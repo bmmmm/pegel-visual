@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="de">
+
+<head>
+    <title>Pixelmatrix</title>
+</head>
+
+<body>
+    <h1>🌊🌊 Unser schöner Pegel 🌊🌊</h1>
+    <canvas id="myCanvas" width=500 height="500"></canvas>
+    <script>
+        const canvas = document.getElementById("myCanvas");
+        const ctx = canvas.getContext("2d");
+
+        // Definiere die Größe der Pixelmatrix
+        const width = canvas.width;
+        const height = canvas.height;
+        const himmel = "rgb(255,250,205)"
+        const wasser = "rgb(25,25,112)"
+
+        let richtung = 1
+
+        let pegel = 625/2
+
+        let oberer_wert_pegel = pegel +20
+        let unterer_wert_pegel = pegel - 20
+
+
+        
+        // Himmel zeichnen
+        function zeichneHimmel(pegel2) {
+            let himmel_tiefe = height - pegel2
+            ctx.fillStyle = himmel;
+            ctx.fillRect(0, 0, width, himmel_tiefe);
+        }
+
+        // Wasser zeichnen
+        function zeichneWasser(pegel1) {
+            ctx.fillStyle = wasser;
+            ctx.fillRect(0, height - pegel1, width, height);
+        }
+
+        // Hintergrund zeichnen
+        function zeichneHintergrund(water) {
+            if (pegel >= oberer_wert_pegel) {
+                richtung = -1
+                //zeichneHimmel( pegel - 2 )
+            }
+            else {
+                if (pegel == unterer_wert_pegel) {
+                    richtung = 1
+                }
+            }
+            zeichneHimmel(pegel)
+            zeichneWasser(pegel)
+            console.log(pegel)
+            pegel = pegel + (1*richtung)
+        }
+        
+        zeichneHintergrund(pegel)
+        const interval = setInterval(() => {
+
+            zeichneHintergrund(pegel)
+            ctx.beginPath();
+            ctx.arc(75, 75, 50, 0, Math.PI * 2, true); // Outer circle
+            ctx.moveTo(110, 75);
+            ctx.arc(75, 75, 35, 0, Math.PI, false); // Mouth (clockwise)
+            ctx.moveTo(65, 65);
+            ctx.arc(60, 65, 5, 0, Math.PI * 2, true); // Left eye
+            ctx.moveTo(95, 65);
+            ctx.arc(90, 65, 5, 0, Math.PI * 2, true); // Right eye
+            ctx.stroke();
+            
+        }, 105);
+
+    </script>
+</body>
+
+</html>
