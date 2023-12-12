@@ -12,20 +12,18 @@
         const canvas = document.getElementById("myCanvas");
         const ctx = canvas.getContext("2d");
 
-        // Definiere die Größe der Pixelmatrix
         const width = canvas.width;
         const height = canvas.height;
         const himmel = "rgb(255,250,205)"
         const wasser = "rgb(25,25,112)"
-
+        
+        const interval_value = 125 // ms
         let richtung = 1
 
-        let pegel = 625/2
+        let pegel = 625/2 
 
         let oberer_wert_pegel = pegel +20
         let unterer_wert_pegel = pegel - 20
-
-
         
         // Himmel zeichnen
         function zeichneHimmel(pegel2) {
@@ -71,7 +69,7 @@
             ctx.arc(90, 65, 5, 0, Math.PI * 2, true); // Right eye
             ctx.stroke();
             
-        }, 105);
+        }, interval_value);
 
     </script>
 </body>
