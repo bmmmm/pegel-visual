@@ -1,77 +1,393 @@
 <!DOCTYPE html>
-<html lang="de">
-
+<html lang="en">
 <head>
-    <title>Pixelmatrix</title>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PEGEL://BONN</title>
+<meta name="description" content="Live ASCII water level terminal for German rivers, powered by PEGELONLINE (WSV).">
+<style>
+  :root {
+    --bg: #030806;
+    --dim: #1e6b38;
+    --base: #35d363;
+    --bright: #a8ffc2;
+    --glow: rgba(53, 211, 99, 0.35);
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: var(--bg); }
+  body {
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    font-family: ui-monospace, 'SF Mono', Monaco, monospace;
+    color: var(--base);
+    background: radial-gradient(ellipse at center, #071309 0%, var(--bg) 75%);
+  }
+  .crt {
+    position: relative;
+    margin: 2vh auto 0;
+    padding: 1.2em 1.4em;
+    border: 1px solid #123d20;
+    border-radius: 10px;
+    box-shadow: 0 0 40px rgba(20, 120, 55, 0.18), inset 0 0 60px rgba(0, 0, 0, 0.55);
+    animation: flicker 4s infinite;
+  }
+  .crt::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    border-radius: 10px;
+    background: repeating-linear-gradient(
+      to bottom,
+      rgba(0, 0, 0, 0) 0px, rgba(0, 0, 0, 0) 2px,
+      rgba(0, 0, 0, 0.22) 3px
+    );
+  }
+  @keyframes flicker {
+    0%, 100% { opacity: 1; }
+    97% { opacity: 1; }
+    98% { opacity: 0.92; }
+    99% { opacity: 0.98; }
+  }
+  pre {
+    margin: 0;
+    line-height: 1.18;
+    text-shadow: 0 0 6px var(--glow);
+    white-space: pre;
+  }
+  .d { color: var(--dim); }
+  .b { color: var(--bright); text-shadow: 0 0 8px var(--bright); }
+  .w { color: #2fa9c9; text-shadow: 0 0 6px rgba(47, 169, 201, 0.4); }
+  footer {
+    margin: 1.2em 0 2em;
+    font-size: 0.72em;
+    color: var(--dim);
+    text-align: center;
+    line-height: 1.8;
+  }
+  footer a { color: var(--base); text-decoration: none; }
+  footer a:hover { color: var(--bright); }
+</style>
 </head>
-
 <body>
-    <h1>🌊🌊 Unser schöner Pegel 🌊🌊</h1>
-    <canvas id="myCanvas" width=500 height="500"></canvas>
-    <script>
-        const canvas = document.getElementById("myCanvas");
-        const ctx = canvas.getContext("2d");
+<div class="crt"><pre id="screen">booting…</pre></div>
+<footer>
+  data: <a href="https://www.pegelonline.wsv.de" rel="noopener">PEGELONLINE</a> &copy; WSV, refreshed every 5 min
+  · any station: <a href="?station=KÖLN">?station=KÖLN</a>
+  · <a href="https://github.com/bmmmm/pegel-visual" rel="noopener">source</a>
+</footer>
+<script>
+'use strict';
 
-        const width = canvas.width;
-        const height = canvas.height;
-        const himmel = "rgb(255,250,205)"
-        const wasser = "rgb(25,25,112)"
-        
-        const interval_value = 125 // ms
-        let richtung = 1
+const API = 'https://www.pegelonline.wsv.de/webservices/rest-api/v2';
+const COLS = 84;
+const CHART_ROWS = 15;
+const SPARK_ROWS = 4;
+const PROFILE_ROWS = 6;
+const REFRESH_MS = 5 * 60 * 1000;
 
-        let pegel = 625/2 
+const screen = document.getElementById('screen');
+const station = (new URLSearchParams(location.search).get('station') || 'BONN').toUpperCase();
+document.title = 'PEGEL://' + station;
 
-        let oberer_wert_pegel = pegel +20
-        let unterer_wert_pegel = pegel - 20
-        
-        // Himmel zeichnen
-        function zeichneHimmel(pegel2) {
-            let himmel_tiefe = height - pegel2
-            ctx.fillStyle = himmel;
-            ctx.fillRect(0, 0, width, himmel_tiefe);
-        }
+const state = {
+  info: null,       // station meta: km, water
+  gauge: null,      // W timeseries: current, characteristic values, gauge zero
+  history: [],      // 15-day measurements
+  neighbors: [],    // [upstream?, self, downstream?] with elevation data
+  error: null,
+};
 
-        // Wasser zeichnen
-        function zeichneWasser(pegel1) {
-            ctx.fillStyle = wasser;
-            ctx.fillRect(0, height - pegel1, width, height);
-        }
+// ---------- data ----------
 
-        // Hintergrund zeichnen
-        function zeichneHintergrund(water) {
-            if (pegel >= oberer_wert_pegel) {
-                richtung = -1
-                //zeichneHimmel( pegel - 2 )
-            }
-            else {
-                if (pegel == unterer_wert_pegel) {
-                    richtung = 1
-                }
-            }
-            zeichneHimmel(pegel)
-            zeichneWasser(pegel)
-            console.log(pegel)
-            pegel = pegel + (1*richtung)
-        }
-        
-        zeichneHintergrund(pegel)
-        const interval = setInterval(() => {
+async function getJson(url) {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(res.status + ' ' + url.replace(API, ''));
+  return res.json();
+}
 
-            zeichneHintergrund(pegel)
-            ctx.beginPath();
-            ctx.arc(75, 75, 50, 0, Math.PI * 2, true); // Outer circle
-            ctx.moveTo(110, 75);
-            ctx.arc(75, 75, 35, 0, Math.PI, false); // Mouth (clockwise)
-            ctx.moveTo(65, 65);
-            ctx.arc(60, 65, 5, 0, Math.PI * 2, true); // Left eye
-            ctx.moveTo(95, 65);
-            ctx.arc(90, 65, 5, 0, Math.PI * 2, true); // Right eye
-            ctx.stroke();
-            
-        }, interval_value);
+async function loadData() {
+  try {
+    const enc = encodeURIComponent(station);
+    const [info, gauge, history] = await Promise.all([
+      getJson(`${API}/stations/${enc}.json`),
+      getJson(`${API}/stations/${enc}/W.json?includeCurrentMeasurement=true&includeCharacteristicValues=true`),
+      getJson(`${API}/stations/${enc}/W/measurements.json?start=P15D`).catch(() => []),
+    ]);
+    state.info = info;
+    state.gauge = gauge;
+    state.history = history;
+    state.error = null;
+    loadNeighbors(info).catch(() => {});
+  } catch (e) {
+    state.error = `station "${station}" failed: ${e.message}\n` +
+      `check the name against ${API}/stations.json or try ?station=BONN`;
+  }
+}
 
-    </script>
+async function loadNeighbors(info) {
+  const water = encodeURIComponent(info.water.shortname);
+  const all = (await getJson(`${API}/stations.json?waters=${water}`))
+    .filter(s => typeof s.km === 'number')
+    .sort((a, b) => a.km - b.km);
+  const i = all.findIndex(s => s.uuid === info.uuid);
+  if (i < 0) return;
+  const picks = [all[i - 1], all[i], all[i + 1]].filter(Boolean);
+  const enriched = await Promise.all(picks.map(async s => {
+    const g = s.uuid === info.uuid ? state.gauge :
+      await getJson(`${API}/stations/${encodeURIComponent(s.shortname)}/W.json?includeCurrentMeasurement=true`).catch(() => null);
+    if (!g || !g.gaugeZero || !g.currentMeasurement) return null;
+    return { name: s.shortname, km: s.km, elev: g.gaugeZero.value + g.currentMeasurement.value / 100 };
+  }));
+  state.neighbors = enriched.filter(Boolean);
+}
+
+// ---------- grid helpers ----------
+
+function makeGrid(rows) {
+  return {
+    ch: Array.from({ length: rows }, () => Array(COLS).fill(' ')),
+    cl: Array.from({ length: rows }, () => Array(COLS).fill('')),
+    rows,
+  };
+}
+
+function put(g, row, col, text, cls = '') {
+  if (row < 0 || row >= g.rows) return;
+  for (let i = 0; i < text.length; i++) {
+    const c = col + i;
+    if (c >= 0 && c < COLS) { g.ch[row][c] = text[i]; g.cl[row][c] = cls; }
+  }
+}
+
+function esc(s) { return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+
+function gridToHtml(g) {
+  const out = [];
+  for (let r = 0; r < g.rows; r++) {
+    let line = '', run = '', runCls = g.cl[r][0];
+    for (let c = 0; c <= COLS; c++) {
+      const cls = c < COLS ? g.cl[r][c] : null;
+      if (cls !== runCls || c === COLS) {
+        line += runCls ? `<span class="${runCls}">${esc(run)}</span>` : esc(run);
+        run = ''; runCls = cls;
+      }
+      if (c < COLS) run += g.ch[r][c];
+    }
+    out.push(line);
+  }
+  return out.join('\n');
+}
+
+// ---------- big digits (3x5) ----------
+
+const FONT = {
+  '0': ['███', '█ █', '█ █', '█ █', '███'],
+  '1': [' █ ', '██ ', ' █ ', ' █ ', '███'],
+  '2': ['███', '  █', '███', '█  ', '███'],
+  '3': ['███', '  █', '███', '  █', '███'],
+  '4': ['█ █', '█ █', '███', '  █', '  █'],
+  '5': ['███', '█  ', '███', '  █', '███'],
+  '6': ['███', '█  ', '███', '█ █', '███'],
+  '7': ['███', '  █', '  █', '  █', '  █'],
+  '8': ['███', '█ █', '███', '█ █', '███'],
+  '9': ['███', '█ █', '███', '  █', '███'],
+};
+
+function putBig(g, row, col, text, cls) {
+  let x = col;
+  for (const c of text) {
+    const glyph = FONT[c];
+    if (!glyph) { x += 2; continue; }
+    for (let r = 0; r < 5; r++) put(g, row + r, x, glyph[r], cls);
+    x += 4;
+  }
+  return x;
+}
+
+// ---------- sections ----------
+
+function charValue(name) {
+  const cv = (state.gauge.characteristicValues || []).find(v => v.shortname === name);
+  return cv ? cv.value : null;
+}
+
+function trendPerHour() {
+  const h = state.history;
+  if (h.length < 5) return null;
+  const last = h[h.length - 1], ago = h[Math.max(0, h.length - 5)];
+  return last.value - ago.value;
+}
+
+function drawHeader(g, row, t) {
+  const info = state.info, cur = state.gauge.currentMeasurement;
+  const title = `─── PEGELONLINE://${station} `;
+  const meta = ` ${info.water.shortname} · KM ${info.km ?? '?'} ───`;
+  put(g, row, 0, title.padEnd(COLS - meta.length, '─') + meta, 'd');
+  put(g, row, 4, `PEGELONLINE://${station}`, 'b');
+
+  const x = putBig(g, row + 2, 2, String(Math.round(cur.value)), 'b');
+  put(g, row + 6, x + 1, 'cm', 'd');
+
+  const trend = trendPerHour();
+  const arrow = trend === null ? '▬' : trend > 1 ? '▲' : trend < -1 ? '▼' : '▬';
+  const sign = trend === null ? '' : (trend > 0 ? '+' : '') + trend.toFixed(0);
+  put(g, row + 2, x + 6, `${arrow} ${sign} cm/h`, trend > 1 ? 'b' : '');
+  put(g, row + 4, x + 6, `state: [${(cur.stateMnwMhw || 'unknown').toUpperCase()}]`, 'd');
+  put(g, row + 6, x + 6, new Date(cur.timestamp).toISOString().replace('T', ' ').slice(0, 16) + ' UTC', 'd');
+  return row + 8;
+}
+
+function drawChart(g, row, t) {
+  const value = state.gauge.currentMeasurement.value;
+  const mhw = charValue('MHW'), mw = charValue('MW'), mnw = charValue('MNW');
+  const topCm = Math.max((mhw || mw * 1.5 || value * 1.5 || 100) * 1.06, value * 1.15);
+  const chartW = COLS - 12;
+  const rowOf = cm => row + Math.round((CHART_ROWS - 1) * (1 - cm / topCm));
+  const surface = Math.min(rowOf(value), row + CHART_ROWS - 3);
+  const bedTop = row + CHART_ROWS - 3;
+
+  // riverbed: seeded bumpy profile, 1-3 rows tall
+  const seed = [...station].reduce((a, c) => a + c.charCodeAt(0), 0);
+  for (let x = 0; x < chartW; x++) {
+    const h = Math.max(1, Math.round(2 + Math.sin(x * 0.31 + seed) * 0.9 + Math.sin(x * 0.11 + seed * 2) * 0.7));
+    for (let r = 0; r < h; r++) put(g, row + CHART_ROWS - 1 - r, x, r === h - 1 ? '▓' : '█', 'd');
+  }
+
+  // water body with drifting current particles
+  for (let r = surface + 1; r < row + CHART_ROWS; r++) {
+    for (let x = 0; x < chartW; x++) {
+      if (g.ch[r][x] !== ' ') continue;
+      const drift = (x - Math.floor(t * 5) + r * 37) % 29;
+      put(g, r, x, drift === 0 ? '·' : '░', 'w');
+    }
+  }
+
+  // animated wave surface
+  const waves = '~≈~~∼≈~∼';
+  for (let x = 0; x < chartW; x++) {
+    const i = ((x - Math.floor(t * 6)) % waves.length + waves.length) % waves.length;
+    put(g, surface, x, waves[i], 'w');
+  }
+
+  // characteristic level markers
+  for (const [label, cm] of [['MHW', mhw], ['MW', mw], ['MNW', mnw]]) {
+    if (cm === null || cm > topCm) continue;
+    const r = rowOf(cm);
+    if (r === surface) continue;
+    for (let x = 0; x < chartW; x += 2) if (g.ch[r][x] === ' ' || g.ch[r][x] === '░') put(g, r, x, '╌', 'd');
+    put(g, r, chartW + 1, `┤ ${label} ${cm}`, 'd');
+  }
+  put(g, surface, chartW + 1, `◄ W ${value}`, 'b');
+
+  // little ship, bobbing downstream
+  if (surface > row + 2) {
+    const shipX = 4 + Math.floor((t * 1.3) % (chartW - 14));
+    const bob = Math.sin(t * 1.6) > 0.4 ? -1 : 0;
+    put(g, surface - 2 + bob, shipX + 2, '|\\', 'b');
+    put(g, surface - 1 + bob, shipX, '__|_\\_', 'b');
+    put(g, surface + bob, shipX, '\\____/', 'b');
+  }
+  return row + CHART_ROWS + 1;
+}
+
+function drawSparkline(g, row, t) {
+  const h = state.history;
+  if (h.length < 2) { put(g, row, 0, '15-DAY HISTORY: no data', 'd'); return row + 2; }
+  const chartW = COLS - 12;
+  const step = h.length / chartW;
+  const vals = Array.from({ length: chartW }, (_, x) => h[Math.min(h.length - 1, Math.floor(x * step))].value);
+  const min = Math.min(...vals), max = Math.max(...vals), span = Math.max(max - min, 1);
+  put(g, row, 0, `15-DAY HISTORY`, 'd');
+  put(g, row, 17, `min ${min}  max ${max}`, 'd');
+  const partial = ' ▁▂▃▄▅▆▇';
+  for (let x = 0; x < chartW; x++) {
+    const level = ((vals[x] - min) / span) * SPARK_ROWS * 8;
+    for (let r = 0; r < SPARK_ROWS; r++) {
+      const cellLevel = Math.max(0, Math.min(8, level - r * 8));
+      const rr = row + 1 + SPARK_ROWS - 1 - r;
+      if (cellLevel >= 8) put(g, rr, x, '█', 'w');
+      else if (cellLevel >= 1) put(g, rr, x, partial[Math.floor(cellLevel)], 'w');
+    }
+  }
+  put(g, row + 1, chartW + 1, `┐ now`, 'd');
+  put(g, row + SPARK_ROWS, chartW + 1, `┘ ${state.history.length} pts`, 'd');
+  return row + SPARK_ROWS + 2;
+}
+
+function drawProfile(g, row) {
+  const n = state.neighbors;
+  put(g, row, 0, 'WATER SURFACE ELEVATION · m NHN', 'd');
+  if (n.length < 2) {
+    put(g, row + 1, 0, n.length === 0 ? 'locating neighbor stations…' : 'no neighbor stations with gauge zero on this water', 'd');
+    return row + 3;
+  }
+  const kmMin = n[0].km, kmSpan = Math.max(n[n.length - 1].km - kmMin, 0.1);
+  const elevs = n.map(p => p.elev);
+  const eMin = Math.min(...elevs), eSpan = Math.max(Math.max(...elevs) - eMin, 0.1);
+  const plotW = COLS - 26;
+  const pts = n.map(p => ({
+    x: 2 + Math.round(((p.km - kmMin) / kmSpan) * plotW),
+    y: row + 1 + Math.round((1 - (p.elev - eMin) / eSpan) * (PROFILE_ROWS - 3)),
+    p,
+  }));
+  for (let i = 0; i < pts.length - 1; i++) {
+    const a = pts[i], b = pts[i + 1], steps = Math.max(b.x - a.x, 1);
+    for (let s = 1; s < steps; s++) {
+      put(g, Math.round(a.y + ((b.y - a.y) * s) / steps), a.x + s, '·', 'w');
+    }
+  }
+  for (const { x, y, p } of pts) {
+    const self = p.name === station;
+    put(g, y, x, '◉', self ? 'b' : '');
+    const label = `${p.name} ${p.elev.toFixed(2)}`;
+    const lx = Math.min(Math.max(0, x - 3), COLS - label.length);
+    put(g, y + 1, lx, label, self ? 'b' : 'd');
+    put(g, y + 2, lx, `km ${p.km}`, 'd');
+  }
+  put(g, row, COLS - 14, '≋ downstream →', 'd');
+  return row + PROFILE_ROWS + 1;
+}
+
+function drawPrompt(g, row, t) {
+  const cursor = Math.floor(t * 2) % 2 ? '█' : ' ';
+  put(g, row, 0, `> pegel --station ${station} --refresh 300s ${cursor}`, 'd');
+  put(g, row, 2, `pegel`, '');
+}
+
+// ---------- main loop ----------
+
+function render(t) {
+  if (state.error) {
+    screen.textContent = `ERROR\n\n${state.error}`;
+    return;
+  }
+  if (!state.gauge || !state.gauge.currentMeasurement) {
+    screen.textContent = `connecting to pegelonline.wsv.de ${'·'.repeat(1 + Math.floor(t * 2) % 3)}`;
+    return;
+  }
+  const g = makeGrid(8 + CHART_ROWS + 1 + SPARK_ROWS + 2 + PROFILE_ROWS + 2);
+  let row = drawHeader(g, 0, t);
+  row = drawChart(g, row, t);
+  row = drawSparkline(g, row, t);
+  row = drawProfile(g, row);
+  drawPrompt(g, g.rows - 1, t);
+  screen.innerHTML = gridToHtml(g);
+}
+
+function fitFont() {
+  const px = Math.min(15, (document.documentElement.clientWidth * 0.94) / (COLS * 0.602));
+  screen.style.fontSize = px.toFixed(2) + 'px';
+}
+
+window.addEventListener('resize', fitFont);
+fitFont();
+loadData();
+setInterval(loadData, REFRESH_MS);
+const start = performance.now();
+setInterval(() => render((performance.now() - start) / 1000), 120);
+</script>
 </body>
-
 </html>
