@@ -21,6 +21,8 @@ _      _      _      _      _      _      _      _
   time your sparkline covers more than the API can serve. Points older than
   16 days are thinned to hourly. `export` downloads the archive as JSON,
   `clear` (click twice) deletes it. Nothing ever leaves your browser.
+  Fetching is API-friendly: the 15-day history is requested once as a seed,
+  afterwards only the delta since the newest archived point is pulled.
 - water surface elevation profile (m NHN) between the neighboring
   stations on the same river, ordered by river km
 

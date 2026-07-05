@@ -121,7 +121,6 @@ stationLink.href = '?station=' + encodeURIComponent(station);
 const state = {
   info: null,       // station meta: km, water
   gauge: null,      // W timeseries: current, characteristic values, gauge zero
-  history: [],      // 15-day measurements
   neighbors: [],    // [upstream?, self, downstream?] with elevation data
   aircraft: [],     // live ADS-B positions from the user's own receiver
   adsbOk: null,     // null = off, true/false = last fetch result
@@ -140,19 +139,24 @@ async function getJson(url) {
 async function loadData() {
   try {
     const enc = encodeURIComponent(station);
-    const [info, gauge, history] = await Promise.all([
-      getJson(`${API}/stations/${enc}.json`),
+    // be gentle to the WSV API: seed the archive once with 15 days, afterwards
+    // request only the delta since the newest locally archived point
+    const arc = loadArchive(station);
+    const lastTs = arc.length ? arc[arc.length - 1][0] : 0;
+    const inWindow = lastTs && Date.now() - lastTs < 14 * 864e5;
+    const start = inWindow ? new Date(lastTs + 1000).toISOString() : 'P15D';
+    const [info, gauge, delta] = await Promise.all([
+      state.info || getJson(`${API}/stations/${enc}.json`),
       getJson(`${API}/stations/${enc}/W.json?includeCurrentMeasurement=true&includeCharacteristicValues=true`),
-      getJson(`${API}/stations/${enc}/W/measurements.json?start=P15D`).catch(() => []),
+      getJson(`${API}/stations/${enc}/W/measurements.json?start=${encodeURIComponent(start)}`).catch(() => []),
     ]);
     state.info = info;
     state.gauge = gauge;
-    state.history = history;
     state.error = null;
-    mergeIntoArchive(station, history.length ? history : (gauge.currentMeasurement ? [gauge.currentMeasurement] : []));
+    mergeIntoArchive(station, delta.length ? delta : (gauge.currentMeasurement ? [gauge.currentMeasurement] : []));
     state.archive = loadArchive(station);
     updateLocalBar();
-    loadNeighbors(info).catch(() => {});
+    if (!state.neighbors.length) loadNeighbors(info).catch(() => {});
   } catch (e) {
     state.error = `station "${station}" failed: ${e.message}\n` +
       `check the name against ${API}/stations.json or try ?station=BONN`;
@@ -361,10 +365,16 @@ function charValue(name) {
 }
 
 function trendPerHour() {
-  const h = state.history;
-  if (h.length < 5) return null;
-  const last = h[h.length - 1], ago = h[Math.max(0, h.length - 5)];
-  return last.value - ago.value;
+  const a = state.archive;
+  if (a.length < 2) return null;
+  const [tLast, vLast] = a[a.length - 1];
+  let ref = null;
+  for (let i = a.length - 2; i >= 0; i--) {
+    ref = a[i];
+    if (a[i][0] <= tLast - 36e5) break;
+  }
+  const hours = (tLast - ref[0]) / 36e5;
+  return hours > 0 ? (vLast - ref[1]) / hours : null;
 }
 
 function drawHeader(g, row, t) {
@@ -476,13 +486,9 @@ function drawChart(g, row, t) {
 }
 
 function drawSparkline(g, row, t) {
-  const series = state.archive.length > 2
-    ? state.archive.map(p => p[1])
-    : state.history.map(m => m.value);
+  const series = state.archive.map(p => p[1]);
   if (series.length < 2) { put(g, row, 0, 'HISTORY: no data', 'd'); return row + 2; }
-  const days = state.archive.length > 2
-    ? Math.max(1, Math.round((state.archive[state.archive.length - 1][0] - state.archive[0][0]) / 864e5))
-    : 15;
+  const days = Math.max(1, Math.round((state.archive[state.archive.length - 1][0] - state.archive[0][0]) / 864e5));
   const chartW = COLS - 12;
   const step = series.length / chartW;
   const vals = Array.from({ length: chartW }, (_, x) => series[Math.min(series.length - 1, Math.floor(x * step))]);
