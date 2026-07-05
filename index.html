@@ -77,7 +77,7 @@
 </main>
 <footer>
   data: <a href="https://www.pegelonline.wsv.de" rel="noopener">PEGELONLINE</a> &copy; WSV, refreshed every 5 min
-  · any station: <a href="?station=BONN">?station=BONN</a>
+  · station link: <a id="station-link" href="?station=BONN">?station=BONN</a>
   · <a href="https://github.com/bmmmm/pegel-visual" rel="noopener">source</a>
   · <a href="https://ko-fi.com/bmabma" rel="noopener">support on ko-fi</a>
 </footer>
@@ -94,6 +94,9 @@ const REFRESH_MS = 5 * 60 * 1000;
 const screen = document.getElementById('screen');
 const station = (new URLSearchParams(location.search).get('station') || 'BONN').toUpperCase();
 document.title = 'PEGEL://' + station;
+const stationLink = document.getElementById('station-link');
+stationLink.textContent = '?station=' + station;
+stationLink.href = '?station=' + encodeURIComponent(station);
 
 const state = {
   info: null,       // station meta: km, water
