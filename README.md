@@ -26,7 +26,7 @@ Default is Bonn (Rhine). Type a station name into the prompt at the bottom
 (with autocomplete over all PEGELONLINE stations), or use the query param:
 
 ```
-?station=KÖLN
+?station=BONN
 ?station=MARBURG
 ```
 
