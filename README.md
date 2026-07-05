@@ -1,27 +1,44 @@
 # pegel-visual
 
-floating river...
+Live ASCII water level terminal for German rivers — a single static page with a
+CRT phosphor look, powered by the open [PEGELONLINE](https://www.pegelonline.wsv.de)
+REST API (WSV). No build step, no backend, no dependencies.
+
+**Live:** https://bmmmm.github.io/pegel-visual/
 
 ```
 _      _      _      _      _      _      _      _
 )`'-.,_)`'-.,_)`'-.,_)`'-.,_)`'-.,_)`'-.,_)`'-.,_)`'-.,_
-_     _     _     _     _     _     _     _
-)`'-.,)`'-.,)`'-.,)`'-.,)`'-.,)`'-.,)`'-.,)`'-.,
-_    _    _    _    _    _    _    _    _
-)'-.,)'-.,)'-.,)'-.,)'-.,)'-.,)'-.,)'-.,)'-.,
- _       _      _       _      _      _
-( `'-.,_( `'-.,( `'-.,_( `'-._( `'-.,( `'-.,
- _    _     _      _
-( '-.( '-.,( '-.,_( `'-.,_
-   _     _     _     _     _     _
-__( '-._( '-._( '-._( '-._( '-._( '-.__
-  (_.-' (_.-' (_.-' (_.-' (_.-' (_.-'
-   _     _     _     _     _     _
-__) '-._) '-._) '-._) '-._) '-._0) '-.__
-  )_.-' )_.-' )_.-' )_.-' )_.-' 0)_.-'
-
-``'-.,_,.-'``'-.,_,.='``'-.,_,.-'``'-.,_,.='``
-
-.-.   .-.   .-.   .-.   .-.   .-.   .-.   .-.   .-.
-   '-'   '-'   '-'   '-'   '-'   '-'   '-'   '-'   '-'
 ```
+
+## What it shows
+
+- current level as big block digits, trend per hour, MNW/MHW state
+- animated river cross-section: waves at the live level, drifting current,
+  seeded riverbed, a little ship, markers for MNW / MW / MHW
+- 15-day history sparkline
+- water surface elevation profile (m NHN) between the neighboring
+  stations on the same river, ordered by river km
+
+## Any station
+
+Default is Bonn (Rhine). Every PEGELONLINE station works via query param:
+
+```
+?station=KÖLN
+?station=MARBURG
+```
+
+Neighbors for the elevation profile are discovered automatically from the
+station's river and kilometrage. Stations without characteristic values or
+gauge zero degrade gracefully.
+
+## Run locally
+
+```
+python3 -m http.server 8123
+open http://127.0.0.1:8123/
+```
+
+Data: © Wasserstraßen- und Schifffahrtsverwaltung des Bundes (WSV),
+[PEGELONLINE](https://www.pegelonline.wsv.de), refreshed every 5 minutes.
