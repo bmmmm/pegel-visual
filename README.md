@@ -53,3 +53,8 @@ open http://127.0.0.1:8123/
 
 Data: © Wasserstraßen- und Schifffahrtsverwaltung des Bundes (WSV),
 [PEGELONLINE](https://www.pegelonline.wsv.de), refreshed every 5 minutes.
+
+## Support
+
+If you enjoy this, you can [buy me a coffee on Ko-fi](https://ko-fi.com/bmabma). ☕
+
