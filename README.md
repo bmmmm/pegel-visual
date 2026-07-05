@@ -34,6 +34,16 @@ Neighbors for the elevation profile are discovered automatically from the
 station's river and kilometrage. Stations without characteristic values or
 gauge zero degrade gracefully.
 
+## Aircraft overhead (optional, bring your own receiver)
+
+If you run an ADS-B receiver (tar1090 / readsb / adsb.im image), put its URL
+into the `--adsb` field of the prompt (e.g. `http://10.0.0.5:8080`). Live
+aircraft are projected onto the river axis between the neighbor stations and
+drawn in the sky at their barometric altitude, with callsign and flight level.
+The URL is stored in your browser's localStorage only — it never leaves your
+machine. Note: the public HTTPS page cannot fetch a plain-http LAN receiver
+(mixed content); serve the page locally or put the receiver behind HTTPS.
+
 ## Run locally
 
 ```

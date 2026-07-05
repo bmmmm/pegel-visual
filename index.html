@@ -52,8 +52,9 @@
     width: 14ch;
     padding: 0 0.2ch;
     outline: none;
-    text-transform: uppercase;
   }
+  #station-input { text-transform: uppercase; }
+  #adsb-input { width: 26ch; text-transform: none; }
   footer {
     margin: 1.2em 0 2em;
     font-size: 0.72em;
@@ -69,7 +70,9 @@
   <pre id="screen">loading…</pre>
   <form id="prompt" autocomplete="off">&gt; pegel --station
     <input id="station-input" name="station" list="stations" spellcheck="false" aria-label="station name">
-    <datalist id="stations"></datalist> --refresh 300s
+    <datalist id="stations"></datalist> --adsb
+    <input id="adsb-input" name="adsb" spellcheck="false" placeholder="receiver url (optional)"
+      aria-label="ADS-B receiver URL"> --refresh 300s
   </form>
 </main>
 <footer>
@@ -96,6 +99,8 @@ const state = {
   gauge: null,      // W timeseries: current, characteristic values, gauge zero
   history: [],      // 15-day measurements
   neighbors: [],    // [upstream?, self, downstream?] with elevation data
+  aircraft: [],     // live ADS-B positions from the user's own receiver
+  adsbOk: null,     // null = off, true/false = last fetch result
   error: null,
 };
 
@@ -138,9 +143,39 @@ async function loadNeighbors(info) {
     const g = s.uuid === info.uuid ? state.gauge :
       await getJson(`${API}/stations/${encodeURIComponent(s.shortname)}/W.json?includeCurrentMeasurement=true`).catch(() => null);
     if (!g || !g.gaugeZero || !g.currentMeasurement) return null;
-    return { name: s.shortname, km: s.km, elev: g.gaugeZero.value + g.currentMeasurement.value / 100 };
+    return {
+      name: s.shortname, km: s.km,
+      lat: s.latitude, lon: s.longitude,
+      elev: g.gaugeZero.value + g.currentMeasurement.value / 100,
+    };
   }));
   state.neighbors = enriched.filter(Boolean);
+}
+
+// ---------- ADS-B (optional, own receiver via --adsb) ----------
+
+const ADSB_REFRESH_MS = 2500;
+let adsbRaw = new URLSearchParams(location.search).get('adsb')
+  || localStorage.getItem('pegel.adsb') || '';
+
+function adsbEndpoint(raw) {
+  if (!raw) return '';
+  let u = /^https?:\/\//.test(raw) ? raw : 'http://' + raw;
+  if (!u.endsWith('.json')) u = u.replace(/\/+$/, '') + '/data/aircraft.json';
+  return u;
+}
+
+async function loadAircraft() {
+  const url = adsbEndpoint(adsbRaw);
+  if (!url) { state.aircraft = []; state.adsbOk = null; return; }
+  try {
+    const d = await getJson(url);
+    state.aircraft = (d.aircraft || []).filter(a => a.lat != null && a.lon != null);
+    state.adsbOk = true;
+  } catch {
+    state.aircraft = [];
+    state.adsbOk = false;
+  }
 }
 
 // ---------- grid helpers ----------
@@ -236,6 +271,10 @@ function drawHeader(g, row, t) {
   put(g, row + 2, x + 6, `${arrow} ${sign} cm/h`, trend > 1 ? 'b' : '');
   put(g, row + 4, x + 6, `state: [${(cur.stateMnwMhw || 'unknown').toUpperCase()}]`, 'd');
   put(g, row + 6, x + 6, new Date(cur.timestamp).toISOString().replace('T', ' ').slice(0, 16) + ' UTC', 'd');
+  if (state.adsbOk !== null) {
+    const status = state.adsbOk ? `adsb: ${state.aircraft.length} aircraft` : 'adsb: receiver offline';
+    put(g, row + 7, 2, status, 'd');
+  }
   return row + 8;
 }
 
@@ -280,6 +319,38 @@ function drawChart(g, row, t) {
     put(g, r, chartW + 1, `┤ ${label} ${cm}`, 'd');
   }
   put(g, surface, chartW + 1, `◄ W ${value}`, 'b');
+
+  // aircraft in the sky, projected onto the river axis between neighbor stations
+  const n = state.neighbors;
+  if (state.adsbOk !== null && n.length >= 2) {
+    const L = n[n.length - 1], R = n[0]; // left = downstream (max km), right = upstream
+    const kx = Math.cos((L.lat * Math.PI) / 180);
+    const ax = (R.lon - L.lon) * kx, ay = R.lat - L.lat;
+    const len2 = ax * ax + ay * ay;
+    for (const a of state.aircraft) {
+      const px = (a.lon - L.lon) * kx, py = a.lat - L.lat;
+      const frac = (px * ax + py * ay) / len2;
+      if (frac < 0 || frac > 1) continue;
+      const lateralKm = (Math.abs(px * ay - py * ax) / Math.sqrt(len2)) * 111;
+      if (lateralKm > 50) continue;
+      const alt = a.alt_baro === 'ground' ? 0 : (a.alt_baro || 0);
+      const skyTop = row + 1, skyBottom = surface - 3;
+      if (skyBottom <= skyTop) continue;
+      const y = skyBottom - Math.round((Math.min(alt, 42000) / 42000) * (skyBottom - skyTop));
+      const x = Math.round(frac * (chartW - 1));
+      const tr = ((a.track ?? 0) * Math.PI) / 180;
+      const movingRight = Math.sin(tr) * ax + Math.cos(tr) * ay > 0;
+      const callsign = (a.flight || '').trim() || a.hex || '';
+      const level = alt >= 5000 ? 'FL' + Math.round(alt / 100) : alt + 'ft';
+      if (movingRight) {
+        put(g, y, x, '+>', 'b');
+        put(g, y, x + 3, `${callsign} ${level}`, 'd');
+      } else {
+        put(g, y, Math.max(0, x - 1), '<+', 'b');
+        put(g, y, x + 2, `${callsign} ${level}`, 'd');
+      }
+    }
+  }
 
   // little ship, bobbing downstream (Bonn view: downstream is to the left)
   if (surface > row + 2) {
@@ -354,9 +425,15 @@ function drawProfile(g, row) {
 // ---------- station prompt ----------
 
 const stationInput = document.getElementById('station-input');
+const adsbInput = document.getElementById('adsb-input');
 stationInput.value = station;
+adsbInput.value = adsbRaw;
 document.getElementById('prompt').addEventListener('submit', e => {
   e.preventDefault();
+  adsbRaw = adsbInput.value.trim();
+  if (adsbRaw) localStorage.setItem('pegel.adsb', adsbRaw);
+  else localStorage.removeItem('pegel.adsb');
+  loadAircraft();
   const v = stationInput.value.trim();
   if (v && v !== station) location.search = '?station=' + encodeURIComponent(v.toUpperCase());
 });
@@ -403,6 +480,8 @@ window.addEventListener('resize', fitFont);
 fitFont();
 loadData();
 setInterval(loadData, REFRESH_MS);
+loadAircraft();
+setInterval(loadAircraft, ADSB_REFRESH_MS);
 const start = performance.now();
 setInterval(() => render((performance.now() - start) / 1000), 120);
 </script>
