@@ -1,7 +1,7 @@
 # pegel-visual
 
-Live ASCII water level terminal for German rivers — a single static page with a
-CRT phosphor look, powered by the open [PEGELONLINE](https://www.pegelonline.wsv.de)
+Live ASCII water level terminal for German rivers — a single static page,
+Bauhaus black-and-white, powered by the open [PEGELONLINE](https://www.pegelonline.wsv.de)
 REST API (WSV). No build step, no backend, no dependencies.
 
 **Live:** https://bmmmm.github.io/pegel-visual/
@@ -22,7 +22,8 @@ _      _      _      _      _      _      _      _
 
 ## Any station
 
-Default is Bonn (Rhine). Every PEGELONLINE station works via query param:
+Default is Bonn (Rhine). Type a station name into the prompt at the bottom
+(with autocomplete over all PEGELONLINE stations), or use the query param:
 
 ```
 ?station=KÖLN
