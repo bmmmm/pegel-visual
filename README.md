@@ -16,7 +16,11 @@ _      _      _      _      _      _      _      _
 - current level as big block digits, trend per hour, MNW/MHW state
 - animated river cross-section: waves at the live level, drifting current,
   seeded riverbed, a little ship, markers for MNW / MW / MHW
-- 15-day history sparkline
+- history sparkline — starts with the API's 15 days and grows: every visit
+  merges the data into a local archive (localStorage, per station), so over
+  time your sparkline covers more than the API can serve. Points older than
+  16 days are thinned to hourly. `export` downloads the archive as JSON,
+  `clear` (click twice) deletes it. Nothing ever leaves your browser.
 - water surface elevation profile (m NHN) between the neighboring
   stations on the same river, ordered by river km
 

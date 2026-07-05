@@ -55,6 +55,20 @@
   }
   #station-input { text-transform: uppercase; }
   #adsb-input { width: 26ch; text-transform: none; }
+  #localbar {
+    margin-top: 0.8em;
+    font-size: 0.75em;
+    color: var(--dim);
+  }
+  #localbar button {
+    font: inherit;
+    color: var(--ink);
+    background: none;
+    border: none;
+    padding: 0;
+    text-decoration: underline;
+    cursor: pointer;
+  }
   footer {
     margin: 1.2em 0 2em;
     font-size: 0.72em;
@@ -73,7 +87,13 @@
     <datalist id="stations"></datalist> --adsb
     <input id="adsb-input" name="adsb" spellcheck="false" placeholder="receiver url (optional)"
       aria-label="ADS-B receiver URL"> --refresh 300s
+    <button type="submit" hidden>go</button>
   </form>
+  <div id="localbar">
+    <span id="local-stats">local archive: empty</span>
+    · <button id="export-btn" type="button">export</button>
+    · <button id="clear-btn" type="button">clear</button>
+  </div>
 </main>
 <footer>
   data: <a href="https://www.pegelonline.wsv.de" rel="noopener">PEGELONLINE</a> &copy; WSV, refreshed every 5 min
@@ -105,6 +125,7 @@ const state = {
   neighbors: [],    // [upstream?, self, downstream?] with elevation data
   aircraft: [],     // live ADS-B positions from the user's own receiver
   adsbOk: null,     // null = off, true/false = last fetch result
+  archive: [],      // locally accumulated [timestampMs, cm] for this station
   error: null,
 };
 
@@ -128,6 +149,9 @@ async function loadData() {
     state.gauge = gauge;
     state.history = history;
     state.error = null;
+    mergeIntoArchive(station, history.length ? history : (gauge.currentMeasurement ? [gauge.currentMeasurement] : []));
+    state.archive = loadArchive(station);
+    updateLocalBar();
     loadNeighbors(info).catch(() => {});
   } catch (e) {
     state.error = `station "${station}" failed: ${e.message}\n` +
@@ -155,6 +179,90 @@ async function loadNeighbors(info) {
   }));
   state.neighbors = enriched.filter(Boolean);
 }
+
+// ---------- local archive (accumulates beyond the API's 15-day window) ----------
+
+const ARCHIVE_PREFIX = 'pegel.archive.';
+
+function archiveKeys() {
+  return Object.keys(localStorage).filter(k => k.startsWith(ARCHIVE_PREFIX));
+}
+
+function loadArchive(name) {
+  try { return JSON.parse(localStorage.getItem(ARCHIVE_PREFIX + name)) || []; }
+  catch { return []; }
+}
+
+function mergeIntoArchive(name, measurements) {
+  const pts = loadArchive(name);
+  const seen = new Set(pts.map(p => p[0]));
+  for (const m of measurements) {
+    const t = Date.parse(m.timestamp);
+    if (Number.isFinite(t) && m.value != null && !seen.has(t)) pts.push([t, m.value]);
+  }
+  pts.sort((a, b) => a[0] - b[0]);
+  // thin points older than 16 days to one per hour to stay within quota
+  const cutoff = Date.now() - 16 * 864e5;
+  const thinned = [];
+  let lastHour = -1;
+  for (const p of pts) {
+    if (p[0] >= cutoff) { thinned.push(p); continue; }
+    const hour = Math.floor(p[0] / 36e5);
+    if (hour !== lastHour) { thinned.push(p); lastHour = hour; }
+  }
+  try {
+    localStorage.setItem(ARCHIVE_PREFIX + name, JSON.stringify(thinned));
+  } catch {
+    // quota exceeded: drop the older half and try once more
+    try { localStorage.setItem(ARCHIVE_PREFIX + name, JSON.stringify(thinned.slice(Math.floor(thinned.length / 2)))); }
+    catch { /* archive is best-effort */ }
+  }
+}
+
+function updateLocalBar() {
+  const keys = archiveKeys();
+  let pts = 0, bytes = 0, oldest = Infinity;
+  for (const k of keys) {
+    const raw = localStorage.getItem(k) || '[]';
+    bytes += raw.length * 2;
+    try {
+      const a = JSON.parse(raw);
+      pts += a.length;
+      if (a.length) oldest = Math.min(oldest, a[0][0]);
+    } catch {}
+  }
+  document.getElementById('local-stats').textContent = pts
+    ? `local archive: ${pts} pts · ${keys.length} station${keys.length > 1 ? 's' : ''} · ` +
+      `${Math.max(1, Math.round(bytes / 1024))} KB · since ${new Date(oldest).toISOString().slice(0, 10)}`
+    : 'local archive: empty';
+}
+
+document.getElementById('export-btn').addEventListener('click', () => {
+  const out = {};
+  for (const k of archiveKeys()) out[k.slice(ARCHIVE_PREFIX.length)] = loadArchive(k.slice(ARCHIVE_PREFIX.length));
+  const blob = new Blob([JSON.stringify(out, null, 1)], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'pegel-archive.json';
+  a.click();
+  URL.revokeObjectURL(a.href);
+});
+
+const clearBtn = document.getElementById('clear-btn');
+let clearArmedAt = 0;
+clearBtn.addEventListener('click', () => {
+  if (Date.now() - clearArmedAt < 4000) {
+    for (const k of archiveKeys()) localStorage.removeItem(k);
+    state.archive = [];
+    clearArmedAt = 0;
+    clearBtn.textContent = 'clear';
+    updateLocalBar();
+  } else {
+    clearArmedAt = Date.now();
+    clearBtn.textContent = 'sure?';
+    setTimeout(() => { clearBtn.textContent = 'clear'; clearArmedAt = 0; }, 4000);
+  }
+});
 
 // ---------- ADS-B (optional, own receiver via --adsb) ----------
 
@@ -368,14 +476,20 @@ function drawChart(g, row, t) {
 }
 
 function drawSparkline(g, row, t) {
-  const h = state.history;
-  if (h.length < 2) { put(g, row, 0, '15-DAY HISTORY: no data', 'd'); return row + 2; }
+  const series = state.archive.length > 2
+    ? state.archive.map(p => p[1])
+    : state.history.map(m => m.value);
+  if (series.length < 2) { put(g, row, 0, 'HISTORY: no data', 'd'); return row + 2; }
+  const days = state.archive.length > 2
+    ? Math.max(1, Math.round((state.archive[state.archive.length - 1][0] - state.archive[0][0]) / 864e5))
+    : 15;
   const chartW = COLS - 12;
-  const step = h.length / chartW;
-  const vals = Array.from({ length: chartW }, (_, x) => h[Math.min(h.length - 1, Math.floor(x * step))].value);
+  const step = series.length / chartW;
+  const vals = Array.from({ length: chartW }, (_, x) => series[Math.min(series.length - 1, Math.floor(x * step))]);
   const min = Math.min(...vals), max = Math.max(...vals), span = Math.max(max - min, 1);
-  put(g, row, 0, `15-DAY HISTORY`, 'd');
-  put(g, row, 17, `min ${min}  max ${max}`, 'd');
+  const label = `HISTORY · ${days}D`;
+  put(g, row, 0, label, 'd');
+  put(g, row, label.length + 3, `min ${min}  max ${max}`, 'd');
   const partial = ' ▁▂▃▄▅▆▇';
   for (let x = 0; x < chartW; x++) {
     const level = ((vals[x] - min) / span) * SPARK_ROWS * 8;
@@ -387,7 +501,7 @@ function drawSparkline(g, row, t) {
     }
   }
   put(g, row + 1, chartW + 1, `┐ now`, 'd');
-  put(g, row + SPARK_ROWS, chartW + 1, `┘ ${state.history.length} pts`, 'd');
+  put(g, row + SPARK_ROWS, chartW + 1, `┘ ${series.length} pts`, 'd');
   return row + SPARK_ROWS + 2;
 }
 
@@ -437,9 +551,11 @@ document.getElementById('prompt').addEventListener('submit', e => {
   adsbRaw = adsbInput.value.trim();
   if (adsbRaw) localStorage.setItem('pegel.adsb', adsbRaw);
   else localStorage.removeItem('pegel.adsb');
-  loadAircraft();
-  const v = stationInput.value.trim();
-  if (v && v !== station) location.search = '?station=' + encodeURIComponent(v.toUpperCase());
+  const v = (stationInput.value.trim() || station).toUpperCase();
+  const q = new URLSearchParams();
+  q.set('station', v);
+  if (adsbRaw) q.set('adsb', adsbRaw);
+  location.search = q.toString(); // both fields land in the URL; reloads the page
 });
 let stationListLoaded = false;
 stationInput.addEventListener('focus', async () => {
@@ -482,6 +598,7 @@ function fitFont() {
 
 window.addEventListener('resize', fitFont);
 fitFont();
+updateLocalBar();
 loadData();
 setInterval(loadData, REFRESH_MS);
 loadAircraft();
