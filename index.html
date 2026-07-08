@@ -81,7 +81,17 @@
     color: var(--mid);
     overflow-x: auto;
   }
-  #local-detail .cur { color: var(--ink); font-weight: 700; }
+  #local-detail .arow.cur { color: var(--ink); font-weight: 700; }
+  #local-detail .row-btn {
+    font: inherit;
+    color: var(--dim);
+    background: none;
+    border: none;
+    padding: 0 0.3ch;
+    text-decoration: underline;
+    cursor: pointer;
+  }
+  #local-detail .row-btn:hover { color: var(--ink); }
   footer {
     margin: 1.2em 0 2em;
     font-size: 0.72em;
@@ -272,22 +282,63 @@ function updateLocalBar() {
 
   const nameW = rows.reduce((w, r) => Math.max(w, r.name.length), 0);
   const detail = document.getElementById('local-detail');
-  detail.innerHTML = rows.map(r => {
+  detail.textContent = '';
+  for (const r of rows) {
     const line = `${r.name.padEnd(nameW)}  ${String(r.pts).padStart(5)} pts  ` +
       `${String(kb(r.bytes)).padStart(4)} KB  ${mmdd(r.first)}→${mmdd(r.last)}  ` +
       `${String(coverageDays(r.first, r.last)).padStart(3)}d`;
-    const marker = r.name === station ? '› ' : '  ';
-    return r.name === station
-      ? `<span class="cur">${marker}${esc(line)}</span>`
-      : `${marker}${esc(line)}`;
-  }).join('\n');
+    const div = document.createElement('div');
+    div.className = 'arow' + (r.name === station ? ' cur' : '');
+    div.append((r.name === station ? '› ' : '  ') + line + '  ');
+    const exp = document.createElement('button');
+    exp.className = 'row-btn'; exp.textContent = '↓';
+    exp.dataset.act = 'exp'; exp.dataset.name = r.name; exp.title = 'export ' + r.name;
+    const del = document.createElement('button');
+    del.className = 'row-btn';
+    del.textContent = archiveDelArmed === r.name ? 'sure?' : '×';
+    del.dataset.act = 'del'; del.dataset.name = r.name; del.title = 'delete ' + r.name;
+    div.append(exp, ' ', del);
+    detail.append(div);
+  }
 }
+
+function exportArchives(map, filename) {
+  const blob = new Blob([JSON.stringify(map, null, 1)], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+function deleteStation(name) {
+  localStorage.removeItem(ARCHIVE_PREFIX + name);
+  if (name === station) state.archive = [];
+  updateLocalBar();
+}
+
+let archiveDelArmed = '';
+const localDetail = document.getElementById('local-detail');
+localDetail.addEventListener('click', e => {
+  const btn = e.target.closest('button');
+  if (!btn) return;
+  const name = btn.dataset.name;
+  if (btn.dataset.act === 'exp') {
+    exportArchives({ [name]: loadArchive(name) }, 'pegel-archive-' + name.replace(/\s+/g, '_') + '.json');
+  } else if (archiveDelArmed === name) {
+    archiveDelArmed = '';
+    deleteStation(name);
+  } else {
+    archiveDelArmed = name;
+    updateLocalBar();
+    setTimeout(() => { if (archiveDelArmed === name) { archiveDelArmed = ''; updateLocalBar(); } }, 4000);
+  }
+});
 
 const localToggle = document.getElementById('local-toggle');
 localToggle.addEventListener('click', () => {
-  const detail = document.getElementById('local-detail');
-  const open = detail.hidden;
-  detail.hidden = !open;
+  const open = localDetail.hidden;
+  localDetail.hidden = !open;
   localToggle.textContent = open ? '▾' : '▸';
   localToggle.setAttribute('aria-expanded', String(open));
 });
@@ -295,12 +346,7 @@ localToggle.addEventListener('click', () => {
 document.getElementById('export-btn').addEventListener('click', () => {
   const out = {};
   for (const k of archiveKeys()) out[k.slice(ARCHIVE_PREFIX.length)] = loadArchive(k.slice(ARCHIVE_PREFIX.length));
-  const blob = new Blob([JSON.stringify(out, null, 1)], { type: 'application/json' });
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(blob);
-  a.download = 'pegel-archive.json';
-  a.click();
-  URL.revokeObjectURL(a.href);
+  exportArchives(out, 'pegel-archive.json');
 });
 
 const clearBtn = document.getElementById('clear-btn');
