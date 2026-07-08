@@ -1027,26 +1027,28 @@ function wreckFrame(t) {
   const buf = Array.from({ length: H }, () => Array(W).fill(' '));
   const put = (r, c, s) => { for (let i = 0; i < s.length; i++) { const cc = c + i, ch = s[i]; if (ch !== ' ' && r >= 0 && r < H && cc >= 0 && cc < W) buf[r][cc] = ch; } };
   const putArr = (r, c, a) => a.forEach((s, i) => put(r + i, c, s));
-  const C = 6.5, p = (t % C) / C;
-  const surf = H - 3;   // waterline (waves fill the two rows below)
-  const bx = 2, chompX = 4, farX = W - 24;
+  const C = 7, p = (t % C) / C;
+  const surf = H - 3;   // waterline (waves fill the rows below)
+  const bx = 2, chompX = 4, offX = W + 6;   // offX is fully past the right edge
+  const lerp = (a, b, f) => Math.round(a + (b - a) * f);
 
   // sailboat, bobbing — gone the instant the jaws snap shut
-  const eaten = p >= 0.56;
+  const eaten = p >= 0.52;
   if (!eaten) {
     const bob = Math.sin(t * 3) > 0.3 ? 0 : -1;  // bob up only, hull stays above the waves
     putArr(surf - 5 + bob, bx, ['   |>', '   |\\', '   |#\\', '   |##\\', '___|###\\', '\\_______/']);
   }
 
-  // monster: idles far right, lunges left over the boat, chomps, then retreats
+  // monster: glides in from the right, lunges over the boat, chomps, then swims
+  // all the way off the right edge
   let mx, open;
-  if (p < 0.26) { mx = farX; open = false; }
-  else if (p < 0.50) { mx = Math.round(farX - ((p - 0.26) / 0.24) * (farX - chompX)); open = true; }
-  else if (p < 0.56) { mx = chompX; open = true; }
-  else if (p < 0.72) { mx = chompX; open = false; }
-  else { mx = Math.round(chompX + ((p - 0.72) / 0.28) * (farX - chompX)); open = false; }
+  if (p < 0.14) { mx = offX; open = false; }
+  else if (p < 0.40) { mx = lerp(offX, chompX, (p - 0.14) / 0.26); open = p >= 0.32; }
+  else if (p < 0.52) { mx = chompX; open = true; }
+  else if (p < 0.66) { mx = chompX; open = false; }
+  else { mx = lerp(chompX, offX, (p - 0.66) / 0.34); open = false; }
   const my = surf - 8;
-  const happy = p >= 0.56;                 // full and content once it has eaten the boat
+  const happy = p >= 0.52;                 // full and content once it has eaten the boat
   const eye = happy ? '^' : '◣';           // angry glare while hunting; happy squint after
   let jaw;
   if (open) {
@@ -1086,20 +1088,23 @@ function wreckFrame(t) {
       '   \\________________/',
     ];
   }
-  const swim = happy && p >= 0.72 && Math.sin(t * 4) > 0 ? -1 : 0;  // bob up as it swims off
+  const swim = happy && p >= 0.66 && Math.sin(t * 4) > 0 ? -1 : 0;  // bob up as it swims off
   putArr(my + swim, mx, jaw);
 
   if (happy) put(0, mx + 14 + (Math.floor(t * 2) % 2), '♪');  // humming a happy tune
-  if (p >= 0.54 && p < 0.60) put(my + 1, bx, 'CHOMP!');   // snap flash by the boat
+  if (p >= 0.50 && p < 0.56) put(my + 1, bx, 'CHOMP!');   // snap flash by the boat
 
-  // scrolling waves across the surface
+  // waves: 2 base rows always, plus a swell that rises once the monster swims off
+  // and recedes as the next boat drifts in — the sea expands to fill the scene
   const wv = '~∼≈~';
-  for (let c = 0; c < W; c++) {
-    buf[H - 2][c] = wv[(c + Math.floor(t * 4)) % wv.length];
-    buf[H - 1][c] = wv[(c + Math.floor(t * 3) + 2) % wv.length];
-  }
-  // bubbles rising where the boat went down (just left of the maw)
-  if (p >= 0.60 && p < 0.86) {
+  const waveRow = (r, o) => { for (let c = 0; c < W; c++) if (buf[r][c] === ' ') buf[r][c] = wv[((c + Math.floor(t * 4) + o) % wv.length + wv.length) % wv.length]; };
+  let swell = 0;
+  if (p >= 0.72) swell = (p - 0.72) / 0.28 * 2;      // sea rises as the monster swims off
+  else if (p < 0.20) swell = (1 - p / 0.20) * 2;     // and recedes as the next boat drifts in
+  for (let wr = 0; wr < 2 + Math.round(swell); wr++) waveRow(H - 1 - wr, wr * 2);
+
+  // bubbles trailing where the boat went down (left of the maw)
+  if (p >= 0.56 && p < 0.82) {
     for (let k = 0; k < 3; k++) {
       const br = (surf - 1) - (Math.floor(t * 4 + k * 2) % 3);
       put(br, mx - 1 - k * 2, k % 2 ? '°' : 'o');
