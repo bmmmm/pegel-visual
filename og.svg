@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630" width="1200" height="630">
+  <rect width="1200" height="630" fill="#fbfbf9"/>
+  <rect x="18" y="18" width="1164" height="594" fill="none" stroke="#141414" stroke-width="4"/>
+  <clipPath id="ogw"><rect x="20" y="440" width="1160" height="172"/></clipPath>
+  <g clip-path="url(#ogw)">
+    <path d="M0 512 q60 -34 120 0 t120 0 t120 0 t120 0 t120 0 t120 0 t120 0 t120 0 t120 0 t120 0 V630 H0 Z" fill="#a8cede"/>
+    <path d="M0 512 q60 -34 120 0 t120 0 t120 0 t120 0 t120 0 t120 0 t120 0 t120 0 t120 0 t120 0" fill="none" stroke="#6f9fb8" stroke-width="6"/>
+    <path d="M0 548 q60 -34 120 0 t120 0 t120 0 t120 0 t120 0 t120 0 t120 0 t120 0 t120 0 t120 0" fill="none" stroke="#ffffff" stroke-width="4" opacity=".55"/>
+  </g>
+  <g transform="translate(96 150) scale(5.1)">
+    <clipPath id="ob"><rect x="6" y="8" width="52" height="48" rx="16"/></clipPath>
+    <rect x="6" y="8" width="52" height="48" rx="16" fill="#fbfbf9" stroke="#141414" stroke-width="3"/>
+    <g clip-path="url(#ob)">
+      <path d="M2 31 q6 -5 12 0 t12 0 t12 0 t12 0 t12 0 V60 H2 Z" fill="#a8cede"/>
+      <path d="M2 31 q6 -5 12 0 t12 0 t12 0 t12 0 t12 0" fill="none" stroke="#6f9fb8" stroke-width="2.4"/>
+      <path d="M2 37 q6 -5 12 0 t12 0 t12 0 t12 0 t12 0" fill="none" stroke="#ffffff" stroke-width="1.6" opacity=".5"/>
+    </g>
+    <circle cx="14" cy="24" r="3.2" fill="#a8cede"/><circle cx="50" cy="24" r="3.2" fill="#a8cede"/>
+    <circle cx="23" cy="19" r="5" fill="#141414"/><circle cx="41" cy="19" r="5" fill="#141414"/>
+    <circle cx="24.6" cy="17.4" r="1.7" fill="#ffffff"/><circle cx="42.6" cy="17.4" r="1.7" fill="#ffffff"/>
+    <path d="M22 26 q10 9 20 0" fill="none" stroke="#141414" stroke-width="3" stroke-linecap="round"/>
+  </g>
+  <text x="470" y="300" font-family="Menlo, monospace" font-size="118" font-weight="700" fill="#141414">PEGEL<tspan fill="#6f9fb8">://</tspan></text>
+  <text x="476" y="362" font-family="Menlo, monospace" font-size="34" fill="#5c5c5c">live ASCII river gauges</text>
+  <text x="476" y="408" font-family="Menlo, monospace" font-size="26" fill="#a6a6a6">data: PEGELONLINE · WSV</text>
+</svg>

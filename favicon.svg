@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="PEGEL water buddy">
+  <clipPath id="b"><rect x="6" y="8" width="52" height="48" rx="16"/></clipPath>
+  <rect x="6" y="8" width="52" height="48" rx="16" fill="#fbfbf9" stroke="#141414" stroke-width="3"/>
+  <g clip-path="url(#b)">
+    <path d="M2 31 q6 -5 12 0 t12 0 t12 0 t12 0 t12 0 V60 H2 Z" fill="#a8cede"/>
+    <path d="M2 31 q6 -5 12 0 t12 0 t12 0 t12 0 t12 0" fill="none" stroke="#6f9fb8" stroke-width="2.4"/>
+    <path d="M2 37 q6 -5 12 0 t12 0 t12 0 t12 0 t12 0" fill="none" stroke="#ffffff" stroke-width="1.6" opacity=".5"/>
+  </g>
+  <circle cx="14" cy="24" r="3.2" fill="#a8cede"/><circle cx="50" cy="24" r="3.2" fill="#a8cede"/>
+  <circle cx="23" cy="19" r="5" fill="#141414"/><circle cx="41" cy="19" r="5" fill="#141414"/>
+  <circle cx="24.6" cy="17.4" r="1.7" fill="#ffffff"/><circle cx="42.6" cy="17.4" r="1.7" fill="#ffffff"/>
+  <path d="M22 26 q10 9 20 0" fill="none" stroke="#141414" stroke-width="3" stroke-linecap="round"/>
+</svg>
