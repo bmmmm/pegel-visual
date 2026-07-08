@@ -728,18 +728,24 @@ window.addEventListener('popstate', () => {
 const STATIONS_CACHE = 'pegel.stations';
 const STATIONS_TTL = 7 * 864e5;
 const knownStations = new Set();
+const stationMeta = new Map(); // UPPERCASE shortname -> { w: water, km }
 
-function fillDatalist(names) {
-  for (const name of names) knownStations.add(name.toUpperCase());
-  const list = document.getElementById('stations');
-  if (list.childElementCount) return;
+function fillDatalist(list) {
+  for (const s of list) {
+    knownStations.add(s.n.toUpperCase());
+    stationMeta.set(s.n.toUpperCase(), { w: s.w, km: s.km });
+  }
+  const dl = document.getElementById('stations');
+  if (dl.childElementCount) return;
   const frag = document.createDocumentFragment();
-  for (const name of names) {
+  for (const s of list) {
     const opt = document.createElement('option');
-    opt.value = name;
+    opt.value = s.n;
+    const ctx = [s.w, s.km != null ? 'km ' + Math.round(s.km) : ''].filter(Boolean).join(' · ');
+    if (ctx) opt.label = ctx;
     frag.appendChild(opt);
   }
-  list.appendChild(frag);
+  dl.appendChild(frag);
 }
 
 // picking a datalist suggestion (or committing a complete valid name) fires 'change',
@@ -753,13 +759,18 @@ stationInput.addEventListener('change', () => {
 async function loadStationList() {
   let cached = null;
   try { cached = JSON.parse(localStorage.getItem(STATIONS_CACHE)); } catch {}
-  if (cached && Array.isArray(cached.names)) fillDatalist(cached.names);
-  if (cached && Date.now() - cached.t < STATIONS_TTL) return; // fresh enough
+  if (cached && Array.isArray(cached.list)) fillDatalist(cached.list);
+  if (cached && Array.isArray(cached.list) && Date.now() - cached.t < STATIONS_TTL) return; // fresh
   try {
     const all = await getJson(`${API}/stations.json`);
-    const names = [...new Set(all.map(s => s.shortname))].sort();
-    localStorage.setItem(STATIONS_CACHE, JSON.stringify({ t: Date.now(), names }));
-    fillDatalist(names);
+    const byName = new Map();
+    for (const s of all) {
+      const key = s.shortname.toUpperCase();
+      if (!byName.has(key)) byName.set(key, { n: s.shortname, w: (s.water && s.water.shortname) || '', km: typeof s.km === 'number' ? s.km : null });
+    }
+    const list = [...byName.values()].sort((a, b) => a.n.localeCompare(b.n));
+    localStorage.setItem(STATIONS_CACHE, JSON.stringify({ t: Date.now(), list }));
+    fillDatalist(list);
   } catch { /* keep whatever cache we already showed */ }
 }
 
