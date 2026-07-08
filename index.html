@@ -689,7 +689,7 @@ let refreshTimer = null;
 
 // switch station in-place: no full reload, just reset per-station state and refetch
 function switchStation(name, adsb, push = true) {
-  const next = (name || station).trim().toUpperCase() || station;
+  const next = resolveStation(name || station) || station;
   const nextAdsb = (adsb ?? adsbRaw).trim();
   if (next === station && nextAdsb === adsbRaw) return;
   const adsbChanged = nextAdsb !== adsbRaw;
@@ -751,11 +751,25 @@ const STATIONS_CACHE = 'pegel.stations';
 const STATIONS_TTL = 7 * 864e5;
 const knownStations = new Set();
 const stationMeta = new Map(); // UPPERCASE shortname -> { w: water, km }
+const normMap = new Map();     // ASCII-folded name -> real shortname
+
+// two foldings so both spellings of an umlaut resolve: KÖLN -> KOELN and KOLN
+const foldAe = s => s.toUpperCase().replace(/Ä/g, 'AE').replace(/Ö/g, 'OE').replace(/Ü/g, 'UE').replace(/ß/g, 'SS');
+const foldStrip = s => [...s.toUpperCase().normalize('NFD')].filter(c => { const n = c.charCodeAt(0); return n < 0x300 || n > 0x36f; }).join('');
+
+// resolve user input to a real shortname, tolerating ASCII spellings of umlauts
+function resolveStation(raw) {
+  const up = (raw || '').trim().toUpperCase();
+  if (!up || knownStations.has(up)) return up;
+  return normMap.get(foldAe(up)) || normMap.get(foldStrip(up)) || up;
+}
 
 function fillDatalist(list) {
   for (const s of list) {
-    knownStations.add(s.n.toUpperCase());
-    stationMeta.set(s.n.toUpperCase(), { w: s.w, km: s.km });
+    const up = s.n.toUpperCase();
+    knownStations.add(up);
+    stationMeta.set(up, { w: s.w, km: s.km });
+    for (const key of [foldAe(up), foldStrip(up)]) if (!normMap.has(key)) normMap.set(key, s.n);
   }
   const dl = document.getElementById('stations');
   if (dl.childElementCount) return;
@@ -773,9 +787,9 @@ function fillDatalist(list) {
 // picking a datalist suggestion (or committing a complete valid name) fires 'change',
 // not per keystroke — so this applies on select without clobbering mid-typing input
 stationInput.addEventListener('change', () => {
-  const v = stationInput.value.trim().toUpperCase();
-  if (v && v !== station && knownStations.has(v)) switchStation(v, adsbInput.value);
-  else if (knownStations.size && v !== station) stationInput.value = station; // invalid/abandoned commit: snap back
+  const resolved = resolveStation(stationInput.value);
+  if (resolved !== station && knownStations.has(resolved)) switchStation(resolved, adsbInput.value);
+  else if (knownStations.size) stationInput.value = station; // invalid/abandoned/ASCII spelling: snap to canonical
 });
 
 async function loadStationList() {
@@ -835,6 +849,22 @@ function renderRecent() {
     b.addEventListener('click', () => switchStation(n, adsbInput.value));
     nav.append(b);
   }
+}
+
+// hydrate suggestions from cache synchronously so an ASCII-spelled ?station= (e.g. a
+// hand-typed link) resolves to the real name before the first fetch, no 404 round-trip
+try {
+  const c = JSON.parse(localStorage.getItem(STATIONS_CACHE));
+  if (c && Array.isArray(c.list)) fillDatalist(c.list);
+} catch {}
+const canonical = resolveStation(station);
+if (canonical !== station && knownStations.has(canonical)) {
+  station = canonical;
+  applyStationChrome();
+  stationInput.value = station;
+  const q = new URLSearchParams(location.search);
+  q.set('station', station);
+  history.replaceState(null, '', '?' + q.toString());
 }
 
 pushRecent(station);
