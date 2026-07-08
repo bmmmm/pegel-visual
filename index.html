@@ -257,6 +257,18 @@ const isoDay = ts => new Date(ts).toISOString().slice(0, 10);
 const mmdd = ts => new Date(ts).toISOString().slice(5, 10);
 const coverageDays = (first, last) => Math.max(1, Math.round((last - first) / 864e5));
 
+// a gap is a jump larger than 90 min — tolerates the 15 min live cadence and the
+// 1 h thinned cadence for old points, so only real outages/offline stretches count
+const GAP_MIN_MS = 90 * 60000;
+function countGaps(pts) {
+  let gaps = 0, maxGap = 0;
+  for (let i = 1; i < pts.length; i++) {
+    const d = pts[i][0] - pts[i - 1][0];
+    if (d > GAP_MIN_MS) { gaps++; if (d > maxGap) maxGap = d; }
+  }
+  return { gaps, maxGapH: maxGap / 36e5 };
+}
+
 function updateLocalBar() {
   const rows = [];
   let totalPts = 0, totalBytes = 0, oldest = Infinity;
@@ -269,7 +281,8 @@ function updateLocalBar() {
     totalPts += a.length;
     totalBytes += bytes;
     oldest = Math.min(oldest, a[0][0]);
-    rows.push({ name: k.slice(ARCHIVE_PREFIX.length), pts: a.length, bytes, first: a[0][0], last: a[a.length - 1][0] });
+    const g = countGaps(a);
+    rows.push({ name: k.slice(ARCHIVE_PREFIX.length), pts: a.length, bytes, first: a[0][0], last: a[a.length - 1][0], gaps: g.gaps, maxGapH: g.maxGapH });
   }
   rows.sort((x, y) => y.pts - x.pts);
 
@@ -284,9 +297,12 @@ function updateLocalBar() {
   const detail = document.getElementById('local-detail');
   detail.textContent = '';
   for (const r of rows) {
+    const gapText = r.gaps
+      ? `${r.gaps} gap${r.gaps > 1 ? 's' : ''}${r.maxGapH >= 1 ? ' · max ' + Math.round(r.maxGapH) + 'h' : ''}`
+      : 'no gaps';
     const line = `${r.name.padEnd(nameW)}  ${String(r.pts).padStart(5)} pts  ` +
       `${String(kb(r.bytes)).padStart(4)} KB  ${mmdd(r.first)}→${mmdd(r.last)}  ` +
-      `${String(coverageDays(r.first, r.last)).padStart(3)}d`;
+      `${String(coverageDays(r.first, r.last)).padStart(3)}d  ${gapText}`;
     const div = document.createElement('div');
     div.className = 'arow' + (r.name === station ? ' cur' : '');
     div.append((r.name === station ? '› ' : '  ') + line + '  ');
