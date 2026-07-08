@@ -112,11 +112,15 @@ const PROFILE_ROWS = 6;
 const REFRESH_MS = 5 * 60 * 1000;
 
 const screen = document.getElementById('screen');
-const station = (new URLSearchParams(location.search).get('station') || 'BONN').toUpperCase();
-document.title = 'PEGEL://' + station;
+let station = (new URLSearchParams(location.search).get('station') || 'BONN').toUpperCase();
 const stationLink = document.getElementById('station-link');
-stationLink.textContent = '?station=' + station;
-stationLink.href = '?station=' + encodeURIComponent(station);
+
+function applyStationChrome() {
+  document.title = 'PEGEL://' + station;
+  stationLink.textContent = '?station=' + station;
+  stationLink.href = '?station=' + encodeURIComponent(station);
+}
+applyStationChrome();
 
 const state = {
   info: null,       // station meta: km, water
@@ -552,31 +556,98 @@ const stationInput = document.getElementById('station-input');
 const adsbInput = document.getElementById('adsb-input');
 stationInput.value = station;
 adsbInput.value = adsbRaw;
-document.getElementById('prompt').addEventListener('submit', e => {
-  e.preventDefault();
-  adsbRaw = adsbInput.value.trim();
+
+let refreshTimer = null;
+
+// switch station in-place: no full reload, just reset per-station state and refetch
+function switchStation(name, adsb, push = true) {
+  const next = (name || station).trim().toUpperCase() || station;
+  const nextAdsb = (adsb ?? adsbRaw).trim();
+  if (next === station && nextAdsb === adsbRaw) return;
+  const adsbChanged = nextAdsb !== adsbRaw;
+
+  station = next;
+  adsbRaw = nextAdsb;
   if (adsbRaw) localStorage.setItem('pegel.adsb', adsbRaw);
   else localStorage.removeItem('pegel.adsb');
-  const v = (stationInput.value.trim() || station).toUpperCase();
-  const q = new URLSearchParams();
-  q.set('station', v);
-  if (adsbRaw) q.set('adsb', adsbRaw);
-  location.search = q.toString(); // both fields land in the URL; reloads the page
+
+  if (push) {
+    const q = new URLSearchParams();
+    q.set('station', station);
+    if (adsbRaw) q.set('adsb', adsbRaw);
+    history.pushState(null, '', '?' + q.toString());
+  }
+  applyStationChrome();
+
+  // drop the previous station's data so render() shows the connecting screen at once
+  state.info = null;
+  state.gauge = null;
+  state.neighbors = [];
+  state.error = null;
+  state.archive = loadArchive(station);
+  updateLocalBar();
+
+  stationInput.value = station;
+  adsbInput.value = adsbRaw;
+
+  clearInterval(refreshTimer);
+  loadData();
+  refreshTimer = setInterval(loadData, REFRESH_MS);
+  if (adsbChanged) loadAircraft();
+}
+
+document.getElementById('prompt').addEventListener('submit', e => {
+  e.preventDefault();
+  switchStation(stationInput.value, adsbInput.value);
 });
-let stationListLoaded = false;
-stationInput.addEventListener('focus', async () => {
-  if (stationListLoaded) return;
-  stationListLoaded = true;
+// apply on Enter directly — bypasses the datalist swallowing the first Enter keystroke
+for (const el of [stationInput, adsbInput]) {
+  el.addEventListener('keydown', e => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      switchStation(stationInput.value, adsbInput.value);
+    }
+  });
+}
+window.addEventListener('popstate', () => {
+  const p = new URLSearchParams(location.search);
+  switchStation(p.get('station') || 'BONN', p.get('adsb') || '', false);
+});
+
+// ---------- station suggestions (cached names, not the 255 KB full list) ----------
+
+const STATIONS_CACHE = 'pegel.stations';
+const STATIONS_TTL = 7 * 864e5;
+
+function fillDatalist(names) {
+  const list = document.getElementById('stations');
+  if (list.childElementCount) return;
+  const frag = document.createDocumentFragment();
+  for (const name of names) {
+    const opt = document.createElement('option');
+    opt.value = name;
+    frag.appendChild(opt);
+  }
+  list.appendChild(frag);
+}
+
+async function loadStationList() {
+  let cached = null;
+  try { cached = JSON.parse(localStorage.getItem(STATIONS_CACHE)); } catch {}
+  if (cached && Array.isArray(cached.names)) fillDatalist(cached.names);
+  if (cached && Date.now() - cached.t < STATIONS_TTL) return; // fresh enough
   try {
     const all = await getJson(`${API}/stations.json`);
-    const list = document.getElementById('stations');
-    for (const name of [...new Set(all.map(s => s.shortname))].sort()) {
-      const opt = document.createElement('option');
-      opt.value = name;
-      list.appendChild(opt);
-    }
-  } catch { stationListLoaded = false; }
-});
+    const names = [...new Set(all.map(s => s.shortname))].sort();
+    localStorage.setItem(STATIONS_CACHE, JSON.stringify({ t: Date.now(), names }));
+    fillDatalist(names);
+  } catch { /* keep whatever cache we already showed */ }
+}
+
+stationInput.addEventListener('focus', loadStationList, { once: true });
+// preload shortly after first paint — requestIdleCallback never fires under the
+// 120 ms render loop, so it would starve indefinitely
+setTimeout(loadStationList, 600);
 
 // ---------- main loop ----------
 
@@ -606,7 +677,7 @@ window.addEventListener('resize', fitFont);
 fitFont();
 updateLocalBar();
 loadData();
-setInterval(loadData, REFRESH_MS);
+refreshTimer = setInterval(loadData, REFRESH_MS);
 loadAircraft();
 setInterval(loadAircraft, ADSB_REFRESH_MS);
 const start = performance.now();
