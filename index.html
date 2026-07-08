@@ -30,6 +30,7 @@
     margin: 5vh auto 0;
     padding: 1.6em 1.8em;
     border: 2px solid var(--ink);
+    max-width: 100%; /* don't let a wide child (expanded archive) push past the viewport */
   }
   pre {
     margin: 0;
@@ -65,6 +66,8 @@
     font-size: 0.75em;
     color: var(--dim);
   }
+  #local-stats { cursor: pointer; user-select: none; }
+  #local-stats:hover { color: var(--ink); }
   #localbar button {
     font: inherit;
     color: var(--ink);
@@ -133,6 +136,11 @@
     line-height: 1.8;
   }
   footer a { color: var(--ink); text-decoration: underline; }
+  @media (max-width: 640px) {
+    main { margin-top: 2vh; padding: 1em 0.7em; }
+    footer { margin: 1em 0.7em 2em; }
+    #recent button { padding: 0.2em 0.7ch; } /* a little more tap area */
+  }
 </style>
 </head>
 <body>
@@ -391,12 +399,14 @@ localDetail.addEventListener('click', e => {
 });
 
 const localToggle = document.getElementById('local-toggle');
-localToggle.addEventListener('click', () => {
+function toggleArchiveDetail() {
   const open = localDetail.hidden;
   localDetail.hidden = !open;
   localToggle.classList.toggle('open', open); // rotation encodes state; glyph stays ▸
   localToggle.setAttribute('aria-expanded', String(open));
-});
+}
+localToggle.addEventListener('click', toggleArchiveDetail);
+document.getElementById('local-stats').addEventListener('click', toggleArchiveDetail);
 
 document.getElementById('export-btn').addEventListener('click', () => {
   const out = {};
@@ -941,11 +951,23 @@ function render(t) {
   row = drawSparkline(g, row, t);
   drawProfile(g, row);
   screen.innerHTML = gridToHtml(g);
+  if (!fitted) { fitted = true; fitFont(); } // refit once the real grid exists
 }
+let fitted = false;
 
 function fitFont() {
-  const px = Math.min(15, (document.documentElement.clientWidth * 0.94) / (COLS * 0.602));
+  // size the grid to the width actually available inside <main>, i.e. minus its
+  // padding and border — otherwise the box overflows the viewport on narrow screens
+  const cs = getComputedStyle(document.querySelector('main'));
+  const chrome = parseFloat(cs.paddingLeft) + parseFloat(cs.paddingRight) +
+    parseFloat(cs.borderLeftWidth) + parseFloat(cs.borderRightWidth);
+  const avail = document.documentElement.clientWidth - chrome - 4;
+  let px = Math.min(15, avail / (COLS * 0.602));
   screen.style.fontSize = px.toFixed(2) + 'px';
+  // the 0.602 glyph-aspect estimate can be off; correct against the real rendered
+  // width so the grid always fits exactly (only meaningful once the grid is drawn)
+  const w = screen.scrollWidth;
+  if (w > avail) screen.style.fontSize = (px * avail / w).toFixed(2) + 'px';
 }
 
 window.addEventListener('resize', fitFont);
