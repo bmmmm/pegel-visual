@@ -541,7 +541,7 @@ function trendPerHour() {
 function drawHeader(g, row, t) {
   const info = state.info, cur = state.gauge.currentMeasurement;
   const title = `─── PEGELONLINE://${station} `;
-  const meta = ` ${info.water.shortname} · KM ${info.km ?? '?'} ───`;
+  const meta = info.km != null ? ` ${info.water.shortname} · KM ${info.km} ───` : ` ${info.water.shortname} ───`;
   put(g, row, 0, title.padEnd(COLS - meta.length, '─') + meta, 'd');
   put(g, row, 4, `PEGELONLINE://${station}`, 'b');
 
@@ -561,6 +561,12 @@ function drawHeader(g, row, t) {
   if (info.km != null) {
     const w = 4 * String(Math.round(info.km)).length + 1;
     putKmSign(g, row + 1, COLS - w - 1, info.km);
+  } else {
+    const col = COLS - 12;
+    put(g, row + 2, col, '┌─────┐', 'd');
+    put(g, row + 3, col, '│ :-( │', 'b');
+    put(g, row + 4, col, '└─────┘', 'd');
+    put(g, row + 5, col, 'no river km', 'd');
   }
   return row + HEADER_ROWS;
 }
