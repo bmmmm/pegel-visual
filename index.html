@@ -186,11 +186,12 @@ async function getJson(url) {
 }
 
 async function loadData() {
+  const forStation = station; // guard against a mid-flight station switch
   try {
-    const enc = encodeURIComponent(station);
+    const enc = encodeURIComponent(forStation);
     // be gentle to the WSV API: seed the archive once with 15 days, afterwards
     // request only the delta since the newest locally archived point
-    const arc = loadArchive(station);
+    const arc = loadArchive(forStation);
     const lastTs = arc.length ? arc[arc.length - 1][0] : 0;
     const inWindow = lastTs && Date.now() - lastTs < 14 * 864e5;
     const start = inWindow ? new Date(lastTs + 1000).toISOString() : 'P15D';
@@ -199,15 +200,17 @@ async function loadData() {
       getJson(`${API}/stations/${enc}/W.json?includeCurrentMeasurement=true&includeCharacteristicValues=true`),
       getJson(`${API}/stations/${enc}/W/measurements.json?start=${encodeURIComponent(start)}`).catch(() => []),
     ]);
+    if (station !== forStation) return; // switched away while fetching — discard
     state.info = info;
     state.gauge = gauge;
     state.error = null;
-    mergeIntoArchive(station, delta.length ? delta : (gauge.currentMeasurement ? [gauge.currentMeasurement] : []));
-    state.archive = loadArchive(station);
+    mergeIntoArchive(forStation, delta.length ? delta : (gauge.currentMeasurement ? [gauge.currentMeasurement] : []));
+    state.archive = loadArchive(forStation);
     updateLocalBar();
     if (!state.neighbors.length) loadNeighbors(info).catch(() => {});
   } catch (e) {
-    state.error = `station "${station}" failed: ${e.message}\n` +
+    if (station !== forStation) return; // stale error from a station we left
+    state.error = `station "${forStation}" failed: ${e.message}\n` +
       `check the name against ${API}/stations.json or try ?station=BONN`;
   }
 }
@@ -230,6 +233,7 @@ async function loadNeighbors(info) {
       elev: g.gaugeZero.value + g.currentMeasurement.value / 100,
     };
   }));
+  if (!state.info || state.info.uuid !== info.uuid) return; // switched away — discard
   state.neighbors = enriched.filter(Boolean);
 }
 
