@@ -92,6 +92,24 @@
     cursor: pointer;
   }
   #local-detail .row-btn:hover { color: var(--ink); }
+  #recent {
+    margin-top: 1em;
+    font-size: 0.8em;
+    color: var(--dim);
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.4em 0.55em;
+  }
+  #recent button {
+    font: inherit;
+    color: var(--ink);
+    background: none;
+    border: 1px solid var(--ink);
+    padding: 0.05em 0.6ch;
+    cursor: pointer;
+  }
+  #recent button:hover { background: var(--ink); color: var(--paper); }
   footer {
     margin: 1.2em 0 2em;
     font-size: 0.72em;
@@ -112,6 +130,7 @@
       aria-label="ADS-B receiver URL"> --refresh 300s
     <button type="submit" hidden>go</button>
   </form>
+  <nav id="recent" aria-label="recently viewed stations" hidden></nav>
   <div id="localbar">
     <button id="local-toggle" type="button" aria-expanded="false" aria-label="toggle per-station breakdown">▸</button>
     <span id="local-stats">local archive: empty</span>
@@ -703,6 +722,9 @@ function switchStation(name, adsb, push = true) {
   loadData();
   refreshTimer = setInterval(loadData, REFRESH_MS);
   if (adsbChanged) loadAircraft();
+
+  pushRecent(station);
+  renderRecent();
 }
 
 document.getElementById('prompt').addEventListener('submit', e => {
@@ -778,6 +800,45 @@ stationInput.addEventListener('focus', loadStationList, { once: true });
 // preload shortly after first paint — requestIdleCallback never fires under the
 // 120 ms render loop, so it would starve indefinitely
 setTimeout(loadStationList, 600);
+
+// ---------- recent stations (quick-switch chips) ----------
+
+const RECENT_KEY = 'pegel.recent';
+const RECENT_MAX = 8;
+const RECENT_SHOWN = 6;
+
+function loadRecent() {
+  try { return JSON.parse(localStorage.getItem(RECENT_KEY)) || []; }
+  catch { return []; }
+}
+
+function pushRecent(name) {
+  const up = name.toUpperCase();
+  const list = loadRecent().filter(n => n !== up);
+  list.unshift(up);
+  localStorage.setItem(RECENT_KEY, JSON.stringify(list.slice(0, RECENT_MAX)));
+}
+
+function renderRecent() {
+  const nav = document.getElementById('recent');
+  const others = loadRecent().filter(n => n !== station).slice(0, RECENT_SHOWN);
+  nav.textContent = '';
+  if (!others.length) { nav.hidden = true; return; }
+  nav.hidden = false;
+  nav.append('recent ');
+  for (const n of others) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.textContent = n;
+    const m = stationMeta.get(n);
+    if (m && (m.w || m.km != null)) b.title = [m.w, m.km != null ? 'km ' + Math.round(m.km) : ''].filter(Boolean).join(' · ');
+    b.addEventListener('click', () => switchStation(n, adsbInput.value));
+    nav.append(b);
+  }
+}
+
+pushRecent(station);
+renderRecent();
 
 // ---------- main loop ----------
 
