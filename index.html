@@ -11,6 +11,9 @@
     --ink: #141414;
     --dim: #a6a6a6;
     --mid: #5c5c5c;
+    --water: #a8cede;      /* soft pastel light blue */
+    --water-deep: #6f9fb8; /* slightly deeper pastel blue */
+    --bed: #cabfa6;        /* faint sand */
   }
   * { box-sizing: border-box; }
   html, body { margin: 0; padding: 0; }
@@ -35,7 +38,9 @@
   }
   .d { color: var(--dim); }
   .b { color: var(--ink); font-weight: 700; }
-  .w { color: var(--mid); }
+  .w { color: var(--water); }
+  .w2 { color: var(--water-deep); }
+  .bed { color: var(--bed); }
   form {
     margin-top: 1.4em;
     padding-top: 1em;
@@ -584,7 +589,7 @@ function drawChart(g, row, t) {
   const seed = [...station].reduce((a, c) => a + c.charCodeAt(0), 0);
   for (let x = 0; x < chartW; x++) {
     const h = Math.min(3, Math.max(1, Math.round(2 + Math.sin(x * 0.31 + seed) * 0.9 + Math.sin(x * 0.11 + seed * 2) * 0.7)));
-    for (let r = 0; r < h; r++) put(g, row + CHART_ROWS - 1 - r, x, r === h - 1 ? '▓' : '█', 'd');
+    for (let r = 0; r < h; r++) put(g, row + CHART_ROWS - 1 - r, x, r === h - 1 ? '▓' : '█', 'bed');
   }
 
   // water body with drifting current particles
@@ -592,7 +597,7 @@ function drawChart(g, row, t) {
     for (let x = 0; x < chartW; x++) {
       if (g.ch[r][x] !== ' ') continue;
       const drift = (x + Math.floor(t * 5) + r * 37) % 29;
-      put(g, r, x, drift === 0 ? '·' : '░', 'w');
+      put(g, r, x, drift === 0 ? '·' : '░', drift === 0 ? 'w2' : 'w');
     }
   }
 
@@ -600,7 +605,7 @@ function drawChart(g, row, t) {
   const waves = '~≈~~∼≈~∼';
   for (let x = 0; x < chartW; x++) {
     const i = ((x + Math.floor(t * 6)) % waves.length + waves.length) % waves.length;
-    put(g, surface, x, waves[i], 'w');
+    put(g, surface, x, waves[i], 'w2');
   }
 
   // characteristic level markers
