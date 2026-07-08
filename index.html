@@ -78,6 +78,16 @@
     text-decoration: none;
     color: var(--dim);
     width: 1.4ch;
+    display: inline-block;
+    transform-origin: 50% 50%;
+    /* springy back-overshoot: the caret barrel-rolls and bounces into place */
+    transition: transform 0.5s cubic-bezier(0.68, -0.6, 0.27, 1.6);
+  }
+  #local-toggle:hover { color: var(--ink); }
+  #local-toggle.open { transform: rotate(450deg); } /* full spin, then points down */
+  @media (prefers-reduced-motion: reduce) {
+    #local-toggle { transition: none; }
+    #local-toggle.open { transform: rotate(90deg); }
   }
   #local-detail {
     margin-top: 0.5em;
@@ -384,7 +394,7 @@ const localToggle = document.getElementById('local-toggle');
 localToggle.addEventListener('click', () => {
   const open = localDetail.hidden;
   localDetail.hidden = !open;
-  localToggle.textContent = open ? '▾' : '▸';
+  localToggle.classList.toggle('open', open); // rotation encodes state; glyph stays ▸
   localToggle.setAttribute('aria-expanded', String(open));
 });
 
