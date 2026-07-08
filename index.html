@@ -150,6 +150,7 @@
 
 const API = 'https://www.pegelonline.wsv.de/webservices/rest-api/v2';
 const COLS = 84;
+const HEADER_ROWS = 10;
 const CHART_ROWS = 15;
 const SPARK_ROWS = 4;
 const PROFILE_ROWS = 6;
@@ -489,6 +490,30 @@ function putBig(g, row, col, text, cls) {
   return x;
 }
 
+// river-kilometer marker drawn like the roadside Rheinkilometer signs: a framed,
+// paneled number board on two posts. `row` is the top-border row. Width = 4·digits+1
+function putKmSign(g, row, col, km) {
+  const d = String(Math.round(km));
+  const n = d.length, cw = 3;
+  let top = '┌', bot = '└';
+  for (let i = 0; i < n; i++) {
+    top += '─'.repeat(cw) + (i < n - 1 ? '┬' : '┐');
+    bot += '─'.repeat(cw) + (i < n - 1 ? '┴' : '┘');
+  }
+  put(g, row, col, top, 'b');
+  for (let r = 0; r < 5; r++) {
+    let line = '│';
+    for (let i = 0; i < n; i++) line += FONT[d[i]][r] + '│';
+    put(g, row + 1 + r, col, line, 'b');
+  }
+  put(g, row + 6, col, bot, 'b');
+  for (const i of [0, n - 1]) {
+    const c = col + 2 + i * (cw + 1);
+    put(g, row + 7, c, '│', 'b');
+    put(g, row + 8, c, '│', 'b');
+  }
+}
+
 // ---------- sections ----------
 
 function charValue(name) {
@@ -529,7 +554,11 @@ function drawHeader(g, row, t) {
     const status = state.adsbOk ? `adsb: ${state.aircraft.length} aircraft` : 'adsb: receiver offline';
     put(g, row + 7, 2, status, 'd');
   }
-  return row + 8;
+  if (info.km != null) {
+    const w = 4 * String(Math.round(info.km)).length + 1;
+    putKmSign(g, row + 1, COLS - w - 1, info.km);
+  }
+  return row + HEADER_ROWS;
 }
 
 function drawChart(g, row, t) {
@@ -881,7 +910,7 @@ function render(t) {
     screen.textContent = `connecting to pegelonline.wsv.de ${'·'.repeat(1 + Math.floor(t * 2) % 3)}`;
     return;
   }
-  const g = makeGrid(8 + CHART_ROWS + 1 + SPARK_ROWS + 2 + PROFILE_ROWS + 1);
+  const g = makeGrid(HEADER_ROWS + CHART_ROWS + 1 + SPARK_ROWS + 2 + PROFILE_ROWS + 1);
   let row = drawHeader(g, 0, t);
   row = drawChart(g, row, t);
   row = drawSparkline(g, row, t);
