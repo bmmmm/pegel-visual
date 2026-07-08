@@ -1019,17 +1019,32 @@ renderHistoryBar();
 
 // ---------- main loop ----------
 
+// animated sinking boat for the error screen: it rocks and dips into the
+// scrolling waves while bubbles rise, looping forever
+function wreckFrame(t) {
+  const W = 24, H = 8;
+  const buf = Array.from({ length: H }, () => Array(W).fill(' '));
+  const put = (r, c, s) => { for (let i = 0; i < s.length; i++) { const cc = c + i; if (r >= 0 && r < H && cc >= 0 && cc < W) buf[r][cc] = s[i]; } };
+  const bx = 5 + (Math.sin(t * 1.6) > 0 ? 0 : 1);       // gentle rocking
+  const top = 1 + Math.round((1 - Math.cos(t * 1.1)) * 1.6); // bobs and sinks ~1..4
+  const boat = ['  x_x', ' /   \\', '_/_____\\_', '\\ glug! /', ' \\_____/'];
+  for (let i = 0; i < boat.length; i++) put(top + i, bx, boat[i]);
+  const wv = '~∼≈~';                                     // scrolling waves submerge the hull
+  for (let c = 0; c < W; c++) {
+    buf[H - 2][c] = wv[(c + Math.floor(t * 4)) % wv.length];
+    buf[H - 1][c] = wv[(c + Math.floor(t * 3) + 2) % wv.length];
+  }
+  for (let k = 0; k < 4; k++) {                          // rising bubbles
+    const bc = 3 + k * 5 + (k % 2);
+    const br = (H - 2) - (Math.floor(t * 3 + k * 2) % 5);
+    if (br > top + 1) put(br, bc, k % 2 ? '°' : 'o');
+  }
+  return buf.map(r => r.join('').replace(/\s+$/, '')).join('\n');
+}
+
 function render(t) {
   if (state.error) {
-    const wreck = [
-      '        x_x',
-      '       /   \\',
-      '    __/_____\\__',
-      '    \\  glug!  /',
-      '     \\_______/',
-      '  ~~~~~~~~~~~~~~~~~',
-    ].join('\n');
-    screen.textContent = `${wreck}\n\nERROR\n\n${state.error}`;
+    screen.textContent = `${wreckFrame(t)}\n\nERROR\n\n${state.error}`;
     return;
   }
   if (!state.gauge || !state.gauge.currentMeasurement) {
