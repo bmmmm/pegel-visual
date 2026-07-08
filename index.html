@@ -128,7 +128,7 @@
     cursor: pointer;
   }
   #local-detail .row-btn:hover { color: var(--ink); }
-  #recent {
+  #recent, #history-bar {
     margin-top: 1em;
     font-size: 0.8em;
     color: var(--dim);
@@ -137,7 +137,8 @@
     align-items: center;
     gap: 0.4em 0.55em;
   }
-  #recent button {
+  #history-bar { margin-top: 0.8em; }
+  #recent button, #history-bar button {
     font: inherit;
     color: var(--ink);
     background: none;
@@ -145,7 +146,8 @@
     padding: 0.05em 0.6ch;
     cursor: pointer;
   }
-  #recent button:hover { background: var(--ink); color: var(--paper); }
+  #recent button:hover, #history-bar button:hover,
+  #history-bar button.on { background: var(--ink); color: var(--paper); }
   footer {
     margin: 1.2em 0 2em;
     font-size: 0.72em;
@@ -157,7 +159,7 @@
   @media (max-width: 640px) {
     main { margin-top: 2vh; padding: 1em 0.7em; }
     footer { margin: 1em 0.7em 2em; }
-    #recent button { padding: 0.2em 0.7ch; } /* a little more tap area */
+    #recent button, #history-bar button { padding: 0.2em 0.7ch; } /* a little more tap area */
   }
 </style>
 </head>
@@ -171,6 +173,7 @@
       aria-label="ADS-B receiver URL"> --refresh 300s
     <button type="submit" hidden>go</button>
   </form>
+  <nav id="history-bar" aria-label="history range"></nav>
   <nav id="recent" aria-label="recently viewed stations" hidden></nav>
   <div id="localbar">
     <button id="local-toggle" type="button" aria-expanded="false" aria-label="toggle per-station breakdown">▸</button>
@@ -699,15 +702,33 @@ function drawChart(g, row, t) {
   return row + CHART_ROWS + 1;
 }
 
+// ---------- history range (adjustable sparkline window) ----------
+
+const HISTORY_KEY = 'pegel.history';
+const HISTORY_PRESETS = [
+  { k: '24h', d: 1, label: '24H' },
+  { k: '3d', d: 3, label: '3D' },
+  { k: '7d', d: 7, label: '7D' },
+  { k: '15d', d: 15, label: '15D' },
+  { k: '30d', d: 30, label: '30D' },
+  { k: 'all', d: null, label: 'ALL' },
+];
+let historyKey = localStorage.getItem(HISTORY_KEY) || 'all';
+if (!HISTORY_PRESETS.some(p => p.k === historyKey)) historyKey = 'all';
+const historyPreset = () => HISTORY_PRESETS.find(p => p.k === historyKey);
+
 function drawSparkline(g, row, t) {
-  const series = state.archive.map(p => p[1]);
-  if (series.length < 2) { put(g, row, 0, 'HISTORY: no data', 'd'); return row + 2; }
-  const days = Math.max(1, Math.round((state.archive[state.archive.length - 1][0] - state.archive[0][0]) / 864e5));
+  const wd = historyPreset().d;
+  const cutoff = wd ? Date.now() - wd * 864e5 : 0;
+  const arch = wd ? state.archive.filter(p => p[0] >= cutoff) : state.archive;
+  const series = arch.map(p => p[1]);
+  if (series.length < 2) { put(g, row, 0, `HISTORY · ${historyPreset().label}: not enough data yet`, 'd'); return row + 2; }
+  const spanDays = Math.max(1, Math.round((arch[arch.length - 1][0] - arch[0][0]) / 864e5));
   const chartW = COLS - 12;
   const step = series.length / chartW;
   const vals = Array.from({ length: chartW }, (_, x) => series[Math.min(series.length - 1, Math.floor(x * step))]);
   const min = Math.min(...vals), max = Math.max(...vals), span = Math.max(max - min, 1);
-  const label = `HISTORY · ${days}D`;
+  const label = `HISTORY · ${wd ? historyPreset().label : spanDays + 'D'}`;
   put(g, row, 0, label, 'd');
   put(g, row, label.length + 3, `min ${min}  max ${max}`, 'd');
   const partial = ' ▁▂▃▄▅▆▇';
@@ -933,6 +954,28 @@ function renderRecent() {
   }
 }
 
+// ---------- history range chips ----------
+
+function renderHistoryBar() {
+  const nav = document.getElementById('history-bar');
+  nav.textContent = 'history ';
+  for (const p of HISTORY_PRESETS) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.textContent = p.label;
+    if (p.k === historyKey) b.className = 'on';
+    b.addEventListener('click', () => setHistory(p.k));
+    nav.append(b);
+  }
+}
+
+function setHistory(k) {
+  if (k === historyKey) return;
+  historyKey = k;
+  localStorage.setItem(HISTORY_KEY, k);
+  renderHistoryBar();
+}
+
 // hydrate suggestions from cache synchronously so an ASCII-spelled ?station= (e.g. a
 // hand-typed link) resolves to the real name before the first fetch, no 404 round-trip
 try {
@@ -951,6 +994,7 @@ if (canonical !== station && knownStations.has(canonical)) {
 
 pushRecent(station);
 renderRecent();
+renderHistoryBar();
 
 // ---------- main loop ----------
 
