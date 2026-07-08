@@ -69,6 +69,19 @@
     text-decoration: underline;
     cursor: pointer;
   }
+  #local-toggle {
+    text-decoration: none;
+    color: var(--dim);
+    width: 1.4ch;
+  }
+  #local-detail {
+    margin-top: 0.5em;
+    white-space: pre;
+    line-height: 1.5;
+    color: var(--mid);
+    overflow-x: auto;
+  }
+  #local-detail .cur { color: var(--ink); font-weight: 700; }
   footer {
     margin: 1.2em 0 2em;
     font-size: 0.72em;
@@ -90,9 +103,11 @@
     <button type="submit" hidden>go</button>
   </form>
   <div id="localbar">
+    <button id="local-toggle" type="button" aria-expanded="false" aria-label="toggle per-station breakdown">▸</button>
     <span id="local-stats">local archive: empty</span>
     · <button id="export-btn" type="button">export</button>
     · <button id="clear-btn" type="button">clear</button>
+    <div id="local-detail" hidden></div>
   </div>
 </main>
 <footer>
@@ -227,23 +242,55 @@ function mergeIntoArchive(name, measurements) {
   }
 }
 
+const kb = b => Math.max(1, Math.round(b / 1024));
+const isoDay = ts => new Date(ts).toISOString().slice(0, 10);
+const mmdd = ts => new Date(ts).toISOString().slice(5, 10);
+const coverageDays = (first, last) => Math.max(1, Math.round((last - first) / 864e5));
+
 function updateLocalBar() {
-  const keys = archiveKeys();
-  let pts = 0, bytes = 0, oldest = Infinity;
-  for (const k of keys) {
+  const rows = [];
+  let totalPts = 0, totalBytes = 0, oldest = Infinity;
+  for (const k of archiveKeys()) {
     const raw = localStorage.getItem(k) || '[]';
-    bytes += raw.length * 2;
-    try {
-      const a = JSON.parse(raw);
-      pts += a.length;
-      if (a.length) oldest = Math.min(oldest, a[0][0]);
-    } catch {}
+    let a = [];
+    try { a = JSON.parse(raw); } catch {}
+    if (!a.length) continue;
+    const bytes = raw.length * 2;
+    totalPts += a.length;
+    totalBytes += bytes;
+    oldest = Math.min(oldest, a[0][0]);
+    rows.push({ name: k.slice(ARCHIVE_PREFIX.length), pts: a.length, bytes, first: a[0][0], last: a[a.length - 1][0] });
   }
-  document.getElementById('local-stats').textContent = pts
-    ? `local archive: ${pts} pts · ${keys.length} station${keys.length > 1 ? 's' : ''} · ` +
-      `${Math.max(1, Math.round(bytes / 1024))} KB · since ${new Date(oldest).toISOString().slice(0, 10)}`
+  rows.sort((x, y) => y.pts - x.pts);
+
+  document.getElementById('local-stats').textContent = totalPts
+    ? `local archive · ${totalPts} pts · ${rows.length} station${rows.length > 1 ? 's' : ''} · ` +
+      `${kb(totalBytes)} KB · since ${isoDay(oldest)}`
     : 'local archive: empty';
+
+  document.getElementById('local-toggle').style.visibility = totalPts ? 'visible' : 'hidden';
+
+  const nameW = rows.reduce((w, r) => Math.max(w, r.name.length), 0);
+  const detail = document.getElementById('local-detail');
+  detail.innerHTML = rows.map(r => {
+    const line = `${r.name.padEnd(nameW)}  ${String(r.pts).padStart(5)} pts  ` +
+      `${String(kb(r.bytes)).padStart(4)} KB  ${mmdd(r.first)}→${mmdd(r.last)}  ` +
+      `${String(coverageDays(r.first, r.last)).padStart(3)}d`;
+    const marker = r.name === station ? '› ' : '  ';
+    return r.name === station
+      ? `<span class="cur">${marker}${esc(line)}</span>`
+      : `${marker}${esc(line)}`;
+  }).join('\n');
 }
+
+const localToggle = document.getElementById('local-toggle');
+localToggle.addEventListener('click', () => {
+  const detail = document.getElementById('local-detail');
+  const open = detail.hidden;
+  detail.hidden = !open;
+  localToggle.textContent = open ? '▾' : '▸';
+  localToggle.setAttribute('aria-expanded', String(open));
+});
 
 document.getElementById('export-btn').addEventListener('click', () => {
   const out = {};
@@ -618,8 +665,10 @@ window.addEventListener('popstate', () => {
 
 const STATIONS_CACHE = 'pegel.stations';
 const STATIONS_TTL = 7 * 864e5;
+const knownStations = new Set();
 
 function fillDatalist(names) {
+  for (const name of names) knownStations.add(name.toUpperCase());
   const list = document.getElementById('stations');
   if (list.childElementCount) return;
   const frag = document.createDocumentFragment();
@@ -630,6 +679,14 @@ function fillDatalist(names) {
   }
   list.appendChild(frag);
 }
+
+// picking a datalist suggestion (or committing a complete valid name) fires 'change',
+// not per keystroke — so this applies on select without clobbering mid-typing input
+stationInput.addEventListener('change', () => {
+  const v = stationInput.value.trim().toUpperCase();
+  if (v && v !== station && knownStations.has(v)) switchStation(v, adsbInput.value);
+  else if (knownStations.size && v !== station) stationInput.value = station; // invalid/abandoned commit: snap back
+});
 
 async function loadStationList() {
   let cached = null;
