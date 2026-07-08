@@ -1046,31 +1046,51 @@ function wreckFrame(t) {
   else if (p < 0.72) { mx = chompX; open = false; }
   else { mx = Math.round(chompX + ((p - 0.72) / 0.28) * (farX - chompX)); open = false; }
   const my = surf - 8;
-  const eye = (p >= 0.60 && p < 0.72) ? '-' : '◣';   // angry glare; a wink after the gulp
-  const jaw = open ? [
-    '        /\\  /\\  /\\',
-    '    ___/  \\/  \\/  \\_',
-    '   /                 \\',
-    '  /             ___   \\',
-    ' < VVVVVVVV    / ' + eye + ' \\   \\',
-    ' < -==<        \\___/   |',
-    ' < ^^^^^^^^           _/',
-    '  \\                  /',
-    '   \\________________/',
-  ] : [
-    '        /\\  /\\  /\\',
-    '    ___/  \\/  \\/  \\_',
-    '   /                 \\',
-    '  /             ___   \\',
-    ' | XXXXXXXX    / ' + eye + ' \\   \\',
-    ' |  ______     \\___/   |',
-    ' | XXXXXXXX           _/',
-    '  \\                  /',
-    '   \\________________/',
-  ];
-  putArr(my, mx, jaw);
+  const happy = p >= 0.56;                 // full and content once it has eaten the boat
+  const eye = happy ? '^' : '◣';           // angry glare while hunting; happy squint after
+  let jaw;
+  if (open) {
+    jaw = [
+      '        /\\  /\\  /\\',
+      '    ___/  \\/  \\/  \\_',
+      '   /                 \\',
+      '  /             ___   \\',
+      ' < VVVVVVVV    / ' + eye + ' \\   \\',
+      ' < -==<        \\___/   |',
+      ' < ^^^^^^^^           _/',
+      '  \\                  /',
+      '   \\________________/',
+    ];
+  } else if (happy) {
+    jaw = [
+      '        /\\  /\\  /\\',
+      '    ___/  \\/  \\/  \\_',
+      '   /                 \\',
+      '  /             ___   \\',
+      ' |  ______     / ' + eye + ' \\   \\',
+      ' |  \\____/     \\___/   |',
+      ' |                    _/',
+      '  \\                  /',
+      '   \\________________/',
+    ];
+  } else {
+    jaw = [
+      '        /\\  /\\  /\\',
+      '    ___/  \\/  \\/  \\_',
+      '   /                 \\',
+      '  /             ___   \\',
+      ' | XXXXXXXX    / ' + eye + ' \\   \\',
+      ' |  ______     \\___/   |',
+      ' | XXXXXXXX           _/',
+      '  \\                  /',
+      '   \\________________/',
+    ];
+  }
+  const swim = happy && p >= 0.72 && Math.sin(t * 4) > 0 ? -1 : 0;  // bob up as it swims off
+  putArr(my + swim, mx, jaw);
 
-  if (p >= 0.54 && p < 0.62) put(my + 1, bx, 'CHOMP!');   // snap flash by the boat
+  if (happy) put(0, mx + 14 + (Math.floor(t * 2) % 2), '♪');  // humming a happy tune
+  if (p >= 0.54 && p < 0.60) put(my + 1, bx, 'CHOMP!');   // snap flash by the boat
 
   // scrolling waves across the surface
   const wv = '~∼≈~';
