@@ -1019,54 +1019,58 @@ renderHistoryBar();
 
 // ---------- main loop ----------
 
-// the error screen: a sea monster surfaces and eats the little sailboat, on a
-// loop. approach -> jaws open around the boat -> CHOMP -> gulp & burp -> dive
+// the error screen: a big horned sea monster surfaces and devours the little
+// sailboat, on a loop. approach -> jaws gape over the boat -> CHOMP -> wink,
+// gulp & bubbles -> dive back under -> repeat. faces left, toward the boat.
 function wreckFrame(t) {
-  const W = 40, H = 10;
+  const W = 46, H = 12;
   const buf = Array.from({ length: H }, () => Array(W).fill(' '));
   const put = (r, c, s) => { for (let i = 0; i < s.length; i++) { const cc = c + i, ch = s[i]; if (ch !== ' ' && r >= 0 && r < H && cc >= 0 && cc < W) buf[r][cc] = ch; } };
   const putArr = (r, c, a) => a.forEach((s, i) => put(r + i, c, s));
-  const C = 6, p = (t % C) / C;
+  const C = 6.5, p = (t % C) / C;
   const surf = H - 3;   // waterline (waves fill the two rows below)
-  const bx = 3;
-  const farX = W - 15;
+  const bx = 2, chompX = 4, farX = W - 24;
 
   // sailboat, bobbing — gone the instant the jaws snap shut
   const eaten = p >= 0.56;
   if (!eaten) {
-    const bob = Math.sin(t * 3) > 0.3 ? 0 : -1;  // bob up only, keep the hull above the waves
-    putArr(surf - 3 + bob, bx, ['|\\', '|_\\', '_|__\\', '\\____/']);
+    const bob = Math.sin(t * 3) > 0.3 ? 0 : -1;  // bob up only, hull stays above the waves
+    putArr(surf - 5 + bob, bx, ['   |>', '   |\\', '   |#\\', '   |##\\', '___|###\\', '\\_______/']);
   }
 
-  // monster maw x: idles far right, lunges left to the boat, then retreats
+  // monster: idles far right, lunges left over the boat, chomps, then retreats
   let mx, open;
   if (p < 0.26) { mx = farX; open = false; }
-  else if (p < 0.50) { mx = Math.round(farX - ((p - 0.26) / 0.24) * (farX - bx)); open = true; }
-  else if (p < 0.56) { mx = bx; open = true; }
-  else if (p < 0.72) { mx = bx; open = false; }
-  else { mx = Math.round(bx + ((p - 0.72) / 0.28) * (farX - bx)); open = false; }
-  const my = surf - 5;
-  const eye = (p >= 0.60 && p < 0.72) ? '-' : 'O';   // a satisfied wink after the gulp
-  if (open) {
-    putArr(my, mx, [
-      '    _____',
-      '  _/  ' + eye + '   \\___',
-      ' /            \\',
-      '< VVVVVVV      |',
-      ' \\ ^^^^^^^  ___/',
-      '  \\________/',
-    ]);
-  } else {
-    putArr(my, mx, [
-      '    _____',
-      '  _/  ' + eye + '   \\___',
-      ' /  _______   \\',
-      '|  wwwwwwww    |',
-      ' \\_________ __/',
-      '  \\________/',
-    ]);
-  }
-  if (p >= 0.54 && p < 0.62) put(my - 1, bx, 'CHOMP!');   // snap flash
+  else if (p < 0.50) { mx = Math.round(farX - ((p - 0.26) / 0.24) * (farX - chompX)); open = true; }
+  else if (p < 0.56) { mx = chompX; open = true; }
+  else if (p < 0.72) { mx = chompX; open = false; }
+  else { mx = Math.round(chompX + ((p - 0.72) / 0.28) * (farX - chompX)); open = false; }
+  const my = surf - 8;
+  const eye = (p >= 0.60 && p < 0.72) ? '-' : '◣';   // angry glare; a wink after the gulp
+  const jaw = open ? [
+    '        /\\  /\\  /\\',
+    '    ___/  \\/  \\/  \\_',
+    '   /                 \\',
+    '  /             ___   \\',
+    ' < VVVVVVVV    / ' + eye + ' \\   \\',
+    ' < -==<        \\___/   |',
+    ' < ^^^^^^^^           _/',
+    '  \\                  /',
+    '   \\________________/',
+  ] : [
+    '        /\\  /\\  /\\',
+    '    ___/  \\/  \\/  \\_',
+    '   /                 \\',
+    '  /             ___   \\',
+    ' | XXXXXXXX    / ' + eye + ' \\   \\',
+    ' |  ______     \\___/   |',
+    ' | XXXXXXXX           _/',
+    '  \\                  /',
+    '   \\________________/',
+  ];
+  putArr(my, mx, jaw);
+
+  if (p >= 0.54 && p < 0.62) put(my + 1, bx, 'CHOMP!');   // snap flash by the boat
 
   // scrolling waves across the surface
   const wv = '~∼≈~';
@@ -1074,11 +1078,11 @@ function wreckFrame(t) {
     buf[H - 2][c] = wv[(c + Math.floor(t * 4)) % wv.length];
     buf[H - 1][c] = wv[(c + Math.floor(t * 3) + 2) % wv.length];
   }
-  // burp bubbles rising above the maw after swallowing (starts after the CHOMP flash)
-  if (p >= 0.62 && p < 0.84) {
+  // bubbles rising where the boat went down (just left of the maw)
+  if (p >= 0.60 && p < 0.86) {
     for (let k = 0; k < 3; k++) {
-      const br = (my - 1) - (Math.floor(t * 3 + k * 2) % 2);
-      put(br, mx + 3 + k * 2, k % 2 ? '°' : 'o');
+      const br = (surf - 1) - (Math.floor(t * 4 + k * 2) % 3);
+      put(br, mx - 1 - k * 2, k % 2 ? '°' : 'o');
     }
   }
   return buf.map(r => r.join('').replace(/\s+$/, '')).join('\n');
