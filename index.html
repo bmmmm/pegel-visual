@@ -199,6 +199,7 @@ const COLS = 84;
 const HEADER_ROWS = 10;
 const CHART_ROWS = 15;
 const SPARK_ROWS = 4;
+const SPLASH_ROWS = 2; // headroom above the sparkline for the overshoot splash
 const PROFILE_ROWS = 6;
 const REFRESH_MS = 5 * 60 * 1000;
 
@@ -738,12 +739,20 @@ let historyKey = localStorage.getItem(HISTORY_KEY) || 'all';
 if (!HISTORY_PRESETS.some(p => p.k === historyKey)) historyKey = 'all';
 const historyPreset = () => HISTORY_PRESETS.find(p => p.k === historyKey);
 
+// spring state for the sparkline transition: reset (set to null) on station switch or
+// whenever there isn't enough data, so a new dataset snaps in instead of springing from junk
+let sparkDisplay = null, sparkVelocity = null, sparkLastT = null;
+
 function drawSparkline(g, row, t) {
   const wd = historyPreset().d;
   const cutoff = wd ? Date.now() - wd * 864e5 : 0;
   const arch = wd ? state.archive.filter(p => p[0] >= cutoff) : state.archive;
   const series = arch.map(p => p[1]);
-  if (series.length < 2) { put(g, row, 0, `HISTORY · ${historyPreset().label}: not enough data yet`, 'd'); return row + 2; }
+  if (series.length < 2) {
+    put(g, row, 0, `HISTORY · ${historyPreset().label}: not enough data yet`, 'd');
+    sparkDisplay = null;
+    return row + 2;
+  }
   const spanDays = Math.max(1, Math.round((arch[arch.length - 1][0] - arch[0][0]) / 864e5));
   const chartW = COLS - 12;
   const step = series.length / chartW;
@@ -752,19 +761,42 @@ function drawSparkline(g, row, t) {
   const label = `HISTORY · ${wd ? historyPreset().label : spanDays + 'D'}`;
   put(g, row, 0, label, 'd');
   put(g, row, label.length + 3, `min ${min}  max ${max}`, 'd');
-  const partial = ' ▁▂▃▄▅▆▇';
+
+  // water sloshes past the new level, wobbles, then settles — a damped spring per
+  // column instead of a flat snap, so history-range changes read as the level moving
+  const dt = sparkLastT === null ? 0.12 : Math.min(0.2, t - sparkLastT);
+  sparkLastT = t;
+  if (!sparkDisplay || sparkDisplay.length !== chartW) { sparkDisplay = vals.slice(); sparkVelocity = vals.map(() => 0); }
   for (let x = 0; x < chartW; x++) {
-    const level = ((vals[x] - min) / span) * SPARK_ROWS * 8;
+    const springK = 45 + (x % 7) * 4, damping = 7 + (x % 5) * 0.6; // slight per-column variation → organic slosh
+    const accel = (vals[x] - sparkDisplay[x]) * springK - sparkVelocity[x] * damping;
+    sparkVelocity[x] += accel * dt;
+    sparkDisplay[x] += sparkVelocity[x] * dt;
+  }
+
+  const partial = ' ▁▂▃▄▅▆▇';
+  const splashGlyphs = '·˚°∘';
+  for (let x = 0; x < chartW; x++) {
+    const level = ((sparkDisplay[x] - min) / span) * SPARK_ROWS * 8;
     for (let r = 0; r < SPARK_ROWS; r++) {
       const cellLevel = Math.max(0, Math.min(8, level - r * 8));
-      const rr = row + 1 + SPARK_ROWS - 1 - r;
+      const rr = row + SPLASH_ROWS + 1 + SPARK_ROWS - 1 - r;
       if (cellLevel >= 8) put(g, rr, x, '█', 'w');
       else if (cellLevel >= 1) put(g, rr, x, partial[Math.floor(cellLevel)], 'w');
     }
+    // overshoot above the frame: the water briefly splashes over the top
+    const overflow = level - SPARK_ROWS * 8;
+    if (overflow > 0) {
+      for (let s = 0; s < SPLASH_ROWS; s++) {
+        const cellLevel = overflow - s * 8;
+        if (cellLevel < 1) continue;
+        put(g, row + SPLASH_ROWS - s, x, splashGlyphs[Math.min(splashGlyphs.length - 1, Math.floor(cellLevel / 2))], 'w2');
+      }
+    }
   }
-  put(g, row + 1, chartW + 1, `┐ now`, 'd');
-  put(g, row + SPARK_ROWS, chartW + 1, `┘ ${series.length} pts`, 'd');
-  return row + SPARK_ROWS + 2;
+  put(g, row + SPLASH_ROWS + 1, chartW + 1, `┐ now`, 'd');
+  put(g, row + SPLASH_ROWS + SPARK_ROWS, chartW + 1, `┘ ${series.length} pts`, 'd');
+  return row + SPLASH_ROWS + SPARK_ROWS + 2;
 }
 
 function drawProfile(g, row) {
@@ -837,6 +869,7 @@ function switchStation(name, adsb, push = true) {
   state.neighbors = [];
   state.error = null;
   state.archive = loadArchive(station);
+  sparkDisplay = null; // new station's data shouldn't spring in from the old one's shape
   updateLocalBar();
 
   stationInput.value = station;
@@ -990,11 +1023,30 @@ function renderHistoryBar() {
   }
 }
 
+// backfill from the API when a picked range reaches further back than what's
+// locally archived yet — the WSV API keeps ~30 days, so this covers everything
+// up to 30D without waiting for the local archive to accumulate that much itself
+async function ensureHistoryCoverage(days) {
+  if (!days) return; // ALL has no fixed window — it just shows whatever's archived
+  const forStation = station;
+  const cutoff = Date.now() - days * 864e5;
+  if (state.archive.length && state.archive[0][0] <= cutoff) return; // already covered
+  try {
+    const enc = encodeURIComponent(forStation);
+    const measurements = await getJson(`${API}/stations/${enc}/W/measurements.json?start=${encodeURIComponent('P' + days + 'D')}`);
+    if (station !== forStation) return; // switched away while fetching — discard
+    mergeIntoArchive(forStation, measurements);
+    state.archive = loadArchive(forStation);
+    updateLocalBar();
+  } catch { /* best-effort backfill; sparkline just falls back to whatever's local */ }
+}
+
 function setHistory(k) {
   if (k === historyKey) return;
   historyKey = k;
   localStorage.setItem(HISTORY_KEY, k);
   renderHistoryBar();
+  ensureHistoryCoverage(historyPreset().d);
 }
 
 // hydrate suggestions from cache synchronously so an ASCII-spelled ?station= (e.g. a
@@ -1122,7 +1174,7 @@ function render(t) {
     screen.textContent = `connecting to pegelonline.wsv.de ${'·'.repeat(1 + Math.floor(t * 2) % 3)}`;
     return;
   }
-  const g = makeGrid(HEADER_ROWS + CHART_ROWS + 1 + SPARK_ROWS + 2 + PROFILE_ROWS + 1);
+  const g = makeGrid(HEADER_ROWS + CHART_ROWS + 1 + SPLASH_ROWS + SPARK_ROWS + 2 + PROFILE_ROWS + 1);
   let row = drawHeader(g, 0, t);
   row = drawChart(g, row, t);
   row = drawSparkline(g, row, t);
