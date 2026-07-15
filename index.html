@@ -288,8 +288,14 @@ function screenSummary() {
   return `${station} on ${state.info.water.shortname}${km}: water level ${Math.round(cur.value)} cm${trendTxt}. State ${cur.stateMnwMhw || 'unknown'}.`;
 }
 
+// while --help is shown, the screen holds a man page instead of the live grid,
+// so the aria-label must say so rather than describe water levels that aren't there
+function setScreenAria() {
+  screen.setAttribute('aria-label', state.help ? 'command help' : screenSummary());
+}
+
 function applyLiveChrome() {
-  screen.setAttribute('aria-label', screenSummary());
+  setScreenAria();
   const cur = state.gauge && state.gauge.currentMeasurement;
   if (!cur) return;
   const trend = trendPerHour();
@@ -306,6 +312,7 @@ const state = {
   adsbOk: null,     // null = off, true/false = last fetch result
   archive: [],      // locally accumulated [timestampMs, cm] for this station
   error: null,
+  help: null,       // set to a man-page string while the --help screen is shown
 };
 
 // ---------- data ----------
@@ -1126,6 +1133,7 @@ let refreshTimer = null;
 
 // switch station in-place: no full reload, just reset per-station state and refetch
 function switchStation(name, adsb, push = true) {
+  dismissHelp(); // a station switch always leaves the man page
   const next = resolveStation(name || station) || station;
   const nextAdsb = (adsb ?? adsbRaw).trim();
   if (next === station && nextAdsb === adsbRaw) return;
@@ -1153,7 +1161,7 @@ function switchStation(name, adsb, push = true) {
   sparkDisplay = null; // new station's data shouldn't spring in from the old one's shape
   dirty = true;
   updateLocalBar();
-  screen.setAttribute('aria-label', screenSummary());
+  setScreenAria();
   // cross-fade the grid from the old station to the connecting screen; a
   // transition aborted by the browser (hidden/unfocused tab) is fine — the
   // render itself still ran, so just swallow the rejections
@@ -1175,26 +1183,115 @@ function switchStation(name, adsb, push = true) {
   renderRecent();
 }
 
+function dismissHelp() {
+  if (!state.help) return;
+  state.help = null;
+  dirty = true;
+  setScreenAria();
+}
+
+// parses a typed command line into flag values. Flags are matched case-insensitively
+// (the station input is visually uppercased by CSS, and typed commands may come in
+// any case); --station/--adsb/--history each take the space-separated words up to the
+// next --flag. Returns undefined for a flag that wasn't present at all, so callers can
+// tell "not given" (undefined) apart from "given empty" (''), e.g. --adsb clearing.
+function parseCommand(raw) {
+  const tokens = (raw || '').trim().split(/\s+/).filter(Boolean);
+  const cmd = { station: undefined, adsb: undefined, history: undefined, help: false, unknownFlag: null };
+  let i = 0;
+  while (i < tokens.length) {
+    const tok = tokens[i];
+    if (!tok.startsWith('--')) { i++; continue; } // stray non-flag token: ignore
+    const flag = tok.slice(2).toLowerCase();
+    i++;
+    const takesValue = flag === 'station' || flag === 'adsb' || flag === 'history';
+    const words = [];
+    if (takesValue) while (i < tokens.length && !tokens[i].startsWith('--')) { words.push(tokens[i]); i++; }
+    const value = words.join(' ');
+    if (flag === 'station') cmd.station = value;
+    else if (flag === 'adsb') cmd.adsb = value;
+    else if (flag === 'history') cmd.history = value.toLowerCase();
+    else if (flag === 'help') cmd.help = true;
+    else if (!cmd.unknownFlag) cmd.unknownFlag = tok;
+  }
+  return cmd;
+}
+
+function helpText(unknownFlag) {
+  const lines = [];
+  if (unknownFlag) lines.push(`unknown flag: ${unknownFlag}`, '');
+  lines.push(
+    'PEGEL(1)                 PEGEL:// terminal manual                 PEGEL(1)',
+    '',
+    'NAME',
+    '    pegel - live ASCII water level terminal for German rivers',
+    '',
+    'SYNOPSIS',
+    '    > pegel [STATION] [--station NAME] [--adsb URL] [--history RANGE] [--help]',
+    '',
+    'OPTIONS',
+    '    STATION           bare station name, e.g. BONN (shorthand for --station)',
+    '    --station NAME    switch to station NAME (umlaut spellings accepted)',
+    '    --adsb URL        set your local ADS-B receiver URL; no value clears it',
+    '    --history RANGE   set the sparkline window: 24h 3d 7d 15d 30d all',
+    '    --help            show this screen',
+    '',
+    'KEYS',
+    '    /       focus the prompt from anywhere on the page',
+    '    enter   apply the command / switch station',
+    '    esc     dismiss this help screen',
+    '',
+    'DATA',
+    '    PEGELONLINE (c) WSV, refreshed every 5 min',
+  );
+  return lines.join('\n');
+}
+
+function runCommand(raw) {
+  const cmd = parseCommand(raw);
+  if (cmd.help || cmd.unknownFlag) {
+    state.help = helpText(cmd.unknownFlag);
+    dirty = true;
+    setScreenAria();
+    stationInput.value = station;
+    return;
+  }
+  if (cmd.station !== undefined || cmd.adsb !== undefined) switchStation(cmd.station, cmd.adsb);
+  if (cmd.history !== undefined && HISTORY_PRESETS.some(p => p.k === cmd.history)) setHistory(cmd.history);
+  dismissHelp();
+  dirty = true;
+  stationInput.value = station;
+}
+
+function applyPrompt() {
+  if (stationInput.value.includes('--')) runCommand(stationInput.value);
+  else switchStation(stationInput.value, adsbInput.value);
+}
+
 document.getElementById('prompt').addEventListener('submit', e => {
   e.preventDefault();
-  switchStation(stationInput.value, adsbInput.value);
+  applyPrompt();
 });
 // apply on Enter directly — bypasses the datalist swallowing the first Enter keystroke
 for (const el of [stationInput, adsbInput]) {
   el.addEventListener('keydown', e => {
     if (e.key === 'Enter') {
       e.preventDefault();
-      switchStation(stationInput.value, adsbInput.value);
+      applyPrompt();
     }
   });
 }
-// terminal idiom: '/' focuses the station prompt from anywhere on the page
+// terminal idiom: '/' focuses the station prompt from anywhere on the page; esc
+// dismisses the --help screen when it's showing
 document.addEventListener('keydown', e => {
   if (e.key === '/' && !e.metaKey && !e.ctrlKey && !e.altKey &&
       !/^(INPUT|TEXTAREA)$/.test(document.activeElement.tagName)) {
     e.preventDefault();
     stationInput.focus();
     stationInput.select();
+  } else if (e.key === 'Escape' && state.help) {
+    e.preventDefault();
+    dismissHelp();
   }
 });
 window.addEventListener('popstate', () => {
@@ -1244,6 +1341,7 @@ function fillDatalist(list) {
 // picking a datalist suggestion (or committing a complete valid name) fires 'change',
 // not per keystroke — so this applies on select without clobbering mid-typing input
 stationInput.addEventListener('change', () => {
+  if (stationInput.value.includes('--')) return; // half-typed command: let Enter/submit parse it
   const resolved = resolveStation(stationInput.value);
   if (resolved !== station && knownStations.has(resolved)) switchStation(resolved, adsbInput.value);
   else if (knownStations.size) stationInput.value = station; // invalid/abandoned/ASCII spelling: snap to canonical
@@ -1483,6 +1581,10 @@ function wreckFrame(t) {
 }
 
 function render(t) {
+  if (state.help) {
+    screen.textContent = state.help;
+    return;
+  }
   if (state.error) {
     screen.textContent = `${wreckFrame(t)}\n\nERROR\n\n${state.error}`;
     return;
