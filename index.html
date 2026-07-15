@@ -686,6 +686,14 @@ function isNight() {
   return utcH < solarNoon - halfDay || utcH > solarNoon + halfDay;
 }
 
+// synodic-month approximation from a known new moon (JD 2451550.1 = 2000-01-06);
+// ±1 day accuracy is plenty for an ASCII scene, no libraries needed
+function moonPhase() {
+  const jd = Date.now() / 86400000 + 2440587.5;
+  const cycles = (jd - 2451550.1) / 29.530588853;
+  return ((cycles % 1) + 1) % 1;
+}
+
 function trendPerHour() {
   const a = state.archive;
   if (a.length < 2) return null;
@@ -874,9 +882,42 @@ function drawChart(g, row, t) {
       for (let r = row; r <= Math.min(row + 3, surface - 3); r++) {
         if (g.ch.slice(r, r + 3).every(line => line.slice(2, 7).every(c => c === ' '))) { moonRow = r; break; }
       }
-      putSky(moonRow,     3, '.-.', 'b');
-      putSky(moonRow + 1, 2, '( o )', 'b');
-      putSky(moonRow + 2, 3, "`-'", 'b');
+      const frac = moonPhase(); // 0/1 = new, 0.5 = full
+      if (frac < 0.05 || frac >= 0.95) {
+        // new moon: faint outline only, nothing lit
+        putSky(moonRow,     3, '.-.', 'd');
+        putSky(moonRow + 1, 2, '(   )', 'd');
+        putSky(moonRow + 2, 3, "`-'", 'd');
+      } else if (frac < 0.25) {
+        // waxing crescent: thin sliver lit on the right
+        putSky(moonRow,     3, '.-.', 'd');
+        putSky(moonRow + 1, 2, '(', 'd');
+        putSky(moonRow + 1, 5, ':)', 'b');
+        putSky(moonRow + 2, 3, "`-'", 'd');
+      } else if (frac < 0.45) {
+        // first quarter / waxing gibbous: right half lit
+        putSky(moonRow,     3, '.-.', 'd');
+        putSky(moonRow + 1, 2, '(', 'd');
+        putSky(moonRow + 1, 3, '#o)', 'b');
+        putSky(moonRow + 2, 3, "`-'", 'd');
+      } else if (frac < 0.55) {
+        // full moon: fully lit disc with a crater
+        putSky(moonRow,     3, '.-.', 'b');
+        putSky(moonRow + 1, 2, '( o )', 'b');
+        putSky(moonRow + 2, 3, "`-'", 'b');
+      } else if (frac < 0.75) {
+        // last quarter / waning gibbous: left half lit
+        putSky(moonRow,     3, '.-.', 'd');
+        putSky(moonRow + 1, 2, '(o#', 'b');
+        putSky(moonRow + 1, 5, ')', 'd');
+        putSky(moonRow + 2, 3, "`-'", 'd');
+      } else {
+        // waning crescent: thin sliver lit on the left
+        putSky(moonRow,     3, '.-.', 'd');
+        putSky(moonRow + 1, 2, '(:', 'b');
+        putSky(moonRow + 1, 5, ')', 'd');
+        putSky(moonRow + 2, 3, "`-'", 'd');
+      }
       const starGlyphs = ['·', '+', '·', '˙'];
       for (let x = 0; x < chartW; x++) {
         for (let r = row; r < surface - 1; r++) {
