@@ -311,6 +311,7 @@ const state = {
   wt: null,         // water temperature, °C (number) or null if unavailable
   q: null,          // discharge, m³/s (number) or null if unavailable
   neighbors: [],    // [upstream?, self, downstream?] with elevation data
+  weather: null,    // current weather at the station (open-meteo), or null if unavailable
   aircraft: [],     // live ADS-B positions from the user's own receiver
   adsbOk: null,     // null = off, true/false = last fetch result
   archive: [],      // locally accumulated [timestampMs, cm] for this station
@@ -328,6 +329,7 @@ async function getJson(url) {
 
 async function loadData() {
   const forStation = station; // guard against a mid-flight station switch
+  const isNewStation = !state.info; // switchStation resets info to null before calling us
   try {
     const enc = encodeURIComponent(forStation);
     // be gentle to the WSV API: seed the archive once with 15 days, afterwards
@@ -359,6 +361,7 @@ async function loadData() {
     state.archive = loadArchive(forStation);
     updateLocalBar();
     if (!state.neighbors.length) loadNeighbors(info).catch(() => {});
+    if (isNewStation) loadWeather();
   } catch (e) {
     if (station !== forStation) return; // stale error from a station we left
     state.error = `station "${forStation}" failed: ${e.message}\n` +
@@ -366,6 +369,25 @@ async function loadData() {
   }
   dirty = true;
   applyLiveChrome();
+}
+
+// ---------- weather (garnish only, via open-meteo — never an error state) ----------
+
+const WEATHER_REFRESH_MS = 15 * 60 * 1000;
+
+async function loadWeather() {
+  const info = state.info;
+  if (!info || info.latitude == null || info.longitude == null) return;
+  const forStation = station; // guard against a mid-flight station switch
+  try {
+    const d = await getJson(`https://api.open-meteo.com/v1/forecast?latitude=${info.latitude}&longitude=${info.longitude}&current=precipitation,snowfall,cloud_cover,wind_speed_10m`);
+    if (station !== forStation) return; // switched away while fetching — discard
+    state.weather = (d && d.current) || null;
+  } catch {
+    if (station !== forStation) return;
+    state.weather = null;
+  }
+  dirty = true;
 }
 
 async function loadNeighbors(info) {
@@ -847,6 +869,16 @@ function drawChart(g, row, t) {
   const night = isNight();
   const icy = state.wt != null && state.wt <= 0.5; // freezing river: ice wins over drought
 
+  // real weather at the station, from open-meteo — pure garnish, null/missing fields
+  // simply mean no effect. suppressed by ice (frozen surface can't wave or rain on),
+  // except snow, which is allowed to fall over the ice pack
+  const weather = state.weather;
+  const windy = !icy && weather && weather.wind_speed_10m != null && weather.wind_speed_10m >= 25;
+  const wSnow = weather && weather.snowfall != null && weather.snowfall > 0;
+  const wRain = !icy && weather && weather.precipitation != null && weather.precipitation > 0 && !wSnow;
+  const wClouds = !icy && weather && weather.cloud_cover != null && weather.cloud_cover >= 60;
+  const wOvercastNight = !icy && weather && weather.cloud_cover != null && weather.cloud_cover >= 85;
+
   // in a flood, leave sky headroom above the swollen river for clouds and rain —
   // the plain scale would pin the surface to the chart ceiling
   const topCm = flood ? value * 1.45 :
@@ -887,8 +919,10 @@ function drawChart(g, row, t) {
     }
   } else {
     const waves = '~≈~~∼≈~∼';
+    const waveT = windy ? t * 14 : t * 6; // wind speeds up the animated surface
     for (let x = 0; x < chartW; x++) {
-      const i = ((x + Math.floor(t * 6)) % waves.length + waves.length) % waves.length;
+      if (windy && x % 9 === 0) { put(g, surface, x, '^', 'w2'); continue; } // whitecap
+      const i = ((x + Math.floor(waveT)) % waves.length + waves.length) % waves.length;
       put(g, surface, x, waves[i], 'w2');
     }
   }
@@ -991,9 +1025,10 @@ function drawChart(g, row, t) {
     put(g, bedTop, bx, '\\__/', 'b');
   } else if (surface > row + 2) {
     // little ship, bobbing downstream (Bonn view: downstream is to the left);
-    // in a flood it pitches harder on the swell; frozen in place mid-river when icy
+    // in a flood — or windy weather — it pitches harder on the swell; frozen in
+    // place mid-river when icy
     const shipX = icy ? Math.floor(chartW * 0.6) : chartW - 10 - Math.floor((t * 1.3) % (chartW - 14));
-    const bob = icy ? 0 : (Math.sin(t * (flood ? 3.2 : 1.6)) > 0.4 ? -1 : 0);
+    const bob = icy ? 0 : (Math.sin(t * (flood || windy ? 3.2 : 1.6)) > 0.4 ? -1 : 0);
     put(g, surface - 2 + bob, shipX + 2, '/|', 'b');
     put(g, surface - 1 + bob, shipX, '_/_|__', 'b');
     put(g, surface + bob, shipX, '\\____/', 'b');
@@ -1024,9 +1059,10 @@ function drawChart(g, row, t) {
       }
     }
   } else {
-    if (night) {
+    if (night && !wOvercastNight) {
       // night: a cratered moon and slowly twinkling stars; the moon slides down
-      // to the first sky slot free of marker lines so it never gets sliced up
+      // to the first sky slot free of marker lines so it never gets sliced up.
+      // heavy real-world cloud cover overcasts the sky: no moon, no stars
       let moonRow = row;
       for (let r = row; r <= Math.min(row + 3, surface - 3); r++) {
         if (g.ch.slice(r, r + 3).every(line => line.slice(2, 7).every(c => c === ' '))) { moonRow = r; break; }
@@ -1077,11 +1113,46 @@ function drawChart(g, row, t) {
         }
       }
     }
+
+    // real weather at the station, from open-meteo: clouds first so precipitation
+    // appears to fall from them, then rain or snow (never both)
+    if (wClouds) {
+      const drift = Math.floor(t * 1.5);
+      for (const [cx0, cy] of [[8, row], [Math.floor(chartW * 0.55), row + 1]]) {
+        const cx = ((cx0 - drift) % chartW + chartW) % chartW;
+        putSky(cy, cx + 1, '.-~~~-.', 'd');
+        putSky(cy + 1, cx, '(_______)', 'd');
+      }
+    }
+    if (wSnow) {
+      // slow, sparse flakes — falls even over a frozen river
+      for (let x = 0; x < chartW; x++) {
+        if (x % 3 !== 0) continue;
+        for (let r = row + 2; r < surface; r++) {
+          if ((((r - Math.floor(t * 2)) % 5) + 5) % 5 === (x * 7) % 5) {
+            const flake = (x + r) % 2 === 0 ? '*' : '·';
+            putSky(r, x, flake, flake === '*' ? 'd' : 'w2');
+          }
+        }
+      }
+    } else if (wRain) {
+      // light rain thins to every 3rd column, moderate+ reuses the flood rain's
+      // dry-streak pattern
+      const light = weather.precipitation < 0.5;
+      for (let x = 0; x < chartW; x++) {
+        if (light ? x % 3 !== 0 : (x * 13) % 4 === 0) continue;
+        for (let r = row + 2; r < surface; r++) {
+          if ((((r - Math.floor(t * 8)) % 5) + 5) % 5 === (x * 7) % 5) putSky(r, x, '/', 'w2');
+        }
+      }
+    }
+
     const trend = trendPerHour();
-    if (!icy && trend !== null && trend >= 2 && surface > row + 4) {
+    if (!icy && !wRain && trend !== null && trend >= 2 && surface > row + 4) {
       // harbinger: the level is rising fast — a lone rain cloud drifts in
       // upstream (right), drizzling, before any flood is on the chart. suppressed
-      // on ice: no drizzle onto a frozen river
+      // on ice (no drizzle onto a frozen river) and when real weather rain is
+      // already active (no double drizzle)
       const cx = chartW - 18 + Math.round(Math.sin(t * 0.4) * 2);
       let cloudRow = row; // like the moon: dodge marker lines if possible
       for (let r = row; r <= Math.min(row + 3, surface - 5); r++) {
@@ -1244,6 +1315,7 @@ function switchStation(name, adsb, push = true) {
   state.wt = null;
   state.q = null;
   state.neighbors = [];
+  state.weather = null;
   state.error = null;
   state.archive = loadArchive(station);
   sparkDisplay = null; // new station's data shouldn't spring in from the old one's shape
@@ -1715,6 +1787,7 @@ fitFont();
 updateLocalBar();
 loadData();
 refreshTimer = setInterval(loadData, REFRESH_MS);
+setInterval(loadWeather, WEATHER_REFRESH_MS);
 loadAircraft();
 setInterval(loadAircraft, ADSB_REFRESH_MS);
 // rAF instead of setInterval: the browser pauses it in hidden tabs for free.
