@@ -134,6 +134,19 @@ python3 -m http.server 8123
 open http://127.0.0.1:8123/
 ```
 
+## Tests
+
+The inline logic is covered by a dependency-free `node:test` suite:
+`tests/extract.mjs` pulls the script out of `index.html` and evaluates it
+against a minimal hand-rolled browser stub (no jsdom, no network, an
+injectable clock for the astronomy). Run it with:
+
+```
+node --test
+```
+
+CI runs the same suite on every push and pull request.
+
 Data: © Wasserstraßen- und Schifffahrtsverwaltung des Bundes (WSV),
 [PEGELONLINE](https://www.pegelonline.wsv.de), refreshed every 5 minutes.
 

@@ -639,7 +639,7 @@ function mergeIntoArchive(name, measurements) {
   const seen = new Set(pts.map(p => p[0]));
   for (const m of measurements) {
     const t = Date.parse(m.timestamp);
-    if (Number.isFinite(t) && m.value != null && !seen.has(t)) pts.push([t, m.value]);
+    if (Number.isFinite(t) && m.value != null && !seen.has(t)) { pts.push([t, m.value]); seen.add(t); }
   }
   pts.sort((a, b) => a[0] - b[0]);
   // thin points older than 16 days to one per hour to stay within quota
@@ -901,7 +901,7 @@ function put(g, row, col, text, cls = '') {
   }
 }
 
-function esc(s) { return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+function esc(s) { return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
 
 function gridToHtml(g) {
   const out = [];
