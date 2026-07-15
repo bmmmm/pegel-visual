@@ -49,6 +49,17 @@ Neighbors for the elevation profile are discovered automatically from the
 station's river and kilometrage. Stations without characteristic values or
 gauge zero degrade gracefully.
 
+The prompt is a tiny REPL: type a bare name to switch station, or a
+flag command (flags are matched case-insensitively) to do more in one go:
+
+- `--station NAME` — switch to station NAME (same as typing a bare name)
+- `--adsb URL` — set your ADS-B receiver URL; `--adsb` with no value clears it
+- `--history RANGE` — set the sparkline window (`24h`, `3d`, `7d`, `15d`, `30d`, `all`)
+- `--help` — show a man page with all of the above right on the screen
+
+Flags combine, e.g. `--station KÖLN --history 7d` switches station and
+range in one command. Press Escape to dismiss the help screen.
+
 `share` in the footer hands the station link to your system share sheet
 (or copies it). The page ships a web manifest, so it can be installed as
 an app from the browser menu.
