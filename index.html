@@ -9,7 +9,9 @@
 <link rel="icon" type="image/svg+xml" href="favicon.svg">
 <link rel="icon" type="image/png" sizes="32x32" href="favicon-32.png">
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
-<meta name="theme-color" content="#a8cede">
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#a8cede" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#121417" media="(prefers-color-scheme: dark)">
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="PEGEL://">
 <meta property="og:title" content="PEGEL:// — live ASCII river gauges">
@@ -25,14 +27,21 @@
 <meta name="twitter:image" content="https://bmmmm.github.io/pegel-visual/og.png">
 <style>
   :root {
-    --paper: #fbfbf9;
-    --ink: #141414;
-    --dim: #a6a6a6;
-    --mid: #5c5c5c;
-    --water: #a8cede;      /* soft pastel light blue */
-    --water-deep: #6f9fb8; /* slightly deeper pastel blue */
-    --bed: #cabfa6;        /* faint sand */
-    --sun: #e0b24e;        /* warm sun / heat accent */
+    color-scheme: light dark;
+    --paper: light-dark(#fbfbf9, #121417);
+    --ink: light-dark(#141414, #e8e6e1);
+    --dim: light-dark(#a6a6a6, #61676c);
+    --mid: light-dark(#5c5c5c, #9aa0a4);
+    --water: light-dark(#a8cede, #5b8aa3);      /* soft pastel light blue */
+    --water-deep: light-dark(#6f9fb8, #9fd4ec); /* the surface accent must pop on dark paper */
+    --bed: light-dark(#cabfa6, #7d7360);        /* faint sand */
+    --sun: light-dark(#e0b24e, #e3bb63);        /* warm sun / heat accent */
+  }
+  ::selection { background: var(--water-deep); color: var(--paper); }
+  :where(a, button):focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+  form input:focus-visible {
+    outline: none;
+    background: color-mix(in oklab, var(--water) 30%, transparent);
   }
   * { box-sizing: border-box; }
   html, body { margin: 0; padding: 0; }
@@ -56,6 +65,8 @@
     line-height: 1.2;
     white-space: pre;
   }
+  #screen { view-transition-name: screen; }
+  ::view-transition-old(screen), ::view-transition-new(screen) { animation-duration: 0.35s; }
   .d { color: var(--dim); }
   .b { color: var(--ink); font-weight: 700; }
   .w { color: var(--water); }
@@ -118,6 +129,23 @@
     line-height: 1.5;
     color: var(--mid);
     overflow-x: auto;
+    opacity: 1;
+    translate: 0 0;
+  }
+  @media (prefers-reduced-motion: no-preference) {
+    /* the archive detail slides open/shut; display animates via allow-discrete,
+       @starting-style supplies the from-state when it re-enters the tree */
+    #local-detail {
+      transition: opacity 0.25s, translate 0.25s, display 0.25s allow-discrete;
+    }
+    #local-detail[hidden] { opacity: 0; translate: 0 -0.4em; }
+    @starting-style {
+      #local-detail:not([hidden]) { opacity: 0; translate: 0 -0.4em; }
+    }
+    #recent button, #history-bar button {
+      transition: opacity 0.3s, scale 0.3s, background 0.15s, color 0.15s;
+      @starting-style { opacity: 0; scale: 0.7; }
+    }
   }
   #local-detail .arow.cur { color: var(--ink); font-weight: 700; }
   #local-detail .row-btn {
@@ -155,6 +183,7 @@
     font-size: 0.72em;
     color: var(--dim);
     text-align: center;
+    text-wrap: balance;
     line-height: 1.8;
   }
   footer a { color: var(--ink); text-decoration: underline; }
@@ -167,7 +196,7 @@
 </head>
 <body>
 <main>
-  <pre id="screen">loading…</pre>
+  <pre id="screen" role="img" aria-label="loading water level data">loading…</pre>
   <form id="prompt" autocomplete="off">&gt; pegel --station
     <input id="station-input" name="station" list="stations" spellcheck="false" aria-label="station name">
     <datalist id="stations"></datalist> --adsb
@@ -188,6 +217,7 @@
 <footer>
   data: <a href="https://www.pegelonline.wsv.de" rel="noopener">PEGELONLINE</a> &copy; WSV, refreshed every 5 min
   · station link: <a id="station-link" href="?station=BONN">?station=BONN</a>
+  · <a href="#" id="share-link">share</a>
   · <a href="https://github.com/bmmmm/pegel-visual" rel="noopener">source</a>
   · <a href="https://ko-fi.com/bmabma" rel="noopener">support on ko-fi</a>
 </footer>
@@ -204,6 +234,8 @@ const PROFILE_ROWS = 6;
 const REFRESH_MS = 5 * 60 * 1000;
 
 const screen = document.getElementById('screen');
+const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)');
+let dirty = true; // set whenever state changes; gates redraws under reduced motion
 let station = (new URLSearchParams(location.search).get('station') || 'BONN').toUpperCase();
 const stationLink = document.getElementById('station-link');
 
@@ -213,6 +245,54 @@ function applyStationChrome() {
   stationLink.href = '?station=' + encodeURIComponent(station);
 }
 applyStationChrome();
+
+// live chrome: once data is in, the tab title carries the level + trend, the
+// favicon buddy's waterline tracks the real level (MNW…MHW → low…high), and
+// the ASCII grid gets a spoken summary for screen readers
+const faviconLink = document.querySelector('link[rel="icon"][type="image/svg+xml"]');
+
+function updateFavicon(valueCm) {
+  const mnw = charValue('MNW'), mhw = charValue('MHW');
+  let f = 0.5;
+  if (mnw != null && mhw != null && mhw > mnw) f = Math.max(0, Math.min(1, (valueCm - mnw) / (mhw - mnw)));
+  const y = (44 - 22 * f).toFixed(1); // waterline: 44 at low water … 22 at high
+  const wave = w => `M2 ${w} q6 -5 12 0 t12 0 t12 0 t12 0 t12 0`;
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">` +
+    `<clipPath id="b"><rect x="6" y="8" width="52" height="48" rx="16"/></clipPath>` +
+    `<rect x="6" y="8" width="52" height="48" rx="16" fill="#fbfbf9" stroke="#141414" stroke-width="3"/>` +
+    `<g clip-path="url(#b)">` +
+    `<path d="${wave(y)} V60 H2 Z" fill="#a8cede"/>` +
+    `<path d="${wave(y)}" fill="none" stroke="#6f9fb8" stroke-width="2.4"/>` +
+    `<path d="${wave(+y + 6)}" fill="none" stroke="#ffffff" stroke-width="1.6" opacity=".5"/>` +
+    `</g>` +
+    `<circle cx="23" cy="19" r="5" fill="#141414"/><circle cx="41" cy="19" r="5" fill="#141414"/>` +
+    `<circle cx="24.6" cy="17.4" r="1.7" fill="#ffffff"/><circle cx="42.6" cy="17.4" r="1.7" fill="#ffffff"/>` +
+    `<path d="M22 26 q10 9 20 0" fill="none" stroke="#141414" stroke-width="3" stroke-linecap="round"/>` +
+    `</svg>`;
+  if (faviconLink) faviconLink.href = 'data:image/svg+xml,' + encodeURIComponent(svg);
+}
+
+function screenSummary() {
+  if (state.error) return 'Error. ' + state.error;
+  const cur = state.gauge && state.gauge.currentMeasurement;
+  if (!cur) return 'Connecting to PEGELONLINE…';
+  const trend = trendPerHour();
+  const trendTxt = trend === null ? '' :
+    trend > 1 ? `, rising ${trend.toFixed(0)} cm per hour` :
+    trend < -1 ? `, falling ${Math.abs(trend).toFixed(0)} cm per hour` : ', steady';
+  const km = state.info.km != null ? `, km ${state.info.km}` : '';
+  return `${station} on ${state.info.water.shortname}${km}: water level ${Math.round(cur.value)} cm${trendTxt}. State ${cur.stateMnwMhw || 'unknown'}.`;
+}
+
+function applyLiveChrome() {
+  screen.setAttribute('aria-label', screenSummary());
+  const cur = state.gauge && state.gauge.currentMeasurement;
+  if (!cur) return;
+  const trend = trendPerHour();
+  const arrow = trend === null ? '' : trend > 1 ? ' ▲' : trend < -1 ? ' ▼' : ' ▬';
+  document.title = `PEGEL://${station} · ${Math.round(cur.value)}cm${arrow}`;
+  updateFavicon(cur.value);
+}
 
 const state = {
   info: null,       // station meta: km, water
@@ -260,6 +340,8 @@ async function loadData() {
     state.error = `station "${forStation}" failed: ${e.message}\n` +
       `check the name against ${API}/stations.json or try ?station=BONN`;
   }
+  dirty = true;
+  applyLiveChrome();
 }
 
 async function loadNeighbors(info) {
@@ -282,6 +364,7 @@ async function loadNeighbors(info) {
   }));
   if (!state.info || state.info.uuid !== info.uuid) return; // switched away — discard
   state.neighbors = enriched.filter(Boolean);
+  dirty = true;
 }
 
 // ---------- local archive (accumulates beyond the API's 15-day window) ----------
@@ -402,6 +485,7 @@ function deleteStation(name) {
   localStorage.removeItem(ARCHIVE_PREFIX + name);
   if (name === station) state.archive = [];
   updateLocalBar();
+  dirty = true;
 }
 
 let archiveDelArmed = '';
@@ -447,6 +531,7 @@ clearBtn.addEventListener('click', () => {
     clearArmedAt = 0;
     clearBtn.textContent = 'clear';
     updateLocalBar();
+    dirty = true;
   } else {
     clearArmedAt = Date.now();
     clearBtn.textContent = 'sure?';
@@ -478,6 +563,7 @@ async function loadAircraft() {
     state.aircraft = [];
     state.adsbOk = false;
   }
+  dirty = true;
 }
 
 // ---------- grid helpers ----------
@@ -623,7 +709,14 @@ function drawHeader(g, row, t) {
 function drawChart(g, row, t) {
   const value = state.gauge.currentMeasurement.value;
   const mhw = charValue('MHW'), mw = charValue('MW'), mnw = charValue('MNW');
-  const topCm = Math.max((mhw || mw * 1.5 || value * 1.5 || 100) * 1.06, value * 1.15);
+  const drought = mnw != null && value < mnw; // below mean low water
+  const flood = mhw != null && value > mhw;   // above mean high water
+  const hour = new Date().getHours();
+  const night = hour >= 21 || hour < 6;
+  // in a flood, leave sky headroom above the swollen river for clouds and rain —
+  // the plain scale would pin the surface to the chart ceiling
+  const topCm = flood ? value * 1.45 :
+    Math.max((mhw || mw * 1.5 || value * 1.5 || 100) * 1.06, value * 1.15);
   const chartW = COLS - 12;
   const rowOf = cm => row + Math.round((CHART_ROWS - 1) * (1 - cm / topCm));
   const surface = Math.min(rowOf(value), row + CHART_ROWS - 3);
@@ -660,7 +753,7 @@ function drawChart(g, row, t) {
     for (let x = 0; x < chartW; x += 2) if (g.ch[r][x] === ' ' || g.ch[r][x] === '░') put(g, r, x, '╌', 'd');
     put(g, r, chartW + 1, `┤ ${label} ${cm}`, 'd');
   }
-  put(g, surface, chartW + 1, `◄ W ${value}`, 'b');
+  put(g, surface, chartW + 1, `◄ W ${value}`, flood ? 's' : 'b');
 
   // aircraft in the sky, projected onto the river axis between neighbor stations
   const n = state.neighbors;
@@ -696,30 +789,77 @@ function drawChart(g, row, t) {
 
   // drought: level below mean-low-water — sun blazes, heat shimmers, the bank
   // dries out and cracks, and the little ship sits stranded and sad
-  const drought = mnw != null && value < mnw;
   if (drought) {
-    put(g, row,     2, '\\ | /', 's');
-    put(g, row + 1, 1, '─( O )─', 's');
-    put(g, row + 2, 2, '/ | \\', 's');
+    if (!night) { // at night the heat lets up: no sun, no shimmer, just cracks
+      put(g, row,     2, '\\ | /', 's');
+      put(g, row + 1, 1, '─( O )─', 's');
+      put(g, row + 2, 2, '/ | \\', 's');
+      for (let x = 1; x < chartW; x += 4) {
+        const hr = surface - 2 - (Math.floor(t * 2 + x * 0.5) % 3);
+        if (hr > row + 3) put(g, hr, x, ((x + Math.floor(t * 4)) % 2) ? '∼' : '~', 's');
+      }
+    }
     const mwRow = mw != null ? rowOf(mw) : row + 3;
     for (let r = Math.max(row + 4, mwRow); r < surface; r++)
       for (let x = 0; x < chartW; x++)
         if (g.ch[r][x] === ' ' && (x * 3 + r * 7) % 4 === 0)
           put(g, r, x, (x + r * 2) % 9 === 0 ? '╌' : '░', 'bed');
-    for (let x = 1; x < chartW; x += 4) {
-      const hr = surface - 2 - (Math.floor(t * 2 + x * 0.5) % 3);
-      if (hr > row + 3) put(g, hr, x, ((x + Math.floor(t * 4)) % 2) ? '∼' : '~', 's');
-    }
     const bx = Math.floor(chartW / 2) - 1;
     put(g, bedTop - 1, bx + 1, ':(', 'b');
     put(g, bedTop, bx, '\\__/', 'b');
   } else if (surface > row + 2) {
-    // little ship, bobbing downstream (Bonn view: downstream is to the left)
+    // little ship, bobbing downstream (Bonn view: downstream is to the left);
+    // in a flood it pitches harder on the swell
     const shipX = chartW - 10 - Math.floor((t * 1.3) % (chartW - 14));
-    const bob = Math.sin(t * 1.6) > 0.4 ? -1 : 0;
+    const bob = Math.sin(t * (flood ? 3.2 : 1.6)) > 0.4 ? -1 : 0;
     put(g, surface - 2 + bob, shipX + 2, '/|', 'b');
     put(g, surface - 1 + bob, shipX, '_/_|__', 'b');
     put(g, surface + bob, shipX, '\\____/', 'b');
+  }
+
+  // sky, painted last and only into empty cells so it never covers aircraft,
+  // markers or the ship
+  const putSky = (r, c, s, cls) => {
+    for (let i = 0; i < s.length; i++) {
+      const x = c + i;
+      if (s[i] !== ' ' && r >= row && x >= 0 && x < chartW && g.ch[r][x] === ' ') {
+        g.ch[r][x] = s[i]; g.cl[r][x] = cls;
+      }
+    }
+  };
+  if (flood) {
+    // storm: clouds drift downstream, rain falls into the swollen river
+    const drift = Math.floor(t * 1.5);
+    for (const [cx0, cy] of [[8, row], [Math.floor(chartW * 0.55), row + 1]]) {
+      const cx = ((cx0 - drift) % chartW + chartW) % chartW;
+      putSky(cy, cx + 1, '.-~~~-.', 'd');
+      putSky(cy + 1, cx, '(_______)', 'd');
+    }
+    for (let x = 0; x < chartW; x++) {
+      if ((x * 13) % 4 === 0) continue; // leave some dry streaks
+      for (let r = row + 2; r < surface; r++) {
+        if ((((r - Math.floor(t * 8)) % 5) + 5) % 5 === (x * 7) % 5) putSky(r, x, '/', 'w2');
+      }
+    }
+  } else if (night) {
+    // night: a cratered moon and slowly twinkling stars; the moon slides down
+    // to the first sky slot free of marker lines so it never gets sliced up
+    let moonRow = row;
+    for (let r = row; r <= Math.min(row + 3, surface - 3); r++) {
+      if (g.ch.slice(r, r + 3).every(line => line.slice(2, 7).every(c => c === ' '))) { moonRow = r; break; }
+    }
+    putSky(moonRow,     3, '.-.', 'b');
+    putSky(moonRow + 1, 2, '( o )', 'b');
+    putSky(moonRow + 2, 3, "`-'", 'b');
+    const starGlyphs = ['·', '+', '·', '˙'];
+    for (let x = 0; x < chartW; x++) {
+      for (let r = row; r < surface - 1; r++) {
+        const h = ((x + 1) * 2654435761 ^ (r + 1) * 40503) >>> 0;
+        if (h % 43) continue;
+        const phase = (Math.floor(t / 2) + (h >>> 8)) % 4;
+        putSky(r, x, starGlyphs[phase], phase === 1 ? 'b' : 'd');
+      }
+    }
   }
   return row + CHART_ROWS + 1;
 }
@@ -766,7 +906,7 @@ function drawSparkline(g, row, t) {
   // column instead of a flat snap, so history-range changes read as the level moving
   const dt = sparkLastT === null ? 0.12 : Math.min(0.2, t - sparkLastT);
   sparkLastT = t;
-  if (!sparkDisplay || sparkDisplay.length !== chartW) { sparkDisplay = vals.slice(); sparkVelocity = vals.map(() => 0); }
+  if (reduceMotion.matches || !sparkDisplay || sparkDisplay.length !== chartW) { sparkDisplay = vals.slice(); sparkVelocity = vals.map(() => 0); }
   for (let x = 0; x < chartW; x++) {
     const springK = 45 + (x % 7) * 4, damping = 7 + (x % 5) * 0.6; // slight per-column variation → organic slosh
     const accel = (vals[x] - sparkDisplay[x]) * springK - sparkVelocity[x] * damping;
@@ -870,7 +1010,17 @@ function switchStation(name, adsb, push = true) {
   state.error = null;
   state.archive = loadArchive(station);
   sparkDisplay = null; // new station's data shouldn't spring in from the old one's shape
+  dirty = true;
   updateLocalBar();
+  screen.setAttribute('aria-label', screenSummary());
+  // cross-fade the grid from the old station to the connecting screen; a
+  // transition aborted by the browser (hidden/unfocused tab) is fine — the
+  // render itself still ran, so just swallow the rejections
+  if (document.startViewTransition && !reduceMotion.matches) {
+    const vt = document.startViewTransition(renderNow);
+    vt.ready.catch(() => {});
+    vt.finished.catch(() => {});
+  }
 
   stationInput.value = station;
   adsbInput.value = adsbRaw;
@@ -1038,6 +1188,7 @@ async function ensureHistoryCoverage(days) {
     mergeIntoArchive(forStation, measurements);
     state.archive = loadArchive(forStation);
     updateLocalBar();
+    dirty = true;
   } catch { /* best-effort backfill; sparkline just falls back to whatever's local */ }
 }
 
@@ -1047,6 +1198,7 @@ function setHistory(k) {
   localStorage.setItem(HISTORY_KEY, k);
   renderHistoryBar();
   ensureHistoryCoverage(historyPreset().d);
+  dirty = true;
 }
 
 // hydrate suggestions from cache synchronously so an ASCII-spelled ?station= (e.g. a
@@ -1068,6 +1220,21 @@ if (canonical !== station && knownStations.has(canonical)) {
 pushRecent(station);
 renderRecent();
 renderHistoryBar();
+
+// share the current station: native share sheet where available, else clipboard
+const shareLink = document.getElementById('share-link');
+shareLink.addEventListener('click', async e => {
+  e.preventDefault();
+  const url = location.origin + location.pathname + '?station=' + encodeURIComponent(station);
+  try {
+    if (navigator.share) await navigator.share({ title: document.title, url });
+    else {
+      await navigator.clipboard.writeText(url);
+      shareLink.textContent = 'copied!';
+      setTimeout(() => { shareLink.textContent = 'share'; }, 1500);
+    }
+  } catch { /* user dismissed the share sheet */ }
+});
 
 // ---------- main loop ----------
 
@@ -1184,6 +1351,10 @@ function render(t) {
 }
 let fitted = false;
 
+function renderNow() {
+  render(reduceMotion.matches ? 0 : (performance.now() - start) / 1000);
+}
+
 function fitFont() {
   // size the grid to the width actually available inside <main>, i.e. minus its
   // padding and border — otherwise the box overflows the viewport on narrow screens
@@ -1206,8 +1377,20 @@ loadData();
 refreshTimer = setInterval(loadData, REFRESH_MS);
 loadAircraft();
 setInterval(loadAircraft, ADSB_REFRESH_MS);
+// rAF instead of setInterval: the browser pauses it in hidden tabs for free.
+// Under prefers-reduced-motion the scene is static (t = 0) and only redraws
+// when data actually changed, instead of 8x per second.
 const start = performance.now();
-setInterval(() => render((performance.now() - start) / 1000), 120);
+let lastFrame = -Infinity;
+function frame(now) {
+  requestAnimationFrame(frame);
+  if (now - lastFrame < 118) return; // ~8 fps is plenty for ASCII water
+  lastFrame = now;
+  if (reduceMotion.matches && !dirty) return;
+  dirty = false;
+  render(reduceMotion.matches ? 0 : (now - start) / 1000);
+}
+requestAnimationFrame(frame);
 </script>
 </body>
 </html>
