@@ -17,8 +17,10 @@ _      _      _      _      _      _      _      _
 - animated river cross-section: waves at the live level, drifting current,
   seeded riverbed, a little ship, markers for MNW / MW / MHW
 - living scenes: below MNW the sun blazes over a cracked, dried-out bank;
-  above MHW storm clouds drift in and rain falls on the swollen river; at
-  night (21:00–06:00 local) a moon rises and stars twinkle over the water
+  above MHW storm clouds drift in and rain falls on the swollen river; when
+  the level rises fast a lone rain cloud drifts in upstream as a harbinger;
+  after sunset (computed for the station's real coordinates) a moon rises
+  and stars twinkle over the water
 - automatic dark mode (`light-dark()`, follows your system), tab title and
   favicon carry the live level — the buddy's waterline tracks MNW…MHW
 - history sparkline — starts with the API's 15 days and grows: every visit
