@@ -64,6 +64,8 @@ flag command (flags are matched case-insensitively) to do more in one go:
   the choice also lands in the URL, so shared links reproduce it
 - `--export` — download the whole local archive as JSON
 - `--clear` — delete the local archive (no confirmation — you typed it)
+- `--info` — open the feature guide dialog (also linked as `info` in the footer):
+  every feature on the page, explained in one box
 - `--help` — show a man page with all of the above right on the screen
 
 River names autocomplete alongside stations: typing or picking a known river

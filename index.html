@@ -151,6 +151,23 @@
       transition: opacity 0.3s, scale 0.3s, background 0.15s, color 0.15s;
       @starting-style { opacity: 0; scale: 0.7; }
     }
+    /* the infobox dialog fades/slides in and out; display+overlay animate via
+       allow-discrete, @starting-style supplies the from-state on showModal() */
+    #infobox {
+      opacity: 0;
+      translate: 0 0.8em;
+      transition: opacity 0.25s, translate 0.25s, display 0.25s allow-discrete, overlay 0.25s allow-discrete;
+    }
+    #infobox[open] { opacity: 1; translate: 0 0; }
+    #infobox::backdrop {
+      opacity: 0;
+      transition: opacity 0.25s, display 0.25s allow-discrete, overlay 0.25s allow-discrete;
+    }
+    #infobox[open]::backdrop { opacity: 1; }
+    @starting-style {
+      #infobox[open] { opacity: 0; translate: 0 0.8em; }
+      #infobox[open]::backdrop { opacity: 0; }
+    }
   }
   #local-detail .arow.cur { color: var(--ink); font-weight: 700; }
   #local-detail .row-btn {
@@ -192,10 +209,49 @@
     line-height: 1.8;
   }
   footer a { color: var(--ink); text-decoration: underline; }
+  #infobox {
+    color: var(--ink);
+    background: var(--paper);
+    border: 2px solid var(--ink);
+    padding: 1.2em 1.4em 1.4em;
+    font-size: 0.85em;
+    line-height: 1.55;
+    max-width: min(66ch, calc(100vw - 3em));
+    max-height: calc(100vh - 4em);
+    overflow: auto;
+    overscroll-behavior: contain; /* keep wheel momentum from scrolling the page behind */
+  }
+  #infobox::backdrop {
+    background: color-mix(in oklab, var(--paper) 55%, transparent);
+    backdrop-filter: blur(1.5px);
+  }
+  #infobox-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 1em;
+    border-bottom: 2px solid var(--ink);
+    padding-bottom: 0.6em;
+  }
+  #infobox-title { font-weight: 700; }
+  #infobox-close {
+    font: inherit;
+    color: var(--ink);
+    background: none;
+    border: 1px solid var(--ink);
+    padding: 0 0.6ch;
+    cursor: pointer;
+  }
+  #infobox-close:hover { background: var(--ink); color: var(--paper); }
+  #infobox dl { margin: 0; }
+  #infobox dt { font-weight: 700; text-transform: uppercase; margin-top: 1.1em; }
+  #infobox dd { margin: 0.25em 0 0; color: var(--mid); }
+  #infobox dd b { color: var(--ink); font-weight: 400; }
   @media (max-width: 640px) {
     main { margin-top: 2vh; padding: 1em 0.7em; }
     footer { margin: 1em 0.7em 2em; }
     #recent button, #history-bar button { padding: 0.2em 0.7ch; } /* a little more tap area */
+    #infobox { padding: 1em 0.9em; max-width: calc(100vw - 1.6em); }
   }
 </style>
 </head>
@@ -221,8 +277,59 @@
     <div id="local-detail" hidden></div>
   </div>
 </main>
+<dialog id="infobox" closedby="any" aria-labelledby="infobox-title">
+  <div id="infobox-head">
+    <span id="infobox-title">PEGEL(7) · feature guide</span>
+    <button id="infobox-close" type="button" aria-label="close">×</button>
+  </div>
+  <dl>
+    <dt>the gauge</dt>
+    <dd>The big digits are the live water level in cm, next to the trend per hour
+      (<b>▲</b> rising · <b>▼</b> falling · <b>▬</b> steady) and the station's state
+      relative to its mean low/high water. Stations that report them also show water
+      temperature (<b>WT</b>) and discharge (<b>Q</b>). Data comes from PEGELONLINE
+      (WSV) and refreshes every 5 minutes.</dd>
+    <dt>the living river</dt>
+    <dd>The cross-section waves at the real level: drifting current, a little ship,
+      dashed marker lines for <b>MNW / MW / MHW</b> and all-time records
+      (<b>HHW / NNW</b>). The scene reacts to the world — below MNW the bank cracks
+      under a blazing sun; above MHW a storm rains into the swollen river; a fast-rising
+      level sends a lone harbinger cloud in upstream; at ≤ 0.5 °C the river freezes
+      over, floes drifting past a ship stuck fast. Real rain, snow, clouds and wind at
+      the station draw themselves (via open-meteo), and after the station's actual
+      sunset the real moon phase rises over twinkling stars — unless it's overcast.</dd>
+    <dt>history &amp; archive</dt>
+    <dd>The sparkline starts with the API's data and grows: every visit merges new
+      points into a local archive in your browser, so over time it covers more than
+      the API can serve. Pick a window with the history chips (<b>24H … ALL</b>) —
+      the choice lands in the URL, so shared links reproduce it. <b>export</b> /
+      <b>import</b> / <b>clear</b> manage the archive; nothing ever leaves your
+      browser.</dd>
+    <dt>elevation profile</dt>
+    <dd>Below the sparkline: the water surface elevation (m NHN) between the
+      neighboring gauges on the same river, ordered by river km. The neighbors are
+      one click away.</dd>
+    <dt>whole-river mode</dt>
+    <dd>Type a river name (e.g. <b>RHEIN</b>) or use <b>?river=</b> to see the entire
+      river as one longitudinal profile: every gauge at its live elevation —
+      <b>◉</b> normal · <b>▼</b> low · <b>▲</b> high — plus a TROUBLE list of every
+      station running low or high. Every marker, label and row is a click target.</dd>
+    <dt>the prompt</dt>
+    <dd>A tiny REPL. A bare name switches to that station (or river). Flags:
+      <b>--station</b>, <b>--river</b>, <b>--adsb</b>, <b>--history 24h…all</b>,
+      <b>--export</b>, <b>--clear</b>, <b>--info</b>, <b>--help</b>. Press <b>/</b>
+      to focus it from anywhere; <b>Esc</b> dismisses help.</dd>
+    <dt>extras</dt>
+    <dd>Aircraft overhead from your own ADS-B receiver (<b>--adsb URL</b> — the URL
+      stays in your browser). The tab title and favicon carry the live level, dark
+      mode follows your system, narrow screens switch to a 44-column compact grid,
+      and the page installs as an app from the browser menu. Should a station ever
+      sink into an error, a sea monster handles it.</dd>
+  </dl>
+</dialog>
 <footer>
-  data: <a href="https://www.pegelonline.wsv.de" rel="noopener">PEGELONLINE</a> &copy; WSV, refreshed every 5 min
+  <a href="#" id="info-link">info</a>
+  · data: <a href="https://www.pegelonline.wsv.de" rel="noopener">PEGELONLINE</a> &copy; WSV, refreshed every 5 min
   · ⛅ weather: <a href="https://open-meteo.com" rel="noopener">open-meteo</a>
   · station link: <a id="station-link" href="?station=BONN">?station=BONN</a>
   · <a href="#" id="share-link">share</a>
@@ -1719,7 +1826,7 @@ function dismissHelp() {
 // tell "not given" (undefined) apart from "given empty" (''), e.g. --adsb clearing.
 function parseCommand(raw) {
   const tokens = (raw || '').trim().split(/\s+/).filter(Boolean);
-  const cmd = { station: undefined, adsb: undefined, history: undefined, river: undefined, help: false, export: false, clear: false, unknownFlag: null };
+  const cmd = { station: undefined, adsb: undefined, history: undefined, river: undefined, help: false, export: false, clear: false, info: false, unknownFlag: null };
   let i = 0;
   while (i < tokens.length) {
     const tok = tokens[i];
@@ -1737,6 +1844,7 @@ function parseCommand(raw) {
     else if (flag === 'help') cmd.help = true;
     else if (flag === 'export') cmd.export = true;
     else if (flag === 'clear') cmd.clear = true;
+    else if (flag === 'info') cmd.info = true;
     else if (!cmd.unknownFlag) cmd.unknownFlag = tok;
   }
   return cmd;
@@ -1753,7 +1861,7 @@ function helpText(unknownFlag) {
     '',
     'SYNOPSIS',
     '    > pegel [STATION] [--station NAME] [--river NAME] [--adsb URL]',
-    '            [--history RANGE] [--export] [--clear] [--help]',
+    '            [--history RANGE] [--export] [--clear] [--info] [--help]',
     '',
     'OPTIONS',
     '    STATION           bare station name, e.g. BONN (shorthand for --station)',
@@ -1763,6 +1871,7 @@ function helpText(unknownFlag) {
     '    --history RANGE   set the sparkline window: 24h 3d 7d 15d 30d all',
     '    --export          download the whole local archive as JSON',
     '    --clear           delete the local archive (no confirmation - you typed it)',
+    '    --info            open the feature guide (what everything here means)',
     '    --help            show this screen',
     '',
     'KEYS',
@@ -1778,6 +1887,11 @@ function helpText(unknownFlag) {
 
 function runCommand(raw) {
   const cmd = parseCommand(raw);
+  if (cmd.info) {
+    infobox.showModal();
+    stationInput.value = mode === 'river' ? state.river : station;
+    return;
+  }
   if (cmd.help || cmd.unknownFlag) {
     state.help = helpText(cmd.unknownFlag);
     dirty = true;
@@ -1833,7 +1947,7 @@ screen.addEventListener('click', e => {
 // terminal idiom: '/' focuses the station prompt from anywhere on the page; esc
 // dismisses the --help screen when it's showing
 document.addEventListener('keydown', e => {
-  if (e.key === '/' && !e.metaKey && !e.ctrlKey && !e.altKey &&
+  if (e.key === '/' && !e.metaKey && !e.ctrlKey && !e.altKey && !infobox.open &&
       !/^(INPUT|TEXTAREA)$/.test(document.activeElement.tagName)) {
     e.preventDefault();
     stationInput.focus();
@@ -2069,6 +2183,15 @@ if (mode !== 'river' && canonical !== station && knownStations.has(canonical)) {
 pushRecent(station);
 renderRecent();
 renderHistoryBar();
+
+// ---------- infobox (feature guide dialog) ----------
+
+const infobox = document.getElementById('infobox');
+document.getElementById('info-link').addEventListener('click', e => {
+  e.preventDefault();
+  infobox.showModal();
+});
+document.getElementById('infobox-close').addEventListener('click', () => infobox.close());
 
 // share the current station: native share sheet where available, else clipboard
 const shareLink = document.getElementById('share-link');
