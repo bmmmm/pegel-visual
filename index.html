@@ -1047,6 +1047,15 @@ for (const el of [stationInput, adsbInput]) {
     }
   });
 }
+// terminal idiom: '/' focuses the station prompt from anywhere on the page
+document.addEventListener('keydown', e => {
+  if (e.key === '/' && !e.metaKey && !e.ctrlKey && !e.altKey &&
+      !/^(INPUT|TEXTAREA)$/.test(document.activeElement.tagName)) {
+    e.preventDefault();
+    stationInput.focus();
+    stationInput.select();
+  }
+});
 window.addEventListener('popstate', () => {
   const p = new URLSearchParams(location.search);
   switchStation(p.get('station') || 'BONN', p.get('adsb') || '', false);
