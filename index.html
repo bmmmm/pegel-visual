@@ -6,6 +6,8 @@
 <title>PEGEL://BONN</title>
 <meta name="description" content="Live ASCII water level terminal for German rivers, powered by PEGELONLINE (WSV).">
 <link rel="canonical" href="https://bmmmm.github.io/pegel-visual/">
+<link rel="preconnect" href="https://www.pegelonline.wsv.de">
+<link rel="preconnect" href="https://api.open-meteo.com">
 <link rel="icon" type="image/svg+xml" href="favicon.svg">
 <link rel="icon" type="image/png" sizes="32x32" href="favicon-32.png">
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
@@ -30,7 +32,8 @@
     color-scheme: light dark;
     --paper: light-dark(#fbfbf9, #121417);
     --ink: light-dark(#141414, #e8e6e1);
-    --dim: light-dark(#a6a6a6, #61676c);
+    /* dim decorates the grid; real UI text uses --mid, which clears WCAG AA */
+    --dim: light-dark(#8c8c8c, #767d82);
     --mid: light-dark(#5c5c5c, #9aa0a4);
     --water: light-dark(#a8cede, #5b8aa3);      /* soft pastel light blue */
     --water-deep: light-dark(#6f9fb8, #9fd4ec); /* the surface accent must pop on dark paper */
@@ -66,6 +69,8 @@
     white-space: pre;
   }
   #screen { view-transition-name: screen; }
+  #screen [data-st] { cursor: pointer; }
+  #screen [data-st]:hover { text-decoration: underline; }
   ::view-transition-old(screen), ::view-transition-new(screen) { animation-duration: 0.35s; }
   .d { color: var(--dim); }
   .b { color: var(--ink); font-weight: 700; }
@@ -77,7 +82,7 @@
     margin-top: 1.4em;
     padding-top: 1em;
     border-top: 2px solid var(--ink);
-    color: var(--dim);
+    color: var(--mid);
     font-size: 0.9em;
   }
   form input {
@@ -95,7 +100,7 @@
   #localbar {
     margin-top: 0.8em;
     font-size: 0.75em;
-    color: var(--dim);
+    color: var(--mid);
   }
   #local-stats { cursor: pointer; user-select: none; }
   #local-stats:hover { color: var(--ink); }
@@ -110,7 +115,7 @@
   }
   #local-toggle {
     text-decoration: none;
-    color: var(--dim);
+    color: var(--mid);
     width: 1.4ch;
     display: inline-block;
     transform-origin: 50% 50%;
@@ -150,7 +155,7 @@
   #local-detail .arow.cur { color: var(--ink); font-weight: 700; }
   #local-detail .row-btn {
     font: inherit;
-    color: var(--dim);
+    color: var(--mid);
     background: none;
     border: none;
     padding: 0 0.3ch;
@@ -161,7 +166,7 @@
   #recent, #history-bar {
     margin-top: 1em;
     font-size: 0.8em;
-    color: var(--dim);
+    color: var(--mid);
     display: flex;
     flex-wrap: wrap;
     align-items: center;
@@ -181,7 +186,7 @@
   footer {
     margin: 1.2em 0 2em;
     font-size: 0.72em;
-    color: var(--dim);
+    color: var(--mid);
     text-align: center;
     text-wrap: balance;
     line-height: 1.8;
@@ -228,7 +233,11 @@
 'use strict';
 
 const API = 'https://www.pegelonline.wsv.de/webservices/rest-api/v2';
-const COLS = 84;
+// the grid is 84 columns wide on desktop; on screens where that would shrink the
+// font below ~8px it switches to a 44-column compact layout instead (see fitFont)
+let COLS = 84;
+const COMPACT_COLS = 44;
+const isCompact = () => COLS < 60;
 const HEADER_ROWS = 10;
 const CHART_ROWS = 15;
 const SPARK_ROWS = 4;
@@ -765,8 +774,16 @@ function makeGrid(rows) {
   return {
     ch: Array.from({ length: rows }, () => Array(COLS).fill(' ')),
     cl: Array.from({ length: rows }, () => Array(COLS).fill('')),
+    ln: Array.from({ length: rows }, () => Array(COLS).fill('')), // station-link layer
     rows,
   };
+}
+
+// mark cells as a click target for a station: gridToHtml emits them as
+// <span data-st="NAME">, and a delegated click handler on #screen switches there
+function linkCells(g, row, col, len, name) {
+  if (row < 0 || row >= g.rows) return;
+  for (let c = Math.max(0, col); c < Math.min(COLS, col + len); c++) g.ln[row][c] = name;
 }
 
 function put(g, row, col, text, cls = '') {
@@ -782,12 +799,18 @@ function esc(s) { return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(
 function gridToHtml(g) {
   const out = [];
   for (let r = 0; r < g.rows; r++) {
-    let line = '', run = '', runCls = g.cl[r][0];
+    let line = '', run = '', runCls = g.cl[r][0], runLn = g.ln[r][0];
     for (let c = 0; c <= COLS; c++) {
       const cls = c < COLS ? g.cl[r][c] : null;
-      if (cls !== runCls || c === COLS) {
-        line += runCls ? `<span class="${runCls}">${esc(run)}</span>` : esc(run);
-        run = ''; runCls = cls;
+      const ln = c < COLS ? g.ln[r][c] : null;
+      if (cls !== runCls || ln !== runLn || c === COLS) {
+        if (runCls || runLn) {
+          line += '<span' + (runCls ? ` class="${runCls}"` : '') +
+            (runLn ? ` data-st="${esc(runLn)}"` : '') + `>${esc(run)}</span>`;
+        } else {
+          line += esc(run);
+        }
+        run = ''; runCls = cls; runLn = ln;
       }
       if (c < COLS) run += g.ch[r][c];
     }
@@ -903,6 +926,48 @@ function moonPhase() {
   return ((cycles % 1) + 1) % 1;
 }
 
+// the current moon phase as a 3-row, 5-column glyph drawn through putCell(row,
+// col, text, cls) — callers pass a guarded putter so the moon never overwrites
+// content. Northern-hemisphere orientation: waxing lights up the right side.
+function drawMoonGlyph(putCell, row, col) {
+  const frac = moonPhase(); // 0/1 = new, 0.5 = full
+  if (frac < 0.05 || frac >= 0.95) {
+    // new moon: faint outline only, nothing lit
+    putCell(row,     col + 1, '.-.', 'd');
+    putCell(row + 1, col, '(   )', 'd');
+    putCell(row + 2, col + 1, "`-'", 'd');
+  } else if (frac < 0.25) {
+    // waxing crescent: thin sliver lit on the right
+    putCell(row,     col + 1, '.-.', 'd');
+    putCell(row + 1, col, '(', 'd');
+    putCell(row + 1, col + 3, ':)', 'b');
+    putCell(row + 2, col + 1, "`-'", 'd');
+  } else if (frac < 0.45) {
+    // first quarter / waxing gibbous: right half lit
+    putCell(row,     col + 1, '.-.', 'd');
+    putCell(row + 1, col, '(', 'd');
+    putCell(row + 1, col + 1, '#o)', 'b');
+    putCell(row + 2, col + 1, "`-'", 'd');
+  } else if (frac < 0.55) {
+    // full moon: fully lit disc with a crater
+    putCell(row,     col + 1, '.-.', 'b');
+    putCell(row + 1, col, '( o )', 'b');
+    putCell(row + 2, col + 1, "`-'", 'b');
+  } else if (frac < 0.75) {
+    // last quarter / waning gibbous: left half lit
+    putCell(row,     col + 1, '.-.', 'd');
+    putCell(row + 1, col, '(o#', 'b');
+    putCell(row + 1, col + 3, ')', 'd');
+    putCell(row + 2, col + 1, "`-'", 'd');
+  } else {
+    // waning crescent: thin sliver lit on the left
+    putCell(row,     col + 1, '.-.', 'd');
+    putCell(row + 1, col, '(:', 'b');
+    putCell(row + 1, col + 3, ')', 'd');
+    putCell(row + 2, col + 1, "`-'", 'd');
+  }
+}
+
 function trendPerHour() {
   const a = state.archive;
   if (a.length < 2) return null;
@@ -918,10 +983,15 @@ function trendPerHour() {
 
 function drawHeader(g, row, t) {
   const info = state.info, cur = state.gauge.currentMeasurement;
-  const title = `─── PEGELONLINE://${station} `;
-  const meta = info.km != null ? ` ${info.water.shortname} · KM ${info.km} ───` : ` ${info.water.shortname} ───`;
-  put(g, row, 0, title.padEnd(COLS - meta.length, '─') + meta, 'd');
-  put(g, row, 4, `PEGELONLINE://${station}`, 'b');
+  const compact = isCompact();
+  // compact: shorter brand, km-only meta (the km sign is skipped too — no room)
+  const brand = compact ? `PEGEL://${station}` : `PEGELONLINE://${station}`;
+  const title = `─── ${brand} `;
+  const meta = compact
+    ? (info.km != null ? ` KM ${info.km} ───` : ` ───`)
+    : (info.km != null ? ` ${info.water.shortname} · KM ${info.km} ───` : ` ${info.water.shortname} ───`);
+  put(g, row, 0, title.padEnd(Math.max(title.length, COLS - meta.length), '─') + meta, 'd');
+  put(g, row, 4, brand, 'b');
 
   const x = putBig(g, row + 2, 2, String(Math.round(cur.value)), 'b');
   put(g, row + 6, x + 1, 'cm', 'd');
@@ -940,6 +1010,7 @@ function drawHeader(g, row, t) {
   if (state.wt != null) wtQ.push(`WT ${state.wt.toFixed(1)}°C`);
   if (state.q != null) wtQ.push(`Q ${Math.round(state.q)} m³/s`);
   if (wtQ.length) put(g, row + 8, 2, wtQ.join(' · ').slice(0, 58), 'd');
+  if (compact) return row + HEADER_ROWS; // no room for the km sign; km is in the title
   if (info.km != null) {
     const w = 4 * String(Math.round(info.km)).length + 1;
     putKmSign(g, row + 1, COLS - w - 1, info.km);
@@ -1033,7 +1104,7 @@ function drawChart(g, row, t) {
   // sits at/below the bottom (riverbed) row. Records never overwrite an existing label.
   const hhw = charRecord('HHW');
   if (hhw) {
-    const label = `HHW ${hhw.value}` + (hhw.year ? ` (${hhw.year})` : '');
+    const label = `HHW ${hhw.value}` + (!isCompact() && hhw.year ? ` (${hhw.year})` : '');
     if (hhw.value > topCm) {
       if (g.ch[row][chartW + 1] === ' ') put(g, row, chartW + 1, `↑ ${label}`, 'd');
     } else {
@@ -1046,7 +1117,7 @@ function drawChart(g, row, t) {
   }
   const nnw = charRecord('NNW');
   if (nnw) {
-    const label = `NNW ${nnw.value}` + (nnw.year ? ` (${nnw.year})` : '');
+    const label = `NNW ${nnw.value}` + (!isCompact() && nnw.year ? ` (${nnw.year})` : '');
     const bottomRow = row + CHART_ROWS - 1;
     const r = rowOf(nnw.value);
     if (r >= bottomRow) {
@@ -1159,42 +1230,7 @@ function drawChart(g, row, t) {
       for (let r = row; r <= Math.min(row + 3, surface - 3); r++) {
         if (g.ch.slice(r, r + 3).every(line => line.slice(2, 7).every(c => c === ' '))) { moonRow = r; break; }
       }
-      const frac = moonPhase(); // 0/1 = new, 0.5 = full
-      if (frac < 0.05 || frac >= 0.95) {
-        // new moon: faint outline only, nothing lit
-        putSky(moonRow,     3, '.-.', 'd');
-        putSky(moonRow + 1, 2, '(   )', 'd');
-        putSky(moonRow + 2, 3, "`-'", 'd');
-      } else if (frac < 0.25) {
-        // waxing crescent: thin sliver lit on the right
-        putSky(moonRow,     3, '.-.', 'd');
-        putSky(moonRow + 1, 2, '(', 'd');
-        putSky(moonRow + 1, 5, ':)', 'b');
-        putSky(moonRow + 2, 3, "`-'", 'd');
-      } else if (frac < 0.45) {
-        // first quarter / waxing gibbous: right half lit
-        putSky(moonRow,     3, '.-.', 'd');
-        putSky(moonRow + 1, 2, '(', 'd');
-        putSky(moonRow + 1, 3, '#o)', 'b');
-        putSky(moonRow + 2, 3, "`-'", 'd');
-      } else if (frac < 0.55) {
-        // full moon: fully lit disc with a crater
-        putSky(moonRow,     3, '.-.', 'b');
-        putSky(moonRow + 1, 2, '( o )', 'b');
-        putSky(moonRow + 2, 3, "`-'", 'b');
-      } else if (frac < 0.75) {
-        // last quarter / waning gibbous: left half lit
-        putSky(moonRow,     3, '.-.', 'd');
-        putSky(moonRow + 1, 2, '(o#', 'b');
-        putSky(moonRow + 1, 5, ')', 'd');
-        putSky(moonRow + 2, 3, "`-'", 'd');
-      } else {
-        // waning crescent: thin sliver lit on the left
-        putSky(moonRow,     3, '.-.', 'd');
-        putSky(moonRow + 1, 2, '(:', 'b');
-        putSky(moonRow + 1, 5, ')', 'd');
-        putSky(moonRow + 2, 3, "`-'", 'd');
-      }
+      drawMoonGlyph(putSky, moonRow, 2);
       const starGlyphs = ['·', '+', '·', '˙'];
       for (let x = 0; x < chartW; x++) {
         for (let r = row; r < surface - 1; r++) {
@@ -1272,7 +1308,9 @@ const HISTORY_PRESETS = [
   { k: '30d', d: 30, label: '30D' },
   { k: 'all', d: null, label: 'ALL' },
 ];
-let historyKey = localStorage.getItem(HISTORY_KEY) || 'all';
+// an explicit ?history= in a shared link wins over the local preference
+let historyKey = (new URLSearchParams(location.search).get('history') || '').toLowerCase()
+  || localStorage.getItem(HISTORY_KEY) || 'all';
 if (!HISTORY_PRESETS.some(p => p.k === historyKey)) historyKey = 'all';
 const historyPreset = () => HISTORY_PRESETS.find(p => p.k === historyKey);
 
@@ -1338,7 +1376,7 @@ function drawSparkline(g, row, t) {
 
 function drawProfile(g, row) {
   const n = state.neighbors;
-  put(g, row, 0, 'WATER SURFACE ELEVATION · m NHN', 'd');
+  put(g, row, 0, isCompact() ? 'ELEVATION m NHN' : 'WATER SURFACE ELEVATION · m NHN', 'd');
   if (n.length < 2) {
     put(g, row + 1, 0, n.length === 0 ? 'locating neighbor stations…' : 'no neighbor stations with gauge zero on this water', 'd');
     return row + 3;
@@ -1366,6 +1404,10 @@ function drawProfile(g, row) {
     const lx = Math.min(Math.max(0, x - 3), COLS - label.length);
     put(g, y + 1, lx, label, self ? 'b' : 'd');
     put(g, y + 2, lx, `km ${p.km}`, 'd');
+    if (!self) { // neighbors are one click away
+      linkCells(g, y, x, 1, p.name);
+      linkCells(g, y + 1, lx, label.length, p.name);
+    }
   }
   put(g, row, COLS - 14, '← downstream ≋', 'd');
   return row + PROFILE_ROWS + 1;
@@ -1414,9 +1456,12 @@ function drawRiver(g, stations, t) {
   const nHigh = stations.filter(s => s.kind === 'high').length;
 
   // header: dim rule with the river title, then a legend of the three marker glyphs
-  const head = `─── PEGELONLINE://${state.river} · ${stations.length} stations · KM ${fmtKm(kmMin)}–${fmtKm(kmMax)} `;
+  const brand = isCompact() ? `PEGEL://${state.river}` : `PEGELONLINE://${state.river}`;
+  const head = isCompact()
+    ? `─── ${brand} · ${stations.length} st `
+    : `─── ${brand} · ${stations.length} stations · KM ${fmtKm(kmMin)}–${fmtKm(kmMax)} `;
   put(g, 0, 0, head.padEnd(COLS, '─'), 'd');
-  put(g, 0, 4, `PEGELONLINE://${state.river}`, 'b');
+  put(g, 0, 4, brand, 'b');
   let lx = 0;
   put(g, 1, lx, RIVER_GLYPH.normal, RIVER_CLS.normal); put(g, 1, lx + 2, 'ok', 'd'); lx += 5;
   put(g, 1, lx, '·', 'd'); lx += 2;
@@ -1442,7 +1487,11 @@ function drawRiver(g, stations, t) {
   // can ever overwrite (or sit fused against) a marker
   const key = (r, c) => r * COLS + c;
   const reserved = new Set();
-  for (const p of pts) { put(g, p.y, p.x, RIVER_GLYPH[p.s.kind], RIVER_CLS[p.s.kind]); reserved.add(key(p.y, p.x)); }
+  for (const p of pts) {
+    put(g, p.y, p.x, RIVER_GLYPH[p.s.kind], RIVER_CLS[p.s.kind]);
+    reserved.add(key(p.y, p.x));
+    linkCells(g, p.y, p.x, 1, p.s.name);
+  }
 
   // label placement. >= 12 columns between any two labeled markers is a HARD
   // constraint for every label; troubled stations get first pick, and a troubled
@@ -1478,7 +1527,7 @@ function drawRiver(g, stations, t) {
     const nameX = clampCol(p.x - (name.length >> 1), name.length);
     if (!clearCells(nameRow, nameX, name.length)) continue; // no room without overlap → drop
     reserveCells(nameRow, nameX, name.length);
-    draws.push({ row: nameRow, col: nameX, text: name, cls: p.s.kind === 'normal' ? 'd' : RIVER_CLS[p.s.kind] });
+    draws.push({ row: nameRow, col: nameX, text: name, cls: p.s.kind === 'normal' ? 'd' : RIVER_CLS[p.s.kind], st: p.s.name });
     // elevation suffix only when the name row still has >= 6 free columns after it
     let freeAfter = 0;
     for (let c = nameX + name.length; c < COLS && !reserved.has(key(nameRow, c)); c++) freeAfter++;
@@ -1486,7 +1535,7 @@ function drawRiver(g, stations, t) {
     const elevX = clampCol(p.x - (elevTxt.length >> 1), elevTxt.length);
     if (freeAfter >= 6 && clearCells(elevRow, elevX, elevTxt.length)) {
       reserveCells(elevRow, elevX, elevTxt.length);
-      draws.push({ row: elevRow, col: elevX, text: elevTxt, cls: 'd' });
+      draws.push({ row: elevRow, col: elevX, text: elevTxt, cls: 'd', st: p.s.name });
     }
   }
 
@@ -1500,8 +1549,11 @@ function drawRiver(g, stations, t) {
       if (!reserved.has(key(r, c))) put(g, r, c, '·', 'w');
     }
   }
-  // labels last, over the (skipped) water line
-  for (const d of draws) put(g, d.row, d.col, d.text, d.cls);
+  // labels last, over the (skipped) water line — every label is a click target
+  for (const d of draws) {
+    put(g, d.row, d.col, d.text, d.cls);
+    if (d.st) linkCells(g, d.row, d.col, d.text.length, d.st);
+  }
 
   // km ticks along the bottom — ascending km maps right-to-left, so sort by column
   // before placing and skip any that would overprint the previous one
@@ -1525,8 +1577,31 @@ function drawRiver(g, stations, t) {
       const val = s.value != null ? `W ${Math.round(s.value)}` : 'W —';
       const line = `${RIVER_GLYPH[s.kind]} ${s.name.slice(0, 10).padEnd(10)} ${val} · ${s.kind} · km ${fmtKm(s.km)}`;
       put(g, RIVER_TROUBLE_TOP + 1 + i, 0, line, RIVER_CLS[s.kind]);
+      linkCells(g, RIVER_TROUBLE_TOP + 1 + i, 0, line.length, s.name);
     });
     if (troubled.length > 8) put(g, RIVER_TROUBLE_TOP + 9, 0, `… and ${troubled.length - 8} more`, 'd');
+  }
+  // night decorates the river view too: moon and stars, only into cells that are
+  // empty AND unreserved so the plot, labels and their padding always win. Star
+  // glyphs avoid '·' here — that's the water line's glyph
+  if (isNight()) {
+    const putSky = (r, c, s, cls) => {
+      for (let i = 0; i < s.length; i++) {
+        const x = c + i;
+        if (s[i] !== ' ' && r >= 0 && r < g.rows && x >= 0 && x < COLS &&
+            g.ch[r][x] === ' ' && !reserved.has(key(r, x))) { g.ch[r][x] = s[i]; g.cl[r][x] = cls; }
+      }
+    };
+    drawMoonGlyph(putSky, RIVER_PROF_TOP, 8);
+    const starGlyphs = ['˙', '+', '˙', '*'];
+    for (let x = 0; x < COLS; x++) {
+      for (let r = RIVER_PROF_TOP; r < RIVER_TICK_ROW - 1; r++) {
+        const h = ((x + 1) * 2654435761 ^ (r + 1) * 40503) >>> 0;
+        if (h % 61) continue; // sparser than the station view — the plot needs the room
+        const phase = (Math.floor(t / 2) + (h >>> 8)) % 4;
+        putSky(r, x, starGlyphs[phase], 'd');
+      }
+    }
   }
   return { nLow, nHigh, labels: draws }; // labels exposed for layout testing
 }
@@ -1559,6 +1634,7 @@ function switchStation(name, adsb, push = true) {
     const q = new URLSearchParams();
     q.set('station', station);
     if (adsbRaw) q.set('adsb', adsbRaw);
+    if (historyKey !== 'all') q.set('history', historyKey);
     history.pushState(null, '', '?' + q.toString());
   }
   applyStationChrome();
@@ -1643,7 +1719,7 @@ function dismissHelp() {
 // tell "not given" (undefined) apart from "given empty" (''), e.g. --adsb clearing.
 function parseCommand(raw) {
   const tokens = (raw || '').trim().split(/\s+/).filter(Boolean);
-  const cmd = { station: undefined, adsb: undefined, history: undefined, river: undefined, help: false, unknownFlag: null };
+  const cmd = { station: undefined, adsb: undefined, history: undefined, river: undefined, help: false, export: false, clear: false, unknownFlag: null };
   let i = 0;
   while (i < tokens.length) {
     const tok = tokens[i];
@@ -1659,6 +1735,8 @@ function parseCommand(raw) {
     else if (flag === 'history') cmd.history = value.toLowerCase();
     else if (flag === 'river') cmd.river = value;
     else if (flag === 'help') cmd.help = true;
+    else if (flag === 'export') cmd.export = true;
+    else if (flag === 'clear') cmd.clear = true;
     else if (!cmd.unknownFlag) cmd.unknownFlag = tok;
   }
   return cmd;
@@ -1674,7 +1752,8 @@ function helpText(unknownFlag) {
     '    pegel - live ASCII water level terminal for German rivers',
     '',
     'SYNOPSIS',
-    '    > pegel [STATION] [--station NAME] [--river NAME] [--adsb URL] [--history RANGE] [--help]',
+    '    > pegel [STATION] [--station NAME] [--river NAME] [--adsb URL]',
+    '            [--history RANGE] [--export] [--clear] [--help]',
     '',
     'OPTIONS',
     '    STATION           bare station name, e.g. BONN (shorthand for --station)',
@@ -1682,6 +1761,8 @@ function helpText(unknownFlag) {
     '    --river NAME      whole-river profile of NAME, e.g. RHEIN (any case, multi-word)',
     '    --adsb URL        set your local ADS-B receiver URL; no value clears it',
     '    --history RANGE   set the sparkline window: 24h 3d 7d 15d 30d all',
+    '    --export          download the whole local archive as JSON',
+    '    --clear           delete the local archive (no confirmation - you typed it)',
     '    --help            show this screen',
     '',
     'KEYS',
@@ -1707,14 +1788,26 @@ function runCommand(raw) {
   if (cmd.river !== undefined) switchRiver(cmd.river);
   else if (cmd.station !== undefined || cmd.adsb !== undefined) switchStation(cmd.station, cmd.adsb);
   if (cmd.history !== undefined && HISTORY_PRESETS.some(p => p.k === cmd.history)) setHistory(cmd.history);
+  if (cmd.export) document.getElementById('export-btn').click();
+  if (cmd.clear) { // typed deliberately — no confirmation dance like the button
+    for (const k of archiveKeys()) localStorage.removeItem(k);
+    state.archive = [];
+    updateLocalBar();
+  }
   dismissHelp();
   dirty = true;
-  stationInput.value = station;
+  stationInput.value = mode === 'river' ? state.river : station;
 }
 
 function applyPrompt() {
-  if (stationInput.value.includes('--')) runCommand(stationInput.value);
-  else switchStation(stationInput.value, adsbInput.value);
+  const v = stationInput.value;
+  if (v.includes('--')) return runCommand(v);
+  // a plain name that is a known river (and not a station) opens the river profile
+  if (knownStations.size && !knownStations.has(resolveStation(v))) {
+    const water = resolveWater(v);
+    if (water) return switchRiver(water);
+  }
+  switchStation(v, adsbInput.value);
 }
 
 document.getElementById('prompt').addEventListener('submit', e => {
@@ -1730,6 +1823,13 @@ for (const el of [stationInput, adsbInput]) {
     }
   });
 }
+// stations drawn into the grid (river markers/labels/trouble rows, profile
+// neighbors) are click targets — delegated so the 8 fps innerHTML swap can't
+// detach a listener mid-click
+screen.addEventListener('click', e => {
+  const el = e.target.closest('[data-st]');
+  if (el) switchStation(el.dataset.st, adsbInput.value);
+});
 // terminal idiom: '/' focuses the station prompt from anywhere on the page; esc
 // dismisses the --help screen when it's showing
 document.addEventListener('keydown', e => {
@@ -1752,10 +1852,13 @@ window.addEventListener('popstate', () => {
 // ---------- station suggestions (cached names, not the 255 KB full list) ----------
 
 const STATIONS_CACHE = 'pegel.stations';
+const WATERS_CACHE = 'pegel.waters';
 const STATIONS_TTL = 7 * 864e5;
 const knownStations = new Set();
+const knownWaters = new Set();  // UPPERCASE river names — typing one opens river mode
 const stationMeta = new Map(); // UPPERCASE shortname -> { w: water, km }
 const normMap = new Map();     // ASCII-folded name -> real shortname
+const watersNorm = new Map();  // ASCII-folded river name -> UPPERCASE river name
 
 // two foldings so both spellings of an umlaut resolve: KÖLN -> KOELN and KOLN
 const foldAe = s => s.toUpperCase().replace(/Ä/g, 'AE').replace(/Ö/g, 'OE').replace(/Ü/g, 'UE').replace(/ß/g, 'SS');
@@ -1766,6 +1869,31 @@ function resolveStation(raw) {
   const up = (raw || '').trim().toUpperCase();
   if (!up || knownStations.has(up)) return up;
   return normMap.get(foldAe(up)) || normMap.get(foldStrip(up)) || up;
+}
+
+// resolve user input to a known river name, or null — station names win over
+// rivers, so this is only consulted when the input is NOT a known station
+function resolveWater(raw) {
+  const up = (raw || '').trim().toUpperCase();
+  if (!up) return null;
+  if (knownWaters.has(up)) return up;
+  return watersNorm.get(foldAe(up)) || watersNorm.get(foldStrip(up)) || null;
+}
+
+function fillWaters(list) {
+  const dl = document.getElementById('stations');
+  const frag = document.createDocumentFragment();
+  for (const w of list) {
+    const up = (w || '').toUpperCase();
+    if (!up || knownWaters.has(up)) continue;
+    knownWaters.add(up);
+    for (const k of [foldAe(up), foldStrip(up)]) if (!watersNorm.has(k)) watersNorm.set(k, up);
+    const opt = document.createElement('option');
+    opt.value = up;
+    opt.label = 'river · whole profile';
+    frag.appendChild(opt);
+  }
+  dl.appendChild(frag);
 }
 
 function fillDatalist(list) {
@@ -1794,10 +1922,12 @@ stationInput.addEventListener('change', () => {
   if (stationInput.value.includes('--')) return; // half-typed command: let Enter/submit parse it
   const resolved = resolveStation(stationInput.value);
   if (resolved !== station && knownStations.has(resolved)) switchStation(resolved, adsbInput.value);
+  else if (!knownStations.has(resolved) && resolveWater(stationInput.value)) switchRiver(resolveWater(stationInput.value));
   else if (knownStations.size) stationInput.value = mode === 'river' ? state.river : station; // invalid/abandoned/ASCII spelling: snap back
 });
 
 async function loadStationList() {
+  loadWaterList(); // independent of the station cache's freshness early-return below
   let cached = null;
   try { cached = JSON.parse(localStorage.getItem(STATIONS_CACHE)); } catch {}
   if (cached && Array.isArray(cached.list)) fillDatalist(cached.list);
@@ -1813,6 +1943,21 @@ async function loadStationList() {
     localStorage.setItem(STATIONS_CACHE, JSON.stringify({ t: Date.now(), list }));
     fillDatalist(list);
   } catch { /* keep whatever cache we already showed */ }
+}
+
+// rivers join the suggestions after the stations: picking (or typing) one opens
+// the whole-river profile instead of a station
+async function loadWaterList() {
+  let cached = null;
+  try { cached = JSON.parse(localStorage.getItem(WATERS_CACHE)); } catch {}
+  if (cached && Array.isArray(cached.list)) fillWaters(cached.list);
+  if (cached && Array.isArray(cached.list) && Date.now() - cached.t < STATIONS_TTL) return;
+  try {
+    const waters = await getJson(`${API}/waters.json`);
+    const list = [...new Set(waters.map(w => (w.shortname || '').toUpperCase()).filter(Boolean))].sort();
+    localStorage.setItem(WATERS_CACHE, JSON.stringify({ t: Date.now(), list }));
+    fillWaters(list);
+  } catch { /* rivers in the datalist are a bonus, not a requirement */ }
 }
 
 stationInput.addEventListener('focus', loadStationList, { once: true });
@@ -1894,6 +2039,10 @@ function setHistory(k) {
   if (k === historyKey) return;
   historyKey = k;
   localStorage.setItem(HISTORY_KEY, k);
+  // keep shared links reproducing the visible range ('all' is the default → no param)
+  const q = new URLSearchParams(location.search);
+  if (k === 'all') q.delete('history'); else q.set('history', k);
+  history.replaceState(null, '', '?' + q.toString());
   renderHistoryBar();
   ensureHistoryCoverage(historyPreset().d);
   dirty = true;
@@ -1904,6 +2053,8 @@ function setHistory(k) {
 try {
   const c = JSON.parse(localStorage.getItem(STATIONS_CACHE));
   if (c && Array.isArray(c.list)) fillDatalist(c.list);
+  const wc = JSON.parse(localStorage.getItem(WATERS_CACHE));
+  if (wc && Array.isArray(wc.list)) fillWaters(wc.list);
 } catch {}
 const canonical = resolveStation(station);
 if (mode !== 'river' && canonical !== station && knownStations.has(canonical)) {
@@ -2076,6 +2227,14 @@ function fitFont() {
   const chrome = parseFloat(cs.paddingLeft) + parseFloat(cs.paddingRight) +
     parseFloat(cs.borderLeftWidth) + parseFloat(cs.borderRightWidth);
   const avail = document.documentElement.clientWidth - chrome - 4;
+  // pick the grid width first: full 84 columns only while the font stays readable
+  // (>= 8px); below that, phones get the 44-column compact layout at a large font
+  const next = avail / (84 * 0.602) >= 8 ? 84 : COMPACT_COLS;
+  if (next !== COLS) {
+    COLS = next;
+    sparkDisplay = null; // spring arrays are sized per chart width
+    dirty = true;
+  }
   let px = Math.min(15, avail / (COLS * 0.602));
   screen.style.fontSize = px.toFixed(2) + 'px';
   // the 0.602 glyph-aspect estimate can be off; correct against the real rendered
