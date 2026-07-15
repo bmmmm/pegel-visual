@@ -34,6 +34,10 @@ _      _      _      _      _      _      _      _
   afterwards only the delta since the newest archived point is pulled.
 - water surface elevation profile (m NHN) between the neighboring
   stations on the same river, ordered by river km
+- water temperature and discharge in the header when the station reports
+  them, all-time record markers (HHW/NNW) on the chart when available, and
+  a frozen river scene — static pack ice, drifting floes, a ship stuck fast —
+  once water temperature drops to 0.5 °C or below
 
 ## Any station
 
