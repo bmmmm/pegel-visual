@@ -70,6 +70,40 @@ range in one command. Press Escape to dismiss the help screen.
 (or copies it). The page ships a web manifest, so it can be installed as
 an app from the browser menu.
 
+## Whole-river mode
+
+Instead of one station, view an entire river as a single ASCII longitudinal
+profile: every gauge on the river laid out by river kilometre (downstream to
+the left), plotted at its live water-surface elevation (m NHN), with a
+`TROUBLE` list of every station currently running low or high. One request to
+PEGELONLINE fetches the whole river; it refreshes on the same 5-minute cycle.
+Markers use a distinct glyph per state so colour never carries meaning alone:
+`◉` normal, `▼` low, `▲` high.
+
+Entry points — the query param or the prompt's `--river` flag (any case,
+multi-word river names allowed):
+
+```
+?river=RHEIN
+> pegel --river RHEIN
+> pegel --river ELDE MÜRITZ WASSERSTRASSE
+```
+
+A profile line looks like this — the water surface stepping down between two
+gauges, a flagged low station labelled below its marker:
+
+```
+                      RUHRORT
+      ·······◉·······  57.94
+◉·····                        ·····▼·····
+812.4                              WESEL
+                                   19.03
+```
+
+`--river` and `--station` are mutually exclusive views; typing a station name
+(or `--station NAME`) from river mode switches straight back. Back/forward in
+the browser restores whichever view the URL held.
+
 ## Aircraft overhead (optional, bring your own receiver)
 
 If you run an ADS-B receiver (tar1090 / readsb / adsb.im image), put its URL

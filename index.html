@@ -240,14 +240,35 @@ const screen = document.getElementById('screen');
 const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)');
 let dirty = true; // set whenever state changes; gates redraws under reduced motion
 let station = (new URLSearchParams(location.search).get('station') || 'BONN').toUpperCase();
+// two mutually exclusive views: the single-station terminal, or a whole-river
+// longitudinal profile. ?river= wins over ?station= on load.
+let mode = new URLSearchParams(location.search).get('river') ? 'river' : 'station';
 const stationLink = document.getElementById('station-link');
 
 function applyStationChrome() {
+  if (mode === 'river') return; // river chrome owns the title/link while in river mode
   document.title = 'PEGEL://' + station;
   stationLink.textContent = '?station=' + station;
   stationLink.href = '?station=' + encodeURIComponent(station);
 }
-applyStationChrome();
+
+function applyRiverChrome() {
+  document.title = 'PEGEL://' + state.river;
+  stationLink.textContent = '?river=' + state.river;
+  stationLink.href = '?river=' + encodeURIComponent(state.river);
+}
+
+// river mode hides the per-station chrome (archive bar, history range, recent chips);
+// the prompt form stays so users can jump back to a station
+function applyModeChrome() {
+  const river = mode === 'river';
+  document.getElementById('localbar').hidden = river;
+  document.getElementById('history-bar').hidden = river;
+  if (river) document.getElementById('recent').hidden = true;
+  else renderRecent();
+}
+
+if (mode !== 'river') applyStationChrome();
 
 // live chrome: once data is in, the tab title carries the level + trend, the
 // favicon buddy's waterline tracks the real level (MNW…MHW → low…high), and
@@ -279,6 +300,12 @@ function updateFavicon(valueCm) {
 
 function screenSummary() {
   if (state.error) return 'Error. ' + state.error;
+  if (mode === 'river') {
+    if (!state.riverStations) return `Loading ${state.river} river profile…`;
+    const low = state.riverStations.filter(s => s.kind === 'low').length;
+    const high = state.riverStations.filter(s => s.kind === 'high').length;
+    return `${state.river}: ${state.riverStations.length} stations, ${low} low, ${high} high.`;
+  }
   const cur = state.gauge && state.gauge.currentMeasurement;
   if (!cur) return 'Connecting to PEGELONLINE…';
   const trend = trendPerHour();
@@ -298,6 +325,7 @@ function setScreenAria() {
 
 function applyLiveChrome() {
   setScreenAria();
+  if (mode === 'river') return; // no gauge/favicon in river mode; chrome is river-owned
   const cur = state.gauge && state.gauge.currentMeasurement;
   if (!cur) return;
   const trend = trendPerHour();
@@ -318,6 +346,8 @@ const state = {
   archive: [],      // locally accumulated [timestampMs, cm] for this station
   error: null,
   help: null,       // set to a man-page string while the --help screen is shown
+  river: null,      // river name (uppercase) while in river mode
+  riverStations: null, // prepared station array for the longitudinal profile
 };
 
 // ---------- data ----------
@@ -412,6 +442,67 @@ async function loadNeighbors(info) {
   if (!state.info || state.info.uuid !== info.uuid) return; // switched away — discard
   state.neighbors = enriched.filter(Boolean);
   dirty = true;
+}
+
+// ---------- river mode (whole-river longitudinal profile) ----------
+
+// stateMnwMhw is one of: unknown, lowest, low, normal, high, highest (any case).
+// low/lowest read as drought-ish, high/highest as flood-ish, everything else normal.
+function troubleKind(stateStr) {
+  const v = (stateStr || '').toLowerCase();
+  if (v === 'low' || v === 'lowest') return 'low';
+  if (v === 'high' || v === 'highest') return 'high';
+  return 'normal';
+}
+
+// turn the raw ?waters= station list into the array the profile renders from.
+// Keeps a station if it has a km AND a W timeseries and either an elevation
+// (gaugeZero + current W) or a non-normal state worth flagging. elev is null when
+// gaugeZero/current is missing — such a station shows in the trouble list only.
+function prepareRiverStations(raw) {
+  const out = [];
+  for (const s of raw) {
+    if (typeof s.km !== 'number') continue;
+    const w = (s.timeseries || []).find(ts => ts.shortname === 'W');
+    if (!w) continue;
+    const cur = w.currentMeasurement;
+    const kind = troubleKind(cur && cur.stateMnwMhw);
+    const hasElev = w.gaugeZero && w.gaugeZero.value != null && cur && cur.value != null;
+    if (!hasElev && kind === 'normal') continue; // nothing to plot, nothing to flag
+    out.push({
+      name: s.shortname,
+      km: s.km,
+      value: cur && cur.value != null ? cur.value : null,
+      elev: hasElev ? w.gaugeZero.value + cur.value / 100 : null,
+      kind,
+    });
+  }
+  return out.sort((a, b) => a.km - b.km);
+}
+
+async function loadRiver() {
+  const forRiver = state.river; // guard against a mid-flight river/station switch
+  try {
+    const enc = encodeURIComponent(forRiver);
+    const raw = await getJson(`${API}/stations.json?waters=${enc}&includeTimeseries=true&includeCurrentMeasurement=true`);
+    if (mode !== 'river' || state.river !== forRiver) return; // switched away — discard
+    const prepared = prepareRiverStations(raw);
+    if (prepared.filter(s => s.elev != null).length < 2) {
+      state.error = `river "${forRiver}" has fewer than 2 usable stations\n` +
+        `check the name against ${API}/stations.json?waters=${enc}`;
+      state.riverStations = null;
+    } else {
+      state.riverStations = prepared;
+      state.error = null;
+    }
+  } catch (e) {
+    if (mode !== 'river' || state.river !== forRiver) return; // stale error from a river we left
+    state.error = `river "${forRiver}" failed: ${e.message}\n` +
+      `check ${API}/stations.json?waters=${encodeURIComponent(forRiver)}`;
+    state.riverStations = null;
+  }
+  dirty = true;
+  setScreenAria();
 }
 
 // ---------- local archive (accumulates beyond the API's 15-day window) ----------
@@ -1280,6 +1371,134 @@ function drawProfile(g, row) {
   return row + PROFILE_ROWS + 1;
 }
 
+// ---------- river profile renderer ----------
+
+// color alone can't carry meaning, so each state gets a distinct glyph too
+const RIVER_GLYPH = { low: '▼', high: '▲', normal: '◉' };
+const RIVER_CLS = { low: 's', high: 'w2', normal: 'b' };
+
+// layout rows (see drawRiver): title, legend, then the plot block and trouble list
+const RIVER_PROF_TOP = 3;                          // caption row (m NHN / ← downstream)
+const RIVER_BODY_TOP = RIVER_PROF_TOP + 3;         // first plot-body row (2 label rows above)
+const RIVER_PLOT_H = 10;                            // plot-body height
+const RIVER_TICK_ROW = RIVER_BODY_TOP + RIVER_PLOT_H + 2; // km ticks (2 label rows below)
+const RIVER_TROUBLE_TOP = RIVER_TICK_ROW + 2;      // TROUBLE header
+
+const fmtKm = k => Number.isInteger(k) ? String(k) : k.toFixed(1);
+const clampCol = (c, w) => Math.max(0, Math.min(COLS - w, c));
+
+// 4-6 round km ticks across [kmMin, kmMax]
+function kmTicks(kmMin, kmMax) {
+  const span = Math.max(kmMax - kmMin, 0.1);
+  const mag = Math.pow(10, Math.floor(Math.log10(span / 5)));
+  const step = [1, 2, 5, 10].map(m => m * mag).find(s => span / s <= 6) || mag * 10;
+  const ticks = [];
+  for (let k = Math.ceil(kmMin / step) * step; k <= kmMax + 1e-9; k += step) ticks.push(k);
+  return ticks;
+}
+
+function riverGridRows(stations) {
+  const n = stations.filter(s => s.kind !== 'normal').length;
+  const lines = n ? Math.min(n, 8) + (n > 8 ? 1 : 0) : 1;
+  return RIVER_TROUBLE_TOP + 1 + lines;
+}
+
+// pure: draws the whole river view (header + profile + trouble list) into g from the
+// prepared station array, so it can be exercised from a fixture without any network
+function drawRiver(g, stations, t) {
+  const usable = stations.filter(s => s.elev != null);
+  const kms = stations.map(s => s.km);
+  const kmMin = Math.min(...kms), kmMax = Math.max(...kms);
+  const kmSpan = Math.max(kmMax - kmMin, 0.1);
+  const nLow = stations.filter(s => s.kind === 'low').length;
+  const nHigh = stations.filter(s => s.kind === 'high').length;
+
+  // header: dim rule with the river title, then a legend of the three marker glyphs
+  const head = `─── PEGELONLINE://${state.river} · ${stations.length} stations · KM ${fmtKm(kmMin)}–${fmtKm(kmMax)} `;
+  put(g, 0, 0, head.padEnd(COLS, '─'), 'd');
+  put(g, 0, 4, `PEGELONLINE://${state.river}`, 'b');
+  let lx = 0;
+  put(g, 1, lx, RIVER_GLYPH.normal, RIVER_CLS.normal); put(g, 1, lx + 2, 'ok', 'd'); lx += 5;
+  put(g, 1, lx, '·', 'd'); lx += 2;
+  put(g, 1, lx, RIVER_GLYPH.low, RIVER_CLS.low); put(g, 1, lx + 2, 'low', 'd'); lx += 6;
+  put(g, 1, lx, '·', 'd'); lx += 2;
+  put(g, 1, lx, RIVER_GLYPH.high, RIVER_CLS.high); put(g, 1, lx + 2, 'high', 'd');
+
+  // captions: m NHN (elevation axis) top-left, downstream marker top-right
+  put(g, RIVER_PROF_TOP, 0, 'm NHN', 'd');
+  put(g, RIVER_PROF_TOP, COLS - 14, '← downstream ≋', 'd');
+
+  // x = km, DOWNSTREAM LEFT (highest km at the left, matching drawProfile); y = elev
+  const xBase = 1, plotW = COLS - 2;
+  const elevs = usable.map(s => s.elev);
+  const eMin = Math.min(...elevs), eSpan = Math.max(Math.max(...elevs) - eMin, 0.1);
+  const xOf = km => xBase + Math.round((1 - (km - kmMin) / kmSpan) * (plotW - 1));
+  const pts = usable.map(s => ({
+    s, x: xOf(s.km),
+    y: RIVER_BODY_TOP + Math.round((1 - (s.elev - eMin) / eSpan) * (RIVER_PLOT_H - 1)),
+  })).sort((a, b) => a.x - b.x);
+
+  // water surface line between consecutive stations
+  for (let i = 0; i < pts.length - 1; i++) {
+    const a = pts[i], b = pts[i + 1];
+    const steps = Math.max(Math.abs(b.x - a.x), 1), dir = Math.sign(b.x - a.x) || 1;
+    for (let sp = 1; sp < steps; sp++) {
+      put(g, Math.round(a.y + ((b.y - a.y) * sp) / steps), a.x + dir * sp, '·', 'w');
+    }
+  }
+  // markers on top of the line
+  for (const p of pts) put(g, p.y, p.x, RIVER_GLYPH[p.s.kind], RIVER_CLS[p.s.kind]);
+
+  // labels: troubled stations are always labeled; normal ones only if ≥12 columns
+  // from any already-labeled marker (troubled neighbors win the space)
+  const labeled = new Set();
+  const xs = [];
+  for (const p of pts) if (p.s.kind !== 'normal') { labeled.add(p); xs.push(p.x); }
+  for (const p of pts) {
+    if (labeled.has(p)) continue;
+    if (xs.every(x => Math.abs(x - p.x) >= 12)) { labeled.add(p); xs.push(p.x); }
+  }
+  let side = -1; // alternate below/above so adjacent labels don't stack
+  for (const p of pts) {
+    if (!labeled.has(p)) continue;
+    side = -side;
+    const name = p.s.name.slice(0, 10);
+    const elevTxt = p.s.elev.toFixed(2);
+    const nameX = clampCol(p.x - (name.length >> 1), name.length);
+    const elevX = clampCol(p.x - (elevTxt.length >> 1), elevTxt.length);
+    const nameCls = p.s.kind === 'normal' ? 'd' : RIVER_CLS[p.s.kind];
+    if (side > 0) { put(g, p.y + 1, nameX, name, nameCls); put(g, p.y + 2, elevX, elevTxt, 'd'); }
+    else { put(g, p.y - 2, nameX, name, nameCls); put(g, p.y - 1, elevX, elevTxt, 'd'); }
+  }
+
+  // km ticks along the bottom — ascending km maps right-to-left, so sort by column
+  // before placing and skip any that would overprint the previous one
+  let lastTickEnd = -1;
+  const tickCols = kmTicks(kmMin, kmMax)
+    .map(k => { const lbl = String(Math.round(k)); return { lbl, tx: clampCol(xOf(k) - (lbl.length >> 1), lbl.length) }; })
+    .sort((a, b) => a.tx - b.tx);
+  for (const { lbl, tx } of tickCols) {
+    if (tx <= lastTickEnd) continue;
+    put(g, RIVER_TICK_ROW, tx, lbl, 'd');
+    lastTickEnd = tx + lbl.length;
+  }
+
+  // trouble list: every non-normal station, sorted by km, capped at 8 + overflow
+  put(g, RIVER_TROUBLE_TOP, 0, 'TROUBLE', 'd');
+  const troubled = stations.filter(s => s.kind !== 'normal').sort((a, b) => a.km - b.km);
+  if (!troubled.length) {
+    put(g, RIVER_TROUBLE_TOP + 1, 0, 'all stations normal', 'd');
+  } else {
+    troubled.slice(0, 8).forEach((s, i) => {
+      const val = s.value != null ? `W ${Math.round(s.value)}` : 'W —';
+      const line = `${RIVER_GLYPH[s.kind]} ${s.name.slice(0, 10).padEnd(10)} ${val} · ${s.kind} · km ${fmtKm(s.km)}`;
+      put(g, RIVER_TROUBLE_TOP + 1 + i, 0, line, RIVER_CLS[s.kind]);
+    });
+    if (troubled.length > 8) put(g, RIVER_TROUBLE_TOP + 9, 0, `… and ${troubled.length - 8} more`, 'd');
+  }
+  return { nLow, nHigh };
+}
+
 // ---------- station prompt ----------
 
 const stationInput = document.getElementById('station-input');
@@ -1292,11 +1511,13 @@ let refreshTimer = null;
 // switch station in-place: no full reload, just reset per-station state and refetch
 function switchStation(name, adsb, push = true) {
   dismissHelp(); // a station switch always leaves the man page
+  const wasRiver = mode === 'river';
   const next = resolveStation(name || station) || station;
   const nextAdsb = (adsb ?? adsbRaw).trim();
-  if (next === station && nextAdsb === adsbRaw) return;
+  if (!wasRiver && next === station && nextAdsb === adsbRaw) return;
   const adsbChanged = nextAdsb !== adsbRaw;
 
+  mode = 'station';
   station = next;
   adsbRaw = nextAdsb;
   if (adsbRaw) localStorage.setItem('pegel.adsb', adsbRaw);
@@ -1309,6 +1530,7 @@ function switchStation(name, adsb, push = true) {
     history.pushState(null, '', '?' + q.toString());
   }
   applyStationChrome();
+  applyModeChrome(); // restore the station chrome if we came from river mode
 
   // drop the previous station's data so render() shows the connecting screen at once
   state.info = null;
@@ -1344,6 +1566,37 @@ function switchStation(name, adsb, push = true) {
   renderRecent();
 }
 
+// enter river mode: mirror switchStation but for a whole-river profile. Resets the
+// river state and kicks the fetch on the normal 5-min cycle.
+function switchRiver(name, push = true) {
+  dismissHelp();
+  const next = (name || state.river || '').trim().toUpperCase();
+  if (!next) return;
+  if (mode === 'river' && next === state.river) return;
+
+  mode = 'river';
+  state.river = next;
+  state.riverStations = null;
+  state.gauge = null; // ensure any station live-title guard sees no gauge
+  state.error = null;
+
+  if (push) history.pushState(null, '', '?river=' + encodeURIComponent(next));
+  applyRiverChrome();
+  applyModeChrome();
+  dirty = true;
+  setScreenAria();
+  if (document.startViewTransition && !reduceMotion.matches) {
+    const vt = document.startViewTransition(renderNow);
+    vt.ready.catch(() => {});
+    vt.finished.catch(() => {});
+  }
+
+  stationInput.value = next;
+  clearInterval(refreshTimer);
+  loadRiver();
+  refreshTimer = setInterval(loadRiver, REFRESH_MS);
+}
+
 function dismissHelp() {
   if (!state.help) return;
   state.help = null;
@@ -1358,20 +1611,21 @@ function dismissHelp() {
 // tell "not given" (undefined) apart from "given empty" (''), e.g. --adsb clearing.
 function parseCommand(raw) {
   const tokens = (raw || '').trim().split(/\s+/).filter(Boolean);
-  const cmd = { station: undefined, adsb: undefined, history: undefined, help: false, unknownFlag: null };
+  const cmd = { station: undefined, adsb: undefined, history: undefined, river: undefined, help: false, unknownFlag: null };
   let i = 0;
   while (i < tokens.length) {
     const tok = tokens[i];
     if (!tok.startsWith('--')) { i++; continue; } // stray non-flag token: ignore
     const flag = tok.slice(2).toLowerCase();
     i++;
-    const takesValue = flag === 'station' || flag === 'adsb' || flag === 'history';
+    const takesValue = flag === 'station' || flag === 'adsb' || flag === 'history' || flag === 'river';
     const words = [];
     if (takesValue) while (i < tokens.length && !tokens[i].startsWith('--')) { words.push(tokens[i]); i++; }
     const value = words.join(' ');
     if (flag === 'station') cmd.station = value;
     else if (flag === 'adsb') cmd.adsb = value;
     else if (flag === 'history') cmd.history = value.toLowerCase();
+    else if (flag === 'river') cmd.river = value;
     else if (flag === 'help') cmd.help = true;
     else if (!cmd.unknownFlag) cmd.unknownFlag = tok;
   }
@@ -1388,11 +1642,12 @@ function helpText(unknownFlag) {
     '    pegel - live ASCII water level terminal for German rivers',
     '',
     'SYNOPSIS',
-    '    > pegel [STATION] [--station NAME] [--adsb URL] [--history RANGE] [--help]',
+    '    > pegel [STATION] [--station NAME] [--river NAME] [--adsb URL] [--history RANGE] [--help]',
     '',
     'OPTIONS',
     '    STATION           bare station name, e.g. BONN (shorthand for --station)',
     '    --station NAME    switch to station NAME (umlaut spellings accepted)',
+    '    --river NAME      whole-river profile of NAME, e.g. RHEIN (any case, multi-word)',
     '    --adsb URL        set your local ADS-B receiver URL; no value clears it',
     '    --history RANGE   set the sparkline window: 24h 3d 7d 15d 30d all',
     '    --help            show this screen',
@@ -1417,7 +1672,8 @@ function runCommand(raw) {
     stationInput.value = station;
     return;
   }
-  if (cmd.station !== undefined || cmd.adsb !== undefined) switchStation(cmd.station, cmd.adsb);
+  if (cmd.river !== undefined) switchRiver(cmd.river);
+  else if (cmd.station !== undefined || cmd.adsb !== undefined) switchStation(cmd.station, cmd.adsb);
   if (cmd.history !== undefined && HISTORY_PRESETS.some(p => p.k === cmd.history)) setHistory(cmd.history);
   dismissHelp();
   dirty = true;
@@ -1457,7 +1713,8 @@ document.addEventListener('keydown', e => {
 });
 window.addEventListener('popstate', () => {
   const p = new URLSearchParams(location.search);
-  switchStation(p.get('station') || 'BONN', p.get('adsb') || '', false);
+  if (p.get('river')) switchRiver(p.get('river'), false);
+  else switchStation(p.get('station') || 'BONN', p.get('adsb') || '', false);
 });
 
 // ---------- station suggestions (cached names, not the 255 KB full list) ----------
@@ -1505,7 +1762,7 @@ stationInput.addEventListener('change', () => {
   if (stationInput.value.includes('--')) return; // half-typed command: let Enter/submit parse it
   const resolved = resolveStation(stationInput.value);
   if (resolved !== station && knownStations.has(resolved)) switchStation(resolved, adsbInput.value);
-  else if (knownStations.size) stationInput.value = station; // invalid/abandoned/ASCII spelling: snap to canonical
+  else if (knownStations.size) stationInput.value = mode === 'river' ? state.river : station; // invalid/abandoned/ASCII spelling: snap back
 });
 
 async function loadStationList() {
@@ -1617,7 +1874,7 @@ try {
   if (c && Array.isArray(c.list)) fillDatalist(c.list);
 } catch {}
 const canonical = resolveStation(station);
-if (canonical !== station && knownStations.has(canonical)) {
+if (mode !== 'river' && canonical !== station && knownStations.has(canonical)) {
   station = canonical;
   applyStationChrome();
   stationInput.value = station;
@@ -1746,6 +2003,18 @@ function render(t) {
     screen.textContent = state.help;
     return;
   }
+  if (mode === 'river') {
+    if (state.error) { screen.textContent = `${wreckFrame(t)}\n\nERROR\n\n${state.error}`; return; }
+    if (!state.riverStations) {
+      screen.textContent = `mapping ${state.river} ${'·'.repeat(1 + Math.floor(t * 2) % 3)}`;
+      return;
+    }
+    const g = makeGrid(riverGridRows(state.riverStations));
+    drawRiver(g, state.riverStations, t);
+    screen.innerHTML = gridToHtml(g);
+    if (!fitted) { fitted = true; fitFont(); }
+    return;
+  }
   if (state.error) {
     screen.textContent = `${wreckFrame(t)}\n\nERROR\n\n${state.error}`;
     return;
@@ -1786,8 +2055,18 @@ function fitFont() {
 window.addEventListener('resize', fitFont);
 fitFont();
 updateLocalBar();
-loadData();
-refreshTimer = setInterval(loadData, REFRESH_MS);
+if (mode === 'river') {
+  state.river = new URLSearchParams(location.search).get('river').toUpperCase();
+  applyRiverChrome();
+  applyModeChrome();
+  stationInput.value = state.river;
+  setScreenAria();
+  loadRiver();
+  refreshTimer = setInterval(loadRiver, REFRESH_MS);
+} else {
+  loadData();
+  refreshTimer = setInterval(loadData, REFRESH_MS);
+}
 setInterval(loadWeather, WEATHER_REFRESH_MS);
 loadAircraft();
 setInterval(loadAircraft, ADSB_REFRESH_MS);
