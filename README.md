@@ -27,7 +27,9 @@ _      _      _      _      _      _      _      _
   merges the data into a local archive (localStorage, per station), so over
   time your sparkline covers more than the API can serve. Points older than
   16 days are thinned to hourly. `export` downloads the archive as JSON,
-  `clear` (click twice) deletes it. Nothing ever leaves your browser.
+  `import` restores a previously exported file (e.g. after switching
+  devices) and merges it with what is already there, `clear` (click twice)
+  deletes it. Nothing ever leaves your browser.
   Fetching is API-friendly: the 15-day history is requested once as a seed,
   afterwards only the delta since the newest archived point is pulled.
 - water surface elevation profile (m NHN) between the neighboring

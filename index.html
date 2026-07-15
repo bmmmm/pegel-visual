@@ -210,7 +210,9 @@
     <button id="local-toggle" type="button" aria-expanded="false" aria-label="toggle per-station breakdown">▸</button>
     <span id="local-stats">local archive: empty</span>
     · <button id="export-btn" type="button">export</button>
+    · <button id="import-btn" type="button">import</button>
     · <button id="clear-btn" type="button">clear</button>
+    <input id="import-file" type="file" accept="application/json,.json" hidden>
     <div id="local-detail" hidden></div>
   </div>
 </main>
@@ -522,6 +524,61 @@ document.getElementById('export-btn').addEventListener('click', () => {
   const out = {};
   for (const k of archiveKeys()) out[k.slice(ARCHIVE_PREFIX.length)] = loadArchive(k.slice(ARCHIVE_PREFIX.length));
   exportArchives(out, 'pegel-archive.json');
+});
+
+// import: reuses mergeIntoArchive's dedupe/sort/thin/quota logic by converting
+// each [ts, value] pair into the {timestamp, value} shape it expects
+function totalArchivePts() {
+  return archiveKeys().reduce((n, k) => n + loadArchive(k.slice(ARCHIVE_PREFIX.length)).length, 0);
+}
+
+function importArchiveFile(data) {
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return false;
+  let matched = false;
+  for (const [rawName, pairs] of Object.entries(data)) {
+    if (!Array.isArray(pairs)) continue;
+    const name = rawName.toUpperCase();
+    const measurements = [];
+    for (const pair of pairs) {
+      if (!Array.isArray(pair) || pair.length < 2) continue;
+      const [ts, value] = pair;
+      if (!Number.isFinite(ts) || !Number.isFinite(value)) continue;
+      measurements.push({ timestamp: new Date(ts).toISOString(), value });
+    }
+    if (!measurements.length) continue;
+    matched = true;
+    mergeIntoArchive(name, measurements);
+  }
+  return matched;
+}
+
+const importBtn = document.getElementById('import-btn');
+const importFile = document.getElementById('import-file');
+let importResetTimer = null;
+
+function showImportResult(text) {
+  clearTimeout(importResetTimer);
+  importBtn.textContent = text;
+  importResetTimer = setTimeout(() => { importBtn.textContent = 'import'; }, 2500);
+}
+
+importBtn.addEventListener('click', () => importFile.click());
+importFile.addEventListener('change', async () => {
+  const file = importFile.files[0];
+  importFile.value = ''; // allow re-selecting the same file next time
+  if (!file) return;
+  try {
+    const before = totalArchivePts();
+    const data = JSON.parse(await file.text());
+    if (!importArchiveFile(data)) { showImportResult('bad file'); return; }
+    const added = totalArchivePts() - before;
+    showImportResult(`+${added} pts`);
+    state.archive = loadArchive(station);
+    updateLocalBar();
+    dirty = true;
+  } catch {
+    showImportResult('bad file');
+  }
 });
 
 const clearBtn = document.getElementById('clear-btn');
