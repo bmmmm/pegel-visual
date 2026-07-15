@@ -60,8 +60,14 @@ flag command (flags are matched case-insensitively) to do more in one go:
 
 - `--station NAME` — switch to station NAME (same as typing a bare name)
 - `--adsb URL` — set your ADS-B receiver URL; `--adsb` with no value clears it
-- `--history RANGE` — set the sparkline window (`24h`, `3d`, `7d`, `15d`, `30d`, `all`)
+- `--history RANGE` — set the sparkline window (`24h`, `3d`, `7d`, `15d`, `30d`, `all`);
+  the choice also lands in the URL, so shared links reproduce it
+- `--export` — download the whole local archive as JSON
+- `--clear` — delete the local archive (no confirmation — you typed it)
 - `--help` — show a man page with all of the above right on the screen
+
+River names autocomplete alongside stations: typing or picking a known river
+(e.g. `RHEIN`) opens the whole-river profile directly.
 
 Flags combine, e.g. `--station KÖLN --history 7d` switches station and
 range in one command. Press Escape to dismiss the help screen.
@@ -78,7 +84,12 @@ the left), plotted at its live water-surface elevation (m NHN), with a
 `TROUBLE` list of every station currently running low or high. One request to
 PEGELONLINE fetches the whole river; it refreshes on the same 5-minute cycle.
 Markers use a distinct glyph per state so colour never carries meaning alone:
-`◉` normal, `▼` low, `▲` high.
+`◉` normal, `▼` low, `▲` high. Every marker, label and `TROUBLE` row is a
+click target — one click jumps into that station's terminal (the elevation
+profile's neighbor stations are clickable the same way).
+
+On narrow screens the whole app switches from the 84-column grid to a
+44-column compact layout instead of shrinking the font into illegibility.
 
 Entry points — the query param or the prompt's `--river` flag (any case,
 multi-word river names allowed):
