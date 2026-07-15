@@ -258,16 +258,18 @@ function updateFavicon(valueCm) {
   const y = (44 - 22 * f).toFixed(1); // waterline: 44 at low water … 22 at high
   const wave = w => `M2 ${w} q6 -5 12 0 t12 0 t12 0 t12 0 t12 0`;
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">` +
+    `<style>.face{fill:#fbfbf9;stroke:#141414}.ink{fill:#141414}.glint{fill:#ffffff}.mouth{stroke:#141414}` +
+    `@media(prefers-color-scheme:dark){.face{fill:#121417;stroke:#e8e6e1}.ink{fill:#e8e6e1}.glint{fill:#121417}.mouth{stroke:#e8e6e1}}</style>` +
     `<clipPath id="b"><rect x="6" y="8" width="52" height="48" rx="16"/></clipPath>` +
-    `<rect x="6" y="8" width="52" height="48" rx="16" fill="#fbfbf9" stroke="#141414" stroke-width="3"/>` +
+    `<rect class="face" x="6" y="8" width="52" height="48" rx="16" stroke-width="3"/>` +
     `<g clip-path="url(#b)">` +
     `<path d="${wave(y)} V60 H2 Z" fill="#a8cede"/>` +
     `<path d="${wave(y)}" fill="none" stroke="#6f9fb8" stroke-width="2.4"/>` +
     `<path d="${wave(+y + 6)}" fill="none" stroke="#ffffff" stroke-width="1.6" opacity=".5"/>` +
     `</g>` +
-    `<circle cx="23" cy="19" r="5" fill="#141414"/><circle cx="41" cy="19" r="5" fill="#141414"/>` +
-    `<circle cx="24.6" cy="17.4" r="1.7" fill="#ffffff"/><circle cx="42.6" cy="17.4" r="1.7" fill="#ffffff"/>` +
-    `<path d="M22 26 q10 9 20 0" fill="none" stroke="#141414" stroke-width="3" stroke-linecap="round"/>` +
+    `<circle class="ink" cx="23" cy="19" r="5"/><circle class="ink" cx="41" cy="19" r="5"/>` +
+    `<circle class="glint" cx="24.6" cy="17.4" r="1.7"/><circle class="glint" cx="42.6" cy="17.4" r="1.7"/>` +
+    `<path class="mouth" d="M22 26 q10 9 20 0" fill="none" stroke-width="3" stroke-linecap="round"/>` +
     `</svg>`;
   if (faviconLink) faviconLink.href = 'data:image/svg+xml,' + encodeURIComponent(svg);
 }
@@ -660,6 +662,30 @@ function charValue(name) {
   return cv ? cv.value : null;
 }
 
+// night at the station's actual coordinates: geometric sunrise/sunset from a
+// NOAA-style approximation (no equation of time — good to ~15 min, plenty for
+// switching a scene). Falls back to fixed 21:00–06:00 local without coords.
+function isNight() {
+  const info = state.info;
+  if (!info || info.latitude == null || info.longitude == null) {
+    const h = new Date().getHours();
+    return h >= 21 || h < 6;
+  }
+  const now = new Date();
+  const rad = Math.PI / 180;
+  const doy = Math.floor((now - Date.UTC(now.getUTCFullYear(), 0, 0)) / 864e5);
+  const decl = -23.44 * rad * Math.cos((2 * Math.PI / 365) * (doy + 10));
+  const lat = info.latitude * rad;
+  const cosH = (Math.sin(-0.83 * rad) - Math.sin(lat) * Math.sin(decl)) /
+    (Math.cos(lat) * Math.cos(decl));
+  if (cosH >= 1) return true;   // polar night
+  if (cosH <= -1) return false; // midnight sun
+  const halfDay = Math.acos(cosH) / rad / 15;  // hours from solar noon to sunset
+  const solarNoon = 12 - info.longitude / 15;  // UTC
+  const utcH = now.getUTCHours() + now.getUTCMinutes() / 60;
+  return utcH < solarNoon - halfDay || utcH > solarNoon + halfDay;
+}
+
 function trendPerHour() {
   const a = state.archive;
   if (a.length < 2) return null;
@@ -711,8 +737,7 @@ function drawChart(g, row, t) {
   const mhw = charValue('MHW'), mw = charValue('MW'), mnw = charValue('MNW');
   const drought = mnw != null && value < mnw; // below mean low water
   const flood = mhw != null && value > mhw;   // above mean high water
-  const hour = new Date().getHours();
-  const night = hour >= 21 || hour < 6;
+  const night = isNight();
   // in a flood, leave sky headroom above the swollen river for clouds and rain —
   // the plain scale would pin the surface to the chart ceiling
   const topCm = flood ? value * 1.45 :
@@ -841,23 +866,41 @@ function drawChart(g, row, t) {
         if ((((r - Math.floor(t * 8)) % 5) + 5) % 5 === (x * 7) % 5) putSky(r, x, '/', 'w2');
       }
     }
-  } else if (night) {
-    // night: a cratered moon and slowly twinkling stars; the moon slides down
-    // to the first sky slot free of marker lines so it never gets sliced up
-    let moonRow = row;
-    for (let r = row; r <= Math.min(row + 3, surface - 3); r++) {
-      if (g.ch.slice(r, r + 3).every(line => line.slice(2, 7).every(c => c === ' '))) { moonRow = r; break; }
+  } else {
+    if (night) {
+      // night: a cratered moon and slowly twinkling stars; the moon slides down
+      // to the first sky slot free of marker lines so it never gets sliced up
+      let moonRow = row;
+      for (let r = row; r <= Math.min(row + 3, surface - 3); r++) {
+        if (g.ch.slice(r, r + 3).every(line => line.slice(2, 7).every(c => c === ' '))) { moonRow = r; break; }
+      }
+      putSky(moonRow,     3, '.-.', 'b');
+      putSky(moonRow + 1, 2, '( o )', 'b');
+      putSky(moonRow + 2, 3, "`-'", 'b');
+      const starGlyphs = ['·', '+', '·', '˙'];
+      for (let x = 0; x < chartW; x++) {
+        for (let r = row; r < surface - 1; r++) {
+          const h = ((x + 1) * 2654435761 ^ (r + 1) * 40503) >>> 0;
+          if (h % 43) continue;
+          const phase = (Math.floor(t / 2) + (h >>> 8)) % 4;
+          putSky(r, x, starGlyphs[phase], phase === 1 ? 'b' : 'd');
+        }
+      }
     }
-    putSky(moonRow,     3, '.-.', 'b');
-    putSky(moonRow + 1, 2, '( o )', 'b');
-    putSky(moonRow + 2, 3, "`-'", 'b');
-    const starGlyphs = ['·', '+', '·', '˙'];
-    for (let x = 0; x < chartW; x++) {
-      for (let r = row; r < surface - 1; r++) {
-        const h = ((x + 1) * 2654435761 ^ (r + 1) * 40503) >>> 0;
-        if (h % 43) continue;
-        const phase = (Math.floor(t / 2) + (h >>> 8)) % 4;
-        putSky(r, x, starGlyphs[phase], phase === 1 ? 'b' : 'd');
+    const trend = trendPerHour();
+    if (trend !== null && trend >= 2 && surface > row + 4) {
+      // harbinger: the level is rising fast — a lone rain cloud drifts in
+      // upstream (right), drizzling, before any flood is on the chart
+      const cx = chartW - 18 + Math.round(Math.sin(t * 0.4) * 2);
+      let cloudRow = row; // like the moon: dodge marker lines if possible
+      for (let r = row; r <= Math.min(row + 3, surface - 5); r++) {
+        if (g.ch.slice(r, r + 2).every(line => line.slice(cx, cx + 9).every(c => c === ' '))) { cloudRow = r; break; }
+      }
+      putSky(cloudRow,     cx + 1, '.-~~-.', 'd');
+      putSky(cloudRow + 1, cx, '(______)', 'd');
+      for (let i = 0; i < 8; i++) {
+        const dr = cloudRow + 2 + ((i * 3 + Math.floor(t * 6)) % 3);
+        if (dr < surface && (i * 5) % 3) putSky(dr, cx + 1 + i, "'", 'w2');
       }
     }
   }
