@@ -1,0 +1,13 @@
+{
+  "name": "PEGEL:// live river gauges",
+  "short_name": "PEGEL://",
+  "description": "Live ASCII water level terminal for German rivers, powered by PEGELONLINE (WSV).",
+  "start_url": ".",
+  "display": "standalone",
+  "background_color": "#fbfbf9",
+  "theme_color": "#a8cede",
+  "icons": [
+    { "src": "favicon.svg", "sizes": "any", "type": "image/svg+xml" },
+    { "src": "apple-touch-icon.png", "sizes": "180x180", "type": "image/png" }
+  ]
+}

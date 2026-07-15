@@ -16,6 +16,11 @@ _      _      _      _      _      _      _      _
 - current level as big block digits, trend per hour, MNW/MHW state
 - animated river cross-section: waves at the live level, drifting current,
   seeded riverbed, a little ship, markers for MNW / MW / MHW
+- living scenes: below MNW the sun blazes over a cracked, dried-out bank;
+  above MHW storm clouds drift in and rain falls on the swollen river; at
+  night (21:00–06:00 local) a moon rises and stars twinkle over the water
+- automatic dark mode (`light-dark()`, follows your system), tab title and
+  favicon carry the live level — the buddy's waterline tracks MNW…MHW
 - history sparkline — starts with the API's 15 days and grows: every visit
   merges the data into a local archive (localStorage, per station), so over
   time your sparkline covers more than the API can serve. Points older than
@@ -39,6 +44,10 @@ Default is Bonn (Rhine). Type a station name into the prompt at the bottom
 Neighbors for the elevation profile are discovered automatically from the
 station's river and kilometrage. Stations without characteristic values or
 gauge zero degrade gracefully.
+
+`share` in the footer hands the station link to your system share sheet
+(or copies it). The page ships a web manifest, so it can be installed as
+an app from the browser menu.
 
 ## Aircraft overhead (optional, bring your own receiver)
 
