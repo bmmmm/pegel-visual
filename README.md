@@ -20,7 +20,9 @@ _      _      _      _      _      _      _      _
   above MHW storm clouds drift in and rain falls on the swollen river; when
   the level rises fast a lone rain cloud drifts in upstream as a harbinger;
   after sunset (computed for the station's real coordinates) a moon rises
-  and stars twinkle over the water
+  and stars twinkle over the water. The scene also mirrors real weather at
+  the station (rain, snow, clouds, wind) via [open-meteo](https://open-meteo.com),
+  refreshed every 15 min
 - automatic dark mode (`light-dark()`, follows your system), tab title and
   favicon carry the live level — the buddy's waterline tracks MNW…MHW
 - history sparkline — starts with the API's 15 days and grows: every visit
