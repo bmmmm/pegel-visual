@@ -1438,38 +1438,70 @@ function drawRiver(g, stations, t) {
     y: RIVER_BODY_TOP + Math.round((1 - (s.elev - eMin) / eSpan) * (RIVER_PLOT_H - 1)),
   })).sort((a, b) => a.x - b.x);
 
-  // water surface line between consecutive stations
+  // markers first, into a reservation set so neither labels nor the water line
+  // can ever overwrite (or sit fused against) a marker
+  const key = (r, c) => r * COLS + c;
+  const reserved = new Set();
+  for (const p of pts) { put(g, p.y, p.x, RIVER_GLYPH[p.s.kind], RIVER_CLS[p.s.kind]); reserved.add(key(p.y, p.x)); }
+
+  // label placement. >= 12 columns between any two labeled markers is a HARD
+  // constraint for every label; troubled stations get first pick, and a troubled
+  // label that still cannot fit is dropped — the TROUBLE list below carries the
+  // full information regardless. A greedy left-to-right pick over the (x-sorted)
+  // troubled markers maximizes how many fit before normals mop up the leftovers.
+  const LABEL_GAP = 12;
+  const placedXs = [];
+  const fitsGap = x => placedXs.every(px => Math.abs(px - x) >= LABEL_GAP);
+  const chosen = [];
+  for (const p of pts) if (p.s.kind !== 'normal' && fitsGap(p.x)) { placedXs.push(p.x); chosen.push(p); }
+  for (const p of pts) if (p.s.kind === 'normal' && fitsGap(p.x)) { placedXs.push(p.x); chosen.push(p); }
+  chosen.sort((a, b) => a.x - b.x);
+
+  // a label may only be drawn if its cells — plus one padding cell on each side —
+  // are clear of every marker and other label, so nothing renders half-over another
+  // or fused glyph-to-name. Padding is reserved too, so it stays blank (the water
+  // line skips reserved cells), guaranteeing a space or edge around each label.
+  const clearCells = (row, col, len) => {
+    if (row < 0 || row >= g.rows || col < 0 || col + len > COLS) return false;
+    for (let c = col - 1; c <= col + len; c++) if (c >= 0 && c < COLS && reserved.has(key(row, c))) return false;
+    return true;
+  };
+  const reserveCells = (row, col, len) => { for (let c = col - 1; c <= col + len; c++) if (c >= 0 && c < COLS) reserved.add(key(row, c)); };
+
+  const draws = []; // { row, col, text, cls } — applied after the water line
+  let side = -1;    // alternate below/above so adjacent labels never stack vertically
+  for (const p of chosen) {
+    side = -side;
+    const name = p.s.name.slice(0, 10);
+    const nameRow = side > 0 ? p.y + 1 : p.y - 2;
+    const elevRow = side > 0 ? p.y + 2 : p.y - 1;
+    const nameX = clampCol(p.x - (name.length >> 1), name.length);
+    if (!clearCells(nameRow, nameX, name.length)) continue; // no room without overlap → drop
+    reserveCells(nameRow, nameX, name.length);
+    draws.push({ row: nameRow, col: nameX, text: name, cls: p.s.kind === 'normal' ? 'd' : RIVER_CLS[p.s.kind] });
+    // elevation suffix only when the name row still has >= 6 free columns after it
+    let freeAfter = 0;
+    for (let c = nameX + name.length; c < COLS && !reserved.has(key(nameRow, c)); c++) freeAfter++;
+    const elevTxt = p.s.elev.toFixed(2);
+    const elevX = clampCol(p.x - (elevTxt.length >> 1), elevTxt.length);
+    if (freeAfter >= 6 && clearCells(elevRow, elevX, elevTxt.length)) {
+      reserveCells(elevRow, elevX, elevTxt.length);
+      draws.push({ row: elevRow, col: elevX, text: elevTxt, cls: 'd' });
+    }
+  }
+
+  // water surface line between consecutive stations, skipping reserved cells so it
+  // never touches a marker or a label (nor their padding)
   for (let i = 0; i < pts.length - 1; i++) {
     const a = pts[i], b = pts[i + 1];
     const steps = Math.max(Math.abs(b.x - a.x), 1), dir = Math.sign(b.x - a.x) || 1;
     for (let sp = 1; sp < steps; sp++) {
-      put(g, Math.round(a.y + ((b.y - a.y) * sp) / steps), a.x + dir * sp, '·', 'w');
+      const r = Math.round(a.y + ((b.y - a.y) * sp) / steps), c = a.x + dir * sp;
+      if (!reserved.has(key(r, c))) put(g, r, c, '·', 'w');
     }
   }
-  // markers on top of the line
-  for (const p of pts) put(g, p.y, p.x, RIVER_GLYPH[p.s.kind], RIVER_CLS[p.s.kind]);
-
-  // labels: troubled stations are always labeled; normal ones only if ≥12 columns
-  // from any already-labeled marker (troubled neighbors win the space)
-  const labeled = new Set();
-  const xs = [];
-  for (const p of pts) if (p.s.kind !== 'normal') { labeled.add(p); xs.push(p.x); }
-  for (const p of pts) {
-    if (labeled.has(p)) continue;
-    if (xs.every(x => Math.abs(x - p.x) >= 12)) { labeled.add(p); xs.push(p.x); }
-  }
-  let side = -1; // alternate below/above so adjacent labels don't stack
-  for (const p of pts) {
-    if (!labeled.has(p)) continue;
-    side = -side;
-    const name = p.s.name.slice(0, 10);
-    const elevTxt = p.s.elev.toFixed(2);
-    const nameX = clampCol(p.x - (name.length >> 1), name.length);
-    const elevX = clampCol(p.x - (elevTxt.length >> 1), elevTxt.length);
-    const nameCls = p.s.kind === 'normal' ? 'd' : RIVER_CLS[p.s.kind];
-    if (side > 0) { put(g, p.y + 1, nameX, name, nameCls); put(g, p.y + 2, elevX, elevTxt, 'd'); }
-    else { put(g, p.y - 2, nameX, name, nameCls); put(g, p.y - 1, elevX, elevTxt, 'd'); }
-  }
+  // labels last, over the (skipped) water line
+  for (const d of draws) put(g, d.row, d.col, d.text, d.cls);
 
   // km ticks along the bottom — ascending km maps right-to-left, so sort by column
   // before placing and skip any that would overprint the previous one
@@ -1496,7 +1528,7 @@ function drawRiver(g, stations, t) {
     });
     if (troubled.length > 8) put(g, RIVER_TROUBLE_TOP + 9, 0, `… and ${troubled.length - 8} more`, 'd');
   }
-  return { nLow, nHigh };
+  return { nLow, nHigh, labels: draws }; // labels exposed for layout testing
 }
 
 // ---------- station prompt ----------
