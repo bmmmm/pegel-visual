@@ -931,9 +931,10 @@ function drawChart(g, row, t) {
     }
   }
 
-  const wLabel = `◄ W ${value}`;
+  // keep the whole label inside COLS — a separate [ICE] tag after the value
+  // gets clipped at the grid edge for 2-digit levels
+  const wLabel = `◄ W ${value}${icy ? ' ICE' : ''}`;
   put(g, surface, chartW + 1, wLabel, flood ? 's' : 'b');
-  if (icy) put(g, surface, chartW + 1 + wLabel.length + 1, '[ICE]', 'd');
 
   // aircraft in the sky, projected onto the river axis between neighbor stations
   const n = state.neighbors;
