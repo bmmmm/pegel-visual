@@ -1642,8 +1642,10 @@ function drawChart(g, row, t) {
     // boat yields the river to them and returns once they've passed
     const shipX = icy ? Math.floor(chartW * 0.6) : 4 + Math.floor((t * 1.3) % (chartW - 14));
     const bob = icy ? 0 : (Math.sin(t * (flood || windy ? 3.2 : 1.6)) > 0.4 ? -1 : 0);
-    put(g, surface - 2 + bob, shipX + 2, '/|', 'b');
-    put(g, surface - 1 + bob, shipX, '_/_|__', 'b');
+    // sail on the starboard side of the mast, so the boat faces the way it travels —
+    // mirrored from the old left-facing glyph when the scene turned downstream-right
+    put(g, surface - 2 + bob, shipX + 2, '|\\', 'b');
+    put(g, surface - 1 + bob, shipX, '__|_\\_', 'b');
     put(g, surface + bob, shipX, '\\____/', 'b');
   }
 
