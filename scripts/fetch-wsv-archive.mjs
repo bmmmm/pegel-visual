@@ -43,6 +43,9 @@ const FROM = Number(opt('from', 2000));
 const TO = Number(opt('to', CURRENT_YEAR - 1));
 const CURRENT_ONLY = has('current');
 const ONLY_STATION = (opt('station', '') || '').toUpperCase();
+// workers overlap the server-side zip preparation (the actual bottleneck);
+// keep the default sequential so the monthly CI refresh stays extra polite
+const PARALLEL = Math.max(1, Number(opt('parallel', 1)));
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
@@ -183,10 +186,10 @@ async function main() {
     .filter(s => !ONLY_STATION || s.shortname.toUpperCase() === ONLY_STATION || s.uuid === ONLY_STATION.toLowerCase())
     .sort((a, b) => a.shortname.localeCompare(b.shortname));
 
-  console.log(`${stations.length} stations · mode: ${CURRENT_ONLY ? 'current year refresh' : `backfill ${FROM}-${TO}`} · out: ${OUT}/`);
+  console.log(`${stations.length} stations · mode: ${CURRENT_ONLY ? 'current year refresh' : `backfill ${FROM}-${TO}`} · out: ${OUT}/ · ${PARALLEL} worker(s)`);
 
-  let ok = 0, skipped = 0, failed = 0;
-  for (const [i, s] of stations.entries()) {
+  let ok = 0, skipped = 0, failed = 0, cursor = 0;
+  async function processStation(s, i) {
     const dir = join(OUT, s.uuid);
     const tag = `[${i + 1}/${stations.length}] ${s.shortname}`;
     try {
@@ -198,7 +201,7 @@ async function main() {
       } else {
         let meta = {};
         try { meta = JSON.parse(readFileSync(join(dir, 'meta.json'), 'utf8')); } catch {}
-        if ((meta.fetchedThrough || 0) >= TO) { skipped++; continue; } // resume: already done
+        if ((meta.fetchedThrough || 0) >= TO) { skipped++; return; } // resume: already done
         startYear = Math.max(FROM, (meta.fetchedThrough || 0) + 1);
         fetchedThrough = TO;
       }
@@ -213,5 +216,12 @@ async function main() {
     }
     await sleep(THROTTLE_MS);
   }
+  async function worker() {
+    while (cursor < stations.length) {
+      const i = cursor++;
+      await processStation(stations[i], i);
+    }
+  }
+  await Promise.all(Array.from({ length: PARALLEL }, worker));
   console.log(`done · ${ok} fetched · ${skipped} already complete · ${failed} failed${failed ? ' (re-run to retry)' : ''}`);
 }
