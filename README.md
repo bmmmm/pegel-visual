@@ -37,14 +37,20 @@ _      _      _      _      _      _      _      _
   Fetching is API-friendly: the 15-day history is requested once as a seed,
   afterwards only the delta since the newest archived point is pulled.
 - **years, not days:** WSV publishes each station's raw archive back to
-  2000-01-01 (DL-DE Zero). Its download page blocks cross-origin fetches
-  (doubled CORS header), so the page can't pull it for you — instead the
-  `full archive (2000→)` link jumps straight to the right WSV page for the
-  current station; download the ZIP there (JSON format) and feed it to
-  `import`, which unpacks it right in the browser (`DecompressionStream`,
-  still no dependencies). The `1Y` / `5Y` history chips then have data to
-  show — flagged as *unvalidated raw data*, since WSV serves these values
-  unchecked (outliers and gaps included)
+  2000-01-01 ([DL-DE→Zero-2.0](https://www.govdata.de/dl-de/zero-2-0)).
+  This repo hosts a condensed copy — daily min/max per station and year,
+  ~3 KB each, on the `archive` branch — so picking `1Y` / `5Y` / `ALL`
+  fetches the needed year files same-origin and merges them into your
+  local archive on the fly. A monthly CI run keeps the running year at
+  most one month stale; the live API covers the newest 30 days on top.
+  Multi-year views are flagged as *unvalidated raw data*, since WSV
+  serves these values unchecked (outliers and gaps included).
+  `scripts/fetch-wsv-archive.mjs` builds and refreshes the data
+  (WSV's own download page cannot be fetched cross-origin — it sends its
+  CORS header twice, see issue #1). The manual route still works too:
+  the `full archive (2000→)` link opens the station's WSV download page,
+  and `import` swallows the ZIP directly (unpacked in the browser via
+  `DecompressionStream`, still no dependencies)
 - water surface elevation profile (m NHN) between the neighboring
   stations on the same river, ordered by river km
 - water temperature and discharge in the header when the station reports

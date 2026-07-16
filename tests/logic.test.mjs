@@ -365,6 +365,57 @@ test('fitFont: picks 44 columns on phone widths, 84 on desktop, and switches bac
   assert.equal(desktop.run('COLS'), 84, 'growing restores the full grid');
 });
 
+// ---------- repo-hosted WSV archive (scripts/fetch-wsv-archive.mjs + client) ----------
+
+test('archive script: condense folds measurements into daily MEZ min/max', async () => {
+  const { condense, daysInYear, unzipJsonEntry } = await import('../scripts/fetch-wsv-archive.mjs');
+  const measurements = [
+    { timestamp: '2024-03-05T00:15:00+01:00', value: 500 },
+    { timestamp: '2024-03-05T13:00:00+01:00', value: 540 },
+    { timestamp: '2024-03-05T23:45:00+01:00', value: 520 },
+    { timestamp: '2024-12-31T23:30:00+01:00', value: 300 },
+    { timestamp: '2025-01-01T00:15:00+01:00', value: 301 }, // next MEZ day → next year
+    { timestamp: '2024-03-06T00:00:00+01:00', value: null }, // dropped
+  ];
+  const years = condense(measurements);
+  assert.deepEqual([...years.keys()].sort(), [2024, 2025]);
+  const y24 = years.get(2024);
+  assert.equal(y24.min.length, daysInYear(2024));
+  assert.equal(y24.min.length, 366, '2024 is a leap year');
+  const mar5 = 31 + 29 + 4; // day index of March 5 in a leap year
+  assert.equal(y24.min[mar5], 500);
+  assert.equal(y24.max[mar5], 540);
+  assert.equal(y24.min[365], 300, 'Dec 31 lands in the last slot');
+  assert.equal(years.get(2025).min[0], 301);
+
+  // the script's zip reader handles the same layout as the in-page one
+  const zip = buildZip([['pegelonline-bonn-W-x.json', JSON.stringify(measurements.slice(0, 1))]]);
+  assert.equal(JSON.parse(unzipJsonEntry(zip).toString())[0].value, 500);
+});
+
+test('loadRepoArchive: lazily merges year files into the local archive', async () => {
+  const app = loadApp({ now: NOON });
+  const year = new Date(NOON).getUTCFullYear();
+  const days = 365 + (((year % 4 === 0 && year % 100 !== 0) || year % 400 === 0) ? 1 : 0);
+  const min = Array(days).fill(null), max = Array(days).fill(null);
+  min[9] = 110; max[9] = 190; // one archived day in the current year
+  app.run(`state.info = { uuid: 'test-uuid' }`);
+  app.run(`getJson = async url => {
+    if (url === 'archive/test-uuid/current.json') return { y: ${year}, min: ${JSON.stringify(min)}, max: ${JSON.stringify(max)} };
+    throw new Error('404 ' + url); // every other year file is missing — must not break the merge
+  }`);
+  await app.run('loadRepoArchive(400)');
+  const arch = app.run(`loadArchive('BONN')`);
+  assert.equal(arch.length, 2, 'one archived day → daily min + max as two points');
+  assert.deepEqual(arch.map(p => p[1]), [110, 190]);
+  const mezBase = Date.UTC(year, 0, 1) - 36e5 + 9 * 864e5;
+  assert.deepEqual(arch.map(p => p[0]), [mezBase + 6 * 36e5, mezBase + 18 * 36e5]);
+
+  // a second call is a no-op (per-session fetch guard), even with new data
+  await app.run('loadRepoArchive(400)');
+  assert.equal(app.run(`loadArchive('BONN')`).length, 2);
+});
+
 test('history presets: 1Y/5Y exist, API backfill stays within its 30-day reach', () => {
   const app = loadApp();
   const presets = app.run('HISTORY_PRESETS');
