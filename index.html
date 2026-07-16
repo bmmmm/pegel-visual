@@ -103,11 +103,14 @@
   }
   #station-input { text-transform: uppercase; }
   #adsb-input, #ais-input { width: 26ch; text-transform: none; }
+  form .cmd + .cmd { margin-top: 0.7em; }
+  form .cont { padding-left: 8ch; } /* lines up under --station, like a wrapped shell command */
   #localbar {
     margin-top: 0.8em;
     font-size: 0.75em;
     color: var(--mid);
   }
+  #local-actions { margin-top: 0.4em; padding-left: 1.4ch; } /* clears the caret, aligns with the stats */
   #local-stats { cursor: pointer; user-select: none; }
   #local-stats:hover { color: var(--ink); }
   #localbar button, #localbar a {
@@ -206,15 +209,28 @@
   }
   #recent button:hover, #history-bar button:hover,
   #history-bar button.on { background: var(--ink); color: var(--paper); }
+  /* body centers its flex items, so without a cap the footer grows to fit its
+     longest line and sticks out past the main box — hence the ch-based ceiling */
   footer {
-    margin: 1.2em 0 2em;
+    margin: 1.4em 0 2em;
+    max-width: min(58ch, calc(100vw - 2em));
     font-size: 0.72em;
     color: var(--mid);
     text-align: center;
     text-wrap: balance;
-    line-height: 1.8;
+    line-height: 1.6;
   }
   footer a { color: var(--ink); text-decoration: underline; }
+  footer p { margin: 0; }
+  #footer-nav { color: var(--ink); }
+  #footer-perma { margin-top: 0.5em; }
+  /* the permalink is the one footer line that must survive verbatim — a long
+     station name wraps mid-name rather than widening the whole block */
+  #footer-perma a { overflow-wrap: anywhere; }
+  #footer-credits { margin-top: 0.5em; font-size: 0.95em; }
+  /* two separate attributions, one line each — as one run they broke mid-phrase
+     ("… WSV, refreshed / every 5 min") and left the separator dangling */
+  #footer-credits span { display: block; }
   #infobox {
     color: var(--ink);
     background: var(--paper);
@@ -256,6 +272,7 @@
   @media (max-width: 640px) {
     main { margin-top: 2vh; padding: 1em 0.7em; }
     footer { margin: 1em 0.7em 2em; }
+    form .cont { padding-left: 0; } /* the indent costs more than the alignment is worth here */
     #recent button, #history-bar button { padding: 0.2em 0.7ch; } /* a little more tap area */
     #infobox { padding: 1em 0.9em; max-width: calc(100vw - 1.6em); }
   }
@@ -264,25 +281,33 @@
 <body>
 <main>
   <pre id="screen" role="img" aria-label="loading water level data">loading…</pre>
-  <form id="prompt" autocomplete="off">&gt; pegel --station
-    <input id="station-input" name="station" list="stations" spellcheck="false" aria-label="station name">
-    <datalist id="stations"></datalist> --adsb
-    <input id="adsb-input" name="adsb" spellcheck="false" placeholder="receiver url (optional)"
-      aria-label="ADS-B receiver URL"> --ais
-    <input id="ais-input" name="ais" spellcheck="false" placeholder="receiver url (optional)"
-      aria-label="AIS receiver URL"> --refresh 300s
+  <form id="prompt" autocomplete="off">
+    <div class="cmd">&gt; pegel --station
+      <input id="station-input" name="station" list="stations" spellcheck="false" aria-label="station name">
+      <datalist id="stations"></datalist> --refresh 300s
+    </div>
+    <div class="cmd cont">--adsb
+      <input id="adsb-input" name="adsb" spellcheck="false" placeholder="receiver url (optional)"
+        aria-label="ADS-B receiver URL"> --ais
+      <input id="ais-input" name="ais" spellcheck="false" placeholder="receiver url (optional)"
+        aria-label="AIS receiver URL">
+    </div>
     <button type="submit" hidden>go</button>
   </form>
   <nav id="history-bar" aria-label="history range"></nav>
   <nav id="recent" aria-label="recently viewed stations" hidden></nav>
   <div id="localbar">
-    <button id="local-toggle" type="button" aria-expanded="false" aria-label="toggle per-station breakdown">▸</button>
-    <span id="local-stats">local archive: empty</span>
-    · <button id="export-btn" type="button">export</button>
-    · <button id="import-btn" type="button">import</button>
-    · <button id="clear-btn" type="button">clear</button>
-    · <a id="wsv-archive-link" href="https://www.pegelonline.wsv.de" target="_blank" rel="noopener"
-      title="download the multi-year raw archive (ZIP, data since 2000) at PEGELONLINE, then feed it to import">full archive (2000→)</a>
+    <div id="local-line">
+      <button id="local-toggle" type="button" aria-expanded="false" aria-label="toggle per-station breakdown">▸</button>
+      <span id="local-stats">local archive: empty</span>
+    </div>
+    <div id="local-actions">
+      <button id="export-btn" type="button">export</button>
+      · <button id="import-btn" type="button">import</button>
+      · <button id="clear-btn" type="button">clear</button>
+      · <a id="wsv-archive-link" href="https://www.pegelonline.wsv.de" target="_blank" rel="noopener"
+        title="download the multi-year raw archive (ZIP, data since 2000) at PEGELONLINE, then feed it to import">full archive (2000→)</a>
+    </div>
     <input id="import-file" type="file" accept="application/json,application/zip,.json,.zip" hidden>
     <div id="local-detail" hidden></div>
   </div>
@@ -347,13 +372,17 @@
   </dl>
 </dialog>
 <footer>
-  <a href="#" id="info-link">info</a>
-  · data: <a href="https://www.pegelonline.wsv.de" rel="noopener">PEGELONLINE</a> &copy; WSV, refreshed every 5 min
-  · ⛅ weather: <a href="https://open-meteo.com" rel="noopener">open-meteo</a>
-  · station link: <a id="station-link" href="?station=BONN">?station=BONN</a>
-  · <a href="#" id="share-link">share</a>
-  · <a href="https://github.com/bmmmm/pegel-visual" rel="noopener">source</a>
-  · <a href="https://ko-fi.com/bmabma" rel="noopener">support on ko-fi</a>
+  <nav id="footer-nav" aria-label="site">
+    <a href="#" id="info-link">info</a>
+    · <a href="#" id="share-link">share</a>
+    · <a href="https://github.com/bmmmm/pegel-visual" rel="noopener">source</a>
+    · <a href="https://ko-fi.com/bmabma" rel="noopener">support on ko-fi</a>
+  </nav>
+  <p id="footer-perma">station link: <a id="station-link" href="?station=BONN">?station=BONN</a></p>
+  <p id="footer-credits">
+    <span>data: <a href="https://www.pegelonline.wsv.de" rel="noopener">PEGELONLINE</a> &copy; WSV, refreshed every 5 min</span>
+    <span>⛅ weather: <a href="https://open-meteo.com" rel="noopener">open-meteo</a></span>
+  </p>
 </footer>
 <script>
 'use strict';
@@ -369,7 +398,7 @@ const CHART_ROWS = 15;
 const SPARK_ROWS = 4;
 const SPLASH_ROWS = 2; // headroom above the sparkline for the overshoot splash
 const PROFILE_PLOT_H = 4;     // marker rows in the elevation plot
-const PROFILE_LABEL_ROWS = 3; // one row per neighbor station (at most 3)
+const PROFILE_LABEL_ROWS = 5; // 3 neighbor stations, blank-separated so they breathe
 const PROFILE_ROWS = 1 + PROFILE_PLOT_H + PROFILE_LABEL_ROWS; // caption + plot + labels
 const PROFILE_GAP = 2;  // blank rows between the sparkline block and the profile
 const PROFILE_FOOT = 1; // the ≋ downstream → marker row under the profile
@@ -483,6 +512,7 @@ const state = {
   wt: null,         // water temperature, °C (number) or null if unavailable
   q: null,          // discharge, m³/s (number) or null if unavailable
   neighbors: [],    // km-ascending [prev?, self, next?] with elevation data
+  flowLowKm: null,  // true = this water flows towards its low km; null until known
   weather: null,    // current weather at the station (open-meteo), or null if unavailable
   aircraft: [],     // live ADS-B positions from the user's own receiver
   adsbOk: null,     // null = off, true/false = last fetch result
@@ -501,8 +531,34 @@ const state = {
 
 async function getJson(url) {
   const res = await fetch(url);
-  if (!res.ok) throw new Error(res.status + ' ' + url.replace(API, ''));
+  if (!res.ok) {
+    const e = new Error(res.status + ' ' + url.replace(API, ''));
+    e.status = res.status; // lets callers tell "not there" from "network died"
+    throw e;
+  }
   return res.json();
+}
+
+// PEGELONLINE lists more than water-level gauges: bridge clearances (DFH),
+// groundwater wells (GRU), temperature-only probes. Their names are perfectly
+// valid, so the generic "check the name" error sent people hunting for a typo
+// that was never there — say what the station actually measures, and name the
+// real gauges nearest to it on the same water.
+function noWaterLevelError(info) {
+  const series = (info.timeseries || []).map(t => t.shortname).filter(Boolean);
+  const water = info.water && info.water.shortname;
+  const self = (info.shortname || '').toUpperCase();
+  const near = typeof info.km === 'number' && water
+    ? [...stationMeta]
+      .filter(([n, m]) => m.w === water && n !== self && typeof m.km === 'number')
+      .sort((a, b) => Math.abs(a[1].km - info.km) - Math.abs(b[1].km - info.km))
+      .slice(0, 3).map(([n, m]) => `${n} (km ${m.km})`)
+    : [];
+  return `station "${info.shortname}" reports no water level` +
+    (series.length ? ` — it only measures ${series.join(', ')}` : '') + '\n' +
+    (near.length
+      ? `nearest gauges on the ${water}:\n  ` + near.join('\n  ')
+      : `pick another station${water ? ' on the ' + water : ''}`);
 }
 
 async function loadData() {
@@ -518,9 +574,19 @@ async function loadData() {
     const start = inWindow ? new Date(lastTs + 1000).toISOString() : 'P15D';
     const [info, gauge, delta] = await Promise.all([
       state.info || getJson(`${API}/stations/${enc}.json?includeTimeseries=true`),
-      getJson(`${API}/stations/${enc}/W.json?includeCurrentMeasurement=true&includeCharacteristicValues=true`),
+      // 48 of the 786 stations carry no W series at all, so this 404s by design —
+      // swallowed here so the message below can name the real reason from info.
+      // Only the 404: a network failure must not be reported as "no water level"
+      getJson(`${API}/stations/${enc}/W.json?includeCurrentMeasurement=true&includeCharacteristicValues=true`)
+        .catch(e => { if (e.status === 404) return null; throw e; }),
       getJson(`${API}/stations/${enc}/W/measurements.json?start=${encodeURIComponent(start)}`).catch(() => []),
     ]);
+    if (station !== forStation) return; // switched away while fetching — discard
+    if (!gauge) {
+      state.error = noWaterLevelError(info);
+      dirty = true;
+      return;
+    }
     // WT/Q only for stations whose timeseries list offers them — blind probing
     // would 404 in the console on every fresh load of a WT/Q-less station
     const series = (info.timeseries || []).map(ts => ts.shortname);
@@ -577,11 +643,25 @@ async function loadWeather() {
 
 async function loadNeighbors(info) {
   const water = encodeURIComponent(info.water.shortname);
-  const all = (await getJson(`${API}/stations.json?waters=${water}`))
+  // includeTimeseries carries every station's gauge zero (~13 KB extra on the Rhein),
+  // which is what pins the flow direction — see below
+  const all = (await getJson(`${API}/stations.json?waters=${water}&includeTimeseries=true`))
     .filter(s => typeof s.km === 'number')
     .sort((a, b) => a.km - b.km);
   const i = all.findIndex(s => s.uuid === info.uuid);
   if (i < 0) return;
+
+  // Flow direction is a property of the whole river, never of three adjacent gauges.
+  // Near its mouth the Neckar drops 8 cm over the 3 km from Feudenheim to Mannheim —
+  // less than the datum noise, and the Rhein backs water up into it, so a local fit
+  // reads the river as flowing uphill. Gauge zeros over the entire water leave no
+  // such room: 160 m across 200 km on the Neckar. They are static survey datums, so
+  // unlike live levels they carry no backwater at all.
+  const datums = all.map(s => {
+    const w = (s.timeseries || []).find(t => t.shortname === 'W');
+    return w && w.gaugeZero && w.gaugeZero.value != null ? { km: s.km, elev: w.gaugeZero.value } : null;
+  }).filter(Boolean);
+
   const picks = [all[i - 1], all[i], all[i + 1]].filter(Boolean);
   const enriched = await Promise.all(picks.map(async s => {
     const g = s.uuid === info.uuid ? state.gauge :
@@ -595,6 +675,7 @@ async function loadNeighbors(info) {
   }));
   if (!state.info || state.info.uuid !== info.uuid) return; // switched away — discard
   state.neighbors = enriched.filter(Boolean);
+  state.flowLowKm = datums.length >= 2 ? downstreamIsLowKm(datums) : null;
   dirty = true;
 }
 
@@ -1328,13 +1409,21 @@ function drawHeader(g, row, t) {
 
 // German river km run either way: Rhein and Elbe count downstream from the source,
 // Neckar, Mosel and Main upstream from the mouth — so "higher km" is no direction.
-// Water surface elevation is: it always falls downstream. The sign of cov(km, elev)
-// picks the flow direction on any water, and every view then draws it left to right.
+// Elevation is: it always falls downstream. The sign of cov(km, elev) picks the flow
+// direction on any water, and every view then draws it left to right.
+//
+// Feed this the widest sample there is (see loadNeighbors): over a few adjacent
+// gauges the drop can vanish into the datum noise, and the fit then reads the river
+// as flowing uphill.
 function downstreamIsLowKm(pts) {
   const kMean = pts.reduce((a, p) => a + p.km, 0) / pts.length;
   const eMean = pts.reduce((a, p) => a + p.elev, 0) / pts.length;
   return pts.reduce((a, p) => a + (p.km - kMean) * (p.elev - eMean), 0) >= 0;
 }
+
+// the flow direction for the station views: whole-river when known, otherwise the
+// neighbors are all we have
+const flowLowKm = n => state.flowLowKm ?? downstreamIsLowKm(n);
 
 // fraction along the scene, 0 = upstream (left) … 1 = downstream (right)
 const flowFrac = (km, kmMin, kmSpan, lowKmDown) => {
@@ -1378,12 +1467,13 @@ function drawChart(g, row, t) {
     for (let r = 0; r < h; r++) put(g, row + CHART_ROWS - 1 - r, x, r === h - 1 ? '▓' : '█', 'bed');
   }
 
-  // water body with drifting current particles — under ice the current slows way down
+  // water body with drifting current particles — under ice the current slows way down.
+  // Subtracting the time term carries the particles downstream, i.e. to the right
   const driftT = icy ? t / 4 : t;
   for (let r = surface + 1; r < row + CHART_ROWS; r++) {
     for (let x = 0; x < chartW; x++) {
       if (g.ch[r][x] !== ' ') continue;
-      const drift = (x + Math.floor(driftT * 5) + r * 37) % 29;
+      const drift = (((x - Math.floor(driftT * 5) + r * 37) % 29) + 29) % 29;
       put(g, r, x, drift === 0 ? '·' : '░', drift === 0 ? 'w2' : 'w');
     }
   }
@@ -1405,7 +1495,7 @@ function drawChart(g, row, t) {
     const waveT = windy ? t * 14 : t * 6; // wind speeds up the animated surface
     for (let x = 0; x < chartW; x++) {
       if (windy && x % 9 === 0) { put(g, surface, x, '^', 'w2'); continue; } // whitecap
-      const i = ((x + Math.floor(waveT)) % waves.length + waves.length) % waves.length;
+      const i = ((x - Math.floor(waveT)) % waves.length + waves.length) % waves.length;
       put(g, surface, x, waves[i], 'w2');
     }
   }
@@ -1458,7 +1548,7 @@ function drawChart(g, row, t) {
   const n = state.neighbors;
   let axis = null;
   if (n.length >= 2) {
-    const lowKmDown = downstreamIsLowKm(n);
+    const lowKmDown = flowLowKm(n);
     const L = lowKmDown ? n[n.length - 1] : n[0]; // left = upstream end
     const R = lowKmDown ? n[0] : n[n.length - 1]; // right = downstream end
     const kx = Math.cos((L.lat * Math.PI) / 180);
@@ -1792,7 +1882,7 @@ function drawProfile(g, row) {
   const elevs = n.map(p => p.elev);
   const eMin = Math.min(...elevs), eSpan = Math.max(Math.max(...elevs) - eMin, 0.1);
   const plotW = COLS - 26;
-  const lowKmDown = downstreamIsLowKm(n);
+  const lowKmDown = flowLowKm(n);
   const pts = n.map(p => ({
     x: 2 + Math.round(flowFrac(p.km, kmMin, kmSpan, lowKmDown) * plotW),
     y: row + 1 + Math.round((1 - (p.elev - eMin) / eSpan) * (PROFILE_PLOT_H - 1)),
@@ -1816,7 +1906,8 @@ function drawProfile(g, row) {
   // to share rows, so floating labels overwrote each other on 3 profiles in 4 at 44
   // columns (and 1 in 6 at 84). One row each makes that impossible instead of merely
   // unlikely. Order follows the flow — top = upstream — and each row is indented to
-  // its own marker, so the link back to the plot survives.
+  // its own marker, so the link back to the plot survives. Every other row stays
+  // blank: stacked adjacent, three long underlined runs read as a wall of text.
   const byFlow = [...pts].sort((a, b) => a.x - b.x);
   byFlow.forEach(({ x, p }, i) => {
     const self = p.name === station;
@@ -1825,7 +1916,7 @@ function drawProfile(g, row) {
     const name = p.name.length > budget ? p.name.slice(0, budget - 1) + '…' : p.name;
     const label = `${name} ${elev} · ${km}`;
     const lx = Math.min(Math.max(0, x - 2), COLS - label.length);
-    const lrow = row + 1 + PROFILE_PLOT_H + i;
+    const lrow = row + 1 + PROFILE_PLOT_H + i * 2;
     put(g, lrow, lx, label, self ? 'b' : 'd');
     // the current station's own label leads onward: to its whole-river profile
     linkCells(g, lrow, lx, label.length, self ? 'river:' + state.info.water.shortname : p.name);
@@ -2073,6 +2164,7 @@ function switchStation(name, adsb, push = true) {
   state.wt = null;
   state.q = null;
   state.neighbors = [];
+  state.flowLowKm = null;
   state.weather = null;
   state.error = null;
   state.repoArchive = null; // per-station; re-resolved from the manifest on demand
