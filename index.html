@@ -693,9 +693,25 @@ function mergeIntoArchive(name, measurements) {
   try {
     localStorage.setItem(ARCHIVE_PREFIX + name, JSON.stringify(thinned));
   } catch {
-    // quota exceeded: drop the older half and try once more
-    try { localStorage.setItem(ARCHIVE_PREFIX + name, JSON.stringify(thinned.slice(Math.floor(thinned.length / 2)))); }
-    catch { /* archive is best-effort */ }
+    // quota exceeded: evict least-recently viewed OTHER stations first —
+    // dropping this station's old points would silently destroy exactly the
+    // multi-year history someone just asked for
+    const recent = loadRecent();
+    const rank = n => { const i = recent.indexOf(n); return i < 0 ? 1e9 : i; };
+    const victims = archiveKeys().map(k => k.slice(ARCHIVE_PREFIX.length))
+      .filter(n => n !== name)
+      .sort((a, b) => rank(b) - rank(a)); // least recently viewed first
+    let stored = false;
+    for (const v of victims) {
+      localStorage.removeItem(ARCHIVE_PREFIX + v);
+      try { localStorage.setItem(ARCHIVE_PREFIX + name, JSON.stringify(thinned)); stored = true; break; }
+      catch { /* still full — evict the next one */ }
+    }
+    if (!stored) {
+      // nothing left to evict: drop the older half as the last resort
+      try { localStorage.setItem(ARCHIVE_PREFIX + name, JSON.stringify(thinned.slice(Math.floor(thinned.length / 2)))); }
+      catch { /* archive is best-effort */ }
+    }
   }
 }
 
@@ -2517,8 +2533,10 @@ async function loadRepoArchive(days) {
     if (repoArchiveTried.has(key)) continue;
     repoArchiveTried.add(key);
     // the running year lives in current.json (refreshed monthly), closed years
-    // are immutable; a missing file (station or year not archived) is fine
-    jobs.push(getJson(`archive/${info.uuid}/${y === nowYear ? 'current' : y}.json`).catch(() => null));
+    // are immutable; a missing file (station or year not archived) is fine —
+    // but a failed fetch frees its session guard so a later attempt can retry
+    jobs.push(getJson(`archive/${info.uuid}/${y === nowYear ? 'current' : y}.json`)
+      .catch(() => { repoArchiveTried.delete(key); return null; }));
   }
   if (!jobs.length) return;
   const years = (await Promise.all(jobs)).filter(Boolean);

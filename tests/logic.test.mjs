@@ -128,6 +128,24 @@ test('mergeIntoArchive: quota errors never throw (best-effort)', () => {
     app.run(`mergeIntoArchive('T', [{ timestamp: new Date(${NOON}).toISOString(), value: 1 }])`));
 });
 
+test('mergeIntoArchive: quota evicts the least-recently viewed station, not old points', () => {
+  const app = loadApp({ now: NOON });
+  const mk = (v, h) => `[{ "timestamp": "${new Date(NOON - h * 36e5).toISOString()}", "value": ${v} }]`;
+  app.run(`mergeIntoArchive('OLDTOWN', ${mk(1, 1)})`);
+  app.run(`mergeIntoArchive('CURRENT', ${mk(2, 2)})`);
+  app.run(`localStorage.setItem('pegel.recent', '["CURRENT","OLDTOWN"]')`);
+  // simulate a full store: writes fail while OLDTOWN's archive still exists
+  const ls = app.localStorage;
+  const orig = Object.getOwnPropertyDescriptor(ls, 'setItem').value;
+  Object.defineProperty(ls, 'setItem', { value: (k, v) => {
+    if (Object.prototype.hasOwnProperty.call(ls, 'pegel.archive.OLDTOWN')) throw new Error('QuotaExceededError');
+    return orig(k, v);
+  }, writable: true, configurable: true });
+  app.run(`mergeIntoArchive('CURRENT', ${mk(3, 3)})`);
+  assert.equal(app.run(`loadArchive('OLDTOWN')`).length, 0, 'stale station was evicted');
+  assert.equal(app.run(`loadArchive('CURRENT')`).length, 2, 'current station kept its full history');
+});
+
 test('importArchiveFile: accepts export shapes, rejects junk, dedupes on re-import', () => {
   const app = loadApp({ now: NOON });
   const data = { bonn: [[NOON - 36e5, 100], [NOON - 18e5, 101]], KÖLN: [[NOON - 36e5, 200]] };
