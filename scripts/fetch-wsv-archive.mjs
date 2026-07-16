@@ -122,9 +122,12 @@ async function fetchRange(uuid, startYear, endDate) {
   try {
     return JSON.parse(text);
   } catch {
-    // some stations' generated JSON carries a bare minus for missing values
-    // ("value":-,) — patch those to null and try once more
-    return JSON.parse(text.replace(/("value"\s*:\s*)-(?=\s*[,}\]])/g, '$1null'));
+    // some stations' generated JSON is not valid JSON: a bare minus for
+    // missing values ("value":-,) and leading-dot decimals ("value":-.87,
+    // seen on m+NN gauges) — patch both and try once more
+    return JSON.parse(text
+      .replace(/("value"\s*:\s*)-(?=\s*[,}\]])/g, '$1null')
+      .replace(/("value"\s*:\s*-?)\.(?=\d)/g, '$10.'));
   }
 }
 
