@@ -611,7 +611,7 @@ async function loadData() {
       // the hosted WSV archive fills windows the live API cannot — including
       // the default ALL view on a first visit, so years appear right away
       const wd = historyPreset().d;
-      if (!wd || wd > API_MAX_DAYS) loadRepoArchive(wd || 365 * 26);
+      if (!wd || wd > API_MAX_DAYS) loadRepoArchive();
     }
   } catch (e) {
     if (station !== forStation) return; // stale error from a station we left
@@ -2625,11 +2625,12 @@ function renderHistoryBar() {
 // backfill from the API when a picked range reaches further back than what's
 // locally archived yet — the WSV API keeps ~30 days, so this covers everything
 // up to 30D without waiting for the local archive to accumulate that much itself
-// the repo hosts a condensed copy of the WSV historical archive (daily min/max
-// per year file, see scripts/fetch-wsv-archive.mjs), served same-origin — the
-// WSV site itself cannot be fetched cross-origin (doubled CORS header). Year
-// files are pulled lazily when a window beyond the API's reach is picked.
-const repoArchiveTried = new Set(); // "<uuid>/<year>" — one attempt per session
+// the repo hosts a condensed copy of the WSV historical archive (daily min/max,
+// see scripts/fetch-wsv-archive.mjs), served same-origin — the WSV site itself
+// cannot be fetched cross-origin (doubled CORS header). Two files carry it:
+// closed.json (immutable bundle of every completed year) + current.json (running
+// year), fetched once each when a window beyond the API's reach is first picked.
+const repoArchiveTried = new Set(); // "<uuid>/<closed|current>" — one attempt per session
 
 // the archive manifest maps every station to its archived year range — or marks
 // it `none` (lock/weir operating gauges, foreign partner gauges: WSV has no
@@ -2643,7 +2644,7 @@ async function loadRepoManifest() {
   return repoManifest;
 }
 
-async function loadRepoArchive(days) {
+async function loadRepoArchive() {
   const info = state.info;
   if (!info || !info.uuid) return;
   const forStation = station;
@@ -2652,26 +2653,27 @@ async function loadRepoArchive(days) {
   if (entry) {
     state.repoArchive = entry.none ? 'none' : 'available';
     dirty = true;
-    if (entry.none) return; // known gap — skip the pointless year fetches
+    if (entry.none) return; // known gap — skip the pointless fetches
   }
-  const nowYear = new Date().getUTCFullYear();
-  let startYear = Math.max(2000, new Date(Date.now() - days * 864e5).getUTCFullYear());
-  let endYear = nowYear;
-  if (entry) { startYear = Math.max(startYear, entry.from); endYear = Math.min(endYear, entry.to); }
+  const uuid = info.uuid;
+  // the whole history is two files: closed.json (immutable bundle of every
+  // completed year) + current.json (running year). One fetch each per session;
+  // a missing file (station not archived) is fine, and a failed fetch frees its
+  // guard so a later pick can retry.
   const jobs = [];
-  for (let y = startYear; y <= endYear; y++) {
-    const key = info.uuid + '/' + y;
+  for (const file of ['closed', 'current']) {
+    const key = uuid + '/' + file;
     if (repoArchiveTried.has(key)) continue;
     repoArchiveTried.add(key);
-    // the running year lives in current.json (refreshed monthly), closed years
-    // are immutable; a missing file (station or year not archived) is fine —
-    // but a failed fetch frees its session guard so a later attempt can retry
-    jobs.push(getJson(`archive/${info.uuid}/${y === nowYear ? 'current' : y}.json`)
+    jobs.push(getJson(`archive/${uuid}/${file}.json`)
       .catch(() => { repoArchiveTried.delete(key); return null; }));
   }
   if (!jobs.length) return;
-  const years = (await Promise.all(jobs)).filter(Boolean);
-  if (station !== forStation || !years.length) return;
+  const results = (await Promise.all(jobs)).filter(Boolean);
+  if (station !== forStation || !results.length) return;
+  // closed.json is an array of years, current.json a single year — flatten both;
+  // the file's own y wins, so a not-yet-frozen current.json maps to its real year
+  const years = results.flatMap(r => (Array.isArray(r) ? r : [r]));
   const measurements = [];
   for (const yr of years) {
     const base = Date.UTC(yr.y, 0, 1) - 36e5; // MEZ midnight of Jan 1 (data is UTC+1 year-round)
@@ -2689,8 +2691,8 @@ async function loadRepoArchive(days) {
 }
 
 async function ensureHistoryCoverage(days) {
-  if (!days) return loadRepoArchive(365 * 26); // ALL: offer everything the repo has
-  if (days > API_MAX_DAYS) return loadRepoArchive(days); // beyond the API's 30-day reach
+  if (!days) return loadRepoArchive(); // ALL: offer everything the repo has
+  if (days > API_MAX_DAYS) return loadRepoArchive(); // beyond the API's 30-day reach
   const forStation = station;
   const cutoff = Date.now() - days * 864e5;
   if (state.archive.length && state.archive[0][0] <= cutoff) return; // already covered

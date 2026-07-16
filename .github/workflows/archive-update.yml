@@ -1,9 +1,11 @@
 name: archive-update
 
 # Refreshes the running-year WSV archive data on the `archive` branch once a
-# month (in January the just-completed year gets frozen into its immutable
-# file — the script handles that). Pushing the branch retriggers the pages
-# deploy, so the site always serves data at most one month old.
+# month. The --current step pulls the last 30 days from the PEGELONLINE REST
+# API and upserts them into current.json; in January the just-completed year
+# graduates into the immutable closed.json bundle (the script handles both).
+# Pushing the branch retriggers the pages deploy, so the site always serves
+# data at most one month old.
 on:
   schedule:
     - cron: '23 4 3 * *'
@@ -25,7 +27,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
-      - name: Fetch current-year data from WSV
+      - name: Fetch current-year data from WSV (REST, last 30 days)
         run: node scripts/fetch-wsv-archive.mjs --current --out archive-branch/archive
       - name: Gap sweep (new stations + retry the none-stations)
         # the plain backfill IS the sweep: stations with a complete meta.json
