@@ -1755,9 +1755,10 @@ function drawProfile(g, row) {
     const lx = Math.min(Math.max(0, x - 3), COLS - label.length);
     put(g, y + 1, lx, label, self ? 'b' : 'd');
     put(g, y + 2, lx, `km ${p.km}`, 'd');
-    if (!self) { // neighbors are one click away
+    if (!self) { // neighbors are one click away — marker, name and km line all count
       linkCells(g, y, x, 1, p.name);
       linkCells(g, y + 1, lx, label.length, p.name);
+      linkCells(g, y + 2, lx, `km ${p.km}`.length, p.name);
     }
   }
   put(g, row, COLS - 14, '← downstream ≋', 'd');
@@ -2191,9 +2192,15 @@ for (const el of [stationInput, adsbInput, aisInput]) {
 }
 // stations drawn into the grid (river markers/labels/trouble rows, profile
 // neighbors) are click targets — delegated so the 8 fps innerHTML swap can't
-// detach a listener mid-click
+// detach a listener mid-click. The swap also races real clicks: when a repaint
+// lands between mousedown and mouseup, the click fires on #screen itself, so
+// fall back to whatever now sits at the pointer position
 screen.addEventListener('click', e => {
-  const el = e.target.closest('[data-st]');
+  let el = e.target.closest && e.target.closest('[data-st]');
+  if (!el && e.clientX != null) {
+    const hit = document.elementFromPoint(e.clientX, e.clientY);
+    el = hit && hit.closest('[data-st]');
+  }
   if (el) switchStation(el.dataset.st, adsbInput.value);
 });
 // terminal idiom: '/' focuses the station prompt from anywhere on the page; esc
