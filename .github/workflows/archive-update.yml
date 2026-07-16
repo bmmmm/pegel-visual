@@ -27,6 +27,11 @@ jobs:
           node-version: 24
       - name: Fetch current-year data from WSV
         run: node scripts/fetch-wsv-archive.mjs --current --out archive-branch/archive
+      - name: Gap sweep (new stations + retry the none-stations)
+        # the plain backfill IS the sweep: stations with a complete meta.json
+        # are skipped, stations that never succeeded (newly commissioned, or
+        # archive-less so far) get a full 2000->last-year attempt
+        run: node scripts/fetch-wsv-archive.mjs --out archive-branch/archive
       - name: Commit and push
         id: push
         run: |

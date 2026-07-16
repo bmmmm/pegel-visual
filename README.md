@@ -52,7 +52,9 @@ _      _      _      _      _      _      _      _
   and `import` swallows the ZIP directly (unpacked in the browser via
   `DecompressionStream`, still no dependencies)
 - water surface elevation profile (m NHN) between the neighboring
-  stations on the same river, ordered by river km
+  stations on the same river, ordered by river km — neighbors are one
+  click away, and the current station's own label opens the whole-river
+  profile
 - water temperature and discharge in the header when the station reports
   them, all-time record markers (HHW/NNW) on the chart when available, and
   a frozen river scene — static pack ice, drifting floes, a ship stuck fast —
@@ -61,7 +63,11 @@ _      _      _      _      _      _      _      _
 ## Any station
 
 Default is Bonn (Rhine). Type a station name into the prompt at the bottom
-(with autocomplete over all PEGELONLINE stations), or use the query param:
+(with autocomplete over all PEGELONLINE stations), or use the query param.
+Partial names work: a fragment that matches exactly one station (umlaut
+spellings folded) switches directly, an ambiguous one — `MAGDEBURG`,
+`HAMBURG`, `TRIER` — opens a clickable *did you mean* list instead of an
+error:
 
 ```
 ?station=BONN
@@ -78,8 +84,9 @@ flag command (flags are matched case-insensitively) to do more in one go:
 - `--station NAME` — switch to station NAME (same as typing a bare name)
 - `--adsb URL` — set your ADS-B receiver URL; `--adsb` with no value clears it
 - `--ais URL` — set your AIS receiver URL; `--ais` with no value clears it
-- `--history RANGE` — set the sparkline window (`24h`, `3d`, `7d`, `15d`, `30d`, `all`);
-  the choice also lands in the URL, so shared links reproduce it
+- `--history RANGE` — set the sparkline window (`24h`, `3d`, `7d`, `15d`, `30d`,
+  `1y`, `5y`, `10y`, `20y`, `all`); the choice also lands in the URL, so shared
+  links reproduce it
 - `--export` — download the whole local archive as JSON
 - `--clear` — delete the local archive (no confirmation — you typed it)
 - `--info` — open the feature guide dialog (also linked as `info` in the footer):
