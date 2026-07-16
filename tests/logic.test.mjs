@@ -673,3 +673,14 @@ test('boot: ?river= wins over ?station=, plain boot is station mode', () => {
   assert.equal(station.run('mode'), 'station');
   assert.equal(station.run('station'), 'MARBURG');
 });
+
+test('first-visit ASCII ?station= link self-corrects once the station list arrives', async () => {
+  const app = loadApp({ search: '?station=KOELN' });
+  assert.equal(app.run('station'), 'KOELN');
+  app.run('state.error = \'station "KOELN" failed: 404 /stations/KOELN.json\'');
+  app.run(`fetch = url => url.includes('stations.json')
+    ? Promise.resolve({ ok: true, json: () => Promise.resolve([{ shortname: 'KÖLN', water: { shortname: 'RHEIN' }, km: 688 }]) })
+    : Promise.reject(new Error('offline (test stub)'))`);
+  await app.run('loadStationList()');
+  assert.equal(app.run('station'), 'KÖLN', 'error screen self-corrected to the canonical station');
+});
