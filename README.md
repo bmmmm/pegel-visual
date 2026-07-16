@@ -30,12 +30,21 @@ _      _      _      _      _      _      _      _
 - history sparkline — starts with the API's 15 days and grows: every visit
   merges the data into a local archive (localStorage, per station), so over
   time your sparkline covers more than the API can serve. Points older than
-  16 days are thinned to hourly. `export` downloads the archive as JSON,
-  `import` restores a previously exported file (e.g. after switching
-  devices) and merges it with what is already there, `clear` (click twice)
-  deletes it. Nothing ever leaves your browser.
+  16 days are thinned to hourly, older than a year to 6-hourly. `export`
+  downloads the archive as JSON, `import` restores a previously exported
+  file (e.g. after switching devices) and merges it with what is already
+  there, `clear` (click twice) deletes it. Nothing ever leaves your browser.
   Fetching is API-friendly: the 15-day history is requested once as a seed,
   afterwards only the delta since the newest archived point is pulled.
+- **years, not days:** WSV publishes each station's raw archive back to
+  2000-01-01 (DL-DE Zero). Its download page blocks cross-origin fetches
+  (doubled CORS header), so the page can't pull it for you — instead the
+  `full archive (2000→)` link jumps straight to the right WSV page for the
+  current station; download the ZIP there (JSON format) and feed it to
+  `import`, which unpacks it right in the browser (`DecompressionStream`,
+  still no dependencies). The `1Y` / `5Y` history chips then have data to
+  show — flagged as *unvalidated raw data*, since WSV serves these values
+  unchecked (outliers and gaps included)
 - water surface elevation profile (m NHN) between the neighboring
   stations on the same river, ordered by river km
 - water temperature and discharge in the header when the station reports

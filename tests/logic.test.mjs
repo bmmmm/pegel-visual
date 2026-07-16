@@ -1,6 +1,45 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { deflateRawSync } from 'node:zlib';
 import { loadApp } from './extract.mjs';
+
+// builds a real (minimal) ZIP: local headers + central directory + EOCD —
+// the same layout the WSV archive service emits, so the in-page reader is
+// exercised against the honest byte format
+function buildZip(files) {
+  const parts = [], cd = [];
+  let offset = 0;
+  for (const [name, content] of files) {
+    const nameB = Buffer.from(name);
+    const raw = Buffer.from(content);
+    const data = deflateRawSync(raw);
+    const local = Buffer.alloc(30);
+    local.writeUInt32LE(0x04034b50, 0);
+    local.writeUInt16LE(20, 4);
+    local.writeUInt16LE(8, 8); // deflate
+    local.writeUInt32LE(data.length, 18);
+    local.writeUInt32LE(raw.length, 22);
+    local.writeUInt16LE(nameB.length, 26);
+    const c = Buffer.alloc(46);
+    c.writeUInt32LE(0x02014b50, 0);
+    c.writeUInt16LE(8, 10);
+    c.writeUInt32LE(data.length, 20);
+    c.writeUInt32LE(raw.length, 24);
+    c.writeUInt16LE(nameB.length, 28);
+    c.writeUInt32LE(offset, 42);
+    cd.push(Buffer.concat([c, nameB]));
+    parts.push(local, nameB, data);
+    offset += 30 + nameB.length + data.length;
+  }
+  const cdBuf = Buffer.concat(cd);
+  const eocd = Buffer.alloc(22);
+  eocd.writeUInt32LE(0x06054b50, 0);
+  eocd.writeUInt16LE(files.length, 8);
+  eocd.writeUInt16LE(files.length, 10);
+  eocd.writeUInt32LE(cdBuf.length, 12);
+  eocd.writeUInt32LE(offset, 16);
+  return new Uint8Array(Buffer.concat([...parts, cdBuf, eocd]));
+}
 
 // noon UTC: keeps isNight()'s no-coords fallback (local hours) out of the night
 // window in both UTC CI runners and European local timezones
@@ -102,6 +141,40 @@ test('importArchiveFile: accepts export shapes, rejects junk, dedupes on re-impo
   assert.equal(app.run('importArchiveFile(null)'), false);
   assert.equal(app.run('importArchiveFile({ X: "not a list" })'), false);
   assert.equal(app.run('importArchiveFile({ X: [["NaN", null], [1]] })'), false, 'all-invalid pairs count as no match');
+});
+
+test('mergeIntoArchive: multi-year points thin to 6-hourly', () => {
+  const app = loadApp({ now: NOON });
+  const base = NOON - 2 * 365 * 864e5; // two years back
+  const old = Array.from({ length: 25 }, (_, i) => ({ timestamp: new Date(base + i * 36e5).toISOString(), value: 70 }));
+  app.run(`mergeIntoArchive('T3', ${JSON.stringify(old)})`);
+  const kept = app.run(`loadArchive('T3')`);
+  assert.ok(kept.length >= 4 && kept.length <= 5, `25 hourly points over 24h thin to ~4-5 six-hour buckets, got ${kept.length}`);
+});
+
+test('importWsvArchive: unpacks the WSV historical ZIP into the right station', async () => {
+  const app = loadApp({ now: NOON });
+  app.run(`fillDatalist([{ n: 'KÖLN', w: 'RHEIN', km: 688 }, { n: 'BONN', w: 'RHEIN', km: 654.8 }])`);
+  app.run(`station = 'BONN'`);
+  const measurements = Array.from({ length: 8 }, (_, i) =>
+    ({ timestamp: new Date(NOON - (8 - i) * 36e5).toISOString(), value: 300 + i }));
+  // same entry layout as the real archive: json + terms + info text
+  const zip = buildZip([
+    ['pegelonline-koeln-W-20240101-20241231.json', JSON.stringify(measurements)],
+    ['nutzungsbedingungen.txt', 'DL-DE Zero'],
+    ['zeitreiheninformation.txt', 'info'],
+  ]);
+  const importWsvArchive = app.run('importWsvArchive');
+  const target = await importWsvArchive(zip);
+  assert.equal(target, 'KÖLN', 'station resolved from the file name, umlaut-folded');
+  assert.equal(app.run(`loadArchive('KÖLN')`).length, 8);
+
+  // a file name that matches no station falls back to the on-screen station
+  const zip2 = buildZip([['pegelonline-atlantis-W-20240101-20241231.json', JSON.stringify(measurements)]]);
+  assert.equal(await app.run('importWsvArchive')(zip2), 'BONN');
+
+  // garbage bytes are rejected, not crashed on
+  await assert.rejects(() => importWsvArchive(new Uint8Array([0x50, 0x4b, 1, 2, 3])), /zip/);
 });
 
 test('countGaps: only jumps beyond 90 min count', () => {
@@ -290,6 +363,15 @@ test('fitFont: picks 44 columns on phone widths, 84 on desktop, and switches bac
   desktop.document.documentElement.clientWidth = 1200;
   desktop.run('fitFont()');
   assert.equal(desktop.run('COLS'), 84, 'growing restores the full grid');
+});
+
+test('history presets: 1Y/5Y exist, API backfill stays within its 30-day reach', () => {
+  const app = loadApp();
+  const presets = app.run('HISTORY_PRESETS');
+  assert.deepEqual(presets.map(p => p.k), ['24h', '3d', '7d', '15d', '30d', '1y', '5y', 'all']);
+  assert.equal(presets.find(p => p.k === '1y').d, 365);
+  assert.equal(presets.find(p => p.k === '5y').d, 1825);
+  assert.equal(app.run('API_MAX_DAYS'), 30);
 });
 
 test('boot: ?river= wins over ?station=, plain boot is station mode', () => {
