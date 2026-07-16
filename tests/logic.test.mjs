@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { deflateRawSync } from 'node:zlib';
+import { execFileSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { loadApp } from './extract.mjs';
 
 // builds a real (minimal) ZIP: local headers + central directory + EOCD —
@@ -238,6 +240,49 @@ test('resolveStation / resolveWater: umlaut spellings fold both ways', () => {
   assert.equal(app.run(`resolveWater('ATLANTIS')`), null);
 });
 
+test('findMatches / applyPrompt: place names resolve via substring search', () => {
+  const app = loadApp();
+  app.run(`fillDatalist([
+    { n: 'MAGDEBURG-BUCKAU', w: 'ELBE', km: 318 },
+    { n: 'MAGDEBURG-STROMBRÜCKE', w: 'ELBE', km: 326.6 },
+    { n: 'Trier OP', w: 'MOSEL', km: 195 },
+    { n: 'Trier UP', w: 'MOSEL', km: 195 },
+    { n: 'MINDEN', w: 'WESER', km: 204.5 },
+    { n: 'BONN', w: 'RHEIN', km: 654.8 },
+  ])`);
+  app.run(`fillWaters(['MOSEL', 'ELBE'])`);
+
+  const m = app.run(`findMatches('MAGDEBURG')`);
+  assert.deepEqual(m.map(x => x.name), ['MAGDEBURG-BUCKAU', 'MAGDEBURG-STROMBRÜCKE']);
+  assert.equal(app.run(`findMatches('trier')`).length, 2, 'case-insensitive');
+  assert.equal(app.run(`findMatches('OSEL')`).find(x => x.river).name, 'MOSEL', 'rivers are found too');
+  assert.deepEqual(app.run(`findMatches('XYZNOWHERE')`), []);
+
+  // unique substring match switches directly
+  app.run(`stationInput.value = 'MINDE'`);
+  app.run(`applyPrompt()`);
+  assert.equal(app.run('station'), 'MINDEN');
+  assert.equal(app.run('state.suggest'), null);
+
+  // ambiguous input opens the did-you-mean screen instead of a 404 sea monster
+  app.run(`stationInput.value = 'MAGDEBURG'`);
+  app.run(`applyPrompt()`);
+  const suggest = app.run('state.suggest');
+  assert.equal(suggest.q, 'MAGDEBURG');
+  assert.equal(suggest.matches.length, 2);
+  assert.equal(app.run('station'), 'MINDEN', 'no switch happened');
+
+  // the suggest screen renders clickable rows (river rows use the river: prefix)
+  const html = app.run(`(() => {
+    state.suggest = { q: 'mosel', matches: [{ name: 'Trier OP', river: false }, { name: 'MOSEL', river: true }] };
+    const g = makeGrid(8);
+    drawSuggest(g, state.suggest);
+    return gridToHtml(g);
+  })()`);
+  assert.ok(html.includes('data-st="Trier OP"'));
+  assert.ok(html.includes('data-st="river:MOSEL"'));
+});
+
 // ---------- river mode data ----------
 
 test('troubleKind: normalizes stateMnwMhw', () => {
@@ -465,6 +510,77 @@ test('loadRepoArchive: lazily merges year files into the local archive', async (
   assert.equal(app.run(`loadArchive('BONN')`).length, 2);
 });
 
+// ---------- the January year-freeze (script clock pinned via PEGEL_NOW) ----------
+
+// PEGEL_NOW is read at module load, so each scenario runs in its own process
+function runWithClock(nowIso, code) {
+  return JSON.parse(execFileSync(process.execPath, ['--input-type=module', '-e', code], {
+    env: { ...process.env, PEGEL_NOW: nowIso },
+    cwd: fileURLToPath(new URL('..', import.meta.url)),
+    encoding: 'utf8',
+  }));
+}
+
+test('archive script: January --current run freezes the completed year', () => {
+  const out = runWithClock('2027-01-03T04:23:00Z', `
+    import { currentRunPlan, condense, writeStation } from './scripts/fetch-wsv-archive.mjs';
+    import { mkdtempSync, readdirSync, readFileSync } from 'node:fs';
+    import { tmpdir } from 'node:os';
+    import { join } from 'node:path';
+    const plan = currentRunPlan();
+    const measurements = [
+      { timestamp: '2026-12-30T10:00:00+01:00', value: 250 },
+      { timestamp: '2026-12-31T23:45:00+01:00', value: 260 },
+      { timestamp: '2027-01-01T00:15:00+01:00', value: 261 },
+      { timestamp: '2027-01-02T12:00:00+01:00', value: 270 },
+    ];
+    const dir = mkdtempSync(join(tmpdir(), 'pegel-jan-'));
+    writeStation(dir, 'BONN', condense(measurements), plan.startYear, plan.fetchedThrough);
+    const files = readdirSync(dir).sort();
+    const frozen = JSON.parse(readFileSync(join(dir, '2026.json')));
+    const current = JSON.parse(readFileSync(join(dir, 'current.json')));
+    console.log(JSON.stringify({ plan, files, frozenY: frozen.y, frozenLastMax: frozen.max[364],
+      currentY: current.y, currentFirstMin: current.min[0], meta: JSON.parse(readFileSync(join(dir, 'meta.json'))) }));
+  `);
+  assert.equal(out.plan.startYear, 2026, 'January re-pulls the completed year');
+  assert.equal(out.plan.fetchedThrough, 2026);
+  assert.equal(out.plan.endDate, '2027-01-03');
+  assert.deepEqual(out.files, ['2026.json', 'current.json', 'meta.json']);
+  assert.equal(out.frozenY, 2026, 'completed year lands in its immutable file');
+  assert.equal(out.frozenLastMax, 260, 'Dec 31 (MEZ) is the last slot of the frozen year');
+  assert.equal(out.currentY, 2027, 'current.json restarts with the new year');
+  assert.equal(out.currentFirstMin, 261);
+  assert.equal(out.meta.fetchedThrough, 2026);
+});
+
+test('archive script: mid-year --current run touches only the running year', () => {
+  const out = runWithClock('2026-07-16T12:00:00Z', `
+    import { currentRunPlan } from './scripts/fetch-wsv-archive.mjs';
+    console.log(JSON.stringify(currentRunPlan()));
+  `);
+  assert.equal(out.startYear, 2026);
+  assert.equal(out.fetchedThrough, 2025);
+  assert.equal(out.endDate, '2026-07-16');
+});
+
+test('client in January: a not-yet-frozen current.json still maps to its own year', async () => {
+  // Jan 5, 2027: the CI freeze has not run yet, current.json still carries 2026
+  const app = loadApp({ now: Date.UTC(2027, 0, 5, 12) });
+  const min = Array(365).fill(null), max = Array(365).fill(null);
+  min[363] = 250; max[363] = 260; // Dec 30, 2026
+  app.run(`state.info = { uuid: 'jan-uuid' }`);
+  app.run(`getJson = async url => {
+    if (url === 'archive/jan-uuid/current.json') return { y: 2026, min: ${JSON.stringify(min)}, max: ${JSON.stringify(max)} };
+    throw new Error('404 ' + url);
+  }`);
+  await app.run('loadRepoArchive(60)'); // 60-day window spans the year boundary
+  const arch = app.run(`loadArchive('BONN')`);
+  assert.equal(arch.length, 2);
+  const dec30 = Date.UTC(2026, 0, 1) - 36e5 + 363 * 864e5;
+  assert.deepEqual(arch.map(p => p[0]), [dec30 + 6 * 36e5, dec30 + 18 * 36e5],
+    'points land on Dec 30, 2026 — the file year wins, not the wall clock');
+});
+
 test('drawSparkline: renders a time axis labeled from real timestamps', () => {
   const app = loadApp({ now: NOON });
   // two years of daily points ending at NOON — multi-year span → YYYY-MM ticks
@@ -487,9 +603,10 @@ test('drawSparkline: renders a time axis labeled from real timestamps', () => {
 test('history presets: 1Y/5Y exist, API backfill stays within its 30-day reach', () => {
   const app = loadApp();
   const presets = app.run('HISTORY_PRESETS');
-  assert.deepEqual(presets.map(p => p.k), ['24h', '3d', '7d', '15d', '30d', '1y', '5y', 'all']);
+  assert.deepEqual(presets.map(p => p.k), ['24h', '3d', '7d', '15d', '30d', '1y', '5y', '10y', '20y', 'all']);
   assert.equal(presets.find(p => p.k === '1y').d, 365);
-  assert.equal(presets.find(p => p.k === '5y').d, 1825);
+  assert.equal(presets.find(p => p.k === '10y').d, 3650);
+  assert.equal(presets.find(p => p.k === '20y').d, 7300);
   assert.equal(app.run('API_MAX_DAYS'), 30);
 });
 

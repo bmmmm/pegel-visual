@@ -69,8 +69,14 @@
     white-space: pre;
   }
   #screen { view-transition-name: screen; }
-  #screen [data-st] { cursor: pointer; }
-  #screen [data-st]:hover { text-decoration: underline; }
+  #screen [data-st] {
+    cursor: pointer;
+    /* a quiet dotted underline says "click me" without shouting over the art */
+    text-decoration: underline dotted;
+    text-decoration-color: color-mix(in oklab, currentColor 40%, transparent);
+    text-underline-offset: 0.2em;
+  }
+  #screen [data-st]:hover { text-decoration: underline solid; text-decoration-color: currentColor; }
   ::view-transition-old(screen), ::view-transition-new(screen) { animation-duration: 0.35s; }
   .d { color: var(--dim); }
   .b { color: var(--ink); font-weight: 700; }
@@ -448,7 +454,10 @@ function screenSummary() {
 // while --help is shown, the screen holds a man page instead of the live grid,
 // so the aria-label must say so rather than describe water levels that aren't there
 function setScreenAria() {
-  screen.setAttribute('aria-label', state.help ? 'command help' : screenSummary());
+  screen.setAttribute('aria-label',
+    state.help ? 'command help' :
+    state.suggest ? `${state.suggest.matches.length} station suggestions for ${state.suggest.q}` :
+    screenSummary());
 }
 
 function applyLiveChrome() {
@@ -476,6 +485,7 @@ const state = {
   archive: [],      // locally accumulated [timestampMs, cm] for this station
   error: null,
   help: null,       // set to a man-page string while the --help screen is shown
+  suggest: null,    // { q, matches } while the did-you-mean screen is shown
   river: null,      // river name (uppercase) while in river mode
   riverStations: null, // prepared station array for the longitudinal profile
   repoArchive: null, // 'available' | 'none' once the hosted archive manifest was consulted
@@ -1616,6 +1626,8 @@ const HISTORY_PRESETS = [
   { k: '30d', d: 30, label: '30D' },
   { k: '1y', d: 365, label: '1Y' },
   { k: '5y', d: 1825, label: '5Y' },
+  { k: '10y', d: 3650, label: '10Y' },
+  { k: '20y', d: 7300, label: '20Y' },
   { k: 'all', d: null, label: 'ALL' },
 ];
 // the live API only reaches ~30 days back; longer windows need the imported
@@ -1646,7 +1658,8 @@ function drawSparkline(g, row, t) {
   const step = series.length / chartW;
   const vals = Array.from({ length: chartW }, (_, x) => series[Math.min(series.length - 1, Math.floor(x * step))]);
   const min = Math.min(...vals), max = Math.max(...vals), span = Math.max(max - min, 1);
-  const label = `HISTORY · ${wd ? historyPreset().label : spanDays + 'D'}`;
+  // ALL says how much it really is: day count while short, years once it spans them
+  const label = `HISTORY · ${wd ? historyPreset().label : spanDays > 730 ? (spanDays / 365.25).toFixed(1) + 'Y' : spanDays + 'D'}`;
   put(g, row, 0, label, 'd');
   const minmax = `min ${min}  max ${max}`;
   put(g, row, label.length + 3, minmax, 'd');
@@ -1759,6 +1772,11 @@ function drawProfile(g, row) {
       linkCells(g, y, x, 1, p.name);
       linkCells(g, y + 1, lx, label.length, p.name);
       linkCells(g, y + 2, lx, `km ${p.km}`.length, p.name);
+    } else {
+      // the current station's own label leads onward: to its whole-river profile
+      const river = 'river:' + state.info.water.shortname;
+      linkCells(g, y + 1, lx, label.length, river);
+      linkCells(g, y + 2, lx, `km ${p.km}`.length, river);
     }
   }
   put(g, row, COLS - 14, '← downstream ≋', 'd');
@@ -1972,6 +1990,7 @@ let refreshTimer = null;
 // switch station in-place: no full reload, just reset per-station state and refetch
 function switchStation(name, adsb, push = true) {
   dismissHelp(); // a station switch always leaves the man page
+  dismissSuggest();
   const wasRiver = mode === 'river';
   const next = resolveStation(name || station) || station;
   const nextAdsb = (adsb ?? adsbRaw).trim();
@@ -2034,6 +2053,7 @@ function switchStation(name, adsb, push = true) {
 // river state and kicks the fetch on the normal 5-min cycle.
 function switchRiver(name, push = true) {
   dismissHelp();
+  dismissSuggest();
   const next = (name || state.river || '').trim().toUpperCase();
   if (!next) return;
   if (mode === 'river' && next === state.river) return;
@@ -2165,14 +2185,75 @@ function runCommand(raw) {
   stationInput.value = mode === 'river' ? state.river : station;
 }
 
+// substring search over stations and rivers, umlaut-folded — the prompt should
+// find "MAGDEBURG-STROMBRÜCKE" when someone types the town, not feed the typed
+// fragment to the API and serve a sea monster. startsWith matches rank first.
+function findMatches(raw) {
+  const q = foldStrip(raw);
+  if (!q) return [];
+  const starts = [], contains = [];
+  for (const name of knownStations) {
+    const f = foldStrip(name);
+    if (f.startsWith(q)) starts.push({ name, river: false });
+    else if (f.includes(q)) contains.push({ name, river: false });
+  }
+  for (const name of knownWaters) {
+    const f = foldStrip(name);
+    if (f.startsWith(q)) starts.push({ name, river: true });
+    else if (f.includes(q)) contains.push({ name, river: true });
+  }
+  starts.sort((a, b) => a.name.localeCompare(b.name));
+  contains.sort((a, b) => a.name.localeCompare(b.name));
+  return [...starts, ...contains];
+}
+
+function dismissSuggest() {
+  if (!state.suggest) return;
+  state.suggest = null;
+  dirty = true;
+  setScreenAria();
+}
+
+function showSuggest(q, matches) {
+  state.suggest = { q, matches };
+  dirty = true;
+  setScreenAria();
+  stationInput.value = q.toUpperCase();
+}
+
+// the did-you-mean screen: every row is a click target (rivers open the
+// whole-river profile via the river: link convention)
+const SUGGEST_MAX = 12;
+function drawSuggest(g, s) {
+  put(g, 0, 0, `─── NO EXACT MATCH FOR "${s.q.toUpperCase()}" `.padEnd(COLS, '─'), 'd');
+  put(g, 2, 2, 'did you mean:', 'b');
+  s.matches.slice(0, SUGGEST_MAX).forEach((m, i) => {
+    const row = 4 + i;
+    const meta = m.river ? 'river · whole profile'
+      : (() => { const md = stationMeta.get(m.name.toUpperCase()); return md ? [md.w, md.km != null ? 'km ' + Math.round(md.km) : ''].filter(Boolean).join(' · ') : ''; })();
+    const name = m.name.slice(0, 34);
+    put(g, row, 2, '▸ ' + name, 'b');
+    if (meta && !isCompact()) put(g, row, 40, meta, 'd');
+    linkCells(g, row, 2, isCompact() ? name.length + 2 : COLS - 4, m.river ? 'river:' + m.name : m.name);
+  });
+  if (s.matches.length > SUGGEST_MAX) put(g, 4 + SUGGEST_MAX, 2, `… and ${s.matches.length - SUGGEST_MAX} more — keep typing`, 'd');
+  put(g, g.rows - 1, 2, 'click a row, or press esc', 'd');
+}
+
 function applyPrompt() {
   const v = stationInput.value;
   if (v.includes('--')) return runCommand(v);
   setAis(aisInput.value); // the ais field applies on every submit, like the adsb field
+  dismissSuggest();
   // a plain name that is a known river (and not a station) opens the river profile
   if (knownStations.size && !knownStations.has(resolveStation(v))) {
     const water = resolveWater(v);
     if (water) return switchRiver(water);
+    const matches = findMatches(v);
+    if (matches.length === 1) {
+      return matches[0].river ? switchRiver(matches[0].name) : switchStation(matches[0].name, adsbInput.value);
+    }
+    if (matches.length > 1) return showSuggest(v, matches);
   }
   switchStation(v, adsbInput.value);
 }
@@ -2201,7 +2282,11 @@ screen.addEventListener('click', e => {
     const hit = document.elementFromPoint(e.clientX, e.clientY);
     el = hit && hit.closest('[data-st]');
   }
-  if (el) switchStation(el.dataset.st, adsbInput.value);
+  if (!el) return;
+  const st = el.dataset.st;
+  // river:NAME targets open the whole-river profile (self labels, suggest rows)
+  if (st.startsWith('river:')) switchRiver(st.slice(6));
+  else switchStation(st, adsbInput.value);
 });
 // terminal idiom: '/' focuses the station prompt from anywhere on the page; esc
 // dismisses the --help screen when it's showing
@@ -2211,9 +2296,10 @@ document.addEventListener('keydown', e => {
     e.preventDefault();
     stationInput.focus();
     stationInput.select();
-  } else if (e.key === 'Escape' && state.help) {
+  } else if (e.key === 'Escape' && (state.help || state.suggest)) {
     e.preventDefault();
     dismissHelp();
+    dismissSuggest();
   }
 });
 window.addEventListener('popstate', () => {
@@ -2628,6 +2714,12 @@ function wreckFrame(t) {
 function render(t) {
   if (state.help) {
     screen.textContent = state.help;
+    return;
+  }
+  if (state.suggest) {
+    const g = makeGrid(6 + Math.min(state.suggest.matches.length, SUGGEST_MAX) + (state.suggest.matches.length > SUGGEST_MAX ? 1 : 0));
+    drawSuggest(g, state.suggest);
+    screen.innerHTML = gridToHtml(g);
     return;
   }
   if (mode === 'river') {

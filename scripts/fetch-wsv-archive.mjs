@@ -28,7 +28,9 @@ import { inflateRawSync } from 'node:zlib';
 const API = 'https://www.pegelonline.wsv.de/webservices/rest-api/v2';
 const PREPARE = 'https://www.pegelonline.wsv.de/gast/historische-zeitreihen/prepare-download';
 const THROTTLE_MS = 1500;
-const now = new Date();
+// PEGEL_NOW pins the clock for tests (e.g. PEGEL_NOW=2027-01-03 to rehearse the
+// January year-freeze); production runs use the real clock
+const now = process.env.PEGEL_NOW ? new Date(process.env.PEGEL_NOW) : new Date();
 const CURRENT_YEAR = now.getUTCFullYear();
 
 const args = process.argv.slice(2);
@@ -179,7 +181,17 @@ export function buildManifest(stations, out) {
   return manifest;
 }
 
-function writeStation(dir, name, years, fetchedFrom, fetchedThrough) {
+// what a --current run fetches: normally the running year; in January also the
+// just-completed one, so it gets frozen into its immutable file
+export function currentRunPlan() {
+  return {
+    startYear: now.getUTCMonth() === 0 ? CURRENT_YEAR - 1 : CURRENT_YEAR,
+    fetchedThrough: CURRENT_YEAR - 1,
+    endDate: now.toISOString().slice(0, 10),
+  };
+}
+
+export function writeStation(dir, name, years, fetchedFrom, fetchedThrough) {
   mkdirSync(dir, { recursive: true });
   let files = 0;
   for (const [y, data] of years) {
@@ -218,9 +230,7 @@ async function main() {
     try {
       let startYear, fetchedThrough;
       if (CURRENT_ONLY) {
-        // in January also re-pull the just-completed year so it gets frozen
-        startYear = now.getUTCMonth() === 0 ? CURRENT_YEAR - 1 : CURRENT_YEAR;
-        fetchedThrough = CURRENT_YEAR - 1;
+        ({ startYear, fetchedThrough } = currentRunPlan());
       } else {
         let meta = {};
         try { meta = JSON.parse(readFileSync(join(dir, 'meta.json'), 'utf8')); } catch {}
@@ -232,7 +242,7 @@ async function main() {
         startYear = resumable ? Math.max(FROM, (meta.fetchedThrough || 0) + 1) : FROM;
         fetchedThrough = TO;
       }
-      const endDate = CURRENT_ONLY ? now.toISOString().slice(0, 10) : `${TO}-12-31`;
+      const endDate = CURRENT_ONLY ? currentRunPlan().endDate : `${TO}-12-31`;
       const { years, pts } = await fetchCondensed(s.uuid, startYear, endDate);
       const files = writeStation(dir, s.shortname, years, startYear, fetchedThrough);
       console.log(`${tag} · ${pts} pts -> ${files} file(s)`);
