@@ -18,11 +18,13 @@ _      _      _      _      _      _      _      _
   seeded riverbed, a little ship, markers for MNW / MW / MHW
 - living scenes: below MNW the sun blazes over a cracked, dried-out bank;
   above MHW storm clouds drift in and rain falls on the swollen river; when
-  the level rises fast a lone rain cloud drifts in upstream as a harbinger;
-  after sunset (computed for the station's real coordinates) a moon rises
-  and stars twinkle over the water. The scene also mirrors real weather at
-  the station (rain, snow, clouds, wind) via [open-meteo](https://open-meteo.com),
-  refreshed every 15 min
+  the level rises fast (≥ 2 cm/h) a lone rain cloud drifts in upstream as a
+  harbinger of the water to come — independent scenes can overlap, e.g. a
+  drought sun next to the harbinger cloud when a low river is refilling;
+  after sunset (computed for the station's real coordinates) the moon rises
+  in its real current phase and stars twinkle over the water. The scene also
+  mirrors real weather at the station (rain, snow, clouds, wind) via
+  [open-meteo](https://open-meteo.com), refreshed every 15 min
 - automatic dark mode (`light-dark()`, follows your system), tab title and
   favicon carry the live level — the buddy's waterline tracks MNW…MHW
 - history sparkline — starts with the API's 15 days and grows: every visit
@@ -73,7 +75,8 @@ River names autocomplete alongside stations: typing or picking a known river
 (e.g. `RHEIN`) opens the whole-river profile directly.
 
 Flags combine, e.g. `--station KÖLN --history 7d` switches station and
-range in one command. Press Escape to dismiss the help screen.
+range in one command. Press `/` to focus the prompt from anywhere on the
+page, Escape to dismiss the help screen.
 
 `share` in the footer hands the station link to your system share sheet
 (or copies it). The page ships a web manifest, so it can be installed as
@@ -162,6 +165,10 @@ CI runs the same suite on every push and pull request.
 
 Data: © Wasserstraßen- und Schifffahrtsverwaltung des Bundes (WSV),
 [PEGELONLINE](https://www.pegelonline.wsv.de), refreshed every 5 minutes.
+
+## License
+
+[GPL-3.0](LICENSE).
 
 ## Support
 
