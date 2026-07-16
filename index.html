@@ -322,7 +322,9 @@
       directly) remain as the manual route.</dd>
     <dt>elevation profile</dt>
     <dd>Below the sparkline: the water surface elevation (m NHN) between the
-      neighboring gauges on the same river, ordered by river km. The neighbors are
+      neighboring gauges on the same river. It always runs downstream to the right —
+      German river km count downstream on the Rhein but upstream on the Neckar, so
+      the direction comes from the elevation, not from the km. The neighbors are
       one click away.</dd>
     <dt>whole-river mode</dt>
     <dd>Type a river name (e.g. <b>RHEIN</b>) or use <b>?river=</b> to see the entire
@@ -367,6 +369,8 @@ const CHART_ROWS = 15;
 const SPARK_ROWS = 4;
 const SPLASH_ROWS = 2; // headroom above the sparkline for the overshoot splash
 const PROFILE_ROWS = 6;
+const PROFILE_GAP = 2;  // blank rows between the sparkline block and the profile
+const PROFILE_FOOT = 1; // the ≋ downstream → marker row under the profile
 const REFRESH_MS = 5 * 60 * 1000;
 
 const screen = document.getElementById('screen');
@@ -476,7 +480,7 @@ const state = {
   gauge: null,      // W timeseries: current, characteristic values, gauge zero
   wt: null,         // water temperature, °C (number) or null if unavailable
   q: null,          // discharge, m³/s (number) or null if unavailable
-  neighbors: [],    // [upstream?, self, downstream?] with elevation data
+  neighbors: [],    // km-ascending [prev?, self, next?] with elevation data
   weather: null,    // current weather at the station (open-meteo), or null if unavailable
   aircraft: [],     // live ADS-B positions from the user's own receiver
   adsbOk: null,     // null = off, true/false = last fetch result
@@ -1320,6 +1324,24 @@ function drawHeader(g, row, t) {
   return row + HEADER_ROWS;
 }
 
+// German river km run either way: Rhein and Elbe count downstream from the source,
+// Neckar, Mosel and Main upstream from the mouth — so "higher km" is no direction.
+// Water surface elevation is: it always falls downstream. The sign of cov(km, elev)
+// picks the flow direction on any water, and every view then draws it left to right.
+function downstreamIsLowKm(pts) {
+  const kMean = pts.reduce((a, p) => a + p.km, 0) / pts.length;
+  const eMean = pts.reduce((a, p) => a + p.elev, 0) / pts.length;
+  return pts.reduce((a, p) => a + (p.km - kMean) * (p.elev - eMean), 0) >= 0;
+}
+
+// fraction along the scene, 0 = upstream (left) … 1 = downstream (right)
+const flowFrac = (km, kmMin, kmSpan, lowKmDown) => {
+  const f = (km - kmMin) / kmSpan;
+  return lowKmDown ? 1 - f : f;
+};
+
+const FLOW_MARK = '≋ downstream →';
+
 function drawChart(g, row, t) {
   const value = state.gauge.currentMeasurement.value;
   const mhw = charValue('MHW'), mw = charValue('MW'), mnw = charValue('MNW');
@@ -1434,7 +1456,9 @@ function drawChart(g, row, t) {
   const n = state.neighbors;
   let axis = null;
   if (n.length >= 2) {
-    const L = n[n.length - 1], R = n[0]; // left = downstream (max km), right = upstream
+    const lowKmDown = downstreamIsLowKm(n);
+    const L = lowKmDown ? n[n.length - 1] : n[0]; // left = upstream end
+    const R = lowKmDown ? n[0] : n[n.length - 1]; // right = downstream end
     const kx = Math.cos((L.lat * Math.PI) / 180);
     const ax = (R.lon - L.lon) * kx, ay = R.lat - L.lat;
     axis = { L, kx, ax, ay, len2: ax * ax + ay * ay };
@@ -1520,11 +1544,11 @@ function drawChart(g, row, t) {
     put(g, bedTop - 1, bx + 1, ':(', 'b');
     put(g, bedTop, bx, '\\__/', 'b');
   } else if (surface > row + 2 && !shipsShown) {
-    // little ship, bobbing downstream (Bonn view: downstream is to the left);
+    // little ship, bobbing downstream (left to right, like every view);
     // in a flood — or windy weather — it pitches harder on the swell; frozen in
     // place mid-river when icy. While real AIS ships are in view the decorative
     // boat yields the river to them and returns once they've passed
-    const shipX = icy ? Math.floor(chartW * 0.6) : chartW - 10 - Math.floor((t * 1.3) % (chartW - 14));
+    const shipX = icy ? Math.floor(chartW * 0.6) : 4 + Math.floor((t * 1.3) % (chartW - 14));
     const bob = icy ? 0 : (Math.sin(t * (flood || windy ? 3.2 : 1.6)) > 0.4 ? -1 : 0);
     put(g, surface - 2 + bob, shipX + 2, '/|', 'b');
     put(g, surface - 1 + bob, shipX, '_/_|__', 'b');
@@ -1545,7 +1569,7 @@ function drawChart(g, row, t) {
     // storm: clouds drift downstream, rain falls into the swollen river
     const drift = Math.floor(t * 1.5);
     for (const [cx0, cy] of [[8, row], [Math.floor(chartW * 0.55), row + 1]]) {
-      const cx = ((cx0 - drift) % chartW + chartW) % chartW;
+      const cx = (cx0 + drift) % chartW;
       putSky(cy, cx + 1, '.-~~~-.', 'd');
       putSky(cy + 1, cx, '(_______)', 'd');
     }
@@ -1581,7 +1605,7 @@ function drawChart(g, row, t) {
     if (wClouds) {
       const drift = Math.floor(t * 1.5);
       for (const [cx0, cy] of [[8, row], [Math.floor(chartW * 0.55), row + 1]]) {
-        const cx = ((cx0 - drift) % chartW + chartW) % chartW;
+        const cx = (cx0 + drift) % chartW;
         putSky(cy, cx + 1, '.-~~~-.', 'd');
         putSky(cy + 1, cx, '(_______)', 'd');
       }
@@ -1612,10 +1636,11 @@ function drawChart(g, row, t) {
     const trend = trendPerHour();
     if (!icy && !wRain && trend !== null && trend >= 2 && surface > row + 4) {
       // harbinger: the level is rising fast — a lone rain cloud drifts in
-      // upstream (right), drizzling, before any flood is on the chart. suppressed
+      // upstream (left), drizzling, before any flood is on the chart. suppressed
       // on ice (no drizzle onto a frozen river) and when real weather rain is
-      // already active (no double drizzle)
-      const cx = chartW - 18 + Math.round(Math.sin(t * 0.4) * 2);
+      // already active (no double drizzle). Column 12 keeps it clear of the moon
+      // and the drought sun, which both live in the leftmost columns
+      const cx = 12 + Math.round(Math.sin(t * 0.4) * 2);
       let cloudRow = row; // like the moon: dodge marker lines if possible
       for (let r = row; r <= Math.min(row + 3, surface - 5); r++) {
         if (g.ch.slice(r, r + 2).every(line => line.slice(cx, cx + 9).every(c => c === ' '))) { cloudRow = r; break; }
@@ -1765,8 +1790,9 @@ function drawProfile(g, row) {
   const elevs = n.map(p => p.elev);
   const eMin = Math.min(...elevs), eSpan = Math.max(Math.max(...elevs) - eMin, 0.1);
   const plotW = COLS - 26;
+  const lowKmDown = downstreamIsLowKm(n);
   const pts = n.map(p => ({
-    x: 2 + Math.round((1 - (p.km - kmMin) / kmSpan) * plotW),
+    x: 2 + Math.round(flowFrac(p.km, kmMin, kmSpan, lowKmDown) * plotW),
     y: row + 1 + Math.round((1 - (p.elev - eMin) / eSpan) * (PROFILE_ROWS - 3)),
     p,
   }));
@@ -1777,6 +1803,8 @@ function drawProfile(g, row) {
       put(g, Math.round(a.y + ((b.y - a.y) * s) / steps), a.x + dir * s, '·', 'w');
     }
   }
+  // FIXME: unlike drawRiver, these labels have no overlap guard — at 44 columns two
+  // long station names on the same row fuse ("km 117.435bronn Schleuse UP 151.00")
   for (const { x, y, p } of pts) {
     const self = p.name === station;
     put(g, y, x, '◉', self ? 'b' : '');
@@ -1795,8 +1823,10 @@ function drawProfile(g, row) {
       linkCells(g, y + 2, lx, `km ${p.km}`.length, river);
     }
   }
-  put(g, row, COLS - 14, '← downstream ≋', 'd');
-  return row + PROFILE_ROWS + 1;
+  // flow marker on its own row under the block: the lowest station sits at the
+  // bottom right, so the bottom left corner is always free for it
+  put(g, row + PROFILE_ROWS + 1, 0, FLOW_MARK, 'd');
+  return row + PROFILE_ROWS + 2;
 }
 
 // ---------- river profile renderer ----------
@@ -1806,11 +1836,12 @@ const RIVER_GLYPH = { low: '▼', high: '▲', normal: '◉' };
 const RIVER_CLS = { low: 's', high: 'w2', normal: 'b' };
 
 // layout rows (see drawRiver): title, legend, then the plot block and trouble list
-const RIVER_PROF_TOP = 3;                          // caption row (m NHN / ← downstream)
+const RIVER_PROF_TOP = 3;                          // caption row (m NHN)
 const RIVER_BODY_TOP = RIVER_PROF_TOP + 3;         // first plot-body row (2 label rows above)
 const RIVER_PLOT_H = 10;                            // plot-body height
 const RIVER_TICK_ROW = RIVER_BODY_TOP + RIVER_PLOT_H + 2; // km ticks (2 label rows below)
-const RIVER_TROUBLE_TOP = RIVER_TICK_ROW + 2;      // TROUBLE header
+const RIVER_FLOW_ROW = RIVER_TICK_ROW + 1;         // ≋ downstream → marker
+const RIVER_TROUBLE_TOP = RIVER_FLOW_ROW + 2;      // TROUBLE header
 
 const fmtKm = k => Number.isInteger(k) ? String(k) : k.toFixed(1);
 const clampCol = (c, w) => Math.max(0, Math.min(COLS - w, c));
@@ -1855,15 +1886,15 @@ function drawRiver(g, stations, t) {
   put(g, 1, lx, '·', 'd'); lx += 2;
   put(g, 1, lx, RIVER_GLYPH.high, RIVER_CLS.high); put(g, 1, lx + 2, 'high', 'd');
 
-  // captions: m NHN (elevation axis) top-left, downstream marker top-right
+  // caption: m NHN (elevation axis) top-left; the flow marker sits under the plot
   put(g, RIVER_PROF_TOP, 0, 'm NHN', 'd');
-  put(g, RIVER_PROF_TOP, COLS - 14, '← downstream ≋', 'd');
 
-  // x = km, DOWNSTREAM LEFT (highest km at the left, matching drawProfile); y = elev
+  // x = km, DOWNSTREAM RIGHT (matching drawProfile and the station scene); y = elev
   const xBase = 1, plotW = COLS - 2;
   const elevs = usable.map(s => s.elev);
   const eMin = Math.min(...elevs), eSpan = Math.max(Math.max(...elevs) - eMin, 0.1);
-  const xOf = km => xBase + Math.round((1 - (km - kmMin) / kmSpan) * (plotW - 1));
+  const lowKmDown = downstreamIsLowKm(usable);
+  const xOf = km => xBase + Math.round(flowFrac(km, kmMin, kmSpan, lowKmDown) * (plotW - 1));
   const pts = usable.map(s => ({
     s, x: xOf(s.km),
     y: RIVER_BODY_TOP + Math.round((1 - (s.elev - eMin) / eSpan) * (RIVER_PLOT_H - 1)),
@@ -1941,8 +1972,8 @@ function drawRiver(g, stations, t) {
     if (d.st) linkCells(g, d.row, d.col, d.text.length, d.st);
   }
 
-  // km ticks along the bottom — ascending km maps right-to-left, so sort by column
-  // before placing and skip any that would overprint the previous one
+  // km ticks along the bottom — ascending km maps either way depending on the
+  // river, so sort by column before placing and skip any that would overprint
   let lastTickEnd = -1;
   const tickCols = kmTicks(kmMin, kmMax)
     .map(k => { const lbl = String(Math.round(k)); return { lbl, tx: clampCol(xOf(k) - (lbl.length >> 1), lbl.length) }; })
@@ -1952,6 +1983,7 @@ function drawRiver(g, stations, t) {
     put(g, RIVER_TICK_ROW, tx, lbl, 'd');
     lastTickEnd = tx + lbl.length;
   }
+  put(g, RIVER_FLOW_ROW, 0, FLOW_MARK, 'd');
 
   // trouble list: every non-normal station, sorted by km, capped at 8 + overflow
   put(g, RIVER_TROUBLE_TOP, 0, 'TROUBLE', 'd');
@@ -2760,11 +2792,12 @@ function render(t) {
     screen.textContent = `connecting to pegelonline.wsv.de ${'·'.repeat(1 + Math.floor(t * 2) % 3)}`;
     return;
   }
-  const g = makeGrid(HEADER_ROWS + CHART_ROWS + 1 + SPLASH_ROWS + SPARK_ROWS + 2 + PROFILE_ROWS + 1);
+  const g = makeGrid(HEADER_ROWS + CHART_ROWS + 1 + SPLASH_ROWS + SPARK_ROWS + 2 +
+    PROFILE_GAP + PROFILE_ROWS + 1 + PROFILE_FOOT);
   let row = drawHeader(g, 0, t);
   row = drawChart(g, row, t);
   row = drawSparkline(g, row, t);
-  drawProfile(g, row);
+  drawProfile(g, row + PROFILE_GAP);
   screen.innerHTML = gridToHtml(g);
   if (!fitted) { fitted = true; fitFont(); } // refit once the real grid exists
 }
