@@ -118,7 +118,37 @@ async function fetchRange(uuid, startYear, endDate) {
   const zipRes = await fetch(new URL(loc, PREPARE), { signal: AbortSignal.timeout(300000) });
   if (!zipRes.ok) throw new Error('download failed HTTP ' + zipRes.status);
   const bytes = new Uint8Array(await zipRes.arrayBuffer());
-  return JSON.parse(unzipJsonEntry(bytes).toString());
+  const text = unzipJsonEntry(bytes).toString();
+  try {
+    return JSON.parse(text);
+  } catch {
+    // some stations' generated JSON carries a bare minus for missing values
+    // ("value":-,) — patch those to null and try once more
+    return JSON.parse(text.replace(/("value"\s*:\s*)-(?=\s*[,}\]])/g, '$1null'));
+  }
+}
+
+// full range in one request where possible; coastal gauges measure every
+// minute, whose 26-year JSON exceeds node's max string length — those fall
+// back to 3-year chunks (year files never straddle a chunk boundary)
+async function fetchCondensed(uuid, startYear, endDate) {
+  try {
+    const measurements = await fetchRange(uuid, startYear, endDate);
+    return { years: condense(measurements), pts: measurements.length };
+  } catch (e) {
+    if (!/string longer|Invalid string length/i.test(e.message)) throw e;
+    const endYear = Number(endDate.slice(0, 4));
+    const years = new Map();
+    let pts = 0;
+    for (let y = startYear; y <= endYear; y += 3) {
+      const to = Math.min(y + 2, endYear);
+      await sleep(THROTTLE_MS);
+      const chunk = await fetchRange(uuid, y, to === endYear ? endDate : `${to}-12-31`);
+      pts += chunk.length;
+      for (const [yy, data] of condense(chunk)) years.set(yy, data);
+    }
+    return { years, pts };
+  }
 }
 
 function writeStation(dir, name, years, fetchedThrough) {
@@ -170,9 +200,9 @@ async function main() {
         fetchedThrough = TO;
       }
       const endDate = CURRENT_ONLY ? now.toISOString().slice(0, 10) : `${TO}-12-31`;
-      const measurements = await fetchRange(s.uuid, startYear, endDate);
-      const files = writeStation(dir, s.shortname, condense(measurements), fetchedThrough);
-      console.log(`${tag} · ${measurements.length} pts -> ${files} file(s)`);
+      const { years, pts } = await fetchCondensed(s.uuid, startYear, endDate);
+      const files = writeStation(dir, s.shortname, years, fetchedThrough);
+      console.log(`${tag} · ${pts} pts -> ${files} file(s)`);
       ok++;
     } catch (e) {
       console.log(`${tag} · FAILED: ${e.message}`);
