@@ -216,12 +216,16 @@ async function main() {
     }
     await sleep(THROTTLE_MS);
   }
-  async function worker() {
+  async function worker(w) {
+    // staggered starts + a little jitter per request keep the prepare calls
+    // from bursting at the server simultaneously — bursts are what it rejects
+    await sleep(w * 2000);
     while (cursor < stations.length) {
       const i = cursor++;
       await processStation(stations[i], i);
+      await sleep(Math.random() * 500);
     }
   }
-  await Promise.all(Array.from({ length: PARALLEL }, worker));
+  await Promise.all(Array.from({ length: PARALLEL }, (_, w) => worker(w)));
   console.log(`done · ${ok} fetched · ${skipped} already complete · ${failed} failed${failed ? ' (re-run to retry)' : ''}`);
 }
