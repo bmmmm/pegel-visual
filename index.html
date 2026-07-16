@@ -104,7 +104,7 @@
   }
   #local-stats { cursor: pointer; user-select: none; }
   #local-stats:hover { color: var(--ink); }
-  #localbar button {
+  #localbar button, #localbar a {
     font: inherit;
     color: var(--ink);
     background: none;
@@ -275,7 +275,9 @@
     · <button id="export-btn" type="button">export</button>
     · <button id="import-btn" type="button">import</button>
     · <button id="clear-btn" type="button">clear</button>
-    <input id="import-file" type="file" accept="application/json,.json" hidden>
+    · <a id="wsv-archive-link" href="https://www.pegelonline.wsv.de" target="_blank" rel="noopener"
+      title="download the multi-year raw archive (ZIP, data since 2000) at PEGELONLINE, then feed it to import">full archive (2000→)</a>
+    <input id="import-file" type="file" accept="application/json,application/zip,.json,.zip" hidden>
     <div id="local-detail" hidden></div>
   </div>
 </main>
@@ -306,7 +308,11 @@
       the API can serve. Pick a window with the history chips (<b>24H … ALL</b>) —
       the choice lands in the URL, so shared links reproduce it. <b>export</b> /
       <b>import</b> / <b>clear</b> manage the archive; nothing ever leaves your
-      browser.</dd>
+      browser. Want years instead of days? WSV offers each station's raw archive
+      back to <b>2000</b> as a ZIP — the <b>full archive</b> link opens the right
+      page, and <b>import</b> swallows that ZIP directly (unpacked in your
+      browser). Multi-year windows (<b>1Y / 5Y</b>) then work, marked as
+      unvalidated raw data: outliers and gaps are part of the deal.</dd>
     <dt>elevation profile</dt>
     <dd>Below the sparkline: the water surface elevation (m NHN) between the
       neighboring gauges on the same river, ordered by river km. The neighbors are
@@ -364,6 +370,7 @@ let station = (new URLSearchParams(location.search).get('station') || 'BONN').to
 // longitudinal profile. ?river= wins over ?station= on load.
 let mode = new URLSearchParams(location.search).get('river') ? 'river' : 'station';
 const stationLink = document.getElementById('station-link');
+const wsvArchiveLink = document.getElementById('wsv-archive-link');
 
 function applyStationChrome() {
   if (mode === 'river') return; // river chrome owns the title/link while in river mode
@@ -507,6 +514,8 @@ async function loadData() {
     if (station !== forStation) return; // switched away while fetching — discard
     state.info = info;
     state.gauge = gauge;
+    // deep-link the WSV page that offers this station's multi-year archive ZIP
+    if (info.number) wsvArchiveLink.href = 'https://www.pegelonline.wsv.de/gast/stammdaten?pegelnr=' + encodeURIComponent(info.number);
     state.wt = wt && wt.currentMeasurement && wt.currentMeasurement.value != null ? wt.currentMeasurement.value : null;
     state.q = q && q.currentMeasurement && q.currentMeasurement.value != null ? q.currentMeasurement.value : null;
     state.error = null;
@@ -648,14 +657,21 @@ function mergeIntoArchive(name, measurements) {
     if (Number.isFinite(t) && m.value != null && !seen.has(t)) { pts.push([t, m.value]); seen.add(t); }
   }
   pts.sort((a, b) => a[0] - b[0]);
-  // thin points older than 16 days to one per hour to stay within quota
+  // thin to stay within quota: full 15-min cadence for 16 days, hourly up to a
+  // year, 6-hourly beyond that (26 years of a WSV archive import ≈ 38k points)
   const cutoff = Date.now() - 16 * 864e5;
+  const yearCutoff = Date.now() - 365 * 864e5;
   const thinned = [];
-  let lastHour = -1;
+  let lastHour = -1, lastSix = -1;
   for (const p of pts) {
     if (p[0] >= cutoff) { thinned.push(p); continue; }
-    const hour = Math.floor(p[0] / 36e5);
-    if (hour !== lastHour) { thinned.push(p); lastHour = hour; }
+    if (p[0] >= yearCutoff) {
+      const hour = Math.floor(p[0] / 36e5);
+      if (hour !== lastHour) { thinned.push(p); lastHour = hour; }
+      continue;
+    }
+    const six = Math.floor(p[0] / (6 * 36e5));
+    if (six !== lastSix) { thinned.push(p); lastSix = six; }
   }
   try {
     localStorage.setItem(ARCHIVE_PREFIX + name, JSON.stringify(thinned));
@@ -788,6 +804,75 @@ function totalArchivePts() {
   return archiveKeys().reduce((n, k) => n + loadArchive(k.slice(ARCHIVE_PREFIX.length)).length, 0);
 }
 
+// ---------- WSV historical archive import (ZIP, data back to 2000) ----------
+// PEGELONLINE serves multi-year raw data (since 2000-01-01) only as a ZIP from
+// its website — its CORS headers are doubled on that path, which browsers
+// reject, so the page cannot fetch it itself. Instead the user downloads the
+// ZIP (link in the archive bar) and drops it into import; the ZIP is unpacked
+// right here with DecompressionStream, no dependencies.
+
+// minimal ZIP reader: entries come from the central directory (local headers
+// alone are not enough — the server streams with data descriptors, so sizes
+// only exist in the central directory)
+async function zipEntries(bytes) {
+  const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  // find the end-of-central-directory record, scanning back over the comment
+  let eocd = -1;
+  for (let i = bytes.length - 22; i >= Math.max(0, bytes.length - 22 - 65535); i--) {
+    if (dv.getUint32(i, true) === 0x06054b50) { eocd = i; break; }
+  }
+  if (eocd < 0) throw new Error('no zip directory');
+  const count = dv.getUint16(eocd + 10, true);
+  let off = dv.getUint32(eocd + 16, true);
+  const entries = [];
+  const names = new TextDecoder();
+  for (let n = 0; n < count; n++) {
+    if (dv.getUint32(off, true) !== 0x02014b50) break;
+    const method = dv.getUint16(off + 10, true);
+    const compSize = dv.getUint32(off + 20, true);
+    const nameLen = dv.getUint16(off + 28, true);
+    const extraLen = dv.getUint16(off + 30, true);
+    const commentLen = dv.getUint16(off + 32, true);
+    const localOff = dv.getUint32(off + 42, true);
+    entries.push({ name: names.decode(bytes.subarray(off + 46, off + 46 + nameLen)), method, compSize, localOff });
+    off += 46 + nameLen + extraLen + commentLen;
+  }
+  return entries;
+}
+
+async function zipExtract(bytes, entry) {
+  const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  // the local header repeats name/extra with its own lengths — skip via those
+  const nameLen = dv.getUint16(entry.localOff + 26, true);
+  const extraLen = dv.getUint16(entry.localOff + 28, true);
+  const start = entry.localOff + 30 + nameLen + extraLen;
+  const data = bytes.subarray(start, start + entry.compSize);
+  if (entry.method === 0) return data; // stored
+  if (entry.method !== 8) throw new Error('unsupported zip compression ' + entry.method);
+  const ds = new DecompressionStream('deflate-raw');
+  const writer = ds.writable.getWriter();
+  writer.write(data);
+  writer.close();
+  return new Uint8Array(await new Response(ds.readable).arrayBuffer());
+}
+
+// imports a PEGELONLINE historical ZIP (or its inner JSON measurement array).
+// The station comes from the archive's file name (pegelonline-<station>-W-…),
+// resolved through the usual umlaut folding; unknown names fall back to the
+// station currently on screen. Returns the station imported into, or null.
+async function importWsvArchive(bytes) {
+  const entries = await zipEntries(bytes);
+  const entry = entries.find(e => e.name.endsWith('.json'));
+  if (!entry) return null;
+  const measurements = JSON.parse(new TextDecoder().decode(await zipExtract(bytes, entry)));
+  if (!Array.isArray(measurements) || !measurements.length) return null;
+  const m = entry.name.match(/^pegelonline-(.+)-[A-Z]+-\d{8}-\d{8}\.json$/);
+  const guess = m ? resolveStation(m[1].replace(/-/g, ' ')) : '';
+  const target = knownStations.has(guess) ? guess : station;
+  mergeIntoArchive(target, measurements);
+  return target;
+}
+
 function importArchiveFile(data) {
   if (!data || typeof data !== 'object' || Array.isArray(data)) return false;
   let matched = false;
@@ -825,10 +910,25 @@ importFile.addEventListener('change', async () => {
   if (!file) return;
   try {
     const before = totalArchivePts();
-    const data = JSON.parse(await file.text());
-    if (!importArchiveFile(data)) { showImportResult('bad file'); return; }
+    const buf = new Uint8Array(await file.arrayBuffer());
+    let target = null;
+    if (buf[0] === 0x50 && buf[1] === 0x4b) {
+      // a WSV historical archive ZIP (PK magic), unpacked right here
+      target = await importWsvArchive(buf);
+      if (!target) { showImportResult('bad file'); return; }
+    } else {
+      const data = JSON.parse(new TextDecoder().decode(buf));
+      if (Array.isArray(data) && data.length && data[0] && data[0].timestamp !== undefined) {
+        // an unzipped WSV measurement array — goes to the station on screen
+        mergeIntoArchive(station, data);
+        target = station;
+      } else if (!importArchiveFile(data)) {
+        showImportResult('bad file');
+        return;
+      }
+    }
     const added = totalArchivePts() - before;
-    showImportResult(`+${added} pts`);
+    showImportResult(target && target !== station ? `+${added} → ${target}` : `+${added} pts`);
     state.archive = loadArchive(station);
     updateLocalBar();
     dirty = true;
@@ -1506,8 +1606,13 @@ const HISTORY_PRESETS = [
   { k: '7d', d: 7, label: '7D' },
   { k: '15d', d: 15, label: '15D' },
   { k: '30d', d: 30, label: '30D' },
+  { k: '1y', d: 365, label: '1Y' },
+  { k: '5y', d: 1825, label: '5Y' },
   { k: 'all', d: null, label: 'ALL' },
 ];
+// the live API only reaches ~30 days back; longer windows need the imported
+// WSV archive (see the "full archive" link) — used to gate backfill + warnings
+const API_MAX_DAYS = 30;
 // an explicit ?history= in a shared link wins over the local preference
 let historyKey = (new URLSearchParams(location.search).get('history') || '').toLowerCase()
   || localStorage.getItem(HISTORY_KEY) || 'all';
@@ -1535,7 +1640,18 @@ function drawSparkline(g, row, t) {
   const min = Math.min(...vals), max = Math.max(...vals), span = Math.max(max - min, 1);
   const label = `HISTORY · ${wd ? historyPreset().label : spanDays + 'D'}`;
   put(g, row, 0, label, 'd');
-  put(g, row, label.length + 3, `min ${min}  max ${max}`, 'd');
+  const minmax = `min ${min}  max ${max}`;
+  put(g, row, label.length + 3, minmax, 'd');
+  // multi-year windows show WSV archive data: warn that it is unvalidated raw
+  // data, or — when the local archive is still short of the window — say so
+  // and point at the import path instead of silently showing a shorter span
+  const noteCol = label.length + 3 + minmax.length + 2;
+  const coveredDays = (Date.now() - arch[0][0]) / 864e5;
+  if (wd && coveredDays < wd * 0.8) {
+    put(g, row, noteCol, isCompact() ? `· ${Math.round(coveredDays)}D only` : `· covers ${Math.round(coveredDays)}D — import the WSV archive ↓`, 's');
+  } else if ((wd || spanDays) > API_MAX_DAYS) { // ALL warns too once the archive spans years
+    put(g, row, noteCol, isCompact() ? '· RAW' : '· unvalidated raw data (WSV)', 's');
+  }
 
   // water sloshes past the new level, wobbles, then settles — a damped spring per
   // column instead of a flat snap, so history-range changes read as the level moving
@@ -2235,6 +2351,7 @@ function renderHistoryBar() {
 // up to 30D without waiting for the local archive to accumulate that much itself
 async function ensureHistoryCoverage(days) {
   if (!days) return; // ALL has no fixed window — it just shows whatever's archived
+  if (days > API_MAX_DAYS) return; // beyond the API: only the imported WSV archive can help
   const forStation = station;
   const cutoff = Date.now() - days * 864e5;
   if (state.archive.length && state.archive[0][0] <= cutoff) return; // already covered
