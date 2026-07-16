@@ -24,6 +24,9 @@ test('parseCommand: flags, values, booleans', () => {
 
   assert.equal(parse('--adsb').adsb, '', 'flag given without value means "given empty" (clears)');
   assert.equal(parse('--station X').adsb, undefined, 'absent flag stays undefined');
+  assert.equal(parse('--ais 10.0.0.5:8080/aiscatcher').ais, '10.0.0.5:8080/aiscatcher');
+  assert.equal(parse('--ais').ais, '', '--ais without value clears, like --adsb');
+  assert.equal(parse('--station X').ais, undefined);
 
   const bools = parse('--export --clear --info --help');
   assert.equal(bools.export, true);
@@ -38,10 +41,21 @@ test('parseCommand: flags, values, booleans', () => {
 test('helpText: the man page lists every flag', () => {
   const app = loadApp();
   const man = app.run('helpText(null)');
-  for (const flag of ['--station', '--river', '--adsb', '--history', '--export', '--clear', '--info', '--help']) {
+  for (const flag of ['--station', '--river', '--adsb', '--ais', '--history', '--export', '--clear', '--info', '--help']) {
     assert.ok(man.includes(flag), `man page mentions ${flag}`);
   }
   assert.ok(app.run('helpText("--nope")').startsWith('unknown flag: --nope'));
+});
+
+test('adsbEndpoint / aisEndpoint: URL normalization', () => {
+  const app = loadApp();
+  assert.equal(app.run(`adsbEndpoint('10.0.0.5:8080')`), 'http://10.0.0.5:8080/data/aircraft.json');
+  assert.equal(app.run(`adsbEndpoint('https://r.example/data/aircraft.json')`), 'https://r.example/data/aircraft.json');
+  assert.equal(app.run(`adsbEndpoint('')`), '');
+  assert.equal(app.run(`aisEndpoint('10.0.0.5:8080/aiscatcher')`), 'http://10.0.0.5:8080/aiscatcher/ships.json');
+  assert.equal(app.run(`aisEndpoint('http://10.0.0.5:8080/aiscatcher/')`), 'http://10.0.0.5:8080/aiscatcher/ships.json');
+  assert.equal(app.run(`aisEndpoint('https://r.example/ships.json')`), 'https://r.example/ships.json');
+  assert.equal(app.run(`aisEndpoint('')`), '');
 });
 
 // ---------- archive: merge, thin, dedupe, import ----------

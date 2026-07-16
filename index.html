@@ -96,7 +96,7 @@
     outline: none;
   }
   #station-input { text-transform: uppercase; }
-  #adsb-input { width: 26ch; text-transform: none; }
+  #adsb-input, #ais-input { width: 26ch; text-transform: none; }
   #localbar {
     margin-top: 0.8em;
     font-size: 0.75em;
@@ -262,7 +262,9 @@
     <input id="station-input" name="station" list="stations" spellcheck="false" aria-label="station name">
     <datalist id="stations"></datalist> --adsb
     <input id="adsb-input" name="adsb" spellcheck="false" placeholder="receiver url (optional)"
-      aria-label="ADS-B receiver URL"> --refresh 300s
+      aria-label="ADS-B receiver URL"> --ais
+    <input id="ais-input" name="ais" spellcheck="false" placeholder="receiver url (optional)"
+      aria-label="AIS receiver URL"> --refresh 300s
     <button type="submit" hidden>go</button>
   </form>
   <nav id="history-bar" aria-label="history range"></nav>
@@ -320,11 +322,13 @@
       <b>--export</b>, <b>--clear</b>, <b>--info</b>, <b>--help</b>. Press <b>/</b>
       to focus it from anywhere; <b>Esc</b> dismisses help.</dd>
     <dt>extras</dt>
-    <dd>Aircraft overhead from your own ADS-B receiver (<b>--adsb URL</b> — the URL
-      stays in your browser). The tab title and favicon carry the live level, dark
-      mode follows your system, narrow screens switch to a 44-column compact grid,
-      and the page installs as an app from the browser menu. Should a station ever
-      sink into an error, a sea monster handles it.</dd>
+    <dd>Aircraft overhead from your own ADS-B receiver (<b>--adsb URL</b>) and real
+      river traffic on the waterline from your own AIS receiver (<b>--ais URL</b>,
+      AIS-catcher) — both URLs stay in your browser. The tab title and favicon
+      carry the live level, dark mode follows your system, narrow screens switch
+      to a 44-column compact grid, and the page installs as an app from the
+      browser menu. Should a station ever sink into an error, a sea monster
+      handles it.</dd>
   </dl>
 </dialog>
 <footer>
@@ -459,6 +463,8 @@ const state = {
   weather: null,    // current weather at the station (open-meteo), or null if unavailable
   aircraft: [],     // live ADS-B positions from the user's own receiver
   adsbOk: null,     // null = off, true/false = last fetch result
+  ships: [],        // live AIS positions from the user's own receiver
+  aisOk: null,      // null = off, true/false = last fetch result
   archive: [],      // locally accumulated [timestampMs, cm] for this station
   error: null,
   help: null,       // set to a man-page string while the --help screen is shown
@@ -875,6 +881,51 @@ async function loadAircraft() {
   dirty = true;
 }
 
+// ---------- AIS (optional, own receiver via --ais) ----------
+
+const AIS_REFRESH_MS = 5000;
+const AIS_MAX_AGE_S = 600; // ships silent for 10+ min are harbor memories, not traffic
+let aisRaw = new URLSearchParams(location.search).get('ais')
+  || localStorage.getItem('pegel.ais') || '';
+
+// AIS-catcher's built-in web server serves the ship list at <root>/ships.json;
+// adsb.im images proxy it under /aiscatcher, so that base URL works as-is
+function aisEndpoint(raw) {
+  if (!raw) return '';
+  let u = /^https?:\/\//.test(raw) ? raw : 'http://' + raw;
+  if (!u.endsWith('.json')) u = u.replace(/\/+$/, '') + '/ships.json';
+  return u;
+}
+
+async function loadShips() {
+  const url = aisEndpoint(aisRaw);
+  if (!url) { state.ships = []; state.aisOk = null; return; }
+  try {
+    const d = await getJson(url);
+    // lat/lon are null until a position report came in; last_signal is seconds ago
+    state.ships = (d.ships || []).filter(s =>
+      s.lat != null && s.lon != null && (s.last_signal == null || s.last_signal <= AIS_MAX_AGE_S));
+    state.aisOk = true;
+  } catch {
+    state.ships = [];
+    state.aisOk = false;
+  }
+  dirty = true;
+}
+
+function setAis(raw) {
+  const next = (raw ?? '').trim();
+  aisInput.value = next;
+  if (next === aisRaw) return;
+  aisRaw = next;
+  if (aisRaw) localStorage.setItem('pegel.ais', aisRaw);
+  else localStorage.removeItem('pegel.ais');
+  state.ships = [];
+  state.aisOk = null;
+  loadShips();
+  dirty = true;
+}
+
 // ---------- grid helpers ----------
 
 function makeGrid(rows) {
@@ -1117,6 +1168,10 @@ function drawHeader(g, row, t) {
   if (state.wt != null) wtQ.push(`WT ${state.wt.toFixed(1)}°C`);
   if (state.q != null) wtQ.push(`Q ${Math.round(state.q)} m³/s`);
   if (wtQ.length) put(g, row + 8, 2, wtQ.join(' · ').slice(0, 58), 'd');
+  if (state.aisOk !== null) {
+    const aisStatus = state.aisOk ? `ais: ${state.ships.length} ship${state.ships.length === 1 ? '' : 's'}` : 'ais: receiver offline';
+    put(g, row + 9, 2, aisStatus, 'd');
+  }
   if (compact) return row + HEADER_ROWS; // no room for the km sign; km is in the title
   if (info.km != null) {
     const w = 4 * String(Math.round(info.km)).length + 1;
@@ -1240,13 +1295,18 @@ function drawChart(g, row, t) {
   const wLabel = `◄ W ${value}${icy ? ' ICE' : ''}`;
   put(g, surface, chartW + 1, wLabel, flood ? 's' : 'b');
 
-  // aircraft in the sky, projected onto the river axis between neighbor stations
+  // the river axis between the outermost neighbor stations: aircraft in the sky
+  // and AIS ships on the waterline both project onto it
   const n = state.neighbors;
-  if (state.adsbOk !== null && n.length >= 2) {
+  let axis = null;
+  if (n.length >= 2) {
     const L = n[n.length - 1], R = n[0]; // left = downstream (max km), right = upstream
     const kx = Math.cos((L.lat * Math.PI) / 180);
     const ax = (R.lon - L.lon) * kx, ay = R.lat - L.lat;
-    const len2 = ax * ax + ay * ay;
+    axis = { L, kx, ax, ay, len2: ax * ax + ay * ay };
+  }
+  if (state.adsbOk !== null && axis) {
+    const { L, kx, ax, ay, len2 } = axis;
     for (const a of state.aircraft) {
       const px = (a.lon - L.lon) * kx, py = a.lat - L.lat;
       const frac = (px * ax + py * ay) / len2;
@@ -1272,6 +1332,38 @@ function drawChart(g, row, t) {
     }
   }
 
+  // real river traffic from the user's own AIS receiver, drawn on the waterline.
+  // The lateral cutoff is much tighter than the aircraft's 50 km: ships are ON
+  // the river, ~2 km keeps moored harbor traffic on other arms out of the scene
+  let shipsShown = 0;
+  if (state.aisOk !== null && axis) {
+    const { L, kx, ax, ay, len2 } = axis;
+    for (const s of state.ships) {
+      const px = (s.lon - L.lon) * kx, py = s.lat - L.lat;
+      const frac = (px * ax + py * ay) / len2;
+      if (frac < 0 || frac > 1) continue;
+      const lateralKm = (Math.abs(px * ay - py * ax) / Math.sqrt(len2)) * 111;
+      if (lateralKm > 2) continue;
+      const course = s.cog ?? s.heading ?? 0; // cog missing on some class-B reports
+      const tr = (course * Math.PI) / 180;
+      const movingRight = Math.sin(tr) * ax + Math.cos(tr) * ay > 0;
+      const x = Math.round(frac * (chartW - 1));
+      const hull = movingRight ? '\\__/▸' : '◂\\__/';
+      const hx = Math.max(0, Math.min(chartW - hull.length, x - 2));
+      put(g, surface, hx, hull, 'b');
+      const label = [(s.shipname || '').trim() || String(s.mmsi || ''),
+        s.speed != null ? Math.round(s.speed) + 'kn' : ''].filter(Boolean).join(' ');
+      const lx = Math.max(0, Math.min(chartW - label.length, x - (label.length >> 1)));
+      // the label goes just above the hull, only into free sky (plus a breathing
+      // cell each side) — overlapping ships drop their label instead of colliding
+      if (label && surface - 1 > row &&
+          g.ch[surface - 1].slice(Math.max(0, lx - 1), Math.min(chartW, lx + label.length + 1)).every(c => c === ' ')) {
+        put(g, surface - 1, lx, label, 'd');
+      }
+      shipsShown++;
+    }
+  }
+
   // drought: level below mean-low-water — sun blazes, heat shimmers, the bank
   // dries out and cracks, and the little ship sits stranded and sad. Ice and drought
   // can't meaningfully co-occur — a frozen river wins and skips the drought scene.
@@ -1293,10 +1385,11 @@ function drawChart(g, row, t) {
     const bx = Math.floor(chartW / 2) - 1;
     put(g, bedTop - 1, bx + 1, ':(', 'b');
     put(g, bedTop, bx, '\\__/', 'b');
-  } else if (surface > row + 2) {
+  } else if (surface > row + 2 && !shipsShown) {
     // little ship, bobbing downstream (Bonn view: downstream is to the left);
     // in a flood — or windy weather — it pitches harder on the swell; frozen in
-    // place mid-river when icy
+    // place mid-river when icy. While real AIS ships are in view the decorative
+    // boat yields the river to them and returns once they've passed
     const shipX = icy ? Math.floor(chartW * 0.6) : chartW - 10 - Math.floor((t * 1.3) % (chartW - 14));
     const bob = icy ? 0 : (Math.sin(t * (flood || windy ? 3.2 : 1.6)) > 0.4 ? -1 : 0);
     put(g, surface - 2 + bob, shipX + 2, '/|', 'b');
@@ -1717,8 +1810,10 @@ function drawRiver(g, stations, t) {
 
 const stationInput = document.getElementById('station-input');
 const adsbInput = document.getElementById('adsb-input');
+const aisInput = document.getElementById('ais-input');
 stationInput.value = station;
 adsbInput.value = adsbRaw;
+aisInput.value = aisRaw;
 
 let refreshTimer = null;
 
@@ -1741,6 +1836,7 @@ function switchStation(name, adsb, push = true) {
     const q = new URLSearchParams();
     q.set('station', station);
     if (adsbRaw) q.set('adsb', adsbRaw);
+    if (aisRaw) q.set('ais', aisRaw);
     if (historyKey !== 'all') q.set('history', historyKey);
     history.pushState(null, '', '?' + q.toString());
   }
@@ -1826,19 +1922,20 @@ function dismissHelp() {
 // tell "not given" (undefined) apart from "given empty" (''), e.g. --adsb clearing.
 function parseCommand(raw) {
   const tokens = (raw || '').trim().split(/\s+/).filter(Boolean);
-  const cmd = { station: undefined, adsb: undefined, history: undefined, river: undefined, help: false, export: false, clear: false, info: false, unknownFlag: null };
+  const cmd = { station: undefined, adsb: undefined, ais: undefined, history: undefined, river: undefined, help: false, export: false, clear: false, info: false, unknownFlag: null };
   let i = 0;
   while (i < tokens.length) {
     const tok = tokens[i];
     if (!tok.startsWith('--')) { i++; continue; } // stray non-flag token: ignore
     const flag = tok.slice(2).toLowerCase();
     i++;
-    const takesValue = flag === 'station' || flag === 'adsb' || flag === 'history' || flag === 'river';
+    const takesValue = flag === 'station' || flag === 'adsb' || flag === 'ais' || flag === 'history' || flag === 'river';
     const words = [];
     if (takesValue) while (i < tokens.length && !tokens[i].startsWith('--')) { words.push(tokens[i]); i++; }
     const value = words.join(' ');
     if (flag === 'station') cmd.station = value;
     else if (flag === 'adsb') cmd.adsb = value;
+    else if (flag === 'ais') cmd.ais = value;
     else if (flag === 'history') cmd.history = value.toLowerCase();
     else if (flag === 'river') cmd.river = value;
     else if (flag === 'help') cmd.help = true;
@@ -1860,7 +1957,7 @@ function helpText(unknownFlag) {
     '    pegel - live ASCII water level terminal for German rivers',
     '',
     'SYNOPSIS',
-    '    > pegel [STATION] [--station NAME] [--river NAME] [--adsb URL]',
+    '    > pegel [STATION] [--station NAME] [--river NAME] [--adsb URL] [--ais URL]',
     '            [--history RANGE] [--export] [--clear] [--info] [--help]',
     '',
     'OPTIONS',
@@ -1868,6 +1965,7 @@ function helpText(unknownFlag) {
     '    --station NAME    switch to station NAME (umlaut spellings accepted)',
     '    --river NAME      whole-river profile of NAME, e.g. RHEIN (any case, multi-word)',
     '    --adsb URL        set your local ADS-B receiver URL; no value clears it',
+    '    --ais URL         set your local AIS receiver URL (AIS-catcher); no value clears it',
     '    --history RANGE   set the sparkline window: 24h 3d 7d 15d 30d all',
     '    --export          download the whole local archive as JSON',
     '    --clear           delete the local archive (no confirmation - you typed it)',
@@ -1899,6 +1997,7 @@ function runCommand(raw) {
     stationInput.value = station;
     return;
   }
+  if (cmd.ais !== undefined) setAis(cmd.ais);
   if (cmd.river !== undefined) switchRiver(cmd.river);
   else if (cmd.station !== undefined || cmd.adsb !== undefined) switchStation(cmd.station, cmd.adsb);
   if (cmd.history !== undefined && HISTORY_PRESETS.some(p => p.k === cmd.history)) setHistory(cmd.history);
@@ -1916,6 +2015,7 @@ function runCommand(raw) {
 function applyPrompt() {
   const v = stationInput.value;
   if (v.includes('--')) return runCommand(v);
+  setAis(aisInput.value); // the ais field applies on every submit, like the adsb field
   // a plain name that is a known river (and not a station) opens the river profile
   if (knownStations.size && !knownStations.has(resolveStation(v))) {
     const water = resolveWater(v);
@@ -1929,7 +2029,7 @@ document.getElementById('prompt').addEventListener('submit', e => {
   applyPrompt();
 });
 // apply on Enter directly — bypasses the datalist swallowing the first Enter keystroke
-for (const el of [stationInput, adsbInput]) {
+for (const el of [stationInput, adsbInput, aisInput]) {
   el.addEventListener('keydown', e => {
     if (e.key === 'Enter') {
       e.preventDefault();
@@ -2384,6 +2484,8 @@ if (mode === 'river') {
 setInterval(loadWeather, WEATHER_REFRESH_MS);
 loadAircraft();
 setInterval(loadAircraft, ADSB_REFRESH_MS);
+loadShips();
+setInterval(loadShips, AIS_REFRESH_MS);
 // rAF instead of setInterval: the browser pauses it in hidden tabs for free.
 // Under prefers-reduced-motion the scene is static (t = 0) and only redraws
 // when data actually changed, instead of 8x per second.
