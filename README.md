@@ -60,6 +60,7 @@ flag command (flags are matched case-insensitively) to do more in one go:
 
 - `--station NAME` — switch to station NAME (same as typing a bare name)
 - `--adsb URL` — set your ADS-B receiver URL; `--adsb` with no value clears it
+- `--ais URL` — set your AIS receiver URL; `--ais` with no value clears it
 - `--history RANGE` — set the sparkline window (`24h`, `3d`, `7d`, `15d`, `30d`, `all`);
   the choice also lands in the URL, so shared links reproduce it
 - `--export` — download the whole local archive as JSON
@@ -126,6 +127,18 @@ drawn in the sky at their barometric altitude, with callsign and flight level.
 The URL is stored in your browser's localStorage only — it never leaves your
 machine. Note: the public HTTPS page cannot fetch a plain-http LAN receiver
 (mixed content); serve the page locally or put the receiver behind HTTPS.
+
+## Ships on the river (optional, bring your own receiver)
+
+If you run an [AIS-catcher](https://github.com/jvde-github/AIS-catcher)
+receiver, put its web server URL into the `--ais` field (e.g.
+`http://10.0.0.5:8080/aiscatcher` on an adsb.im image — the ship list is
+fetched from `<url>/ships.json` every 5 s). Real river traffic within ~2 km
+of the river axis is drawn right on the waterline: a direction-aware hull
+with ship name (or MMSI) and speed in knots, and a `ais: N ships` status in
+the header. While real ships are in view, the decorative boat politely yields
+the river. The URL stays in your browser's localStorage; the same
+mixed-content caveat as for ADS-B applies.
 
 ## Run locally
 
