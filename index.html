@@ -368,7 +368,9 @@ const HEADER_ROWS = 10;
 const CHART_ROWS = 15;
 const SPARK_ROWS = 4;
 const SPLASH_ROWS = 2; // headroom above the sparkline for the overshoot splash
-const PROFILE_ROWS = 6;
+const PROFILE_PLOT_H = 4;     // marker rows in the elevation plot
+const PROFILE_LABEL_ROWS = 3; // one row per neighbor station (at most 3)
+const PROFILE_ROWS = 1 + PROFILE_PLOT_H + PROFILE_LABEL_ROWS; // caption + plot + labels
 const PROFILE_GAP = 2;  // blank rows between the sparkline block and the profile
 const PROFILE_FOOT = 1; // the ≋ downstream → marker row under the profile
 const REFRESH_MS = 5 * 60 * 1000;
@@ -1793,7 +1795,7 @@ function drawProfile(g, row) {
   const lowKmDown = downstreamIsLowKm(n);
   const pts = n.map(p => ({
     x: 2 + Math.round(flowFrac(p.km, kmMin, kmSpan, lowKmDown) * plotW),
-    y: row + 1 + Math.round((1 - (p.elev - eMin) / eSpan) * (PROFILE_ROWS - 3)),
+    y: row + 1 + Math.round((1 - (p.elev - eMin) / eSpan) * (PROFILE_PLOT_H - 1)),
     p,
   }));
   for (let i = 0; i < pts.length - 1; i++) {
@@ -1803,30 +1805,33 @@ function drawProfile(g, row) {
       put(g, Math.round(a.y + ((b.y - a.y) * s) / steps), a.x + dir * s, '·', 'w');
     }
   }
-  // FIXME: unlike drawRiver, these labels have no overlap guard — at 44 columns two
-  // long station names on the same row fuse ("km 117.435bronn Schleuse UP 151.00")
   for (const { x, y, p } of pts) {
     const self = p.name === station;
     put(g, y, x, '◉', self ? 'b' : '');
-    const label = `${p.name} ${p.elev.toFixed(2)}`;
-    const lx = Math.min(Math.max(0, x - 3), COLS - label.length);
-    put(g, y + 1, lx, label, self ? 'b' : 'd');
-    put(g, y + 2, lx, `km ${p.km}`, 'd');
-    if (!self) { // neighbors are one click away — marker, name and km line all count
-      linkCells(g, y, x, 1, p.name);
-      linkCells(g, y + 1, lx, label.length, p.name);
-      linkCells(g, y + 2, lx, `km ${p.km}`.length, p.name);
-    } else {
-      // the current station's own label leads onward: to its whole-river profile
-      const river = 'river:' + state.info.water.shortname;
-      linkCells(g, y + 1, lx, label.length, river);
-      linkCells(g, y + 2, lx, `km ${p.km}`.length, river);
-    }
+    if (!self) linkCells(g, y, x, 1, p.name); // neighbors are one click away
   }
-  // flow marker on its own row under the block: the lowest station sits at the
-  // bottom right, so the bottom left corner is always free for it
-  put(g, row + PROFILE_ROWS + 1, 0, FLOW_MARK, 'd');
-  return row + PROFILE_ROWS + 2;
+
+  // Labels get their own rows under the plot rather than floating by their marker:
+  // a name plus elevation runs to 37 columns, and a 4-row plot forces three of them
+  // to share rows, so floating labels overwrote each other on 3 profiles in 4 at 44
+  // columns (and 1 in 6 at 84). One row each makes that impossible instead of merely
+  // unlikely. Order follows the flow — top = upstream — and each row is indented to
+  // its own marker, so the link back to the plot survives.
+  const byFlow = [...pts].sort((a, b) => a.x - b.x);
+  byFlow.forEach(({ x, p }, i) => {
+    const self = p.name === station;
+    const elev = p.elev.toFixed(2), km = `km ${p.km}`;
+    const budget = COLS - elev.length - km.length - 4; // 4 = the two separators
+    const name = p.name.length > budget ? p.name.slice(0, budget - 1) + '…' : p.name;
+    const label = `${name} ${elev} · ${km}`;
+    const lx = Math.min(Math.max(0, x - 2), COLS - label.length);
+    const lrow = row + 1 + PROFILE_PLOT_H + i;
+    put(g, lrow, lx, label, self ? 'b' : 'd');
+    // the current station's own label leads onward: to its whole-river profile
+    linkCells(g, lrow, lx, label.length, self ? 'river:' + state.info.water.shortname : p.name);
+  });
+  put(g, row + PROFILE_ROWS, 0, FLOW_MARK, 'd');
+  return row + PROFILE_ROWS + PROFILE_FOOT;
 }
 
 // ---------- river profile renderer ----------
@@ -2793,7 +2798,7 @@ function render(t) {
     return;
   }
   const g = makeGrid(HEADER_ROWS + CHART_ROWS + 1 + SPLASH_ROWS + SPARK_ROWS + 2 +
-    PROFILE_GAP + PROFILE_ROWS + 1 + PROFILE_FOOT);
+    PROFILE_GAP + PROFILE_ROWS + PROFILE_FOOT);
   let row = drawHeader(g, 0, t);
   row = drawChart(g, row, t);
   row = drawSparkline(g, row, t);
