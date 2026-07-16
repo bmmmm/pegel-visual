@@ -513,22 +513,27 @@ test('archive script: buildManifest marks year ranges and none-stations', async 
   const { join } = await import('node:path');
   const out = mkdtempSync(join(tmpdir(), 'pegel-manifest-'));
   mkdirSync(join(out, 'uuid-a'));
-  writeFileSync(join(out, 'uuid-a', '2020.json'), '{}');
-  writeFileSync(join(out, 'uuid-a', '2024.json'), '{}');
-  writeFileSync(join(out, 'uuid-a', 'current.json'), '{}');
+  // from/to now derive from the closed.json bundle + current.json, not filenames;
+  // 2020 has one missing day (both null) so it shows up as a gap count
+  writeFileSync(join(out, 'uuid-a', 'closed.json'), JSON.stringify([
+    { y: 2020, min: [10, null], max: [20, null] },
+    { y: 2024, min: [15], max: [25] },
+  ]));
+  writeFileSync(join(out, 'uuid-a', 'current.json'), JSON.stringify({ y: 2099, min: [1], max: [2] }));
   const stations = [
     { uuid: 'uuid-a', shortname: 'BONN', water: { shortname: 'RHEIN' } },
     { uuid: 'uuid-b', shortname: 'Marburg', water: { shortname: 'LAHN' } },
   ];
   const m = buildManifest(stations, out);
-  assert.equal(m.stations['uuid-a'].from, 2020);
+  assert.equal(m.stations['uuid-a'].from, 2020, 'earliest bundle year');
   assert.equal(m.stations['uuid-a'].to, new Date().getUTCFullYear(), 'current.json counts as the running year');
+  assert.equal(m.stations['uuid-a'].gaps, 1, 'the one all-null day is reported as a gap');
   assert.equal(m.stations['uuid-a'].none, undefined);
   assert.deepEqual(m.stations['uuid-b'], { n: 'Marburg', w: 'LAHN', none: true });
   assert.ok(JSON.parse(readFileSync(join(out, 'manifest.json'))).stations['uuid-b'].none, 'written to disk');
 });
 
-test('loadRepoArchive: a manifest none-entry skips year fetches and flags the station', async () => {
+test('loadRepoArchive: a manifest none-entry skips archive fetches and flags the station', async () => {
   const app = loadApp({ now: NOON });
   app.run(`state.info = { uuid: 'gap-uuid' }`);
   app.run(`getJson = async url => {
@@ -542,7 +547,7 @@ test('loadRepoArchive: a manifest none-entry skips year fetches and flags the st
   delete globalThis.__unexpected;
 });
 
-test('loadRepoArchive: lazily merges year files into the local archive', async () => {
+test('loadRepoArchive: lazily merges current.json into the local archive', async () => {
   const app = loadApp({ now: NOON });
   const year = new Date(NOON).getUTCFullYear();
   const days = 365 + (((year % 4 === 0 && year % 100 !== 0) || year % 400 === 0) ? 1 : 0);
@@ -563,6 +568,39 @@ test('loadRepoArchive: lazily merges year files into the local archive', async (
   // a second call is a no-op (per-session fetch guard), even with new data
   await app.run('loadRepoArchive(400)');
   assert.equal(app.run(`loadArchive('BONN')`).length, 2);
+});
+
+test('loadRepoArchive: merges the closed bundle + current.json in exactly 3 requests', async () => {
+  const app = loadApp({ now: NOON });
+  const year = new Date(NOON).getUTCFullYear();
+  // closed.json: two past years, one archived day each; current.json: one day
+  const oneDay = (idx, lo, hi, len) => {
+    const min = Array(len).fill(null), max = Array(len).fill(null);
+    min[idx] = lo; max[idx] = hi; return { min, max };
+  };
+  const closed = [
+    { y: 2001, ...oneDay(0, 300, 340, 365) },
+    { y: 2002, ...oneDay(0, 200, 260, 365) },
+  ];
+  const curY = year, cur = { y: curY, ...oneDay(0, 110, 190, 366) };
+  app.run(`globalThis.__reqs = []`);
+  app.run(`state.info = { uuid: 'bundle-uuid' }`);
+  app.run(`getJson = async url => {
+    globalThis.__reqs.push(url);
+    if (url === 'archive/manifest.json') return { stations: { 'bundle-uuid': { n: 'BONN', w: 'RHEIN', from: 2001, to: ${curY} } } };
+    if (url === 'archive/bundle-uuid/closed.json') return ${JSON.stringify(closed)};
+    if (url === 'archive/bundle-uuid/current.json') return ${JSON.stringify(cur)};
+    throw new Error('unexpected fetch ' + url);
+  }`);
+  await app.run('loadRepoArchive()');
+  assert.equal(app.run('state.repoArchive'), 'available');
+  const reqs = app.run('globalThis.__reqs');
+  assert.deepEqual(reqs, ['archive/manifest.json', 'archive/bundle-uuid/closed.json', 'archive/bundle-uuid/current.json'],
+    'exactly 3 archive requests: manifest, closed, current');
+  const arch = app.run(`loadArchive('BONN')`);
+  assert.equal(arch.length, 6, 'three archived days across bundle + current → two points each');
+  assert.deepEqual(arch.map(p => p[1]), [300, 340, 200, 260, 110, 190]);
+  delete globalThis.__reqs;
 });
 
 // ---------- the January year-freeze (script clock pinned via PEGEL_NOW) ----------
@@ -592,16 +630,18 @@ test('archive script: January --current run freezes the completed year', () => {
     const dir = mkdtempSync(join(tmpdir(), 'pegel-jan-'));
     writeStation(dir, 'BONN', condense(measurements), plan.startYear, plan.fetchedThrough);
     const files = readdirSync(dir).sort();
-    const frozen = JSON.parse(readFileSync(join(dir, '2026.json')));
+    const closed = JSON.parse(readFileSync(join(dir, 'closed.json')));
+    const frozen = closed.find(yr => yr.y === 2026);
     const current = JSON.parse(readFileSync(join(dir, 'current.json')));
-    console.log(JSON.stringify({ plan, files, frozenY: frozen.y, frozenLastMax: frozen.max[364],
-      currentY: current.y, currentFirstMin: current.min[0], meta: JSON.parse(readFileSync(join(dir, 'meta.json'))) }));
+    console.log(JSON.stringify({ plan, files, bundleYears: closed.map(yr => yr.y),
+      frozenLastMax: frozen.max[364], currentY: current.y, currentFirstMin: current.min[0],
+      meta: JSON.parse(readFileSync(join(dir, 'meta.json'))) }));
   `);
   assert.equal(out.plan.startYear, 2026, 'January re-pulls the completed year');
   assert.equal(out.plan.fetchedThrough, 2026);
   assert.equal(out.plan.endDate, '2027-01-03');
-  assert.deepEqual(out.files, ['2026.json', 'current.json', 'meta.json']);
-  assert.equal(out.frozenY, 2026, 'completed year lands in its immutable file');
+  assert.deepEqual(out.files, ['closed.json', 'current.json', 'meta.json']);
+  assert.deepEqual(out.bundleYears, [2026], 'completed year lands in the immutable bundle');
   assert.equal(out.frozenLastMax, 260, 'Dec 31 (MEZ) is the last slot of the frozen year');
   assert.equal(out.currentY, 2027, 'current.json restarts with the new year');
   assert.equal(out.currentFirstMin, 261);
@@ -616,6 +656,100 @@ test('archive script: mid-year --current run touches only the running year', () 
   assert.equal(out.startYear, 2026);
   assert.equal(out.fetchedThrough, 2025);
   assert.equal(out.endDate, '2026-07-16');
+});
+
+test('archive script: a backfill folds every completed year into one closed.json bundle', async () => {
+  const { writeStation, condense } = await import('../scripts/fetch-wsv-archive.mjs');
+  const { mkdtempSync, readdirSync, readFileSync, existsSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const dir = mkdtempSync(join(tmpdir(), 'pegel-bundle-'));
+  // three past years, out of chronological order in the source measurements
+  const years = condense([
+    { timestamp: '2011-06-01T12:00:00+01:00', value: 111 },
+    { timestamp: '2010-06-01T12:00:00+01:00', value: 100 },
+    { timestamp: '2012-06-01T12:00:00+01:00', value: 122 },
+  ]);
+  writeStation(dir, 'BONN', years, 2010, 2012);
+  assert.deepEqual(readdirSync(dir).sort(), ['closed.json', 'meta.json'], 'no per-year files, no current.json');
+  const bundle = JSON.parse(readFileSync(join(dir, 'closed.json')));
+  assert.deepEqual(bundle.map(yr => yr.y), [2010, 2011, 2012], 'bundle sorted ascending');
+  assert.ok(!existsSync(join(dir, 'current.json')));
+});
+
+test('archive script: monthly --current upserts into current.json, closed.json untouched', async () => {
+  const { writeStation, condense } = await import('../scripts/fetch-wsv-archive.mjs');
+  const { mkdtempSync, writeFileSync, readFileSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const Y = new Date().getUTCFullYear(); // writeStation's running year (real clock)
+  const dir = mkdtempSync(join(tmpdir(), 'pegel-cur-'));
+  // an immutable closed bundle already on disk, plus a partial running year
+  const closedBefore = JSON.stringify([{ y: 2000, min: [50], max: [60] }]);
+  writeFileSync(join(dir, 'closed.json'), closedBefore);
+  const seed = { min: Array(366).fill(null), max: Array(366).fill(null) };
+  seed.min[0] = 80; seed.max[0] = 90; // Jan 1 already archived from an earlier run
+  writeFileSync(join(dir, 'current.json'), JSON.stringify({ y: Y, ...seed }));
+  // a fresh 30-day fetch condensed to one new day (day index 40 this year)
+  const fresh = new Map([[Y, { min: Array(366).fill(null), max: Array(366).fill(null) }]]);
+  fresh.get(Y).min[40] = 70; fresh.get(Y).max[40] = 130;
+  writeStation(dir, 'BONN', fresh, Y, Y - 1);
+  const cur = JSON.parse(readFileSync(join(dir, 'current.json')));
+  assert.equal(cur.y, Y);
+  assert.equal(cur.min[0], 80, 'earlier day preserved'); assert.equal(cur.max[0], 90);
+  assert.equal(cur.min[40], 70, 'new day merged in'); assert.equal(cur.max[40], 130);
+  assert.equal(readFileSync(join(dir, 'closed.json'), 'utf8'), closedBefore, 'closed.json byte-identical (not rewritten)');
+});
+
+test('archive script: the January freeze graduates a pre-accumulated current.json into the bundle', () => {
+  const out = runWithClock('2027-01-03T04:23:00Z', `
+    import { writeStation, condense } from './scripts/fetch-wsv-archive.mjs';
+    import { mkdtempSync, writeFileSync, readFileSync, readdirSync, existsSync } from 'node:fs';
+    import { tmpdir } from 'node:os';
+    import { join } from 'node:path';
+    const dir = mkdtempSync(join(tmpdir(), 'pegel-freeze-'));
+    // current.json holds 2026, accumulated month by month all year (summer day set)
+    const acc = { y: 2026, min: Array(365).fill(null), max: Array(365).fill(null) };
+    acc.min[180] = 42; acc.max[180] = 88; // a July value only this file has
+    writeFileSync(join(dir, 'current.json'), JSON.stringify(acc));
+    // the Jan-3 REST fetch spans late Dec 2026 into early Jan 2027
+    const fresh = condense([
+      { timestamp: '2026-12-31T23:45:00+01:00', value: 260 },
+      { timestamp: '2027-01-01T00:15:00+01:00', value: 261 },
+    ]);
+    writeStation(dir, 'BONN', fresh, 2026, 2026);
+    const closed = JSON.parse(readFileSync(join(dir, 'closed.json')));
+    const frozen = closed.find(yr => yr.y === 2026);
+    const current = JSON.parse(readFileSync(join(dir, 'current.json')));
+    console.log(JSON.stringify({ files: readdirSync(dir).sort(), bundleYears: closed.map(yr => yr.y),
+      frozenJuly: frozen.max[180], frozenDec31: frozen.max[364], currentY: current.y, currentJan1: current.min[0] }));
+  `);
+  assert.deepEqual(out.files, ['closed.json', 'current.json', 'meta.json']);
+  assert.deepEqual(out.bundleYears, [2026], 'the completed year graduated into the bundle');
+  assert.equal(out.frozenJuly, 88, 'the accumulated July value survived the graduation');
+  assert.equal(out.frozenDec31, 260, 'the fresh December day merged into the frozen year');
+  assert.equal(out.currentY, 2027, 'current.json restarts at the new running year');
+  assert.equal(out.currentJan1, 261);
+});
+
+test('archive script: migrateStation folds per-year files into a sorted closed.json bundle', async () => {
+  const { migrateStation } = await import('../scripts/fetch-wsv-archive.mjs');
+  const { mkdtempSync, writeFileSync, readFileSync, readdirSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const dir = mkdtempSync(join(tmpdir(), 'pegel-migrate-'));
+  const y2001 = { y: 2001, min: [1], max: [2] };
+  const y2000 = { y: 2000, min: [3], max: [4] };
+  const y2002 = { y: 2002, min: [5], max: [6] };
+  writeFileSync(join(dir, '2001.json'), JSON.stringify(y2001));
+  writeFileSync(join(dir, '2000.json'), JSON.stringify(y2000));
+  writeFileSync(join(dir, '2002.json'), JSON.stringify(y2002));
+  writeFileSync(join(dir, 'meta.json'), '{"name":"BONN","fetchedThrough":2002}');
+  const n = migrateStation(dir);
+  assert.equal(n, 3);
+  assert.deepEqual(readdirSync(dir).sort(), ['closed.json', 'meta.json'], 'year files removed, meta untouched');
+  const bundle = JSON.parse(readFileSync(join(dir, 'closed.json')));
+  assert.deepEqual(bundle, [y2000, y2001, y2002], 'bundle is the sorted union of the year files');
 });
 
 test('client in January: a not-yet-frozen current.json still maps to its own year', async () => {

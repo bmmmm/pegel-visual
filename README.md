@@ -38,19 +38,24 @@ _      _      _      _      _      _      _      _
   afterwards only the delta since the newest archived point is pulled.
 - **years, not days:** WSV publishes each station's raw archive back to
   2000-01-01 ([DL-DE→Zero-2.0](https://www.govdata.de/dl-de/zero-2-0)).
-  This repo hosts a condensed copy — daily min/max per station and year,
-  ~3 KB each, on the `archive` branch — so picking `1Y` / `5Y` / `ALL`
-  fetches the needed year files same-origin and merges them into your
-  local archive on the fly. A monthly CI run keeps the running year at
-  most one month stale; the live API covers the newest 30 days on top.
-  Multi-year views are flagged as *unvalidated raw data*, since WSV
-  serves these values unchecked (outliers and gaps included).
-  `scripts/fetch-wsv-archive.mjs` builds and refreshes the data
-  (WSV's own download page cannot be fetched cross-origin — it sends its
-  CORS header twice, see issue #1). The manual route still works too:
-  the `full archive (2000→)` link opens the station's WSV download page,
-  and `import` swallows the ZIP directly (unpacked in the browser via
-  `DecompressionStream`, still no dependencies)
+  This repo hosts a condensed copy — daily min/max — as two files per
+  station on the `archive` branch: `closed.json`, an immutable bundle of
+  every completed year, and `current.json`, the running year. So picking
+  `1Y` / `5Y` / `ALL` fetches just three files same-origin (manifest +
+  bundle + running year) and merges them into your local archive on the
+  fly. A monthly CI run refreshes the running year from the PEGELONLINE
+  REST API (30 days at a time); each January the completed year graduates
+  into the immutable bundle. The live API covers the newest 30 days on
+  top, so the site is never more than a month stale. Multi-year views are
+  flagged as *unvalidated raw data*, since WSV serves these values
+  unchecked (outliers and gaps included; the manifest carries a per-station
+  gap-day count). `scripts/fetch-wsv-archive.mjs` builds and refreshes the
+  data — the full backfill still uses WSV's ZIP download page, which the
+  browser cannot fetch cross-origin (it sends its CORS header twice, see
+  issue #1). The manual route works too: the `full archive (2000→)` link
+  opens the station's WSV download page, and `import` swallows the ZIP
+  directly (unpacked in the browser via `DecompressionStream`, still no
+  dependencies)
 - water surface elevation profile (m NHN) between the neighboring
   stations on the same river, ordered by river km — neighbors are one
   click away, and the current station's own label opens the whole-river
