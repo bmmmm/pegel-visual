@@ -1,1 +1,5 @@
 .DS_Store
+# local backfill output — the data lives on the `archive` branch, not on main
+/archive/
+/tmp/
+tmp-*

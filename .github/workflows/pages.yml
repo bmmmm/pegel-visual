@@ -1,0 +1,44 @@
+name: pages
+
+# Deploys the site from main plus the WSV archive data from the `archive`
+# branch (data never lives on main — local pushes to main and CI commits to
+# the data branch stay out of each other's way).
+on:
+  push:
+    branches: [main, archive]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - name: Assemble site
+        run: |
+          mkdir /tmp/site
+          rsync -a --exclude .git --exclude .github --exclude tests --exclude scripts ./ /tmp/site/
+      - name: Add archive data (when the archive branch exists)
+        run: |
+          if git fetch origin archive --depth 1; then
+            git worktree add /tmp/archive-branch FETCH_HEAD
+            cp -R /tmp/archive-branch/archive /tmp/site/archive
+          fi
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: /tmp/site
+      - id: deployment
+        uses: actions/deploy-pages@v4

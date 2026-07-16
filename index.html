@@ -308,11 +308,12 @@
       the API can serve. Pick a window with the history chips (<b>24H … ALL</b>) —
       the choice lands in the URL, so shared links reproduce it. <b>export</b> /
       <b>import</b> / <b>clear</b> manage the archive; nothing ever leaves your
-      browser. Want years instead of days? WSV offers each station's raw archive
-      back to <b>2000</b> as a ZIP — the <b>full archive</b> link opens the right
-      page, and <b>import</b> swallows that ZIP directly (unpacked in your
-      browser). Multi-year windows (<b>1Y / 5Y</b>) then work, marked as
-      unvalidated raw data: outliers and gaps are part of the deal.</dd>
+      browser. Want years instead of days? Picking <b>1Y / 5Y / ALL</b> fetches
+      the WSV raw archive (data back to <b>2000</b>, condensed to daily min/max,
+      hosted with this site and refreshed monthly) for the station on screen —
+      marked as unvalidated raw data: outliers and gaps are part of the deal.
+      The <b>full archive</b> link and <b>import</b> (which swallows the WSV ZIP
+      directly) remain as the manual route.</dd>
     <dt>elevation profile</dt>
     <dd>Below the sparkline: the water surface elevation (m NHN) between the
       neighboring gauges on the same river, ordered by river km. The neighbors are
@@ -2349,9 +2350,49 @@ function renderHistoryBar() {
 // backfill from the API when a picked range reaches further back than what's
 // locally archived yet — the WSV API keeps ~30 days, so this covers everything
 // up to 30D without waiting for the local archive to accumulate that much itself
+// the repo hosts a condensed copy of the WSV historical archive (daily min/max
+// per year file, see scripts/fetch-wsv-archive.mjs), served same-origin — the
+// WSV site itself cannot be fetched cross-origin (doubled CORS header). Year
+// files are pulled lazily when a window beyond the API's reach is picked.
+const repoArchiveTried = new Set(); // "<uuid>/<year>" — one attempt per session
+
+async function loadRepoArchive(days) {
+  const info = state.info;
+  if (!info || !info.uuid) return;
+  const forStation = station;
+  const nowYear = new Date().getUTCFullYear();
+  const startYear = Math.max(2000, new Date(Date.now() - days * 864e5).getUTCFullYear());
+  const jobs = [];
+  for (let y = startYear; y <= nowYear; y++) {
+    const key = info.uuid + '/' + y;
+    if (repoArchiveTried.has(key)) continue;
+    repoArchiveTried.add(key);
+    // the running year lives in current.json (refreshed monthly), closed years
+    // are immutable; a missing file (station or year not archived) is fine
+    jobs.push(getJson(`archive/${info.uuid}/${y === nowYear ? 'current' : y}.json`).catch(() => null));
+  }
+  if (!jobs.length) return;
+  const years = (await Promise.all(jobs)).filter(Boolean);
+  if (station !== forStation || !years.length) return;
+  const measurements = [];
+  for (const yr of years) {
+    const base = Date.UTC(yr.y, 0, 1) - 36e5; // MEZ midnight of Jan 1 (data is UTC+1 year-round)
+    for (let d = 0; d < yr.min.length; d++) {
+      if (yr.min[d] == null) continue;
+      // two points per day keep both the daily low and the flood peak honest
+      measurements.push({ timestamp: new Date(base + d * 864e5 + 6 * 36e5).toISOString(), value: yr.min[d] });
+      measurements.push({ timestamp: new Date(base + d * 864e5 + 18 * 36e5).toISOString(), value: yr.max[d] });
+    }
+  }
+  mergeIntoArchive(forStation, measurements);
+  state.archive = loadArchive(forStation);
+  updateLocalBar();
+  dirty = true;
+}
+
 async function ensureHistoryCoverage(days) {
-  if (!days) return; // ALL has no fixed window — it just shows whatever's archived
-  if (days > API_MAX_DAYS) return; // beyond the API: only the imported WSV archive can help
+  if (!days) return loadRepoArchive(365 * 26); // ALL: offer everything the repo has
+  if (days > API_MAX_DAYS) return loadRepoArchive(days); // beyond the API's 30-day reach
   const forStation = station;
   const cutoff = Date.now() - days * 864e5;
   if (state.archive.length && state.archive[0][0] <= cutoff) return; // already covered

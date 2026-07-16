@@ -1,0 +1,37 @@
+name: archive-update
+
+# Refreshes the running-year WSV archive data on the `archive` branch once a
+# month (in January the just-completed year gets frozen into its immutable
+# file — the script handles that). Pushing the branch retriggers the pages
+# deploy, so the site always serves data at most one month old.
+on:
+  schedule:
+    - cron: '23 4 3 * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          ref: archive
+          path: archive-branch
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Fetch current-year data from WSV
+        run: node scripts/fetch-wsv-archive.mjs --current --out archive-branch/archive
+      - name: Commit and push
+        run: |
+          cd archive-branch
+          git config user.name 'github-actions[bot]'
+          git config user.email 'github-actions[bot]@users.noreply.github.com'
+          git add archive
+          git diff --cached --quiet && { echo 'no changes'; exit 0; }
+          git commit -m "Refresh current-year archive data ($(date -u +%Y-%m))"
+          git push
