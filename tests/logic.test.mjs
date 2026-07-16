@@ -345,6 +345,43 @@ test('kmTicks: round steps, in range, 2-7 ticks', () => {
   }
 });
 
+// ---------- drawProfile layout invariants ----------
+
+// Floating labels used to overwrite each other: a name plus its elevation runs to
+// 37 columns, and the plot is only 4 rows tall, so three of them shared rows — on
+// 3 of 4 real profiles at 44 columns, and 1 in 6 at 84. The worst case below packs
+// the longest real station names onto near-identical elevations and adjacent km,
+// which is what forced the collision. Every label must survive intact at any width.
+test('drawProfile: labels never overwrite each other, at any width', () => {
+  const neighbors = [
+    { name: 'DUISBURG-MEIDERICH SCHLEUSE UW', km: 6.1, lat: 51.4, lon: 6.7, elev: 85.98 },
+    { name: 'FRIEDRICHSTADT STRASSENBRÜCKE', km: 6.4, lat: 51.4, lon: 6.7, elev: 85.99 },
+    { name: 'Niederbiel Schleuse Kanal OP', km: 6.9, lat: 51.4, lon: 6.7, elev: 86.01 },
+  ];
+  for (const width of [390, 1200]) {
+    const app = loadApp({ width, now: NOON });
+    const { cols, rows } = app.run(`(() => {
+      station = 'FRIEDRICHSTADT STRASSENBRÜCKE';
+      state.info = { water: { shortname: 'RHEIN' } };
+      state.neighbors = ${JSON.stringify(neighbors)};
+      const g = makeGrid(PROFILE_ROWS + PROFILE_FOOT);
+      drawProfile(g, 0);
+      return { cols: COLS, rows: g.ch.map(r => r.join('')) };
+    })()`);
+    const flat = rows.join('\n');
+    for (const p of neighbors) {
+      const elev = p.elev.toFixed(2), km = `km ${p.km}`;
+      // the name is shortened only as far as the width forces — never further
+      const budget = cols - elev.length - km.length - 4;
+      const name = p.name.length > budget ? p.name.slice(0, budget - 1) + '…' : p.name;
+      assert.ok(flat.includes(`${name} ${elev} · ${km}`),
+        `${cols} cols: "${name} ${elev} · ${km}" survives intact`);
+    }
+    assert.ok(flat.includes('≋ downstream →'), `${cols} cols: flow marker survives`);
+    for (const r of rows) assert.ok(r.length <= cols, `${cols} cols: no row overflows`);
+  }
+});
+
 // ---------- drawRiver layout invariants (worst case: 30 stations, 24 troubled) ----------
 
 test('drawRiver: no label overlaps even on a crowded, clustered river', () => {
