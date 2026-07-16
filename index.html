@@ -478,6 +478,7 @@ const state = {
   help: null,       // set to a man-page string while the --help screen is shown
   river: null,      // river name (uppercase) while in river mode
   riverStations: null, // prepared station array for the longitudinal profile
+  repoArchive: null, // 'available' | 'none' once the hosted archive manifest was consulted
 };
 
 // ---------- data ----------
@@ -1091,6 +1092,7 @@ const FONT = {
   '7': ['███', '  █', '  █', '  █', '  █'],
   '8': ['███', '█ █', '███', '█ █', '███'],
   '9': ['███', '█ █', '███', '  █', '███'],
+  '-': ['   ', '   ', '███', '   ', '   '], // negative river km exist (e.g. MARBURG, Lahn km -38.7)
 };
 
 function putBig(g, row, col, text, cls) {
@@ -1648,7 +1650,10 @@ function drawSparkline(g, row, t) {
   // and point at the import path instead of silently showing a shorter span
   const noteCol = label.length + 3 + minmax.length + 2;
   const coveredDays = (Date.now() - arch[0][0]) / 864e5;
-  if (wd && coveredDays < wd * 0.8) {
+  if (wd && coveredDays < wd * 0.8 && state.repoArchive === 'none') {
+    // the manifest says WSV keeps no pre-30-day archive for this station at all
+    put(g, row, noteCol, isCompact() ? '· no WSV archive' : '· WSV has no multi-year archive for this station', 'd');
+  } else if (wd && coveredDays < wd * 0.8) {
     put(g, row, noteCol, isCompact() ? `· ${Math.round(coveredDays)}D only` : `· covers ${Math.round(coveredDays)}D — import the WSV archive ↓`, 's');
   } else if ((wd || spanDays) > API_MAX_DAYS) { // ALL warns too once the archive spans years
     put(g, row, noteCol, isCompact() ? '· RAW' : '· unvalidated raw data (WSV)', 's');
@@ -1968,6 +1973,7 @@ function switchStation(name, adsb, push = true) {
   state.neighbors = [];
   state.weather = null;
   state.error = null;
+  state.repoArchive = null; // per-station; re-resolved from the manifest on demand
   state.archive = loadArchive(station);
   sparkDisplay = null; // new station's data shouldn't spring in from the old one's shape
   dirty = true;
@@ -2356,14 +2362,35 @@ function renderHistoryBar() {
 // files are pulled lazily when a window beyond the API's reach is picked.
 const repoArchiveTried = new Set(); // "<uuid>/<year>" — one attempt per session
 
+// the archive manifest maps every station to its archived year range — or marks
+// it `none` (lock/weir operating gauges, foreign partner gauges: WSV has no
+// pre-30-day archive for those). Missing manifest (e.g. plain local checkout
+// without the data branch) falls back to blind year fetches.
+let repoManifest; // undefined = not fetched yet, null = unavailable
+async function loadRepoManifest() {
+  if (repoManifest === undefined) {
+    repoManifest = await getJson('archive/manifest.json').then(m => m.stations || null).catch(() => null);
+  }
+  return repoManifest;
+}
+
 async function loadRepoArchive(days) {
   const info = state.info;
   if (!info || !info.uuid) return;
   const forStation = station;
+  const entry = (await loadRepoManifest() || {})[info.uuid];
+  if (station !== forStation) return; // switched away while the manifest loaded
+  if (entry) {
+    state.repoArchive = entry.none ? 'none' : 'available';
+    dirty = true;
+    if (entry.none) return; // known gap — skip the pointless year fetches
+  }
   const nowYear = new Date().getUTCFullYear();
-  const startYear = Math.max(2000, new Date(Date.now() - days * 864e5).getUTCFullYear());
+  let startYear = Math.max(2000, new Date(Date.now() - days * 864e5).getUTCFullYear());
+  let endYear = nowYear;
+  if (entry) { startYear = Math.max(startYear, entry.from); endYear = Math.min(endYear, entry.to); }
   const jobs = [];
-  for (let y = startYear; y <= nowYear; y++) {
+  for (let y = startYear; y <= endYear; y++) {
     const key = info.uuid + '/' + y;
     if (repoArchiveTried.has(key)) continue;
     repoArchiveTried.add(key);
