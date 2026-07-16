@@ -179,7 +179,7 @@ export function buildManifest(stations, out) {
   return manifest;
 }
 
-function writeStation(dir, name, years, fetchedThrough) {
+function writeStation(dir, name, years, fetchedFrom, fetchedThrough) {
   mkdirSync(dir, { recursive: true });
   let files = 0;
   for (const [y, data] of years) {
@@ -192,6 +192,7 @@ function writeStation(dir, name, years, fetchedThrough) {
   let meta = {};
   try { meta = JSON.parse(readFileSync(metaPath, 'utf8')); } catch {}
   meta.name = name;
+  meta.fetchedFrom = Math.min(meta.fetchedFrom ?? fetchedFrom, fetchedFrom);
   meta.fetchedThrough = Math.max(meta.fetchedThrough || 0, fetchedThrough);
   writeFileSync(metaPath, JSON.stringify(meta));
   return files;
@@ -223,13 +224,17 @@ async function main() {
       } else {
         let meta = {};
         try { meta = JSON.parse(readFileSync(join(dir, 'meta.json'), 'utf8')); } catch {}
-        if ((meta.fetchedThrough || 0) >= TO) { skipped++; return; } // resume: already done
-        startYear = Math.max(FROM, (meta.fetchedThrough || 0) + 1);
+        // resume only counts when the earlier fetch started at (or before) our
+        // FROM — a partial smoke run (e.g. --from 2023) must not masquerade as
+        // a completed backfill
+        const resumable = (meta.fetchedFrom ?? 2000) <= FROM;
+        if (resumable && (meta.fetchedThrough || 0) >= TO) { skipped++; return; }
+        startYear = resumable ? Math.max(FROM, (meta.fetchedThrough || 0) + 1) : FROM;
         fetchedThrough = TO;
       }
       const endDate = CURRENT_ONLY ? now.toISOString().slice(0, 10) : `${TO}-12-31`;
       const { years, pts } = await fetchCondensed(s.uuid, startYear, endDate);
-      const files = writeStation(dir, s.shortname, years, fetchedThrough);
+      const files = writeStation(dir, s.shortname, years, startYear, fetchedThrough);
       console.log(`${tag} · ${pts} pts -> ${files} file(s)`);
       ok++;
     } catch (e) {

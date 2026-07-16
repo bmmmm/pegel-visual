@@ -500,18 +500,17 @@ async function loadData() {
     const lastTs = arc.length ? arc[arc.length - 1][0] : 0;
     const inWindow = lastTs && Date.now() - lastTs < 14 * 864e5;
     const start = inWindow ? new Date(lastTs + 1000).toISOString() : 'P15D';
-    // once the station's timeseries list is known (cached in state.info), skip WT/Q
-    // requests it doesn't offer; unknown on first load of a station, so try both —
-    // a station without WT/Q just 404s, caught below
-    const priorSeries = state.info ? (state.info.timeseries || []).map(ts => ts.shortname) : null;
-    const wantWT = !priorSeries || priorSeries.includes('WT');
-    const wantQ = !priorSeries || priorSeries.includes('Q');
-    const [info, gauge, delta, wt, q] = await Promise.all([
+    const [info, gauge, delta] = await Promise.all([
       state.info || getJson(`${API}/stations/${enc}.json?includeTimeseries=true`),
       getJson(`${API}/stations/${enc}/W.json?includeCurrentMeasurement=true&includeCharacteristicValues=true`),
       getJson(`${API}/stations/${enc}/W/measurements.json?start=${encodeURIComponent(start)}`).catch(() => []),
-      wantWT ? getJson(`${API}/stations/${enc}/WT.json?includeCurrentMeasurement=true`).catch(() => null) : Promise.resolve(null),
-      wantQ ? getJson(`${API}/stations/${enc}/Q.json?includeCurrentMeasurement=true`).catch(() => null) : Promise.resolve(null),
+    ]);
+    // WT/Q only for stations whose timeseries list offers them — blind probing
+    // would 404 in the console on every fresh load of a WT/Q-less station
+    const series = (info.timeseries || []).map(ts => ts.shortname);
+    const [wt, q] = await Promise.all([
+      series.includes('WT') ? getJson(`${API}/stations/${enc}/WT.json?includeCurrentMeasurement=true`).catch(() => null) : null,
+      series.includes('Q') ? getJson(`${API}/stations/${enc}/Q.json?includeCurrentMeasurement=true`).catch(() => null) : null,
     ]);
     if (station !== forStation) return; // switched away while fetching — discard
     state.info = info;
@@ -1693,6 +1692,30 @@ function drawSparkline(g, row, t) {
   }
   put(g, row + SPLASH_ROWS + 1, chartW + 1, `┐ now`, 'd');
   put(g, row + SPLASH_ROWS + SPARK_ROWS, chartW + 1, `┘ ${series.length} pts`, 'd');
+
+  // time axis under the bars. Columns sample the archive by index, not by time
+  // (gaps compress), so each tick is labeled with its column's real timestamp
+  const axisRow = row + SPLASH_ROWS + SPARK_ROWS + 1;
+  const fmtTick = ts => {
+    const iso = new Date(ts).toISOString();
+    if (spanDays <= 2) return iso.slice(11, 16);  // HH:MM
+    if (spanDays <= 120) return iso.slice(5, 10); // MM-DD
+    if (spanDays <= 1200) return iso.slice(0, 7); // YYYY-MM
+    return iso.slice(0, 4);                       // YYYY
+  };
+  const nTicks = isCompact() ? 3 : 5;
+  let lastEnd = -2, lastLbl = '';
+  for (let t = 0; t < nTicks; t++) {
+    const x = Math.round((t * (chartW - 1)) / (nTicks - 1));
+    const ts = arch[Math.min(arch.length - 1, Math.floor(x * step))][0];
+    const lbl = fmtTick(ts);
+    if (lbl === lastLbl) continue; // e.g. two coarse-format ticks in the same year
+    const lx = Math.max(0, Math.min(chartW - lbl.length, x - (lbl.length >> 1)));
+    if (lx <= lastEnd + 1) continue; // keep a blank cell between neighboring ticks
+    put(g, axisRow, lx, lbl, 'd');
+    lastEnd = lx + lbl.length;
+    lastLbl = lbl;
+  }
   return row + SPLASH_ROWS + SPARK_ROWS + 2;
 }
 

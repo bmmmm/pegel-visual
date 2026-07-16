@@ -465,6 +465,25 @@ test('loadRepoArchive: lazily merges year files into the local archive', async (
   assert.equal(app.run(`loadArchive('BONN')`).length, 2);
 });
 
+test('drawSparkline: renders a time axis labeled from real timestamps', () => {
+  const app = loadApp({ now: NOON });
+  // two years of daily points ending at NOON — multi-year span → YYYY-MM ticks
+  const days = 730;
+  const pts = Array.from({ length: days }, (_, i) => [NOON - (days - 1 - i) * 864e5, 100 + (i % 40)]);
+  app.run(`state.archive = ${JSON.stringify(pts)}`);
+  app.run(`historyKey = 'all'`);
+  const grid = app.run(`(() => {
+    const g = makeGrid(10);
+    drawSparkline(g, 0, 0.5);
+    return g.ch.map(r => r.join(''));
+  })()`);
+  const axis = grid[2 + 4 + 1]; // SPLASH_ROWS + SPARK_ROWS + 1
+  assert.ok(/\d{4}-\d{2}/.test(axis), `axis carries YYYY-MM ticks: "${axis.trim()}"`);
+  assert.ok(axis.trimStart().startsWith('2024-01'), 'first tick sits at the two-years-ago start (NOON is 2026-01-15)');
+  assert.ok(axis.includes('2026-01'), 'last tick is the now end');
+  assert.ok(grid[0].includes('HISTORY'), 'label row intact');
+});
+
 test('history presets: 1Y/5Y exist, API backfill stays within its 30-day reach', () => {
   const app = loadApp();
   const presets = app.run('HISTORY_PRESETS');
