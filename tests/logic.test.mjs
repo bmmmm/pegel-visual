@@ -330,6 +330,19 @@ test('drawRiver: no label overlaps even on a crowded, clustered river', () => {
 
 // ---------- grid & escaping ----------
 
+test('putKmSign / putBig: negative river km render instead of crashing', () => {
+  const app = loadApp();
+  const grid = app.run(`(() => {
+    const g = makeGrid(12);
+    putKmSign(g, 0, 0, -38.7); // MARBURG (Lahn) — km signs must survive a minus
+    putBig(g, 9, 0, '-39', 'b');
+    return g.ch.map(r => r.join(''));
+  })()`);
+  assert.ok(grid[3].includes('███'), 'minus glyph drawn inside the sign');
+  assert.ok(grid[0].includes('┌───┬───┬───┐'), 'three-cell sign frame for "-39"');
+  assert.ok(grid[11].includes('███'), 'big digits render the minus row');
+});
+
 test('gridToHtml: escapes markup, emits class and link runs', () => {
   const app = loadApp();
   const html = app.run(`(() => {
@@ -391,6 +404,42 @@ test('archive script: condense folds measurements into daily MEZ min/max', async
   // the script's zip reader handles the same layout as the in-page one
   const zip = buildZip([['pegelonline-bonn-W-x.json', JSON.stringify(measurements.slice(0, 1))]]);
   assert.equal(JSON.parse(unzipJsonEntry(zip).toString())[0].value, 500);
+});
+
+test('archive script: buildManifest marks year ranges and none-stations', async () => {
+  const { buildManifest } = await import('../scripts/fetch-wsv-archive.mjs');
+  const { mkdtempSync, mkdirSync, writeFileSync, readFileSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const out = mkdtempSync(join(tmpdir(), 'pegel-manifest-'));
+  mkdirSync(join(out, 'uuid-a'));
+  writeFileSync(join(out, 'uuid-a', '2020.json'), '{}');
+  writeFileSync(join(out, 'uuid-a', '2024.json'), '{}');
+  writeFileSync(join(out, 'uuid-a', 'current.json'), '{}');
+  const stations = [
+    { uuid: 'uuid-a', shortname: 'BONN', water: { shortname: 'RHEIN' } },
+    { uuid: 'uuid-b', shortname: 'Marburg', water: { shortname: 'LAHN' } },
+  ];
+  const m = buildManifest(stations, out);
+  assert.equal(m.stations['uuid-a'].from, 2020);
+  assert.equal(m.stations['uuid-a'].to, new Date().getUTCFullYear(), 'current.json counts as the running year');
+  assert.equal(m.stations['uuid-a'].none, undefined);
+  assert.deepEqual(m.stations['uuid-b'], { n: 'Marburg', w: 'LAHN', none: true });
+  assert.ok(JSON.parse(readFileSync(join(out, 'manifest.json'))).stations['uuid-b'].none, 'written to disk');
+});
+
+test('loadRepoArchive: a manifest none-entry skips year fetches and flags the station', async () => {
+  const app = loadApp({ now: NOON });
+  app.run(`state.info = { uuid: 'gap-uuid' }`);
+  app.run(`getJson = async url => {
+    if (url === 'archive/manifest.json') return { stations: { 'gap-uuid': { n: 'Marburg', w: 'LAHN', none: true } } };
+    globalThis.__unexpected = url;
+    throw new Error('unexpected fetch ' + url);
+  }`);
+  await app.run('loadRepoArchive(2000)');
+  assert.equal(app.run('state.repoArchive'), 'none');
+  assert.equal(globalThis.__unexpected, undefined, 'no year files were requested');
+  delete globalThis.__unexpected;
 });
 
 test('loadRepoArchive: lazily merges year files into the local archive', async () => {

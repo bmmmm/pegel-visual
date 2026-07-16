@@ -20,7 +20,7 @@
 //   node scripts/fetch-wsv-archive.mjs --current          # refresh running year only
 //   node scripts/fetch-wsv-archive.mjs --station BONN     # one station
 //   node scripts/fetch-wsv-archive.mjs --from 2020 --to 2024 --out archive
-import { mkdirSync, writeFileSync, readFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync, readFileSync, readdirSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { inflateRawSync } from 'node:zlib';
@@ -157,6 +157,28 @@ async function fetchCondensed(uuid, startYear, endDate) {
   }
 }
 
+// one map over all W stations: archived ones carry their year range, the rest
+// are marked none — WSV simply has no pre-30-day archive for them (lock/weir
+// operating gauges, foreign partner gauges, some harbor and barrage gauges).
+// The client uses this to skip pointless fetches and to say so precisely.
+export function buildManifest(stations, out) {
+  const manifest = { generated: new Date().toISOString(), stations: {} };
+  for (const s of stations) {
+    const dir = join(out, s.uuid);
+    let years = [];
+    try {
+      years = readdirSync(dir).filter(f => /^\d{4}\.json$/.test(f)).map(f => Number(f.slice(0, 4)));
+      if (existsSync(join(dir, 'current.json'))) years.push(CURRENT_YEAR);
+    } catch { /* no directory: never archived */ }
+    const entry = { n: s.shortname, w: (s.water && s.water.shortname) || '' };
+    if (years.length) { entry.from = Math.min(...years); entry.to = Math.max(...years); }
+    else entry.none = true;
+    manifest.stations[s.uuid] = entry;
+  }
+  writeFileSync(join(out, 'manifest.json'), JSON.stringify(manifest));
+  return manifest;
+}
+
 function writeStation(dir, name, years, fetchedThrough) {
   mkdirSync(dir, { recursive: true });
   let files = 0;
@@ -227,5 +249,10 @@ async function main() {
     }
   }
   await Promise.all(Array.from({ length: PARALLEL }, (_, w) => worker(w)));
+  if (!ONLY_STATION) {
+    const m = buildManifest(stations, OUT);
+    const none = Object.values(m.stations).filter(e => e.none).length;
+    console.log(`manifest: ${stations.length} stations, ${stations.length - none} archived, ${none} without WSV archive`);
+  }
   console.log(`done · ${ok} fetched · ${skipped} already complete · ${failed} failed${failed ? ' (re-run to retry)' : ''}`);
 }
