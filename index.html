@@ -524,7 +524,13 @@ async function loadData() {
     state.archive = loadArchive(forStation);
     updateLocalBar();
     if (!state.neighbors.length) loadNeighbors(info).catch(() => {});
-    if (isNewStation) loadWeather();
+    if (isNewStation) {
+      loadWeather();
+      // the hosted WSV archive fills windows the live API cannot — including
+      // the default ALL view on a first visit, so years appear right away
+      const wd = historyPreset().d;
+      if (!wd || wd > API_MAX_DAYS) loadRepoArchive(wd || 365 * 26);
+    }
   } catch (e) {
     if (station !== forStation) return; // stale error from a station we left
     state.error = `station "${forStation}" failed: ${e.message}\n` +
