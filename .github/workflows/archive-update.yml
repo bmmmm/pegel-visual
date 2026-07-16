@@ -11,6 +11,7 @@ on:
 
 permissions:
   contents: write
+  actions: write # to dispatch the pages deploy afterwards
 
 jobs:
   refresh:
@@ -27,6 +28,7 @@ jobs:
       - name: Fetch current-year data from WSV
         run: node scripts/fetch-wsv-archive.mjs --current --out archive-branch/archive
       - name: Commit and push
+        id: push
         run: |
           cd archive-branch
           git config user.name 'github-actions[bot]'
@@ -35,3 +37,11 @@ jobs:
           git diff --cached --quiet && { echo 'no changes'; exit 0; }
           git commit -m "Refresh current-year archive data ($(date -u +%Y-%m))"
           git push
+          echo "pushed=true" >> "$GITHUB_OUTPUT"
+      - name: Redeploy pages
+        # a push to the archive branch cannot trigger pages.yml itself — the
+        # orphan data branch carries no workflow files — so dispatch it here
+        if: steps.push.outputs.pushed == 'true'
+        run: gh workflow run pages.yml --ref main
+        env:
+          GH_TOKEN: ${{ github.token }}
