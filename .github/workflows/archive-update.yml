@@ -1,8 +1,9 @@
 name: archive-update
 
 # Refreshes the running-year WSV archive data on the `archive` branch once a
-# month. The --current step pulls the last 35 days from the PEGELONLINE REST
-# API and upserts them into current.json; in January the just-completed year
+# month. The --current step pulls the last month from the PEGELONLINE REST
+# API (requests 35 days, the server caps at ~31) and upserts them into
+# current.json; in January the just-completed year
 # is first re-backfilled from the WSV ZIP archive (authoritative; the REST
 # accumulation only fills its gaps, and graduates unchanged if the ZIP path
 # fails — the gap sweep below then retries) before it freezes into the
