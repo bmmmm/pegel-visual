@@ -66,7 +66,10 @@ _      _      _      _      _      _      _      _
   the drought accent, wet months in the flood accent, `·` for normal),
   the long-term monthly min–max band with median against the current
   year, and a day-of-year overlay of all years with one year bold —
-  click any year in the heatmap to put it on top
+  click any year in the heatmap to put it on top or page through them
+  with the `◂ year ▸` chips; clicking a month cell prints its numbers
+  (monthly mean, min–max, deviation from the long-term month mean in σ)
+  in a readout line
 - water surface elevation profile (m NHN) between the neighboring
   stations on the same river, ordered by river km — neighbors are one
   click away, and the current station's own label opens the whole-river
