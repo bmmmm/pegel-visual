@@ -51,11 +51,12 @@
 //   # deploy order: main FIRST — the new client degrades gracefully on the old
 //   # data (closed.json 404 is swallowed, current.json still renders), while
 //   # the old client on reseeded data would 404 on every deleted year file.
-//   # pages.yml runs on pushes to both branches with cancel-in-progress, so
-//   # the two pushes collapse into one authoritative deploy anyway:
+//   # a push to the data branch can NOT trigger pages.yml (the orphan branch
+//   # carries no workflow files — verified 2026-07-17: the force-push produced
+//   # no run), so the dispatch below is what actually deploys the new data:
 //   git push origin main
 //   git push --force origin archive
-//   gh workflow run pages.yml --ref main   # optional; redundant with the push trigger
+//   gh workflow run pages.yml --ref main   # required — deploys the reseeded data
 //   # verify live as a fresh visitor: pick 20Y, the Network panel shows exactly
 //   # 3 archive requests (manifest.json, closed.json, current.json) and fills.
 import { mkdirSync, writeFileSync, readFileSync, readdirSync, existsSync, unlinkSync } from 'node:fs';
@@ -202,9 +203,12 @@ async function fetchCondensed(uuid, startYear, endDate) {
 // no doubled-CORS quirk, no ZIP prepare step. The cron fires on the 3rd of
 // each month, so consecutive runs sit 31 days apart after a 31-day month: a
 // P30D window would leave the boundary day between two runs thinly sampled
-// (missing its afternoon peak), and the January freeze would bake that into
-// the immutable bundle. P35D covers the widest cadence with margin — the
-// overlap is free because writeStation's per-day merge is idempotent.
+// (missing its afternoon peak). We request P35D for margin, but measured
+// 2026-07-17 the server silently clamps to ~31 days — enough to cover the
+// cadence exactly, with no slack for a delayed run. That residual risk is
+// deliberate: the January ZIP re-backfill (freezeFromZip) heals any hole in
+// the completed year, and if WSV ever lifts the cap the wider window starts
+// working for free. Overlap is harmless — writeStation's merge is idempotent.
 // condense buckets by MEZ day, so the live data's DST offset (+02:00 in
 // summer) folds onto the same day boundaries as the ZIP archive's year-round
 // UTC+1 timestamps.

@@ -5,7 +5,10 @@ name: pages
 # the data branch stay out of each other's way).
 on:
   push:
-    branches: [main, archive]
+    branches: [main]
+    # a push to the `archive` data branch cannot trigger this workflow — the
+    # orphan branch carries no workflow files, GitHub evaluates triggers from
+    # the pushed commit. archive-update dispatches the deploy explicitly.
   workflow_dispatch:
 
 permissions:
