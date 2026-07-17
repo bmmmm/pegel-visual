@@ -326,7 +326,7 @@
 <main>
   <pre id="screen" role="img" aria-label="loading water level data">loading…</pre>
   <form id="prompt" autocomplete="off">
-    <div class="cmd">&gt; pegel <span class="flag">--station</span> <input id="station-input" name="station" list="stations" spellcheck="false" aria-label="station name">
+    <div class="cmd">&gt; pegel <span class="flag">--station</span> <input id="station-input" name="station" list="stations" spellcheck="false" placeholder="station" aria-label="station name">
       <datalist id="stations"></datalist> --refresh 300s
     </div>
     <div class="cmd cont"><span class="flag">--river</span> <input id="river-input" name="river" list="rivers" spellcheck="false" placeholder="whole river" aria-label="river name">
@@ -2206,6 +2206,9 @@ const currentRiver = () => mode === 'river'
   ? (state.river || '')
   : ((state.info && state.info.water && state.info.water.shortname) || '');
 
+// in river mode there is no station selected, so the station field reads empty
+const syncStationInput = () => { stationInput.value = mode === 'river' ? '' : station; };
+
 let refreshTimer = null;
 
 // switch station in-place: no full reload, just reset per-station state and refetch
@@ -2300,7 +2303,8 @@ function switchRiver(name, push = true) {
     vt.finished.catch(() => {});
   }
 
-  riverInput.value = next; // station field keeps the last station to return to
+  riverInput.value = next;
+  stationInput.value = ''; // no station is selected in river mode
   clearInterval(refreshTimer);
   loadRiver();
   refreshTimer = setInterval(loadRiver, REFRESH_MS);
@@ -2385,14 +2389,14 @@ function runCommand(raw) {
   const cmd = parseCommand(raw);
   if (cmd.info) {
     infobox.showModal();
-    stationInput.value = station;
+    syncStationInput();
     return;
   }
   if (cmd.help || cmd.unknownFlag) {
     state.help = helpText(cmd.unknownFlag);
     dirty = true;
     setScreenAria();
-    stationInput.value = station;
+    syncStationInput();
     return;
   }
   if (cmd.ais !== undefined) setAis(cmd.ais);
@@ -2407,7 +2411,7 @@ function runCommand(raw) {
   }
   dismissHelp();
   dirty = true;
-  stationInput.value = station; // river commands land in the river field via switchRiver
+  syncStationInput(); // a --river command switched to river mode, so this clears the field
 }
 
 // substring search over stations and rivers, umlaut-folded — the prompt should
@@ -2622,7 +2626,7 @@ stationInput.addEventListener('change', () => {
   const resolved = resolveStation(stationInput.value);
   if (resolved !== station && knownStations.has(resolved)) switchStation(resolved, adsbInput.value);
   else if (!knownStations.has(resolved) && resolveWater(stationInput.value)) switchRiver(resolveWater(stationInput.value));
-  else if (knownStations.size) stationInput.value = station; // invalid/abandoned/ASCII spelling: snap back
+  else if (knownStations.size) syncStationInput(); // invalid/abandoned/ASCII spelling: snap back
 });
 
 async function loadStationList() {
@@ -3195,7 +3199,8 @@ if (mode === 'river') {
   state.river = new URLSearchParams(location.search).get('river').toUpperCase();
   applyRiverChrome();
   applyModeChrome();
-  riverInput.value = state.river; // station field stays on its default, ready to return
+  riverInput.value = state.river;
+  stationInput.value = ''; // booting straight into river mode: no station selected
   setScreenAria();
   loadRiver();
   refreshTimer = setInterval(loadRiver, REFRESH_MS);
