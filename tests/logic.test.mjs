@@ -818,3 +818,82 @@ test('first-visit ASCII ?station= link self-corrects once the station list arriv
   await app.run('loadStationList()');
   assert.equal(app.run('station'), 'KÖLN', 'error screen self-corrected to the canonical station');
 });
+
+// ---------- report issue ----------
+
+test('buildReportBody: covers everything the renderer branches on, redacts receiver URLs', () => {
+  const now = Date.UTC(2026, 0, 15, 12);
+  const app = loadApp({ now, search: '?station=BONN&adsb=10.0.0.5:8080&ais=10.0.0.9:8080/aiscatcher' });
+  app.run(`state.info = { water: { shortname: 'RHEIN' }, km: 654.8 }`);
+  app.run(`state.gauge = { currentMeasurement: { value: 250, timestamp: ${now}, stateMnwMhw: 'normal' } }`);
+  app.run('state.wt = 12.3');
+  app.run('state.q = 500');
+  app.run('state.neighbors = [1, 2, 3]');
+  app.run('state.flowLowKm = true');
+  app.run(`state.archive = [[${now} - 2 * 3600000, 230], [${now}, 250]]`);
+  app.run('state.repoArchive = "available"');
+  app.run(`historyKey = '7d'`);
+
+  const body = app.run(`buildReportBody(${JSON.stringify('the river should be blue, not on fire')})`);
+
+  assert.match(body, /station: BONN/);
+  assert.match(body, /mode: station/);
+  assert.match(body, /water: RHEIN/);
+  assert.match(body, /river km: 654\.8/);
+  assert.match(body, /history range: 7d/);
+  assert.match(body, /points in local archive: 2/);
+  assert.match(body, /hosted WSV archive loaded: true/);
+  assert.match(body, /COLS: 84/);
+  assert.match(body, /flowLowKm: true/);
+  assert.match(body, /neighbors: 3/);
+  assert.match(body, /W: 250 cm/);
+  assert.match(body, /WT: 12\.3 °C/);
+  assert.match(body, /Q: 500 m³\/s/);
+  assert.match(body, /trend: 10\.0 cm\/h/);
+  assert.match(body, /state: normal/);
+  assert.match(body, /adsb configured: true/);
+  assert.match(body, /ais configured: true/);
+  assert.match(body, /app commit: dev/, 'unreplaced __COMMIT__ placeholder falls back to dev');
+  assert.match(body, /the river should be blue, not on fire/);
+  assert.ok(!body.includes('10.0.0.5'), 'adsb receiver URL never appears, only whether it is configured');
+  assert.ok(!body.includes('10.0.0.9'), 'ais receiver URL never appears, only whether it is configured');
+});
+
+test('buildReportBody: state.error and unconfigured receivers report honestly', () => {
+  const app = loadApp({ search: '?station=BONN' });
+  app.run('state.error = \'station "BONN" failed: 500 /stations/BONN/W/measurements.json\'');
+
+  const body = app.run(`buildReportBody('')`);
+
+  assert.match(body, /error: station "BONN" failed: 500/);
+  assert.match(body, /adsb configured: false/);
+  assert.match(body, /ais configured: false/);
+  assert.match(body, /W: n\/a/);
+  assert.match(body, /trend: n\/a/);
+  assert.match(body, /_\(no note provided\)_/);
+});
+
+test('buildReportUrl: trims an oversized note to stay under the GitHub URL limit', () => {
+  const app = loadApp({ search: '?station=BONN' });
+  app.run(`state.info = { water: { shortname: 'RHEIN' }, km: 654.8 }`);
+  const hugeNote = 'x'.repeat(20000);
+
+  const url = app.run(`buildReportUrl(${JSON.stringify(hugeNote)})`);
+
+  assert.ok(url.length <= 8000, `expected url <= 8000 chars, got ${url.length}`);
+  assert.ok(url.startsWith('https://github.com/bmmmm/pegel-visual/issues/new?'));
+  const body = decodeURIComponent(new URL(url).searchParams.get('body'));
+  assert.match(body, /station: BONN/, 'required context section survives trimming');
+  assert.match(body, /water: RHEIN/, 'required context section survives trimming');
+  assert.match(body, /\[trimmed\]/, 'a dropped section leaves a visible marker, not a silent cut');
+  assert.ok(!body.includes(hugeNote), 'the oversized value is dropped whole, never truncated mid-value');
+});
+
+test('buildReportUrl: small reports pass through untrimmed', () => {
+  const app = loadApp({ search: '?station=BONN' });
+  const url = app.run(`buildReportUrl('short note')`);
+  assert.ok(url.length <= 8000);
+  const body = decodeURIComponent(new URL(url).searchParams.get('body'));
+  assert.match(body, /short note/);
+  assert.ok(!body.includes('[trimmed]'), 'nothing needed trimming at this size');
+});

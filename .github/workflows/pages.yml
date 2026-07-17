@@ -31,6 +31,11 @@ jobs:
         run: |
           mkdir /tmp/site
           rsync -a --exclude .git --exclude .github --exclude tests --exclude scripts ./ /tmp/site/
+      - name: Stamp the deployed commit (report-issue payload)
+        # main's own HEAD, not $GITHUB_SHA — a push to the `archive` branch also
+        # triggers this workflow, and GITHUB_SHA would then be the archive
+        # branch's commit even though `ref: main` is what's actually deployed
+        run: sed -i "s/__COMMIT__/$(git rev-parse --short HEAD)/" /tmp/site/index.html
       - name: Add archive data (when the archive branch exists)
         run: |
           if git fetch origin archive --depth 1; then
