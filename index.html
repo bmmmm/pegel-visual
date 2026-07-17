@@ -101,10 +101,23 @@
     padding: 0 0.2ch;
     outline: none;
   }
-  #station-input { text-transform: uppercase; }
+  /* the station and river fields grow to fit the name (up to the longest,
+     "DUISBURG-MEIDERICH SCHLEUSE OW" at 30) instead of clipping at a fixed width.
+     width:auto is required — an explicit width defeats field-sizing:content. On
+     browsers without field-sizing the input falls back to its default ~20ch size */
+  #station-input, #river-input {
+    text-transform: uppercase;
+    field-sizing: content;
+    width: auto;
+    min-width: 10ch;
+    max-width: min(34ch, calc(100vw - 6em)); /* 34ch fits the longest name (30) plus caret room */
+    padding-right: 0.6ch; /* room for the caret so the last letter never clips */
+  }
   #adsb-input, #ais-input { width: 26ch; text-transform: none; }
   form .cmd + .cmd { margin-top: 0.7em; }
   form .cont { padding-left: 8ch; } /* lines up under --station, like a wrapped shell command */
+  /* fixed-width flag so the station and river inputs start at the same column */
+  form .flag { display: inline-block; min-width: 9ch; }
   #localbar {
     margin-top: 0.8em;
     font-size: 0.75em;
@@ -313,9 +326,11 @@
 <main>
   <pre id="screen" role="img" aria-label="loading water level data">loading…</pre>
   <form id="prompt" autocomplete="off">
-    <div class="cmd">&gt; pegel --station
-      <input id="station-input" name="station" list="stations" spellcheck="false" aria-label="station name">
+    <div class="cmd">&gt; pegel <span class="flag">--station</span> <input id="station-input" name="station" list="stations" spellcheck="false" aria-label="station name">
       <datalist id="stations"></datalist> --refresh 300s
+    </div>
+    <div class="cmd cont"><span class="flag">--river</span> <input id="river-input" name="river" list="rivers" spellcheck="false" placeholder="whole river" aria-label="river name">
+      <datalist id="rivers"></datalist>
     </div>
     <div class="cmd cont">--adsb
       <input id="adsb-input" name="adsb" spellcheck="false" placeholder="receiver url (optional)"
@@ -648,6 +663,7 @@ async function loadData() {
     ]);
     if (station !== forStation) return; // switched away while fetching — discard
     state.info = info;
+    if (mode === 'station' && info.water && info.water.shortname) riverInput.value = info.water.shortname;
     state.gauge = gauge;
     // deep-link the WSV page that offers this station's multi-year archive ZIP
     if (info.number) wsvArchiveLink.href = 'https://www.pegelonline.wsv.de/gast/stammdaten?pegelnr=' + encodeURIComponent(info.number);
@@ -2177,11 +2193,18 @@ function drawRiver(g, stations, t) {
 // ---------- station prompt ----------
 
 const stationInput = document.getElementById('station-input');
+const riverInput = document.getElementById('river-input');
 const adsbInput = document.getElementById('adsb-input');
 const aisInput = document.getElementById('ais-input');
 stationInput.value = station;
 adsbInput.value = adsbRaw;
 aisInput.value = aisRaw;
+
+// the river field always shows the water in view: the river itself in river mode,
+// otherwise the current station's water (filled once its info arrives)
+const currentRiver = () => mode === 'river'
+  ? (state.river || '')
+  : ((state.info && state.info.water && state.info.water.shortname) || '');
 
 let refreshTimer = null;
 
@@ -2238,6 +2261,9 @@ function switchStation(name, adsb, push = true) {
 
   stationInput.value = station;
   adsbInput.value = adsbRaw;
+  // reflect the station's water at once from the cached list; loadData confirms it
+  const meta = stationMeta.get(station);
+  if (meta && meta.w) riverInput.value = meta.w;
 
   clearInterval(refreshTimer);
   loadData();
@@ -2274,7 +2300,7 @@ function switchRiver(name, push = true) {
     vt.finished.catch(() => {});
   }
 
-  stationInput.value = next;
+  riverInput.value = next; // station field keeps the last station to return to
   clearInterval(refreshTimer);
   loadRiver();
   refreshTimer = setInterval(loadRiver, REFRESH_MS);
@@ -2359,7 +2385,7 @@ function runCommand(raw) {
   const cmd = parseCommand(raw);
   if (cmd.info) {
     infobox.showModal();
-    stationInput.value = mode === 'river' ? state.river : station;
+    stationInput.value = station;
     return;
   }
   if (cmd.help || cmd.unknownFlag) {
@@ -2381,7 +2407,7 @@ function runCommand(raw) {
   }
   dismissHelp();
   dirty = true;
-  stationInput.value = mode === 'river' ? state.river : station;
+  stationInput.value = station; // river commands land in the river field via switchRiver
 }
 
 // substring search over stations and rivers, umlaut-folded — the prompt should
@@ -2457,10 +2483,25 @@ function applyPrompt() {
   switchStation(v, adsbInput.value);
 }
 
+// the dedicated river field: a known river (any case, ASCII umlauts) opens its
+// whole-river profile; anything else snaps back to the river currently in view
+function applyRiver() {
+  const v = riverInput.value;
+  if (v.includes('--')) return runCommand(v);
+  const water = resolveWater(v);
+  if (water) return switchRiver(water);
+  if (knownWaters.size) riverInput.value = currentRiver();
+}
+
 document.getElementById('prompt').addEventListener('submit', e => {
   e.preventDefault();
-  applyPrompt();
+  (document.activeElement === riverInput ? applyRiver : applyPrompt)();
 });
+riverInput.addEventListener('change', applyRiver);
+riverInput.addEventListener('keydown', e => {
+  if (e.key === 'Enter') { e.preventDefault(); applyRiver(); }
+});
+riverInput.addEventListener('focus', loadStationList, { once: true });
 // apply on Enter directly — bypasses the datalist swallowing the first Enter keystroke
 for (const el of [stationInput, adsbInput, aisInput]) {
   el.addEventListener('keydown', e => {
@@ -2539,7 +2580,7 @@ function resolveWater(raw) {
 }
 
 function fillWaters(list) {
-  const dl = document.getElementById('stations');
+  const dl = document.getElementById('rivers'); // dedicated river picker, not the station list
   const frag = document.createDocumentFragment();
   for (const w of list) {
     const up = (w || '').toUpperCase();
@@ -2548,7 +2589,7 @@ function fillWaters(list) {
     for (const k of [foldAe(up), foldStrip(up)]) if (!watersNorm.has(k)) watersNorm.set(k, up);
     const opt = document.createElement('option');
     opt.value = up;
-    opt.label = 'river · whole profile';
+    opt.label = 'whole-river profile';
     frag.appendChild(opt);
   }
   dl.appendChild(frag);
@@ -2581,7 +2622,7 @@ stationInput.addEventListener('change', () => {
   const resolved = resolveStation(stationInput.value);
   if (resolved !== station && knownStations.has(resolved)) switchStation(resolved, adsbInput.value);
   else if (!knownStations.has(resolved) && resolveWater(stationInput.value)) switchRiver(resolveWater(stationInput.value));
-  else if (knownStations.size) stationInput.value = mode === 'river' ? state.river : station; // invalid/abandoned/ASCII spelling: snap back
+  else if (knownStations.size) stationInput.value = station; // invalid/abandoned/ASCII spelling: snap back
 });
 
 async function loadStationList() {
@@ -3154,7 +3195,7 @@ if (mode === 'river') {
   state.river = new URLSearchParams(location.search).get('river').toUpperCase();
   applyRiverChrome();
   applyModeChrome();
-  stationInput.value = state.river;
+  riverInput.value = state.river; // station field stays on its default, ready to return
   setScreenAria();
   loadRiver();
   refreshTimer = setInterval(loadRiver, REFRESH_MS);
