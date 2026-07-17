@@ -59,6 +59,14 @@ _      _      _      _      _      _      _      _
   opens the station's WSV download page, and `import` swallows the ZIP
   directly (unpacked in the browser via `DecompressionStream`, still no
   dependencies)
+- **years view** (`▦ YEARS` chip or `?view=years`) — the station as a
+  multi-year statistics terminal, built from the same daily archive:
+  a heatmap of every year by month (`ABS` shades the level itself,
+  `ANOM` the deviation from that month's long-term mean — dry months in
+  the drought accent, wet months in the flood accent, `·` for normal),
+  the long-term monthly min–max band with median against the current
+  year, and a day-of-year overlay of all years with one year bold —
+  click any year in the heatmap to put it on top
 - water surface elevation profile (m NHN) between the neighboring
   stations on the same river, ordered by river km — neighbors are one
   click away, and the current station's own label opens the whole-river
@@ -95,6 +103,8 @@ flag command (flags are matched case-insensitively) to do more in one go:
 - `--history RANGE` — set the sparkline window (`24h`, `3d`, `7d`, `15d`, `30d`,
   `1y`, `5y`, `10y`, `20y`, `all`); the choice also lands in the URL, so shared
   links reproduce it
+- `--view MODE` — switch the sub-view: `years` (station statistics), `wave`
+  (river heatmap) or `live`; also lands in the URL, so shared links reproduce it
 - `--export` — download the whole local archive as JSON
 - `--clear` — delete the local archive (no confirmation — you typed it)
 - `--info` — open the feature guide dialog (also linked as `info` in the footer):
@@ -150,6 +160,17 @@ gauges, a flagged low station labelled below its marker:
 `--river` and `--station` are mutually exclusive views; typing a station name
 (or `--station NAME`) from river mode switches straight back. Back/forward in
 the browser restores whichever view the URL held.
+
+### Wave view
+
+`[▦ WAVE]` in the river header (or `?river=RHEIN&view=wave`) redraws the whole
+river as a station × day heatmap: rows run downstream (top = upstream), columns
+are the last ~2.5 months, and darker cells mean higher water — each row scaled
+to its own station's range. A flood wave shows up as a diagonal ridge rolling
+down the screen as it travels toward the mouth. The bulk of the data comes from
+the hosted daily archive (refreshed monthly); the newest ~31 days are filled
+live from the PEGELONLINE API, at most 6 requests in flight and capped at 24
+sampled stations per river. Every row is a click target into that station.
 
 ## Aircraft overhead (optional, bring your own receiver)
 

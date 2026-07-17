@@ -965,3 +965,213 @@ test('archive script: ZIP freeze skips without fetching and fails loudly without
   assert.equal(await freezeFromZip(dir, 'u', 2026, async () => ({ years: new Map() })), false);
   assert.deepEqual(JSON.parse(readFileSync(join(dir, 'current.json'))), cur);
 });
+
+// ---------- years view (multi-year statistics) ----------
+
+// mid-July noon: the current year has ~half a year of data in the fixtures below
+const JULY = Date.UTC(2026, 6, 15, 12);
+
+// three years of daily points, two per day like the hosted archive: a seasonal
+// sine (high winter, low summer) plus per-year offsets injected by `tweak`
+const seedArchive = (app, tweak = '0') => app.run(`(() => {
+  const pts = [];
+  for (let y = 2024; y <= 2026; y++) {
+    const end = y === 2026 ? Date.UTC(2026, 6, 15) : Date.UTC(y + 1, 0, 1);
+    for (let ts = Date.UTC(y, 0, 1); ts < end; ts += 864e5) {
+      const doy = Math.floor((ts - Date.UTC(y, 0, 1)) / 864e5);
+      const m = new Date(ts).getUTCMonth();
+      const v = 200 + Math.round(100 * Math.cos(2 * Math.PI * doy / 365)) + (${tweak});
+      pts.push([ts + 6 * 36e5, v - 5], [ts + 18 * 36e5, v + 5]);
+    }
+  }
+  state.archive = pts;
+  histCache = null;
+  return pts.length;
+})()`);
+
+test('dailyMeans: groups points into per-UTC-day means, in order', () => {
+  const app = loadApp();
+  const d0 = Date.UTC(2026, 0, 1);
+  const out = app.run(`dailyMeans([[${d0} + 6 * 36e5, 100], [${d0} + 18 * 36e5, 200], [${d0} + 864e5, 300]])`);
+  assert.equal(out.length, 2);
+  assert.equal(out[0].v, 150, 'two same-day points average');
+  assert.equal(out[1].v, 300);
+  assert.equal(out[1].d, out[0].d + 1);
+});
+
+test('buildHistStats: climatology comes from past years only, leap days index cleanly', () => {
+  const app = loadApp({ now: JULY });
+  seedArchive(app);
+  const st = app.run(`(() => { const s = histStats(); return {
+    years: s.years, curYear: s.curYear, climYears: s.climYears,
+    jan: s.clim[0], dec31: s.byYear.get(2024)[365], nov: s.byYear.get(2026).slice(304, 366).filter(v => v != null).length,
+  }; })()`);
+  assert.deepEqual(st.years, [2024, 2025, 2026]);
+  assert.equal(st.curYear, 2026);
+  assert.equal(st.climYears, 2, '2026 is judged, not part of the baseline');
+  assert.ok(st.jan.mean > 280, 'january climatology sits near the winter crest');
+  assert.equal(st.dec31, 200 + Math.round(100 * Math.cos(2 * Math.PI * 365 / 365)), '2024 is a leap year: Dec 31 lands on day-of-year 365');
+  assert.equal(st.nov, 0, 'the current year has no data after mid-July');
+});
+
+test('heatAbs / heatAnom: ramp binning, diverging direction classes', () => {
+  const app = loadApp();
+  assert.equal(app.run(`heatAbs(0, 0, 100)`), '░');
+  assert.equal(app.run(`heatAbs(99, 0, 100)`), '█');
+  assert.equal(app.run(`heatAbs(-50, 0, 100)`), '░', 'below-range clamps');
+  assert.equal(app.run(`heatAbs(500, 0, 100)`), '█', 'above-range clamps');
+  assert.deepEqual(app.run(`heatAnom(0.1)`), { ch: '·', cls: 'd' }, 'near-normal is the neutral midpoint');
+  assert.deepEqual(app.run(`heatAnom(3)`), { ch: '█', cls: 'w2' }, 'very wet: densest glyph, flood accent');
+  assert.deepEqual(app.run(`heatAnom(-3)`), { ch: '█', cls: 's' }, 'very dry: densest glyph, drought accent');
+  assert.equal(app.run(`heatAnom(1)`).ch, '▒');
+});
+
+test('drawHistYears: all three sections render inside the grid, at both widths', () => {
+  for (const width of [390, 1200]) {
+    const app = loadApp({ width, now: JULY });
+    seedArchive(app);
+    const { rows, cols, html } = app.run(`(() => {
+      const g = makeGrid(histGridRows(histStats()));
+      drawHistYears(g);
+      return { rows: g.ch.map(r => r.join('')), cols: COLS, html: gridToHtml(g) };
+    })()`);
+    const flat = rows.join('\n');
+    for (const y of ['2024', '2025', '2026']) assert.ok(flat.includes(y), `${cols} cols: year row ${y}`);
+    assert.ok(flat.includes('[ABS]') && flat.includes('[ANOM]'), `${cols} cols: mode toggles`);
+    assert.ok(html.includes('data-st="cmd:live"'), `${cols} cols: back target`);
+    assert.ok(html.includes('data-st="cmd:hy:2024"'), `${cols} cols: year rows are pickable`);
+    // the overlay's month axis is the last drawn row — if it shows, nothing was clipped
+    const axisRe = cols === 84 ? /JAN.*FEB.*DEC/ : /J.+F.+M.+A.+M.+J.+J.+A.+S.+O.+N.+D/;
+    assert.ok(rows.some(r => axisRe.test(r)), `${cols} cols: axes drawn`);
+    assert.ok(rows[rows.length - 2].trim().length > 0, `${cols} cols: axis row inside the grid`);
+    for (const r of rows) assert.ok(r.length <= cols, `${cols} cols: no row overflows`);
+    assert.ok(flat.includes('█'), `${cols} cols: the selected year draws as a bold line`);
+  }
+});
+
+test('drawHistYears: anomaly mode shades wet months blue and dry months warm', () => {
+  const app = loadApp({ now: JULY });
+  // 2026: January +150 (wet), May/June -150 (dry) against the 2024/25 baseline
+  seedArchive(app, `y === 2026 && m === 0 ? 150 : y === 2026 && (m === 4 || m === 5) ? -150 : 0`);
+  const cls = app.run(`(() => {
+    histMode = 'anom';
+    const g = makeGrid(histGridRows(histStats()));
+    drawHistYears(g);
+    histMode = 'abs';
+    const row2026 = 4 + 2; // heatTop + index of 2026
+    return { jan: g.cl[row2026].slice(5, 9), jun: g.cl[row2026].slice(5 + 5 * 5, 5 + 5 * 5 + 4) };
+  })()`);
+  assert.ok(cls.jan.every(c => c === 'w2'), 'january cells wear the wet accent');
+  assert.ok(cls.jun.every(c => c === 's'), 'june cells wear the dry accent');
+});
+
+test('drawHistYears: too little data says so instead of drawing noise', () => {
+  const app = loadApp({ now: JULY });
+  app.run(`state.archive = [[${JULY} - 864e5, 100], [${JULY}, 110]]; histCache = null; state.repoArchive = 'none'`);
+  const flat = app.run(`(() => {
+    const g = makeGrid(histGridRows(histStats()));
+    drawHistYears(g);
+    return g.ch.map(r => r.join('')).join('\\n');
+  })()`);
+  assert.ok(flat.includes('no multi-year archive'), 'the none-manifest case is named');
+});
+
+// ---------- wave view (river station × day heatmap) ----------
+
+test('foldYearsIntoWindow: maps archive days into the window across a year boundary', () => {
+  const app = loadApp();
+  const day0 = app.run(`epochDay(Date.UTC(2025, 11, 30))`); // window starts Dec 30
+  const vals = app.run(`(() => {
+    const vals = Array(6).fill(null);
+    foldYearsIntoWindow([
+      { y: 2025, min: Array(363).fill(null).concat([100, 120]), max: Array(363).fill(null).concat([110, 130]) },
+      { y: 2026, min: [200, null, 220], max: [210, null, 230] },
+    ], vals, ${day0});
+    return vals;
+  })()`);
+  assert.deepEqual(vals, [105, 125, 205, null, 225, null], 'daily mid = (min+max)/2, gaps stay null');
+});
+
+test('drawWave: rows render per-station scaled, labeled and inside the grid', () => {
+  for (const width of [390, 1200]) {
+    const app = loadApp({ width, now: JULY });
+    const { rows, cols, html } = app.run(`(() => {
+      const nDays = WAVE_FETCH_DAYS;
+      const day0 = epochDay(Date.now()) - (nDays - 1);
+      const mk = (name, kind, base) => ({ name, km: 0, kind,
+        vals: Array.from({ length: nDays }, (_, i) => base + (i % 20)) });
+      const w = { river: 'TESTFLUSS', day0, nDays, shown: 3, total: 5, rows: [
+        mk('OBEN', 'normal', 100), mk('MITTE', 'high', 500),
+        { name: 'FLAT', km: 0, kind: 'low', vals: Array(nDays).fill(42) },
+      ]};
+      const g = makeGrid(waveGridRows(w));
+      drawWave(g, w);
+      return { rows: g.ch.map(r => r.join('')), cols: COLS, html: gridToHtml(g) };
+    })()`);
+    const flat = rows.join('\n');
+    assert.ok(flat.includes('OBEN') && flat.includes('MITTE'), `${cols} cols: station names`);
+    assert.ok(flat.includes('3 of 5') || cols === 44, `${cols} cols: sampling is disclosed`);
+    assert.ok(flat.includes('≋ downstream ↓'), `${cols} cols: flow marker`);
+    assert.ok(html.includes('data-st="OBEN"'), `${cols} cols: rows are click targets`);
+    assert.ok(html.includes('data-st="cmd:live"'), `${cols} cols: back target`);
+    const flatRow = rows[5];
+    assert.ok(/▒+\s*$/.test(flatRow) && !flatRow.includes('█'), `${cols} cols: a flat station renders mid-shade, not noise`);
+    for (const r of rows) assert.ok(r.length <= cols, `${cols} cols: no row overflows`);
+  }
+});
+
+// ---------- sub-view switching ----------
+
+test('setView: mode guards, URL round-trip, wrong-mode boot normalizes', () => {
+  const app = loadApp({ search: '?station=BONN&view=years' });
+  assert.equal(app.run('viewMode'), 'years', 'boots into the years view from the URL');
+  app.run(`setView('wave')`);
+  assert.equal(app.run('viewMode'), 'years', 'wave is river-only and bounces off station mode');
+  app.run(`setView('live')`);
+  assert.equal(app.run('viewMode'), 'live');
+
+  const river = loadApp({ search: '?river=RHEIN&view=years' });
+  assert.equal(river.run('viewMode'), 'live', 'years is station-only: normalized away at boot');
+  river.run(`setView('wave')`);
+  assert.equal(river.run('viewMode'), 'wave');
+
+  const junk = loadApp({ search: '?station=BONN&view=nonsense' });
+  assert.equal(junk.run('viewMode'), 'live');
+});
+
+test('parseCommand / helpText: --view is a first-class flag', () => {
+  const app = loadApp();
+  assert.equal(app.run(`parseCommand('--view YEARS').view`), 'years', 'value is lowercased');
+  assert.equal(app.run(`parseCommand('--station X').view`), undefined);
+  assert.ok(app.run('helpText(null)').includes('--view'), 'man page mentions --view');
+});
+
+test('cropWaveWindow: cuts leading days until half the rows have data', () => {
+  const app = loadApp();
+  const rows = JSON.stringify([
+    { vals: [null, null, 1, 1, 1] },
+    { vals: [null, 2, 2, 2, 2] },
+    { vals: [null, null, null, 3, 3] },
+  ]);
+  assert.equal(app.run(`cropWaveWindow(${rows}, 5)`), 2, 'day 2 is the first with >= 2 of 3 rows covered');
+  assert.equal(app.run(`cropWaveWindow([{ vals: [1, 1] }], 2)`), 0, 'full coverage cuts nothing');
+  assert.equal(app.run(`cropWaveWindow([], 5)`), 0, 'no rows, no cut');
+  assert.equal(app.run(`cropWaveWindow([{ vals: [null, null] }], 2)`), 0, 'never-covered window stays uncut');
+});
+
+test('drawWave: a short window right-aligns against now', () => {
+  const app = loadApp({ now: JULY });
+  const rows = app.run(`(() => {
+    const nDays = 20;
+    const day0 = epochDay(Date.now()) - (nDays - 1);
+    const w = { river: 'X', day0, nDays, shown: 1, total: 1, rows: [
+      { name: 'OBEN', km: 0, kind: 'normal', vals: Array.from({ length: nDays }, (_, i) => i) },
+    ]};
+    const g = makeGrid(waveGridRows(w));
+    drawWave(g, w);
+    return g.ch.map(r => r.join(''));
+  })()`);
+  const dataRow = rows[3];
+  assert.ok(/█\s*$/.test(dataRow), 'the newest day sits at the right edge');
+  assert.equal(dataRow.trimEnd().length, 84, 'right-aligned to the last column');
+});
