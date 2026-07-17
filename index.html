@@ -160,22 +160,22 @@
       transition: opacity 0.3s, scale 0.3s, background 0.15s, color 0.15s;
       @starting-style { opacity: 0; scale: 0.7; }
     }
-    /* the infobox dialog fades/slides in and out; display+overlay animate via
-       allow-discrete, @starting-style supplies the from-state on showModal() */
-    #infobox {
+    /* the infobox/reportbox dialogs fade/slide in and out; display+overlay animate
+       via allow-discrete, @starting-style supplies the from-state on showModal() */
+    #infobox, #reportbox {
       opacity: 0;
       translate: 0 0.8em;
       transition: opacity 0.25s, translate 0.25s, display 0.25s allow-discrete, overlay 0.25s allow-discrete;
     }
-    #infobox[open] { opacity: 1; translate: 0 0; }
-    #infobox::backdrop {
+    #infobox[open], #reportbox[open] { opacity: 1; translate: 0 0; }
+    #infobox::backdrop, #reportbox::backdrop {
       opacity: 0;
       transition: opacity 0.25s, display 0.25s allow-discrete, overlay 0.25s allow-discrete;
     }
-    #infobox[open]::backdrop { opacity: 1; }
+    #infobox[open]::backdrop, #reportbox[open]::backdrop { opacity: 1; }
     @starting-style {
-      #infobox[open] { opacity: 0; translate: 0 0.8em; }
-      #infobox[open]::backdrop { opacity: 0; }
+      #infobox[open], #reportbox[open] { opacity: 0; translate: 0 0.8em; }
+      #infobox[open]::backdrop, #reportbox[open]::backdrop { opacity: 0; }
     }
   }
   #local-detail .arow.cur { color: var(--ink); font-weight: 700; }
@@ -231,7 +231,7 @@
   /* two separate attributions, one line each — as one run they broke mid-phrase
      ("… WSV, refreshed / every 5 min") and left the separator dangling */
   #footer-credits span { display: block; }
-  #infobox {
+  #infobox, #reportbox {
     color: var(--ink);
     background: var(--paper);
     border: 2px solid var(--ink);
@@ -243,11 +243,11 @@
     overflow: auto;
     overscroll-behavior: contain; /* keep wheel momentum from scrolling the page behind */
   }
-  #infobox::backdrop {
+  #infobox::backdrop, #reportbox::backdrop {
     background: color-mix(in oklab, var(--paper) 55%, transparent);
     backdrop-filter: blur(1.5px);
   }
-  #infobox-head {
+  #infobox-head, #reportbox-head {
     display: flex;
     justify-content: space-between;
     align-items: baseline;
@@ -255,8 +255,8 @@
     border-bottom: 2px solid var(--ink);
     padding-bottom: 0.6em;
   }
-  #infobox-title { font-weight: 700; }
-  #infobox-close {
+  #infobox-title, #reportbox-title { font-weight: 700; }
+  #infobox-close, #reportbox-close {
     font: inherit;
     color: var(--ink);
     background: none;
@@ -264,17 +264,48 @@
     padding: 0 0.6ch;
     cursor: pointer;
   }
-  #infobox-close:hover { background: var(--ink); color: var(--paper); }
+  #infobox-close:hover, #reportbox-close:hover { background: var(--ink); color: var(--paper); }
   #infobox dl { margin: 0; }
   #infobox dt { font-weight: 700; text-transform: uppercase; margin-top: 1.1em; }
   #infobox dd { margin: 0.25em 0 0; color: var(--mid); }
   #infobox dd b { color: var(--ink); font-weight: 400; }
+  #reportbox-intro { color: var(--mid); margin: 0.8em 0 0; line-height: 1.5; }
+  #reportbox label {
+    display: block;
+    margin-top: 1.1em;
+    font-weight: 700;
+    text-transform: uppercase;
+    font-size: 0.85em;
+  }
+  #reportbox textarea {
+    display: block;
+    width: 100%;
+    margin-top: 0.4em;
+    font: inherit;
+    font-size: 0.82em;
+    color: var(--ink);
+    background: transparent;
+    border: 1px solid var(--ink);
+    padding: 0.5em 0.6ch;
+    resize: vertical;
+  }
+  #report-preview { color: var(--mid); white-space: pre-wrap; }
+  #reportbox-actions { margin-top: 1em; display: flex; gap: 0.6em; flex-wrap: wrap; }
+  #reportbox-actions button {
+    font: inherit;
+    color: var(--ink);
+    background: none;
+    border: 1px solid var(--ink);
+    padding: 0.3em 0.9ch;
+    cursor: pointer;
+  }
+  #reportbox-actions button:hover { background: var(--ink); color: var(--paper); }
   @media (max-width: 640px) {
     main { margin-top: 2vh; padding: 1em 0.7em; }
     footer { margin: 1em 0.7em 2em; }
     form .cont { padding-left: 0; } /* the indent costs more than the alignment is worth here */
     #recent button, #history-bar button { padding: 0.2em 0.7ch; } /* a little more tap area */
-    #infobox { padding: 1em 0.9em; max-width: calc(100vw - 1.6em); }
+    #infobox, #reportbox { padding: 1em 0.9em; max-width: calc(100vw - 1.6em); }
   }
 </style>
 </head>
@@ -371,9 +402,27 @@
       handles it.</dd>
   </dl>
 </dialog>
+<dialog id="reportbox" closedby="any" aria-labelledby="reportbox-title">
+  <div id="reportbox-head">
+    <span id="reportbox-title">PEGEL(7) · report an issue</span>
+    <button id="reportbox-close" type="button" aria-label="close">×</button>
+  </div>
+  <p id="reportbox-intro">The report below is built from what's on screen right now — station,
+    range, live values — so a bug never boils down to "the river looked wrong". Nothing leaves
+    this page until you pick a route below.</p>
+  <label for="report-note">what did you expect to see?</label>
+  <textarea id="report-note" rows="3" placeholder="optional — describe the bug in your own words"></textarea>
+  <label for="report-preview">report body (reviewed before it goes anywhere)</label>
+  <textarea id="report-preview" rows="14" readonly></textarea>
+  <div id="reportbox-actions">
+    <button id="report-github" type="button">file on GitHub</button>
+    <button id="report-copy" type="button">copy to clipboard</button>
+  </div>
+</dialog>
 <footer>
   <nav id="footer-nav" aria-label="site">
     <a href="#" id="info-link">info</a>
+    · <a href="#" id="report-link">report issue</a>
     · <a href="#" id="share-link">share</a>
     · <a href="https://github.com/bmmmm/pegel-visual" rel="noopener">source</a>
     · <a href="https://ko-fi.com/bmabma" rel="noopener">support on ko-fi</a>
@@ -388,6 +437,9 @@
 'use strict';
 
 const API = 'https://www.pegelonline.wsv.de/webservices/rest-api/v2';
+// sed-replaced with the deployed commit sha by .github/workflows/pages.yml;
+// stays 'dev' locally and whenever the placeholder wasn't replaced
+const APP_COMMIT = '__COMMIT__';
 // the grid is 84 columns wide on desktop; on screens where that would shrink the
 // font below ~8px it switches to a 44-column compact layout instead (see fitFont)
 let COLS = 84;
@@ -2771,6 +2823,160 @@ shareLink.addEventListener('click', async e => {
       setTimeout(() => { shareLink.textContent = 'share'; }, 1500);
     }
   } catch { /* user dismissed the share sheet */ }
+});
+
+// ---------- report issue ----------
+//
+// everything the renderer branches on, so a report never boils down to "the
+// river looked wrong". Sections are ordered most- to least-essential; when the
+// GitHub URL route would exceed the practical ~8KB URL limit, buildReportUrl
+// drops whole optional sections (largest first) in favor of a "[trimmed]"
+// placeholder rather than cutting any single value mid-string. The clipboard
+// route always gets the full, untrimmed body — it has no URL length limit.
+const GITHUB_REPORT_URL_LIMIT = 8000;
+
+function reportTitle() {
+  return mode === 'river' ? `bug report: river ${state.river}` : `bug report: ${station}`;
+}
+
+// switchStation/switchRiver persist ?adsb=/?ais= straight into the URL, so the
+// page's own address can carry the user's home network receiver — strip those
+// two params before the URL is ever quoted in a report
+function sanitizedReportUrl() {
+  const q = new URLSearchParams(location.search);
+  q.delete('adsb');
+  q.delete('ais');
+  const qs = q.toString();
+  return location.origin + location.pathname + (qs ? '?' + qs : '');
+}
+
+// returns an ordered list of { name, required, text } sections; `required`
+// sections are never dropped by the GitHub-URL trimmer
+function buildReportSections(note) {
+  const cur = state.gauge && state.gauge.currentMeasurement;
+  const trend = trendPerHour();
+  const vw = document.documentElement.clientWidth || 0;
+  const vh = document.documentElement.clientHeight || 0;
+
+  const context = [
+    `- URL: ${sanitizedReportUrl()}`,
+    `- station: ${station}`,
+    `- mode: ${mode}`,
+  ];
+  if (state.info && state.info.water) context.push(`- water: ${state.info.water.shortname}`);
+  if (state.info && state.info.km != null) context.push(`- river km: ${state.info.km}`);
+  if (mode === 'river' && state.river) context.push(`- river (whole-river view): ${state.river}`);
+
+  const archive = [
+    `- history range: ${historyKey}`,
+    `- points in local archive: ${state.archive.length}`,
+    `- hosted WSV archive loaded: ${state.repoArchive === 'available'}`,
+  ];
+
+  const viewport = [
+    `- COLS: ${COLS}`,
+    `- viewport: ${vw}×${vh}`,
+  ];
+
+  const diagnostics = [
+    `- flowLowKm: ${state.flowLowKm}`,
+    `- neighbors: ${state.neighbors.length}`,
+  ];
+  if (state.error) diagnostics.push(`- error: ${state.error}`);
+
+  const live = [
+    `- W: ${cur ? cur.value + ' cm' : 'n/a'}`,
+    `- WT: ${state.wt != null ? state.wt.toFixed(1) + ' °C' : 'n/a'}`,
+    `- Q: ${state.q != null ? Math.round(state.q) + ' m³/s' : 'n/a'}`,
+    `- trend: ${trend != null ? trend.toFixed(1) + ' cm/h' : 'n/a'}`,
+    `- state: ${cur ? (cur.stateMnwMhw || 'unknown') : 'n/a'}`,
+  ];
+
+  // configured means "a URL is set", regardless of live fetch result — never
+  // the URL itself, it's a home network address
+  const receivers = [
+    `- adsb configured: ${!!adsbRaw}`,
+    `- ais configured: ${!!aisRaw}`,
+  ];
+
+  const app = [
+    `- app commit: ${APP_COMMIT === '__COMMIT__' ? 'dev' : APP_COMMIT}`,
+    `- user agent: ${navigator.userAgent || 'unknown'}`,
+    `- timestamp: ${new Date().toISOString()}`,
+  ];
+
+  return [
+    { name: 'context', required: true, text: context.join('\n') },
+    { name: 'history & archive', required: false, text: archive.join('\n') },
+    { name: 'viewport', required: false, text: viewport.join('\n') },
+    { name: 'diagnostics', required: false, text: diagnostics.join('\n') },
+    { name: 'live values', required: false, text: live.join('\n') },
+    { name: 'receivers', required: false, text: receivers.join('\n') },
+    { name: 'app', required: false, text: app.join('\n') },
+    { name: 'reporter note', required: false, text: note && note.trim() ? note.trim() : '_(no note provided)_' },
+  ];
+}
+
+function composeReportBody(sections) {
+  return sections.map(s => `### ${s.name}\n${s.text}`).join('\n\n');
+}
+
+// the full, untrimmed markdown body — used for the preview and the clipboard route
+function buildReportBody(note) {
+  return composeReportBody(buildReportSections(note));
+}
+
+function reportGithubBase() {
+  return 'https://github.com/bmmmm/pegel-visual/issues/new';
+}
+
+// the GitHub route needs the whole URL (base + title + body, all percent-encoded)
+// to stay under the practical browser/server limit; trims by dropping whole
+// optional sections (largest text first) rather than truncating any value
+function buildReportUrl(note) {
+  const title = reportTitle();
+  const sections = buildReportSections(note);
+  const urlFor = secs => `${reportGithubBase()}?title=${encodeURIComponent(title)}&body=${encodeURIComponent(composeReportBody(secs))}`;
+  let url = urlFor(sections);
+  const droppable = sections.filter(s => !s.required).sort((a, b) => b.text.length - a.text.length);
+  for (const victim of droppable) {
+    if (url.length <= GITHUB_REPORT_URL_LIMIT) break;
+    victim.text = '_[trimmed]_';
+    url = urlFor(sections);
+  }
+  return url;
+}
+
+const reportbox = document.getElementById('reportbox');
+const reportNote = document.getElementById('report-note');
+const reportPreview = document.getElementById('report-preview');
+const reportLink = document.getElementById('report-link');
+const reportGithubBtn = document.getElementById('report-github');
+const reportCopyBtn = document.getElementById('report-copy');
+
+function updateReportPreview() {
+  reportPreview.value = buildReportBody(reportNote.value);
+}
+
+reportLink.addEventListener('click', e => {
+  e.preventDefault();
+  reportNote.value = '';
+  updateReportPreview();
+  reportbox.showModal();
+  reportNote.focus();
+});
+reportNote.addEventListener('input', updateReportPreview);
+document.getElementById('reportbox-close').addEventListener('click', () => reportbox.close());
+
+reportGithubBtn.addEventListener('click', () => {
+  window.open(buildReportUrl(reportNote.value), '_blank', 'noopener');
+});
+reportCopyBtn.addEventListener('click', async () => {
+  try {
+    await navigator.clipboard.writeText(buildReportBody(reportNote.value));
+    reportCopyBtn.textContent = 'copied!';
+    setTimeout(() => { reportCopyBtn.textContent = 'copy to clipboard'; }, 1500);
+  } catch { /* clipboard permission denied — the body stays visible in the textarea to select manually */ }
 });
 
 // ---------- main loop ----------
