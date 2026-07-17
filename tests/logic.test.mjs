@@ -922,3 +922,46 @@ test('pages stamp: only the APP_COMMIT const line carries the __COMMIT__ literal
   assert.equal(lines.length, 1, 'the pages sed stamps every matching line — a second literal turns the dev guard always-true');
   assert.match(lines[0], /const APP_COMMIT = '__COMMIT__'/);
 });
+
+test('archive script: January freeze prefers ZIP days, REST fills only ZIP gaps', async () => {
+  const { freezeFromZip } = await import('../scripts/fetch-wsv-archive.mjs');
+  const { mkdtempSync, writeFileSync, readFileSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const dir = mkdtempSync(join(tmpdir(), 'pegel-freeze-'));
+  const n = 365; // 2026
+  const cur = { y: 2026, min: Array(n).fill(null), max: Array(n).fill(null) };
+  cur.min[10] = 80; cur.max[10] = 300; // monthly snapshot caught a since-corrected spike
+  cur.min[20] = 120; cur.max[20] = 130; // day the ZIP archive is missing
+  writeFileSync(join(dir, 'current.json'), JSON.stringify(cur));
+  const zy = { min: Array(n).fill(null), max: Array(n).fill(null) };
+  zy.min[10] = 81; zy.max[10] = 95; // the archive's corrected day
+  const frozen = await freezeFromZip(dir, 'uuid-x', 2026, async () => ({ years: new Map([[2026, zy]]) }));
+  assert.equal(frozen, true);
+  const out = JSON.parse(readFileSync(join(dir, 'current.json')));
+  assert.equal(out.max[10], 95, 'ZIP day wins — the REST outlier does not survive into the bundle');
+  assert.equal(out.min[10], 81);
+  assert.equal(out.min[20], 120, 'REST fills only ZIP-null days');
+  assert.equal(out.max[20], 130);
+});
+
+test('archive script: ZIP freeze skips without fetching and fails loudly without clobbering', async () => {
+  const { freezeFromZip } = await import('../scripts/fetch-wsv-archive.mjs');
+  const { mkdtempSync, writeFileSync, readFileSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  // no current.json -> nothing to freeze, the ZIP endpoint must not even be hit
+  const empty = mkdtempSync(join(tmpdir(), 'pegel-freeze-skip-'));
+  assert.equal(await freezeFromZip(empty, 'u', 2026, async () => { throw new Error('must not fetch'); }), false);
+  // ZIP path down -> throws (caller falls back), REST accumulation left untouched
+  const dir = mkdtempSync(join(tmpdir(), 'pegel-freeze-fail-'));
+  const cur = { y: 2026, min: [100], max: [110] };
+  writeFileSync(join(dir, 'current.json'), JSON.stringify(cur));
+  await assert.rejects(
+    () => freezeFromZip(dir, 'u', 2026, async () => { throw new Error('prepare failed (503)'); }),
+    /prepare failed/);
+  assert.deepEqual(JSON.parse(readFileSync(join(dir, 'current.json'))), cur, 'accumulation preserved for the fallback graduation');
+  // ZIP reachable but empty for the year -> false, accumulation graduates as-is
+  assert.equal(await freezeFromZip(dir, 'u', 2026, async () => ({ years: new Map() })), false);
+  assert.deepEqual(JSON.parse(readFileSync(join(dir, 'current.json'))), cur);
+});

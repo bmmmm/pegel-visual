@@ -29,7 +29,9 @@
 //
 // Usage:
 //   node scripts/fetch-wsv-archive.mjs                    # backfill 2000..last year (ZIP)
-//   node scripts/fetch-wsv-archive.mjs --current          # refresh running year (REST)
+//   node scripts/fetch-wsv-archive.mjs --current          # refresh running year (REST;
+//                                        # January: ZIP re-backfill of the completed
+//                                        # year, REST accumulation as fallback)
 //   node scripts/fetch-wsv-archive.mjs --station BONN     # one station
 //   node scripts/fetch-wsv-archive.mjs --from 2020 --to 2024 --out archive
 //   node scripts/fetch-wsv-archive.mjs --migrate --out archive  # year files -> bundles
@@ -316,6 +318,31 @@ export function writeStation(dir, name, years, fetchedFrom, fetchedThrough) {
   return touched;
 }
 
+// January freeze, ZIP-first: re-backfill the completed year from the archive
+// download (the same raw series the backfill uses; measured 27/29 overlap days
+// byte-identical to REST) before the REST accumulation graduates. Where the ZIP
+// has data its day wins — an extreme-union would let a since-corrected outlier
+// from the monthly snapshots survive into the immutable bundle — and the REST
+// accumulation only fills days the ZIP is missing (receiver outages, late
+// telemetry). Returns true when current.json was rewritten to the ZIP-backed
+// year (the caller may then claim fetchedThrough = y); false when there is
+// nothing to freeze; throws when the ZIP path fails (the caller graduates the
+// REST accumulation as before and leaves meta low so the gap sweep retries).
+export async function freezeFromZip(dir, uuid, y, fetchYear = fetchCondensed) {
+  const cur = readJson(join(dir, 'current.json'));
+  if (!cur || cur.y !== y) return false; // already graduated or never accumulated
+  const { years } = await fetchYear(uuid, y, `${y}-12-31`);
+  const zy = years.get(y);
+  if (!zy || !zy.min.some(v => v != null)) return false; // ZIP has nothing better
+  const min = zy.min.slice(), max = zy.max.slice();
+  for (let d = 0; d < min.length; d++) {
+    if (min[d] == null) min[d] = cur.min[d];
+    if (max[d] == null) max[d] = cur.max[d];
+  }
+  writeFileSync(join(dir, 'current.json'), JSON.stringify({ y, min, max }));
+  return true;
+}
+
 // Plan A seed reformat: fold one station's per-year files into a single sorted
 // closed.json bundle and delete them. Pure reformat — no WSV data changes.
 export function migrateStation(dir) {
@@ -400,6 +427,25 @@ async function main() {
       const { years, pts } = CURRENT_ONLY
         ? await fetchCurrentViaRest(s.uuid)
         : await fetchCondensed(s.uuid, startYear, `${TO}-12-31`);
+      if (CURRENT_ONLY) {
+        // a REST refresh proves nothing about closed years, so it must not bump
+        // meta.fetchedThrough — that would cancel the gap sweep for stations
+        // whose ZIP backfill is still pending. Only a successful January ZIP
+        // freeze of the completed year may claim it.
+        fetchedThrough = 0;
+        if (startYear < CURRENT_YEAR) {
+          try {
+            if (await freezeFromZip(dir, s.uuid, startYear)) {
+              fetchedThrough = startYear;
+              // the ZIP spans all of December — drop the REST tail of the frozen
+              // year so writeStation's extreme-union cannot reintroduce it
+              years.delete(startYear);
+            }
+          } catch (e) {
+            console.log(`${tag} · zip freeze failed (${e.message}) — REST accumulation graduates, gap sweep heals ${startYear}`);
+          }
+        }
+      }
       const touched = writeStation(dir, s.shortname, years, startYear, fetchedThrough);
       console.log(`${tag} · ${pts} pts -> ${touched} year(s)`);
       ok++;

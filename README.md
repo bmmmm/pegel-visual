@@ -44,8 +44,10 @@ _      _      _      _      _      _      _      _
   `1Y` / `5Y` / `ALL` fetches just three files same-origin (manifest +
   bundle + running year) and merges them into your local archive on the
   fly. A monthly CI run refreshes the running year from the PEGELONLINE
-  REST API (30 days at a time); each January the completed year graduates
-  into the immutable bundle. The live API covers the newest 30 days on
+  REST API (35 days at a time); each January the completed year is
+  re-backfilled from the WSV archive download — the monthly snapshots
+  only fill days the archive is missing — and graduates into the
+  immutable bundle. The live API covers the newest 30 days on
   top, so the site is never more than a month stale. Multi-year views are
   flagged as *unvalidated raw data*, since WSV serves these values
   unchecked (outliers and gaps included; the manifest records a per-station
