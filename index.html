@@ -2901,7 +2901,9 @@ function buildReportSections(note) {
   ];
 
   const app = [
-    `- app commit: ${APP_COMMIT === '__COMMIT__' ? 'dev' : APP_COMMIT}`,
+    // startsWith, not a literal placeholder comparison: the pages stamp sed
+    // replaces every matching line, which would turn that guard always-true
+    `- app commit: ${APP_COMMIT.startsWith('__') ? 'dev' : APP_COMMIT}`,
     `- user agent: ${navigator.userAgent || 'unknown'}`,
     `- timestamp: ${new Date().toISOString()}`,
   ];

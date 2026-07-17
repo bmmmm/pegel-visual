@@ -914,3 +914,11 @@ test('buildReportUrl: small reports pass through untrimmed', () => {
   assert.match(body, /short note/);
   assert.ok(!body.includes('[trimmed]'), 'nothing needed trimming at this size');
 });
+
+test('pages stamp: only the APP_COMMIT const line carries the __COMMIT__ literal', async () => {
+  const { readFileSync } = await import('node:fs');
+  const html = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
+  const lines = html.split('\n').filter(l => l.includes('__COMMIT__'));
+  assert.equal(lines.length, 1, 'the pages sed stamps every matching line — a second literal turns the dev guard always-true');
+  assert.match(lines[0], /const APP_COMMIT = '__COMMIT__'/);
+});
