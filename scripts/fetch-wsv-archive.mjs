@@ -1,26 +1,58 @@
 #!/usr/bin/env node
 // Fetches the WSV/PEGELONLINE historical raw archive (water levels since 2000,
-// DL-DE->Zero-2.0) and condenses it into small static year files the page can
-// serve same-origin:
+// DL-DE->Zero-2.0) and condenses it into small static files the page serves
+// same-origin:
 //
-//   archive/<station-uuid>/<year>.json    {"y":2024,"min":[...],"max":[...]}
-//   archive/<station-uuid>/current.json   same shape, running year, refreshed
-//   archive/<station-uuid>/meta.json      {"name":"BONN","fetchedThrough":2025}
+//   archive/<station-uuid>/closed.json   [{y:2000,min:[...],max:[...]}, ...]
+//                                        immutable bundle of every completed
+//                                        year, sorted; rewritten only when a
+//                                        year is added or the January freeze
+//                                        graduates the running year into it
+//   archive/<station-uuid>/current.json  {"y":2026,"min":[...],"max":[...]}
+//                                        running year, refreshed monthly
+//   archive/<station-uuid>/meta.json     {"name":"BONN","fetchedThrough":2025}
+//   archive/manifest.json                {n,w,from,to[,gaps]} | {n,w,none} per station
 //
 // min/max are ints (cm) or null per day (day boundaries in MEZ, matching the
 // archive's year-round UTC+1 timestamps); daily min+max keeps floods and
-// droughts visible at ~1/300 the raw size.
+// droughts visible at ~1/300 the raw size. One closed.json bundle means the
+// client fetches 3 files (manifest + closed + current), not 27.
 //
-// The endpoint sends its CORS header twice, so browsers cannot fetch it —
-// this script (run locally for the backfill, monthly via CI for the running
-// year) is the workaround. Be polite: sequential, throttled, resumable.
+// Two sources, one per run mode:
+//  - full backfill / gap sweep: the /gast/ ZIP endpoint (all years at once).
+//    Browsers cannot fetch it (doubled CORS header), so this runs locally / in
+//    CI. Be polite: sequential, throttled, resumable.
+//  - monthly --current refresh: the official REST API (30 days at 15-min
+//    resolution, ?start=P30D) — no CORS quirk, no ZIP prepare step. Condensed
+//    to daily min/max and upserted into current.json. In January the completed
+//    year graduates from current.json into closed.json (the freeze).
 //
 // Usage:
-//   node scripts/fetch-wsv-archive.mjs                    # backfill 2000..last year
-//   node scripts/fetch-wsv-archive.mjs --current          # refresh running year only
+//   node scripts/fetch-wsv-archive.mjs                    # backfill 2000..last year (ZIP)
+//   node scripts/fetch-wsv-archive.mjs --current          # refresh running year (REST)
 //   node scripts/fetch-wsv-archive.mjs --station BONN     # one station
 //   node scripts/fetch-wsv-archive.mjs --from 2020 --to 2024 --out archive
-import { mkdirSync, writeFileSync, readFileSync, readdirSync, existsSync } from 'node:fs';
+//   node scripts/fetch-wsv-archive.mjs --migrate --out archive  # year files -> bundles
+//
+// ---- Seed migration + deploy runbook (per-year files -> bundles, Plan A) ----
+// --migrate is a pure reformat of the existing per-year files into closed.json
+// bundles: NO WSV refetch. Run it against a checkout of the data branch and
+// reseed the branch as one fresh commit (copy-pasteable):
+//
+//   git worktree add /tmp/arch archive && cd /tmp/arch
+//   node <repo>/scripts/fetch-wsv-archive.mjs --migrate --out archive
+//     # writes every archive/<uuid>/closed.json, deletes the <year>.json files,
+//     # regenerates archive/manifest.json (from/to/gaps derived from bundles)
+//   # update the branch README to the closed.json layout, then reseed:
+//   git checkout --orphan seed && git add -A && git commit -m "Seed archive: year bundles (Plan A)"
+//   git branch -M seed archive
+//   git push --force origin archive        # archive branch FIRST
+//   # then from the main worktree, push the client that reads bundles:
+//   git push origin main
+//   gh workflow run pages.yml --ref main   # one pages deploy
+//   # verify live as a fresh visitor: pick 20Y, the Network panel shows exactly
+//   # 3 archive requests (manifest.json, closed.json, current.json) and fills.
+import { mkdirSync, writeFileSync, readFileSync, readdirSync, existsSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { inflateRawSync } from 'node:zlib';
@@ -44,6 +76,7 @@ const OUT = opt('out', 'archive');
 const FROM = Number(opt('from', 2000));
 const TO = Number(opt('to', CURRENT_YEAR - 1));
 const CURRENT_ONLY = has('current');
+const MIGRATE = has('migrate');
 const ONLY_STATION = (opt('station', '') || '').toUpperCase();
 // workers overlap the server-side zip preparation (the actual bottleneck);
 // keep the default sequential so the monthly CI refresh stays extra polite
@@ -159,6 +192,21 @@ async function fetchCondensed(uuid, startYear, endDate) {
   }
 }
 
+// the monthly refresh's source: the official REST API serves the last 30 days
+// at 15-min resolution (?start=P30D) — no doubled-CORS quirk, no ZIP prepare
+// step. 30 days comfortably spans the monthly cadence; writeStation's per-day
+// merge absorbs the overlap, so widen the window (P32D...) if a boundary day
+// ever looks thinly sampled. condense buckets by MEZ day, so the live data's
+// DST offset (+02:00 in summer) folds onto the same day boundaries as the ZIP
+// archive's year-round UTC+1 timestamps.
+async function fetchCurrentViaRest(uuid) {
+  const url = `${API}/stations/${uuid}/W/measurements.json?start=P30D`;
+  const res = await fetch(url, { signal: AbortSignal.timeout(120000) });
+  if (!res.ok) throw new Error('REST measurements HTTP ' + res.status);
+  const measurements = await res.json();
+  return { years: condense(measurements), pts: measurements.length };
+}
+
 // one map over all W stations: archived ones carry their year range, the rest
 // are marked none — WSV simply has no pre-30-day archive for them (lock/weir
 // operating gauges, foreign partner gauges, some harbor and barrage gauges).
@@ -167,14 +215,21 @@ export function buildManifest(stations, out) {
   const manifest = { generated: new Date().toISOString(), stations: {} };
   for (const s of stations) {
     const dir = join(out, s.uuid);
-    let years = [];
-    try {
-      years = readdirSync(dir).filter(f => /^\d{4}\.json$/.test(f)).map(f => Number(f.slice(0, 4)));
-      if (existsSync(join(dir, 'current.json'))) years.push(CURRENT_YEAR);
-    } catch { /* no directory: never archived */ }
+    const years = [];
+    let gaps = 0; // honesty metadata: missing days within the closed bundle
+    for (const yr of readJson(join(dir, 'closed.json')) || []) {
+      years.push(yr.y);
+      for (let d = 0; d < yr.min.length; d++) if (yr.min[d] == null && yr.max[d] == null) gaps++;
+    }
+    if (existsSync(join(dir, 'current.json'))) years.push(CURRENT_YEAR);
     const entry = { n: s.shortname, w: (s.water && s.water.shortname) || '' };
-    if (years.length) { entry.from = Math.min(...years); entry.to = Math.max(...years); }
-    else entry.none = true;
+    if (years.length) {
+      entry.from = Math.min(...years);
+      entry.to = Math.max(...years);
+      if (gaps) entry.gaps = gaps;
+    } else {
+      entry.none = true; // WSV keeps no pre-30-day archive for this station
+    }
     manifest.stations[s.uuid] = entry;
   }
   writeFileSync(join(out, 'manifest.json'), JSON.stringify(manifest));
@@ -191,23 +246,105 @@ export function currentRunPlan() {
   };
 }
 
+const readJson = path => { try { return JSON.parse(readFileSync(path, 'utf8')); } catch { return null; } };
+
+// merge a condensed year (per-day min/max) into an existing {y,min,max}, keeping
+// the extreme per day so an overlapping refetch never drops a peak or a trough
+export function mergeYear(existing, y, data) {
+  const n = data.min.length;
+  if (!existing || existing.y !== y || existing.min.length !== n) {
+    return { y, min: data.min.slice(), max: data.max.slice() };
+  }
+  const min = existing.min.slice(), max = existing.max.slice();
+  for (let d = 0; d < n; d++) {
+    if (data.min[d] != null && (min[d] == null || data.min[d] < min[d])) min[d] = data.min[d];
+    if (data.max[d] != null && (max[d] == null || data.max[d] > max[d])) max[d] = data.max[d];
+  }
+  return { y, min, max };
+}
+
+// one code path for all three run modes (backfill, monthly --current, January
+// freeze): upsert the freshly condensed years into the immutable closed.json
+// bundle and the running-year current.json. A current.json holding a
+// now-completed year graduates into the bundle first (the freeze); years equal
+// to CURRENT_YEAR stay in current.json.
 export function writeStation(dir, name, years, fetchedFrom, fetchedThrough) {
   mkdirSync(dir, { recursive: true });
-  let files = 0;
+  const closedPath = join(dir, 'closed.json');
+  const currentPath = join(dir, 'current.json');
+  const closed = new Map((readJson(closedPath) || []).map(yr => [yr.y, yr]));
+  let current = readJson(currentPath);
+  let closedChanged = false;
+
+  if (current && current.y < CURRENT_YEAR) {
+    closed.set(current.y, mergeYear(closed.get(current.y), current.y, current));
+    closedChanged = true;
+    current = null; // the slot reopens for the new running year below
+  }
+
+  let touched = 0;
   for (const [y, data] of years) {
     if (!data.min.some(v => v != null)) continue; // station not live that year
-    const file = y === CURRENT_YEAR ? 'current.json' : `${y}.json`;
-    writeFileSync(join(dir, file), JSON.stringify({ y, min: data.min, max: data.max }));
-    files++;
+    if (y === CURRENT_YEAR) {
+      current = mergeYear(current, y, data);
+    } else {
+      closed.set(y, mergeYear(closed.get(y), y, data));
+      closedChanged = true;
+    }
+    touched++;
   }
+
+  if (closedChanged && closed.size) {
+    writeFileSync(closedPath, JSON.stringify([...closed.values()].sort((a, b) => a.y - b.y)));
+  }
+  if (current) writeFileSync(currentPath, JSON.stringify(current));
+  else if (existsSync(currentPath)) unlinkSync(currentPath); // graduated, nothing new yet
+
   const metaPath = join(dir, 'meta.json');
-  let meta = {};
-  try { meta = JSON.parse(readFileSync(metaPath, 'utf8')); } catch {}
+  const meta = readJson(metaPath) || {};
   meta.name = name;
   meta.fetchedFrom = Math.min(meta.fetchedFrom ?? fetchedFrom, fetchedFrom);
   meta.fetchedThrough = Math.max(meta.fetchedThrough || 0, fetchedThrough);
   writeFileSync(metaPath, JSON.stringify(meta));
-  return files;
+  return touched;
+}
+
+// Plan A seed reformat: fold one station's per-year files into a single sorted
+// closed.json bundle and delete them. Pure reformat — no WSV data changes.
+export function migrateStation(dir) {
+  let files;
+  try { files = readdirSync(dir).filter(f => /^\d{4}\.json$/.test(f)); }
+  catch { return 0; }
+  if (!files.length) return 0;
+  const bundle = files
+    .map(f => JSON.parse(readFileSync(join(dir, f), 'utf8')))
+    .sort((a, b) => a.y - b.y);
+  writeFileSync(join(dir, 'closed.json'), JSON.stringify(bundle));
+  for (const f of files) unlinkSync(join(dir, f));
+  return bundle.length;
+}
+
+// migrate every station dir under `out`, then rebuild manifest.json from the
+// station names/waters already recorded there (no network) so from/to/gaps
+// reflect the new bundles
+function migrateAll(out) {
+  let dirs = [];
+  try { dirs = readdirSync(out, { withFileTypes: true }).filter(d => d.isDirectory()).map(d => d.name); }
+  catch { console.log(`no archive dir at ${out}/`); return; }
+  let migrated = 0, entries = 0;
+  for (const uuid of dirs) {
+    const n = migrateStation(join(out, uuid));
+    if (n) { migrated++; entries += n; }
+  }
+  const old = readJson(join(out, 'manifest.json'));
+  if (old && old.stations) {
+    const stations = Object.entries(old.stations)
+      .map(([uuid, e]) => ({ uuid, shortname: e.n, water: { shortname: e.w } }));
+    buildManifest(stations, out);
+    console.log(`migrated ${migrated} stations (${entries} year entries) · manifest rebuilt for ${stations.length} stations`);
+  } else {
+    console.log(`migrated ${migrated} stations (${entries} year entries) · no manifest.json to rebuild`);
+  }
 }
 
 // ---------- main ----------
@@ -216,6 +353,7 @@ export function writeStation(dir, name, years, fetchedFrom, fetchedThrough) {
 if (import.meta.url === pathToFileURL(process.argv[1] || '').href) await main();
 
 async function main() {
+  if (MIGRATE) return migrateAll(OUT);
   const stations = (await (await fetch(`${API}/stations.json?includeTimeseries=true`)).json())
     .filter(s => (s.timeseries || []).some(ts => ts.shortname === 'W'))
     .filter(s => !ONLY_STATION || s.shortname.toUpperCase() === ONLY_STATION || s.uuid === ONLY_STATION.toLowerCase())
@@ -242,10 +380,11 @@ async function main() {
         startYear = resumable ? Math.max(FROM, (meta.fetchedThrough || 0) + 1) : FROM;
         fetchedThrough = TO;
       }
-      const endDate = CURRENT_ONLY ? currentRunPlan().endDate : `${TO}-12-31`;
-      const { years, pts } = await fetchCondensed(s.uuid, startYear, endDate);
-      const files = writeStation(dir, s.shortname, years, startYear, fetchedThrough);
-      console.log(`${tag} · ${pts} pts -> ${files} file(s)`);
+      const { years, pts } = CURRENT_ONLY
+        ? await fetchCurrentViaRest(s.uuid)
+        : await fetchCondensed(s.uuid, startYear, `${TO}-12-31`);
+      const touched = writeStation(dir, s.shortname, years, startYear, fetchedThrough);
+      console.log(`${tag} · ${pts} pts -> ${touched} year(s)`);
       ok++;
     } catch (e) {
       console.log(`${tag} · FAILED: ${e.message}`);
