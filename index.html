@@ -432,7 +432,8 @@
       the heatmap to put it on top. Built from the same daily WSV archive the
       1Y/5Y/ALL ranges use.</dd>
     <dt>wave view</dt>
-    <dd>In river mode, <b>[▦ WAVE]</b> (or <b>?view=wave</b>) draws the whole
+    <dd>In river mode, the <b>PROFILE / ▦ WAVE</b> chips under the prompt,
+      <b>[▦ WAVE]</b> in the header or <b>?view=wave</b> draw the whole
       river as a station × day heatmap: rows run downstream, columns are days,
       dark cells are high water — a flood wave shows up as a diagonal ridge
       rolling down the screen. Each row is scaled to its own station. Data:
@@ -552,9 +553,9 @@ function applyRiverChrome() {
 function applyModeChrome() {
   const river = mode === 'river';
   document.getElementById('localbar').hidden = river;
-  document.getElementById('history-bar').hidden = river;
   if (river) document.getElementById('recent').hidden = true;
-  else { renderRecent(); renderHistoryBar(); } // the bar's shape depends on the sub-view
+  else renderRecent();
+  renderHistoryBar(); // stays visible in river mode too — it carries the view chips
 }
 
 if (mode !== 'river') applyStationChrome();
@@ -2704,11 +2705,11 @@ function setView(v, push = true) {
   }
 }
 
-// in-grid controls (data-st="cmd:…"): view switches and years-view toggles
+// controls shared by the in-grid targets (data-st="cmd:…") and the bar chips
 function runGridCmd(c) {
   if (c === 'live') setView('live');
   else if (c === 'wave') setView('wave');
-  else if (c === 'abs' || c === 'anom') { histMode = c; dirty = true; }
+  else if (c === 'abs' || c === 'anom') { histMode = c; dirty = true; renderHistoryBar(); }
   else if (c.startsWith('hy:')) { histYear = +c.slice(3); dirty = true; }
 }
 
@@ -3144,23 +3145,33 @@ document.getElementById('prompt').addEventListener('submit', e => {
   (document.activeElement === riverInput ? applyRiver : applyPrompt)();
 });
 // stations drawn into the grid (river markers/labels/trouble rows, profile
-// neighbors) are click targets — delegated so the 8 fps innerHTML swap can't
-// detach a listener mid-click. The swap also races real clicks: when a repaint
-// lands between mousedown and mouseup, the click fires on #screen itself, so
-// fall back to whatever now sits at the pointer position
-screen.addEventListener('click', e => {
-  let el = e.target.closest && e.target.closest('[data-st]');
-  if (!el && e.clientX != null) {
-    const hit = document.elementFromPoint(e.clientX, e.clientY);
-    el = hit && hit.closest('[data-st]');
-  }
-  if (!el) return;
-  const st = el.dataset.st;
-  // river:NAME targets open the whole-river profile (self labels, suggest rows);
-  // cmd:… targets are in-grid controls (view switches, heatmap toggles)
+// neighbors) and cmd:… controls are click targets. Native click events race
+// the animated views' innerHTML swap: when a repaint lands between mousedown
+// and mouseup the browser may never synthesize a click at all, which read as
+// "I have to double-click". So the target is resolved at pointerdown time and
+// the action fires on pointerup — unless the pointer moved away, which is a
+// scroll or drag, not a click.
+function actOnGridTarget(st) {
+  // river:NAME opens the whole-river profile (self labels, suggest rows);
+  // cmd:… are in-grid controls (view switches, heatmap toggles)
   if (st.startsWith('cmd:')) runGridCmd(st.slice(4));
   else if (st.startsWith('river:')) switchRiver(st.slice(6));
   else switchStation(st, adsbInput.value);
+}
+let pressSt = null, pressX = 0, pressY = 0;
+screen.addEventListener('pointerdown', e => {
+  const hit = document.elementFromPoint(e.clientX, e.clientY);
+  const el = hit && hit.closest('[data-st]');
+  pressSt = el ? el.dataset.st : null;
+  pressX = e.clientX; pressY = e.clientY;
+});
+screen.addEventListener('pointercancel', () => { pressSt = null; });
+screen.addEventListener('pointerup', e => {
+  const st = pressSt;
+  pressSt = null;
+  if (!st) return;
+  if (Math.hypot(e.clientX - pressX, e.clientY - pressY) > 8) return; // drag/scroll, not a click
+  actOnGridTarget(st);
 });
 // terminal idiom: '/' focuses the station prompt from anywhere on the page; esc
 // dismisses the --help screen when it's showing
@@ -3331,28 +3342,41 @@ function renderRecent() {
 
 // ---------- history range chips ----------
 
+// one bar, three shapes: range presets + YEARS toggle (station live), YEARS +
+// ABS/ANOM (years view), PROFILE/WAVE view chips (river mode)
 function renderHistoryBar() {
   const nav = document.getElementById('history-bar');
-  nav.textContent = 'history ';
-  // in the years view the range chips are meaningless (it always shows all
-  // years), so the bar collapses to the one toggle that leads back out
-  if (viewMode !== 'years') {
-    for (const p of HISTORY_PRESETS) {
-      const b = document.createElement('button');
-      b.type = 'button';
-      b.textContent = p.label;
-      if (p.k === historyKey) b.className = 'on';
-      b.addEventListener('click', () => setHistory(p.k));
-      nav.append(b);
-    }
+  nav.textContent = '';
+  const chip = (label, on, fn, title) => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.textContent = label;
+    if (title) b.title = title;
+    if (on) b.className = 'on';
+    b.addEventListener('click', fn);
+    nav.append(b);
+  };
+  if (mode === 'river') {
+    nav.setAttribute('aria-label', 'river view');
+    nav.append('view ');
+    chip('PROFILE', viewMode !== 'wave', () => setView('live'), 'longitudinal profile with live elevations');
+    chip('▦ WAVE', viewMode === 'wave', () => setView('wave'), 'station × day heatmap — the wave rolls downstream');
+    return;
   }
-  const yb = document.createElement('button');
-  yb.type = 'button';
-  yb.textContent = '▦ YEARS';
-  yb.title = 'multi-year statistics: monthly heatmap, range band, year overlay';
-  if (viewMode === 'years') yb.className = 'on';
-  yb.addEventListener('click', () => setView(viewMode === 'years' ? 'live' : 'years'));
-  nav.append(yb);
+  nav.setAttribute('aria-label', 'history range');
+  nav.append('history ');
+  // in the years view the range chips are meaningless (it always shows all
+  // years), so they make room for the heatmap's ABS/ANOM switch
+  if (viewMode !== 'years') {
+    for (const p of HISTORY_PRESETS) chip(p.label, p.k === historyKey, () => setHistory(p.k));
+  }
+  chip('▦ YEARS', viewMode === 'years', () => setView(viewMode === 'years' ? 'live' : 'years'),
+    'multi-year statistics: monthly heatmap, range band, year overlay');
+  if (viewMode === 'years') {
+    nav.append(' · ');
+    chip('ABS', histMode === 'abs', () => runGridCmd('abs'), 'shade the level itself');
+    chip('ANOM', histMode === 'anom', () => runGridCmd('anom'), 'shade the deviation from the month mean');
+  }
 }
 
 // backfill from the API when a picked range reaches further back than what's
@@ -3751,57 +3775,72 @@ function wreckFrame(t) {
   return buf.map(r => r.join('').replace(/\s+$/, '')).join('\n');
 }
 
+// the screen only ever swaps when its content actually changed: static views
+// (years, wave, the daytime river profile, help) hold one stable DOM, so click
+// targets stop being yanked out from under the pointer 8 times a second
+let lastScreen = null;
+function setScreenText(text) {
+  if (text === lastScreen) return;
+  lastScreen = text;
+  screen.textContent = text;
+}
+function setScreenHtml(html) {
+  if (html === lastScreen) return;
+  lastScreen = html;
+  screen.innerHTML = html;
+}
+
 function render(t) {
   if (state.help) {
-    screen.textContent = state.help;
+    setScreenText(state.help);
     return;
   }
   if (state.suggest) {
     const g = makeGrid(6 + Math.min(state.suggest.matches.length, SUGGEST_MAX) + (state.suggest.matches.length > SUGGEST_MAX ? 1 : 0));
     drawSuggest(g, state.suggest);
-    screen.innerHTML = gridToHtml(g);
+    setScreenHtml(gridToHtml(g));
     return;
   }
   if (mode === 'river') {
-    if (state.error) { screen.textContent = `${wreckFrame(t)}\n\nERROR\n\n${state.error}`; return; }
+    if (state.error) { setScreenText(`${wreckFrame(t)}\n\nERROR\n\n${state.error}`); return; }
     if (!state.riverStations) {
-      screen.textContent = `mapping ${state.river} ${'·'.repeat(1 + Math.floor(t * 2) % 3)}`;
+      setScreenText(`mapping ${state.river} ${'·'.repeat(1 + Math.floor(t * 2) % 3)}`);
       return;
     }
     if (viewMode === 'wave') {
       if (waveData && waveData.error) {
-        screen.textContent = `${wreckFrame(t)}\n\nERROR\n\nwave data for "${state.river}" failed: ${waveData.error}\nclick elsewhere or retry via ?river=${state.river}&view=wave`;
+        setScreenText(`${wreckFrame(t)}\n\nERROR\n\nwave data for "${state.river}" failed: ${waveData.error}\nclick elsewhere or retry via ?river=${state.river}&view=wave`);
         return;
       }
       if (!waveData || waveData.loading) {
         if (!waveData) loadWave(); // e.g. booted straight into ?view=wave
-        screen.textContent = `sounding ${state.river} day by day ${'·'.repeat(1 + Math.floor(t * 2) % 3)}`;
+        setScreenText(`sounding ${state.river} day by day ${'·'.repeat(1 + Math.floor(t * 2) % 3)}`);
         return;
       }
       const g = makeGrid(waveGridRows(waveData));
       drawWave(g, waveData);
-      screen.innerHTML = gridToHtml(g);
+      setScreenHtml(gridToHtml(g));
       if (!fitted) { fitted = true; fitFont(); }
       return;
     }
     const g = makeGrid(riverGridRows(state.riverStations));
     drawRiver(g, state.riverStations, t);
-    screen.innerHTML = gridToHtml(g);
+    setScreenHtml(gridToHtml(g));
     if (!fitted) { fitted = true; fitFont(); }
     return;
   }
   if (state.error) {
-    screen.textContent = `${wreckFrame(t)}\n\nERROR\n\n${state.error}`;
+    setScreenText(`${wreckFrame(t)}\n\nERROR\n\n${state.error}`);
     return;
   }
   if (!state.gauge || !state.gauge.currentMeasurement) {
-    screen.textContent = `connecting to pegelonline.wsv.de ${'·'.repeat(1 + Math.floor(t * 2) % 3)}`;
+    setScreenText(`connecting to pegelonline.wsv.de ${'·'.repeat(1 + Math.floor(t * 2) % 3)}`);
     return;
   }
   if (viewMode === 'years') {
     const g = makeGrid(histGridRows(histStats()));
     drawHistYears(g);
-    screen.innerHTML = gridToHtml(g);
+    setScreenHtml(gridToHtml(g));
     if (!fitted) { fitted = true; fitFont(); }
     return;
   }
@@ -3811,7 +3850,7 @@ function render(t) {
   row = drawChart(g, row, t);
   row = drawSparkline(g, row, t);
   drawProfile(g, row + PROFILE_GAP);
-  screen.innerHTML = gridToHtml(g);
+  setScreenHtml(gridToHtml(g));
   if (!fitted) { fitted = true; fitFont(); } // refit once the real grid exists
 }
 let fitted = false;

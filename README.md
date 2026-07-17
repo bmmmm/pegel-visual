@@ -163,7 +163,8 @@ the browser restores whichever view the URL held.
 
 ### Wave view
 
-`[▦ WAVE]` in the river header (or `?river=RHEIN&view=wave`) redraws the whole
+The `PROFILE / ▦ WAVE` chips under the prompt, `[▦ WAVE]` in the river
+header or `?river=RHEIN&view=wave` redraw the whole
 river as a station × day heatmap: rows run downstream (top = upstream), columns
 are the last ~2.5 months, and darker cells mean higher water — each row scaled
 to its own station's range. A flood wave shows up as a diagonal ridge rolling

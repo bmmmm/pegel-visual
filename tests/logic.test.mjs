@@ -1175,3 +1175,37 @@ test('drawWave: a short window right-aligns against now', () => {
   assert.ok(/█\s*$/.test(dataRow), 'the newest day sits at the right edge');
   assert.equal(dataRow.trimEnd().length, 84, 'right-aligned to the last column');
 });
+
+test('history bar: view chips per mode — PROFILE/WAVE on rivers, ABS/ANOM in years', () => {
+  const labels = app => app.el('history-bar').children.map(b => b.textContent);
+  const river = loadApp({ search: '?river=RHEIN' });
+  assert.ok(labels(river).includes('PROFILE') && labels(river).includes('▦ WAVE'), 'river mode gets real view buttons');
+  assert.ok(!labels(river).includes('24H'), 'range presets are station business');
+
+  const years = loadApp({ search: '?station=BONN&view=years' });
+  const l = labels(years);
+  assert.ok(l.includes('▦ YEARS') && l.includes('ABS') && l.includes('ANOM'), 'years view gets the heatmap switch as buttons');
+
+  const live = loadApp({ search: '?station=BONN' });
+  assert.ok(labels(live).includes('24H') && labels(live).includes('▦ YEARS'), 'live station keeps the range presets');
+});
+
+test('setScreenText/Html: the screen only swaps when content changed', () => {
+  const app = loadApp();
+  const stable = app.run(`(() => {
+    state.help = 'MAN PAGE';
+    render(0);
+    const first = screen.textContent;
+    screen.textContent = 'SENTINEL'; // a repaint would overwrite this
+    render(0.5);
+    return { first, second: screen.textContent };
+  })()`);
+  assert.equal(stable.first, 'MAN PAGE');
+  assert.equal(stable.second, 'SENTINEL', 'unchanged content leaves the DOM alone');
+  const changed = app.run(`(() => {
+    state.help = 'NEW PAGE';
+    render(1);
+    return screen.textContent;
+  })()`);
+  assert.equal(changed, 'NEW PAGE', 'changed content still repaints');
+});
