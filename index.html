@@ -240,6 +240,9 @@
     align-items: center;
     gap: 0.4em 0.55em;
   }
+  /* display:flex above outranks the UA's [hidden] rule — without this, river
+     mode showed the per-station bars it had explicitly hidden */
+  #recent[hidden], #history-bar[hidden] { display: none; }
   #history-bar { margin-top: 0.8em; }
   #recent button, #history-bar button {
     font: inherit;
@@ -419,6 +422,21 @@
       marked as unvalidated raw data: outliers and gaps are part of the deal.
       The <b>full archive</b> link and <b>import</b> (which swallows the WSV ZIP
       directly) remain as the manual route.</dd>
+    <dt>years view</dt>
+    <dd>The <b>▦ YEARS</b> chip (or <b>?view=years</b>) turns the station into a
+      multi-year statistics terminal: a heatmap of every archived year by month
+      (<b>ABS</b> shades the level itself, <b>ANOM</b> shades the deviation from
+      that month's long-term mean — dry months warm, wet months blue), the
+      long-term monthly min–max band with median against the current year, and a
+      day-of-year overlay of all years with one year bold — click any year in
+      the heatmap to put it on top. Built from the same daily WSV archive the
+      1Y/5Y/ALL ranges use.</dd>
+    <dt>wave view</dt>
+    <dd>In river mode, <b>[▦ WAVE]</b> (or <b>?view=wave</b>) draws the whole
+      river as a station × day heatmap: rows run downstream, columns are days,
+      dark cells are high water — a flood wave shows up as a diagonal ridge
+      rolling down the screen. Each row is scaled to its own station. Data:
+      the hosted daily archive plus the live API for the newest days.</dd>
     <dt>elevation profile</dt>
     <dd>Below the sparkline: the water surface elevation (m NHN) between the
       neighboring gauges on the same river. It always runs downstream to the right —
@@ -506,20 +524,27 @@ let station = (new URLSearchParams(location.search).get('station') || 'BONN').to
 // two mutually exclusive views: the single-station terminal, or a whole-river
 // longitudinal profile. ?river= wins over ?station= on load.
 let mode = new URLSearchParams(location.search).get('river') ? 'river' : 'station';
+// sub-view within a mode: station mode offers 'years' (multi-year statistics),
+// river mode offers 'wave' (station × day heatmap). 'live' is the default of both.
+const VIEW_KEYS = ['live', 'years', 'wave'];
+let viewMode = (new URLSearchParams(location.search).get('view') || 'live').toLowerCase();
+if (!VIEW_KEYS.includes(viewMode)) viewMode = 'live';
+if (mode === 'river' ? viewMode === 'years' : viewMode === 'wave') viewMode = 'live';
+const viewSuffix = () => viewMode === 'live' ? '' : '&view=' + viewMode;
 const stationLink = document.getElementById('station-link');
 const wsvArchiveLink = document.getElementById('wsv-archive-link');
 
 function applyStationChrome() {
   if (mode === 'river') return; // river chrome owns the title/link while in river mode
   document.title = 'PEGEL://' + station;
-  stationLink.textContent = '?station=' + station;
-  stationLink.href = '?station=' + encodeURIComponent(station);
+  stationLink.textContent = '?station=' + station + viewSuffix();
+  stationLink.href = '?station=' + encodeURIComponent(station) + viewSuffix();
 }
 
 function applyRiverChrome() {
   document.title = 'PEGEL://' + state.river;
-  stationLink.textContent = '?river=' + state.river;
-  stationLink.href = '?river=' + encodeURIComponent(state.river);
+  stationLink.textContent = '?river=' + state.river + viewSuffix();
+  stationLink.href = '?river=' + encodeURIComponent(state.river) + viewSuffix();
 }
 
 // river mode hides the per-station chrome (archive bar, history range, recent chips);
@@ -529,7 +554,7 @@ function applyModeChrome() {
   document.getElementById('localbar').hidden = river;
   document.getElementById('history-bar').hidden = river;
   if (river) document.getElementById('recent').hidden = true;
-  else renderRecent();
+  else { renderRecent(); renderHistoryBar(); } // the bar's shape depends on the sub-view
 }
 
 if (mode !== 'river') applyStationChrome();
@@ -566,9 +591,18 @@ function screenSummary() {
   if (state.error) return 'Error. ' + state.error;
   if (mode === 'river') {
     if (!state.riverStations) return `Loading ${state.river} river profile…`;
+    if (viewMode === 'wave') {
+      return waveData && waveData.rows
+        ? `${state.river} wave heatmap: ${waveData.rows.length} stations over ${waveData.nDays} days, dark cells mean high water.`
+        : `Loading ${state.river} wave heatmap…`;
+    }
     const low = state.riverStations.filter(s => s.kind === 'low').length;
     const high = state.riverStations.filter(s => s.kind === 'high').length;
     return `${state.river}: ${state.riverStations.length} stations, ${low} low, ${high} high.`;
+  }
+  if (viewMode === 'years' && state.info) {
+    const st = histStats();
+    return `${station} multi-year statistics: ${st.years.length} years of daily data, heatmap by month, monthly range and year overlay.`;
   }
   const cur = state.gauge && state.gauge.currentMeasurement;
   if (!cur) return 'Connecting to PEGELONLINE…';
@@ -705,9 +739,10 @@ async function loadData() {
     if (isNewStation) {
       loadWeather();
       // the hosted WSV archive fills windows the live API cannot — including
-      // the default ALL view on a first visit, so years appear right away
+      // the default ALL view on a first visit, so years appear right away.
+      // The years view always wants the full archive, whatever the range pref
       const wd = historyPreset().d;
-      if (!wd || wd > API_MAX_DAYS) loadRepoArchive();
+      if (!wd || wd > API_MAX_DAYS || viewMode === 'years') loadRepoArchive();
     }
   } catch (e) {
     if (station !== forStation) return; // stale error from a station we left
@@ -802,6 +837,7 @@ function prepareRiverStations(raw) {
     if (!hasElev && kind === 'normal') continue; // nothing to plot, nothing to flag
     out.push({
       name: s.shortname,
+      uuid: s.uuid, // the wave view fetches each station's hosted archive by uuid
       km: s.km,
       value: cur && cur.value != null ? cur.value : null,
       elev: hasElev ? w.gaugeZero.value + cur.value / 100 : null,
@@ -825,6 +861,7 @@ async function loadRiver() {
     } else {
       state.riverStations = prepared;
       state.error = null;
+      if (viewMode === 'wave') loadWave(); // the wave view needs the station list first
     }
   } catch (e) {
     if (mode !== 'river' || state.river !== forRiver) return; // stale error from a river we left
@@ -2073,6 +2110,7 @@ function drawRiver(g, stations, t) {
     : `─── ${brand} · ${stations.length} stations · KM ${fmtKm(kmMin)}–${fmtKm(kmMax)} `;
   put(g, 0, 0, head.padEnd(COLS, '─'), 'd');
   put(g, 0, 4, brand, 'b');
+  putHeaderTag(g, 0, '[▦ WAVE]', 'cmd:wave'); // station × day heatmap of the same river
   let lx = 0;
   put(g, 1, lx, RIVER_GLYPH.normal, RIVER_CLS.normal); put(g, 1, lx + 2, 'ok', 'd'); lx += 5;
   put(g, 1, lx, '·', 'd'); lx += 2;
@@ -2218,6 +2256,462 @@ function drawRiver(g, stations, t) {
   return { nLow, nHigh, labels: draws }; // labels exposed for layout testing
 }
 
+// ---------- multi-year statistics (years view: heatmap · monthly range · overlay) ----------
+
+const DAY_MS = 864e5;
+const epochDay = ts => Math.floor(ts / DAY_MS);
+// day-of-year index into a year's 366-slot array; m=12 rolls into Jan 1 next year
+const monthDoy = (y, m) => epochDay(Date.UTC(y, m, 1)) - epochDay(Date.UTC(y, 0, 1));
+const MONTH_ABBR = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
+
+// [ts, cm] pairs (sorted) -> per-UTC-day means: [{ d: epochDay, v }]
+function dailyMeans(pts) {
+  const out = [];
+  let d = null, sum = 0, n = 0;
+  for (const p of pts) {
+    const pd = epochDay(p[0]);
+    if (pd !== d) { if (n) out.push({ d, v: sum / n }); d = pd; sum = 0; n = 0; }
+    sum += p[1]; n++;
+  }
+  if (n) out.push({ d, v: sum / n });
+  return out;
+}
+
+const quantile = (sorted, q) => sorted.length ? sorted[Math.min(sorted.length - 1, Math.floor(q * sorted.length))] : null;
+
+const mean = a => a.reduce((s, v) => s + v, 0) / a.length;
+function cellMean(arr, d0, d1) {
+  let s = 0, n = 0;
+  for (let d = d0; d < d1; d++) if (arr[d] != null) { s += arr[d]; n++; }
+  return n ? s / n : null;
+}
+
+// everything the years view draws from, computed once per archive change:
+// per-year day-of-year matrices, a per-month climatology built from the years
+// BEFORE the current one (so "unusual" is judged against the past, not itself),
+// and robust absolute-scale bounds (2nd..98th percentile resists WSV outliers)
+function buildHistStats(pts, nowMs) {
+  const daily = dailyMeans(pts);
+  const curYear = new Date(nowMs).getUTCFullYear();
+  const byYear = new Map();
+  for (const { d, v } of daily) {
+    const dt = new Date(d * DAY_MS);
+    const y = dt.getUTCFullYear();
+    let arr = byYear.get(y);
+    if (!arr) byYear.set(y, arr = Array(366).fill(null));
+    arr[d - epochDay(Date.UTC(y, 0, 1))] = v;
+  }
+  const years = [...byYear.keys()].sort((a, b) => a - b);
+  const perMonth = Array.from({ length: 12 }, () => []);
+  for (const y of years) {
+    if (y >= curYear) continue;
+    const arr = byYear.get(y);
+    for (let m = 0; m < 12; m++) {
+      for (let d = monthDoy(y, m); d < monthDoy(y, m + 1); d++) {
+        if (arr[d] != null) perMonth[m].push(arr[d]);
+      }
+    }
+  }
+  const clim = perMonth.map(vals => {
+    if (!vals.length) return null;
+    const s = [...vals].sort((a, b) => a - b);
+    const mu = mean(vals);
+    const sd = Math.sqrt(mean(vals.map(v => (v - mu) ** 2)));
+    // sd floor of 1 cm keeps z-scores sane on rock-steady impounded gauges
+    return { min: s[0], max: s[s.length - 1], med: quantile(s, 0.5), mean: mu, sd: Math.max(sd, 1) };
+  });
+  const allSorted = daily.map(p => p.v).sort((a, b) => a - b);
+  let lo = quantile(allSorted, 0.02), hi = quantile(allSorted, 0.98);
+  if (lo != null && hi - lo < 4) { lo = allSorted[0]; hi = allSorted[allSorted.length - 1]; }
+  return {
+    daily, byYear, years, curYear, clim, lo, hi,
+    allMin: allSorted.length ? allSorted[0] : null,
+    allMax: allSorted.length ? allSorted[allSorted.length - 1] : null,
+    climYears: years.filter(y => y < curYear).length,
+  };
+}
+
+// render runs at 8 fps — the stats must never recompute per frame
+let histCache = null;
+function histStats() {
+  const a = state.archive;
+  const key = station + ':' + a.length + ':' + (a.length ? a[0][0] + ':' + a[a.length - 1][0] : '');
+  if (!histCache || histCache.key !== key) histCache = { key, stats: buildHistStats(a, Date.now()) };
+  return histCache.stats;
+}
+
+// sequential: ink density = magnitude (one "hue", light → dark — CVD-proof)
+const HEAT_RAMP = '░▒▓█';
+function heatAbs(v, lo, hi) {
+  const f = (v - lo) / Math.max(hi - lo, 1);
+  return HEAT_RAMP[Math.max(0, Math.min(3, Math.floor(f * 4)))];
+}
+// diverging: density = magnitude, hue = direction — wet reuses the flood accent
+// (w2), dry the drought accent (s), matching what those colors already mean in
+// the live scene. '·' is the neutral midpoint, blank = no data.
+function heatAnom(z) {
+  const a = Math.abs(z);
+  if (a < 0.33) return { ch: '·', cls: 'd' };
+  const i = a < 0.8 ? 0 : a < 1.5 ? 1 : a < 2.5 ? 2 : 3;
+  return { ch: HEAT_RAMP[i], cls: z > 0 ? 'w2' : 's' };
+}
+
+let histMode = 'abs';  // 'abs' | 'anom' — heatmap toggle (D lives inside A)
+let histYear = null;   // overlay year picked by clicking a heatmap row; null = current
+
+const HIST_MIN_DAYS = 45; // below this the sections are noise — show a note instead
+const HIST_CLIM_H = 9, HIST_OVER_H = 10;
+
+function histGridRows(st) {
+  if (st.daily.length < HIST_MIN_DAYS) return 6;
+  // header+blank · title+monthhdr+years · blank+title+plot+axis (clim) · same (overlay)
+  return 2 + (2 + st.years.length) + (2 + HIST_CLIM_H + 1) + (2 + HIST_OVER_H + 1) + 1;
+}
+
+// a right-aligned [tag] in a dim header rule; returns nothing, marks the cells
+function putHeaderTag(g, row, text, cmd) {
+  const col = COLS - text.length - 4;
+  put(g, row, col, text, 'b');
+  linkCells(g, row, col, text.length, cmd);
+}
+
+function drawHistYears(g) {
+  const st = histStats();
+  const compact = isCompact();
+  const brand = `PEGEL://${station}`;
+  const back = '[← LIVE]';
+  const head = `─── ${brand} · YEARS `;
+  put(g, 0, 0, head.padEnd(COLS, '─'), 'd');
+  put(g, 0, 4, brand, 'b');
+  putHeaderTag(g, 0, back, 'cmd:live');
+
+  if (st.daily.length < HIST_MIN_DAYS) {
+    put(g, 2, 2, state.repoArchive === 'none'
+      ? 'WSV keeps no multi-year archive for this station'
+      : 'not enough history yet — fetching the WSV archive (2000 →) …', 'd');
+    put(g, 4, 2, 'the local archive also grows with every visit', 'd');
+    return;
+  }
+
+  const selYear = histYear != null && st.byYear.has(histYear) ? histYear
+    : st.byYear.has(st.curYear) ? st.curYear : st.years[st.years.length - 1];
+
+  // — heatmap: rows = years, columns = months split into week-ish cells —
+  const cellsPM = compact ? 2 : 4;
+  const yearW = 5, monthW = cellsPM + 1;
+  let r = 2;
+  put(g, r, 0, compact ? 'HEAT' : 'MONTHLY HEAT · cell ≈ ' + (cellsPM === 4 ? 'week' : 'half month'), 'd');
+  // mode toggles read like radio chips; the active one is bold
+  let tx = compact ? 6 : 34;
+  put(g, r, tx, '[ABS]', histMode === 'abs' ? 'b' : 'd');
+  linkCells(g, r, tx, 5, 'cmd:abs');
+  put(g, r, tx + 6, '[ANOM]', histMode === 'anom' ? 'b' : 'd');
+  linkCells(g, r, tx + 6, 6, 'cmd:anom');
+  if (!compact) {
+    if (histMode === 'abs') {
+      put(g, r, tx + 15, HEAT_RAMP + ' low → high');
+    } else {
+      put(g, r, tx + 15, '█▓▒░', 's');
+      put(g, r, tx + 20, 'dry · wet', 'd');
+      put(g, r, tx + 30, '░▒▓█', 'w2');
+      put(g, r, tx + 36, 'vs month mean', 'd');
+    }
+  }
+  r++;
+  for (let m = 0; m < 12; m++) {
+    put(g, r, yearW + m * monthW, compact ? 'JFMAMJJASOND'[m] : MONTH_ABBR[m].slice(0, 3), 'd');
+  }
+  r++;
+  const heatTop = r;
+  st.years.forEach((y, i) => {
+    const row = heatTop + i;
+    const sel = y === selYear;
+    put(g, row, 0, String(y), sel ? 'b' : 'd');
+    if (sel) put(g, row, 4, '▸', 'b');
+    linkCells(g, row, 0, 4, 'cmd:hy:' + y);
+    const arr = st.byYear.get(y);
+    for (let m = 0; m < 12; m++) {
+      const d0 = monthDoy(y, m), d1 = monthDoy(y, m + 1);
+      for (let c = 0; c < cellsPM; c++) {
+        const a = d0 + Math.floor((d1 - d0) * c / cellsPM);
+        const b = d0 + Math.floor((d1 - d0) * (c + 1) / cellsPM);
+        const v = cellMean(arr, a, b);
+        if (v == null) continue; // blank = no data
+        const col = yearW + m * monthW + c;
+        if (histMode === 'abs') {
+          put(g, row, col, heatAbs(v, st.lo, st.hi));
+        } else {
+          const cm = st.clim[m];
+          if (!cm) continue;
+          const gl = heatAnom((v - cm.mean) / cm.sd);
+          put(g, row, col, gl.ch, gl.cls);
+        }
+      }
+    }
+    if (!compact) {
+      const vals = arr.filter(v => v != null);
+      if (vals.length) put(g, row, yearW + 12 * monthW + 1, '⌀ ' + Math.round(mean(vals)), 'd');
+    }
+  });
+  r = heatTop + st.years.length + 1;
+
+  // — monthly range: long-term min–max band + median vs the current year —
+  const climTitle = compact
+    ? `RANGE vs ${st.curYear}`
+    : `MONTHLY RANGE ${st.years[0]}–${st.curYear - 1} · │ min–max · ┼ median · ● ${st.curYear}`;
+  put(g, r, 0, climTitle, 'd');
+  r++;
+  const climTop = r;
+  if (!st.climYears) {
+    put(g, climTop + 1, 2, 'needs at least one completed year — the WSV archive reaches back to 2000', 'd');
+  } else {
+    const curArr = st.byYear.get(st.curYear);
+    const curMonthly = Array.from({ length: 12 }, (_, m) =>
+      curArr ? cellMean(curArr, monthDoy(st.curYear, m), monthDoy(st.curYear, m + 1)) : null);
+    let vmin = Infinity, vmax = -Infinity;
+    st.clim.forEach(c => { if (c) { vmin = Math.min(vmin, c.min); vmax = Math.max(vmax, c.max); } });
+    curMonthly.forEach(v => { if (v != null) { vmin = Math.min(vmin, v); vmax = Math.max(vmax, v); } });
+    const span = Math.max(vmax - vmin, 1);
+    const yOf = v => climTop + Math.round((1 - (v - vmin) / span) * (HIST_CLIM_H - 1));
+    const left = 6, cstep = compact ? 3 : 6;
+    put(g, climTop, 0, String(Math.round(vmax)).padStart(4), 'd');
+    put(g, climTop + HIST_CLIM_H - 1, 0, String(Math.round(vmin)).padStart(4), 'd');
+    for (let m = 0; m < 12; m++) {
+      const c = st.clim[m], x = left + m * cstep;
+      if (c) {
+        for (let rr = yOf(c.max); rr <= yOf(c.min); rr++) put(g, rr, x, '│', 'd');
+        put(g, yOf(c.med), x, '┼');
+      }
+      const v = curMonthly[m];
+      if (v != null) {
+        // outside the whole historic band → the dot wears the drought/flood accent
+        const cls = c && v > c.max ? 'w2' : c && v < c.min ? 's' : 'b';
+        put(g, yOf(v), x, '●', cls);
+      }
+      put(g, climTop + HIST_CLIM_H, x, compact ? 'JFMAMJJASOND'[m] : MONTH_ABBR[m].slice(0, 3).padEnd(3), 'd');
+    }
+  }
+  r = climTop + HIST_CLIM_H + 2;
+
+  // — year overlay: every year as a faint day-of-year cloud, one year bold —
+  put(g, r, 0, compact
+    ? `${selYear} vs all`
+    : `YEAR OVERLAY · █ ${selYear} · · all years — click a heatmap year to swap`, 'd');
+  r++;
+  const overTop = r;
+  const plotW = COLS - 10;
+  const ovMin = st.allMin, ovSpan = Math.max(st.allMax - st.allMin, 1);
+  const yOfOv = v => overTop + Math.max(0, Math.min(HIST_OVER_H - 1,
+    Math.round((1 - (v - ovMin) / ovSpan) * (HIST_OVER_H - 1))));
+  const colOf = doy => Math.min(plotW - 1, Math.floor(doy / 366 * plotW));
+  for (const y of st.years) {
+    if (y === selYear) continue;
+    const arr = st.byYear.get(y);
+    for (let d = 0; d < 366; d++) {
+      if (arr[d] == null) continue;
+      const row = yOfOv(arr[d]), col = colOf(d);
+      if (g.ch[row][col] === ' ') put(g, row, col, '·', 'd');
+    }
+  }
+  put(g, overTop, plotW + 1, `┤ ${Math.round(ovMin + ovSpan)}`, 'd');
+  put(g, overTop + HIST_OVER_H - 1, plotW + 1, `┤ ${Math.round(ovMin)}`, 'd');
+  // characteristic levels as dashed context lines, like the live chart — their
+  // labels yield to the min/max labels above when they land on the same row
+  if (state.gauge) {
+    for (const name of ['MHW', 'MNW']) {
+      const cm = charValue(name);
+      if (cm == null || cm < ovMin || cm > ovMin + ovSpan) continue;
+      const row = yOfOv(cm);
+      for (let x = 0; x < plotW; x += 2) if (g.ch[row][x] === ' ') put(g, row, x, '╌', 'd');
+      if (g.ch[row][plotW + 1] === ' ') put(g, row, plotW + 1, `┤ ${name}`, 'd');
+    }
+  }
+  const selArr = st.byYear.get(selYear);
+  const acc = Array(plotW).fill(0), cnt = Array(plotW).fill(0);
+  selArr.forEach((v, d) => { if (v != null) { const c = colOf(d); acc[c] += v; cnt[c]++; } });
+  let prevY = null;
+  for (let c = 0; c < plotW; c++) {
+    if (!cnt[c]) { prevY = null; continue; }
+    const y = yOfOv(acc[c] / cnt[c]);
+    const [a, b] = prevY == null ? [y, y] : [Math.min(prevY, y), Math.max(prevY, y)];
+    for (let rr = a; rr <= b; rr++) put(g, rr, c, '█', 'b');
+    prevY = y;
+  }
+  const axisRow = overTop + HIST_OVER_H;
+  for (let m = 0; m < 12; m++) {
+    put(g, axisRow, colOf(monthDoy(2001, m)), compact ? 'JFMAMJJASOND'[m] : MONTH_ABBR[m].slice(0, 3), 'd');
+  }
+}
+
+// ---------- river wave view (station × day heatmap — the wave rolls downstream) ----------
+
+const WAVE_MAX_ROWS = 24;   // more rows than this and the grid stops being readable
+const WAVE_FETCH_DAYS = 76; // widest window the 84-column grid can show
+let waveData = null; // { river, rows, day0, nDays, shown, total } | { river, loading } | { river, error }
+
+// drop leading days that fewer than half the rows cover — a young accumulation
+// year would otherwise render a half-empty grid that reads as broken. Returns
+// the number of days to cut off the front.
+function cropWaveWindow(rows, nDays) {
+  if (!rows.length) return 0;
+  const half = Math.ceil(rows.length / 2);
+  for (let i = 0; i < nDays; i++) {
+    if (rows.filter(r => r.vals[i] != null).length >= half) return i;
+  }
+  return 0;
+}
+
+// fold hosted-archive year objects (y, min[], max[]) into a day-window array
+function foldYearsIntoWindow(years, vals, day0) {
+  for (const yr of years) {
+    const base = epochDay(Date.UTC(yr.y, 0, 1));
+    for (let d = 0; d < yr.min.length; d++) {
+      const di = base + d - day0;
+      if (di >= 0 && di < vals.length && yr.min[d] != null) vals[di] = (yr.min[d] + yr.max[d]) / 2;
+    }
+  }
+}
+
+async function loadWave() {
+  const forRiver = state.river;
+  const prepared = state.riverStations;
+  if (mode !== 'river' || !prepared) return;
+  if (waveData && waveData.river === forRiver && !waveData.error) return; // one load per river
+  waveData = { river: forRiver, loading: true };
+  dirty = true;
+  try {
+    const manifest = await loadRepoManifest() || {};
+    const cands = prepared.filter(s => s.uuid);
+    // cap the rows by sampling evenly along the river, so both ends survive
+    const picks = cands.length <= WAVE_MAX_ROWS ? cands
+      : Array.from({ length: WAVE_MAX_ROWS }, (_, i) => cands[Math.round(i * (cands.length - 1) / (WAVE_MAX_ROWS - 1))]);
+    const today = epochDay(Date.now());
+    const day0 = today - (WAVE_FETCH_DAYS - 1);
+    const rows = [];
+    // the hosted archive gives the long tail (refreshed monthly), the live API
+    // fills the newest ~31 days — together the window reaches today. Chunked to
+    // at most 6 REST calls in flight, to stay polite to the WSV API.
+    const chunk = 6;
+    for (let i = 0; i < picks.length; i += chunk) {
+      await Promise.all(picks.slice(i, i + chunk).map(async s => {
+        const vals = Array(WAVE_FETCH_DAYS).fill(null);
+        const entry = manifest[s.uuid];
+        if (entry && !entry.none) {
+          const files = ['current'];
+          if (new Date(day0 * DAY_MS).getUTCFullYear() < new Date(today * DAY_MS).getUTCFullYear()) files.push('closed');
+          for (const f of files) {
+            const data = await getJson(`archive/${s.uuid}/${f}.json`).catch(() => null);
+            if (data) foldYearsIntoWindow(Array.isArray(data) ? data : [data], vals, day0);
+          }
+        }
+        const meas = await getJson(`${API}/stations/${s.uuid}/W/measurements.json?start=P31D`).catch(() => []);
+        const pts = meas.map(m => [Date.parse(m.timestamp), m.value])
+          .filter(p => Number.isFinite(p[0]) && p[1] != null).sort((a, b) => a[0] - b[0]);
+        for (const { d, v } of dailyMeans(pts)) {
+          const di = d - day0;
+          if (di >= 0 && di < WAVE_FETCH_DAYS) vals[di] = v;
+        }
+        // a station with under 30% coverage is a hole, not a row
+        if (vals.filter(v => v != null).length >= WAVE_FETCH_DAYS * 0.3) {
+          rows.push({ name: s.name, km: s.km, kind: s.kind, vals });
+        }
+      }));
+      if (mode !== 'river' || state.river !== forRiver) return; // switched away mid-fetch
+    }
+    rows.sort((a, b) => a.km - b.km);
+    const usable = prepared.filter(s => s.elev != null);
+    // top row = upstream, so a flood wave rolls DOWN the screen as it travels
+    if (usable.length >= 2 && downstreamIsLowKm(usable)) rows.reverse();
+    const cut = cropWaveWindow(rows, WAVE_FETCH_DAYS);
+    if (cut) for (const r of rows) r.vals = r.vals.slice(cut);
+    waveData = { river: forRiver, rows, day0: day0 + cut, nDays: WAVE_FETCH_DAYS - cut, shown: rows.length, total: cands.length };
+  } catch (e) {
+    if (mode !== 'river' || state.river !== forRiver) return;
+    waveData = { river: forRiver, error: e.message };
+  }
+  dirty = true;
+  setScreenAria();
+}
+
+function waveGridRows(w) { return 3 + w.rows.length + 1; }
+
+function drawWave(g, w) {
+  const compact = isCompact();
+  const nameW = compact ? 8 : 12;
+  const left = nameW + 3; // state glyph + gap + name + gap
+  const nShow = COLS - left;
+  // a window shorter than the grid is right-aligned: the present hugs now
+  const nEff = Math.min(nShow, w.nDays);
+  const start = w.nDays - nEff;
+  const colAt = i => left + (nShow - nEff) + i;
+  const dayAt = i => (w.day0 + start + i) * DAY_MS;
+
+  const brand = `PEGEL://${w.river}`;
+  put(g, 0, 0, `─── ${brand} · WAVE `.padEnd(COLS, '─'), 'd');
+  put(g, 0, 4, brand, 'b');
+  putHeaderTag(g, 0, '[← PROFILE]', 'cmd:live');
+  const range = `${isoDay(dayAt(0))} → ${isoDay(dayAt(nEff - 1))}`;
+  const note = w.shown < w.total ? ` · ${w.shown} of ${w.total} stations` : '';
+  put(g, 1, 0, compact ? range : `${HEAT_RAMP} low → high, scaled per station · ${range}${note}`, 'd');
+
+  // month names along the top, anchored at each 1st of the month
+  for (let i = 0; i < nEff; i++) {
+    const dt = new Date(dayAt(i));
+    if (dt.getUTCDate() === 1) {
+      const lbl = compact ? MONTH_ABBR[dt.getUTCMonth()].slice(0, 1) : MONTH_ABBR[dt.getUTCMonth()].slice(0, 3);
+      if (colAt(i) + lbl.length <= COLS) put(g, 2, colAt(i), lbl, 'd');
+    }
+  }
+
+  w.rows.forEach((row, i) => {
+    const r = 3 + i;
+    put(g, r, 0, RIVER_GLYPH[row.kind], RIVER_CLS[row.kind]);
+    const name = row.name.slice(0, nameW);
+    put(g, r, 2, name, row.kind === 'normal' ? 'd' : RIVER_CLS[row.kind]);
+    linkCells(g, r, 0, left - 1, row.name);
+    const vals = row.vals.slice(start);
+    const present = vals.filter(v => v != null);
+    const lo = Math.min(...present), hi = Math.max(...present);
+    for (let x = 0; x < nEff; x++) {
+      if (vals[x] == null) continue; // blank = no data that day
+      put(g, r, colAt(x), hi > lo ? heatAbs(vals[x], lo, hi) : '▒');
+    }
+  });
+  put(g, 3 + w.rows.length, 0, '≋ downstream ↓ · time →', 'd');
+}
+
+// ---------- sub-view switching ----------
+
+function setView(v, push = true) {
+  if (v === viewMode) return;
+  if (mode === 'river' ? v === 'years' : v === 'wave') return; // wrong mode for this view
+  viewMode = v;
+  if (push) {
+    const q = new URLSearchParams(location.search);
+    if (v === 'live') q.delete('view'); else q.set('view', v);
+    history.pushState(null, '', '?' + q.toString());
+  }
+  if (mode === 'river') applyRiverChrome(); else applyStationChrome();
+  renderHistoryBar();
+  if (v === 'years') ensureHistoryCoverage(null); // pull the multi-year WSV archive
+  if (v === 'wave') loadWave();
+  dirty = true;
+  setScreenAria();
+  if (document.startViewTransition && !reduceMotion.matches) {
+    const vt = document.startViewTransition(renderNow);
+    vt.ready.catch(() => {});
+    vt.finished.catch(() => {});
+  }
+}
+
+// in-grid controls (data-st="cmd:…"): view switches and years-view toggles
+function runGridCmd(c) {
+  if (c === 'live') setView('live');
+  else if (c === 'wave') setView('wave');
+  else if (c === 'abs' || c === 'anom') { histMode = c; dirty = true; }
+  else if (c.startsWith('hy:')) { histYear = +c.slice(3); dirty = true; }
+}
+
 // ---------- station prompt ----------
 
 const stationInput = document.getElementById('station-input');
@@ -2250,6 +2744,7 @@ function switchStation(name, adsb, push = true) {
   const adsbChanged = nextAdsb !== adsbRaw;
 
   mode = 'station';
+  if (viewMode === 'wave') viewMode = 'live'; // wave is river-only; years survives the switch
   station = next;
   adsbRaw = nextAdsb;
   if (adsbRaw) localStorage.setItem('pegel.adsb', adsbRaw);
@@ -2261,6 +2756,7 @@ function switchStation(name, adsb, push = true) {
     if (adsbRaw) q.set('adsb', adsbRaw);
     if (aisRaw) q.set('ais', aisRaw);
     if (historyKey !== 'all') q.set('history', historyKey);
+    if (viewMode !== 'live') q.set('view', viewMode);
     history[push === 'replace' ? 'replaceState' : 'pushState'](null, '', '?' + q.toString());
   }
   applyStationChrome();
@@ -2315,12 +2811,14 @@ function switchRiver(name, push = true) {
   if (mode === 'river' && next === state.river) return;
 
   mode = 'river';
+  if (viewMode === 'years') viewMode = 'live'; // years is station-only; wave survives
   state.river = next;
   state.riverStations = null;
   state.gauge = null; // ensure any station live-title guard sees no gauge
   state.error = null;
+  waveData = null; // the wave heatmap is per-river
 
-  if (push) history.pushState(null, '', '?river=' + encodeURIComponent(next));
+  if (push) history.pushState(null, '', '?river=' + encodeURIComponent(next) + viewSuffix());
   applyRiverChrome();
   applyModeChrome();
   dirty = true;
@@ -2352,14 +2850,14 @@ function dismissHelp() {
 // tell "not given" (undefined) apart from "given empty" (''), e.g. --adsb clearing.
 function parseCommand(raw) {
   const tokens = (raw || '').trim().split(/\s+/).filter(Boolean);
-  const cmd = { station: undefined, adsb: undefined, ais: undefined, history: undefined, river: undefined, help: false, export: false, clear: false, info: false, unknownFlag: null };
+  const cmd = { station: undefined, adsb: undefined, ais: undefined, history: undefined, river: undefined, view: undefined, help: false, export: false, clear: false, info: false, unknownFlag: null };
   let i = 0;
   while (i < tokens.length) {
     const tok = tokens[i];
     if (!tok.startsWith('--')) { i++; continue; } // stray non-flag token: ignore
     const flag = tok.slice(2).toLowerCase();
     i++;
-    const takesValue = flag === 'station' || flag === 'adsb' || flag === 'ais' || flag === 'history' || flag === 'river';
+    const takesValue = flag === 'station' || flag === 'adsb' || flag === 'ais' || flag === 'history' || flag === 'river' || flag === 'view';
     const words = [];
     if (takesValue) while (i < tokens.length && !tokens[i].startsWith('--')) { words.push(tokens[i]); i++; }
     const value = words.join(' ');
@@ -2368,6 +2866,7 @@ function parseCommand(raw) {
     else if (flag === 'ais') cmd.ais = value;
     else if (flag === 'history') cmd.history = value.toLowerCase();
     else if (flag === 'river') cmd.river = value;
+    else if (flag === 'view') cmd.view = value.toLowerCase();
     else if (flag === 'help') cmd.help = true;
     else if (flag === 'export') cmd.export = true;
     else if (flag === 'clear') cmd.clear = true;
@@ -2397,6 +2896,7 @@ function helpText(unknownFlag) {
     '    --adsb URL        set your local ADS-B receiver URL; no value clears it',
     '    --ais URL         set your local AIS receiver URL (AIS-catcher); no value clears it',
     '    --history RANGE   set the sparkline window: 24h 3d 7d 15d 30d all',
+    '    --view MODE       live | years (station statistics) | wave (river heatmap)',
     '    --export          download the whole local archive as JSON',
     '    --clear           delete the local archive (no confirmation - you typed it)',
     '    --info            open the feature guide (what everything here means)',
@@ -2431,6 +2931,7 @@ function runCommand(raw) {
   if (cmd.river !== undefined) switchRiver(cmd.river);
   else if (cmd.station !== undefined || cmd.adsb !== undefined) switchStation(cmd.station, cmd.adsb);
   if (cmd.history !== undefined && HISTORY_PRESETS.some(p => p.k === cmd.history)) setHistory(cmd.history);
+  if (cmd.view !== undefined && VIEW_KEYS.includes(cmd.view)) setView(cmd.view);
   if (cmd.export) document.getElementById('export-btn').click();
   if (cmd.clear) { // typed deliberately — no confirmation dance like the button
     for (const k of archiveKeys()) localStorage.removeItem(k);
@@ -2655,8 +3156,10 @@ screen.addEventListener('click', e => {
   }
   if (!el) return;
   const st = el.dataset.st;
-  // river:NAME targets open the whole-river profile (self labels, suggest rows)
-  if (st.startsWith('river:')) switchRiver(st.slice(6));
+  // river:NAME targets open the whole-river profile (self labels, suggest rows);
+  // cmd:… targets are in-grid controls (view switches, heatmap toggles)
+  if (st.startsWith('cmd:')) runGridCmd(st.slice(4));
+  else if (st.startsWith('river:')) switchRiver(st.slice(6));
   else switchStation(st, adsbInput.value);
 });
 // terminal idiom: '/' focuses the station prompt from anywhere on the page; esc
@@ -2677,6 +3180,9 @@ window.addEventListener('popstate', () => {
   const p = new URLSearchParams(location.search);
   if (p.get('river')) switchRiver(p.get('river'), false);
   else switchStation(p.get('station') || 'BONN', p.get('adsb') || '', false);
+  // restore the sub-view AFTER the mode is back, so its mode-guard sees the truth
+  const v = (p.get('view') || 'live').toLowerCase();
+  if (VIEW_KEYS.includes(v)) setView(v, false);
 });
 
 // ---------- station suggestions (cached names, not the 255 KB full list) ----------
@@ -2828,14 +3334,25 @@ function renderRecent() {
 function renderHistoryBar() {
   const nav = document.getElementById('history-bar');
   nav.textContent = 'history ';
-  for (const p of HISTORY_PRESETS) {
-    const b = document.createElement('button');
-    b.type = 'button';
-    b.textContent = p.label;
-    if (p.k === historyKey) b.className = 'on';
-    b.addEventListener('click', () => setHistory(p.k));
-    nav.append(b);
+  // in the years view the range chips are meaningless (it always shows all
+  // years), so the bar collapses to the one toggle that leads back out
+  if (viewMode !== 'years') {
+    for (const p of HISTORY_PRESETS) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = p.label;
+      if (p.k === historyKey) b.className = 'on';
+      b.addEventListener('click', () => setHistory(p.k));
+      nav.append(b);
+    }
   }
+  const yb = document.createElement('button');
+  yb.type = 'button';
+  yb.textContent = '▦ YEARS';
+  yb.title = 'multi-year statistics: monthly heatmap, range band, year overlay';
+  if (viewMode === 'years') yb.className = 'on';
+  yb.addEventListener('click', () => setView(viewMode === 'years' ? 'live' : 'years'));
+  nav.append(yb);
 }
 
 // backfill from the API when a picked range reaches further back than what's
@@ -3251,6 +3768,22 @@ function render(t) {
       screen.textContent = `mapping ${state.river} ${'·'.repeat(1 + Math.floor(t * 2) % 3)}`;
       return;
     }
+    if (viewMode === 'wave') {
+      if (waveData && waveData.error) {
+        screen.textContent = `${wreckFrame(t)}\n\nERROR\n\nwave data for "${state.river}" failed: ${waveData.error}\nclick elsewhere or retry via ?river=${state.river}&view=wave`;
+        return;
+      }
+      if (!waveData || waveData.loading) {
+        if (!waveData) loadWave(); // e.g. booted straight into ?view=wave
+        screen.textContent = `sounding ${state.river} day by day ${'·'.repeat(1 + Math.floor(t * 2) % 3)}`;
+        return;
+      }
+      const g = makeGrid(waveGridRows(waveData));
+      drawWave(g, waveData);
+      screen.innerHTML = gridToHtml(g);
+      if (!fitted) { fitted = true; fitFont(); }
+      return;
+    }
     const g = makeGrid(riverGridRows(state.riverStations));
     drawRiver(g, state.riverStations, t);
     screen.innerHTML = gridToHtml(g);
@@ -3263,6 +3796,13 @@ function render(t) {
   }
   if (!state.gauge || !state.gauge.currentMeasurement) {
     screen.textContent = `connecting to pegelonline.wsv.de ${'·'.repeat(1 + Math.floor(t * 2) % 3)}`;
+    return;
+  }
+  if (viewMode === 'years') {
+    const g = makeGrid(histGridRows(histStats()));
+    drawHistYears(g);
+    screen.innerHTML = gridToHtml(g);
+    if (!fitted) { fitted = true; fitFont(); }
     return;
   }
   const g = makeGrid(HEADER_ROWS + CHART_ROWS + 1 + SPLASH_ROWS + SPARK_ROWS + 2 +
