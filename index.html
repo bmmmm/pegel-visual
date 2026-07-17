@@ -118,6 +118,35 @@
   form .cont { padding-left: 8ch; } /* lines up under --station, like a wrapped shell command */
   /* fixed-width flag so the station and river inputs start at the same column */
   form .flag { display: inline-block; min-width: 9ch; }
+  /* live typeahead: a custom dropdown (the native datalist can't fold umlauts,
+     rank, or carry the km/water context) positioned under the active input */
+  #prompt { position: relative; }
+  #ac {
+    position: absolute;
+    z-index: 5;
+    margin: 0;
+    padding: 0.25em 0;
+    list-style: none;
+    min-width: 22ch;
+    max-width: min(46ch, calc(100vw - 2em));
+    max-height: 15em;
+    overflow-y: auto;
+    background: var(--paper);
+    border: 2px solid var(--ink);
+    font-size: 0.85em;
+  }
+  #ac li {
+    display: flex;
+    gap: 1.5ch;
+    align-items: baseline;
+    padding: 0.25em 0.9ch;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  #ac li .name { text-transform: uppercase; }
+  #ac li .meta { margin-left: auto; color: var(--mid); font-size: 0.9em; }
+  #ac li.sel, #ac li:hover { background: var(--ink); color: var(--paper); }
+  #ac li.sel .meta, #ac li:hover .meta { color: var(--paper); }
   #localbar {
     margin-top: 0.8em;
     font-size: 0.75em;
@@ -326,11 +355,9 @@
 <main>
   <pre id="screen" role="img" aria-label="loading water level data">loading…</pre>
   <form id="prompt" autocomplete="off">
-    <div class="cmd">&gt; pegel <span class="flag">--station</span> <input id="station-input" name="station" list="stations" spellcheck="false" placeholder="station" aria-label="station name">
-      <datalist id="stations"></datalist> --refresh 300s
+    <div class="cmd">&gt; pegel <span class="flag">--station</span> <input id="station-input" name="station" spellcheck="false" placeholder="station" autocomplete="off" role="combobox" aria-expanded="false" aria-controls="ac" aria-autocomplete="list" aria-label="station name"> --refresh 300s
     </div>
-    <div class="cmd cont"><span class="flag">--river</span> <input id="river-input" name="river" list="rivers" spellcheck="false" placeholder="whole river" aria-label="river name">
-      <datalist id="rivers"></datalist>
+    <div class="cmd cont"><span class="flag">--river</span> <input id="river-input" name="river" spellcheck="false" placeholder="whole river" autocomplete="off" role="combobox" aria-expanded="false" aria-controls="ac" aria-autocomplete="list" aria-label="river name">
     </div>
     <div class="cmd cont">--adsb
       <input id="adsb-input" name="adsb" spellcheck="false" placeholder="receiver url (optional)"
@@ -338,6 +365,7 @@
       <input id="ais-input" name="ais" spellcheck="false" placeholder="receiver url (optional)"
         aria-label="AIS receiver URL">
     </div>
+    <ul id="ac" role="listbox" hidden></ul>
     <button type="submit" hidden>go</button>
   </form>
   <nav id="history-bar" aria-label="history range"></nav>
@@ -2470,6 +2498,7 @@ function drawSuggest(g, s) {
 }
 
 function applyPrompt() {
+  acClose();
   const v = stationInput.value;
   if (v.includes('--')) return runCommand(v);
   setAis(aisInput.value); // the ais field applies on every submit, like the adsb field
@@ -2490,6 +2519,7 @@ function applyPrompt() {
 // the dedicated river field: a known river (any case, ASCII umlauts) opens its
 // whole-river profile; anything else snaps back to the river currently in view
 function applyRiver() {
+  acClose();
   const v = riverInput.value;
   if (v.includes('--')) return runCommand(v);
   const water = resolveWater(v);
@@ -2497,24 +2527,121 @@ function applyRiver() {
   if (knownWaters.size) riverInput.value = currentRiver();
 }
 
+// ---------- live typeahead dropdown ----------
+
+// umlaut-folded, startsWith-ranked matches over one name set — the same folding
+// that resolveStation/resolveWater use, so "koln" finds KÖLN and "muritz" MÜRITZSEE
+const AC_MAX = 8;
+function matchNames(raw, names, metaFor) {
+  const q = foldStrip(raw);
+  if (!q) return [];
+  const starts = [], contains = [];
+  for (const name of names) {
+    const f = foldStrip(name);
+    if (f.startsWith(q)) starts.push(name);
+    else if (f.includes(q)) contains.push(name);
+  }
+  const byName = (a, b) => a.localeCompare(b);
+  return [...starts.sort(byName), ...contains.sort(byName)].slice(0, AC_MAX)
+    .map(name => ({ name, meta: metaFor(name) }));
+}
+const stationLabel = name => {
+  const md = stationMeta.get(name);
+  return md ? [md.w, md.km != null ? 'km ' + Math.round(md.km) : ''].filter(Boolean).join(' · ') : '';
+};
+const stationField = { input: stationInput, match: q => matchNames(q, knownStations, stationLabel), choose: n => switchStation(n, adsbInput.value) };
+const riverField = { input: riverInput, match: q => matchNames(q, knownWaters, () => 'whole river'), choose: n => switchRiver(n) };
+
+const ac = document.getElementById('ac');
+const promptForm = document.getElementById('prompt');
+let acItems = [], acIndex = -1, acField = null;
+
+function acClose() {
+  if (ac.hidden) return;
+  ac.hidden = true;
+  acItems = []; acIndex = -1;
+  if (acField) acField.input.setAttribute('aria-expanded', 'false');
+  acField = null;
+}
+
+function acRender() {
+  ac.textContent = '';
+  acItems.forEach((m, i) => {
+    const li = document.createElement('li');
+    li.setAttribute('role', 'option');
+    const nm = document.createElement('span'); nm.className = 'name'; nm.textContent = m.name;
+    li.appendChild(nm);
+    if (m.meta) { const mt = document.createElement('span'); mt.className = 'meta'; mt.textContent = m.meta; li.appendChild(mt); }
+    if (i === acIndex) li.className = 'sel';
+    ac.appendChild(li);
+  });
+}
+
+function acOpen(field) {
+  const q = field.input.value.trim();
+  if (!q || q.includes('--')) return acClose();
+  const items = field.match(q);
+  if (!items.length) return acClose();
+  acItems = items; acIndex = -1; acField = field;
+  acRender();
+  const fr = promptForm.getBoundingClientRect(), ir = field.input.getBoundingClientRect();
+  ac.style.left = (ir.left - fr.left) + 'px';
+  ac.style.top = (ir.bottom - fr.top + 3) + 'px';
+  ac.hidden = false;
+  field.input.setAttribute('aria-expanded', 'true');
+}
+
+function acMove(d) {
+  if (!acItems.length) return;
+  acIndex = (acIndex + d + acItems.length) % acItems.length;
+  acRender();
+  ac.children[acIndex].scrollIntoView({ block: 'nearest' });
+}
+
+function acApply(i) {
+  const m = acItems[i], field = acField;
+  if (!m || !field) return;
+  acClose();
+  field.choose(m.name);
+}
+
+// Enter with a highlighted row picks it; otherwise the field's own apply runs.
+// Arrows move the selection, Escape closes without applying.
+function acKeydown(e, field, apply) {
+  if (!ac.hidden && acField === field) {
+    if (e.key === 'ArrowDown') { e.preventDefault(); return acMove(1); }
+    if (e.key === 'ArrowUp') { e.preventDefault(); return acMove(-1); }
+    if (e.key === 'Escape') { e.preventDefault(); return acClose(); }
+    if (e.key === 'Enter' && acIndex >= 0) { e.preventDefault(); return acApply(acIndex); }
+  }
+  if (e.key === 'Enter') { e.preventDefault(); apply(); }
+}
+
+stationInput.addEventListener('input', () => acOpen(stationField));
+riverInput.addEventListener('input', () => acOpen(riverField));
+stationInput.addEventListener('keydown', e => acKeydown(e, stationField, applyPrompt));
+riverInput.addEventListener('keydown', e => acKeydown(e, riverField, applyRiver));
+riverInput.addEventListener('change', applyRiver);
+riverInput.addEventListener('focus', loadStationList, { once: true });
+// a click on a row must not blur-close the list before it registers, so commit on
+// mousedown and preventDefault to keep focus on the input
+ac.addEventListener('mousedown', e => {
+  const li = e.target.closest('li');
+  if (!li) return;
+  e.preventDefault();
+  acApply([...ac.children].indexOf(li));
+});
+for (const el of [stationInput, riverInput]) el.addEventListener('blur', () => setTimeout(acClose, 150));
+window.addEventListener('resize', acClose);
+// adsb/ais have no dropdown, but Enter still applies the whole prompt
+for (const el of [adsbInput, aisInput]) {
+  el.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); applyPrompt(); } });
+}
+
 document.getElementById('prompt').addEventListener('submit', e => {
   e.preventDefault();
   (document.activeElement === riverInput ? applyRiver : applyPrompt)();
 });
-riverInput.addEventListener('change', applyRiver);
-riverInput.addEventListener('keydown', e => {
-  if (e.key === 'Enter') { e.preventDefault(); applyRiver(); }
-});
-riverInput.addEventListener('focus', loadStationList, { once: true });
-// apply on Enter directly — bypasses the datalist swallowing the first Enter keystroke
-for (const el of [stationInput, adsbInput, aisInput]) {
-  el.addEventListener('keydown', e => {
-    if (e.key === 'Enter') {
-      e.preventDefault();
-      applyPrompt();
-    }
-  });
-}
 // stations drawn into the grid (river markers/labels/trouble rows, profile
 // neighbors) are click targets — delegated so the 8 fps innerHTML swap can't
 // detach a listener mid-click. The swap also races real clicks: when a repaint
@@ -2583,20 +2710,15 @@ function resolveWater(raw) {
   return watersNorm.get(foldAe(up)) || watersNorm.get(foldStrip(up)) || null;
 }
 
+// both index into the known-name sets/maps the custom typeahead and the resolvers
+// read from; the suggestion UI is rendered on demand from these, not from the DOM
 function fillWaters(list) {
-  const dl = document.getElementById('rivers'); // dedicated river picker, not the station list
-  const frag = document.createDocumentFragment();
   for (const w of list) {
     const up = (w || '').toUpperCase();
     if (!up || knownWaters.has(up)) continue;
     knownWaters.add(up);
     for (const k of [foldAe(up), foldStrip(up)]) if (!watersNorm.has(k)) watersNorm.set(k, up);
-    const opt = document.createElement('option');
-    opt.value = up;
-    opt.label = 'whole-river profile';
-    frag.appendChild(opt);
   }
-  dl.appendChild(frag);
 }
 
 function fillDatalist(list) {
@@ -2606,17 +2728,6 @@ function fillDatalist(list) {
     stationMeta.set(up, { w: s.w, km: s.km });
     for (const key of [foldAe(up), foldStrip(up)]) if (!normMap.has(key)) normMap.set(key, s.n);
   }
-  const dl = document.getElementById('stations');
-  if (dl.childElementCount) return;
-  const frag = document.createDocumentFragment();
-  for (const s of list) {
-    const opt = document.createElement('option');
-    opt.value = s.n;
-    const ctx = [s.w, s.km != null ? 'km ' + Math.round(s.km) : ''].filter(Boolean).join(' · ');
-    if (ctx) opt.label = ctx;
-    frag.appendChild(opt);
-  }
-  dl.appendChild(frag);
 }
 
 // picking a datalist suggestion (or committing a complete valid name) fires 'change',
