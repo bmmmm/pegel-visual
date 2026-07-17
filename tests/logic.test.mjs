@@ -1209,3 +1209,30 @@ test('setScreenText/Html: the screen only swaps when content changed', () => {
   })()`);
   assert.equal(changed, 'NEW PAGE', 'changed content still repaints');
 });
+
+test('year paging + month readout: chips step and clamp, cells print numbers', () => {
+  const app = loadApp({ width: 1200, now: JULY });
+  seedArchive(app);
+  // ◂ steps back through archived years and clamps at the oldest
+  assert.equal(app.run(`(stepHistYear(-1), histSelYear(histStats()))`), 2025);
+  assert.equal(app.run(`(stepHistYear(-1), stepHistYear(-1), stepHistYear(-1), histSelYear(histStats()))`), 2024, 'clamped at the oldest year');
+  assert.equal(app.run(`(stepHistYear(1), histSelYear(histStats()))`), 2025);
+  // the bar carries ◂ / year / ▸ chips while the years view is open
+  const labels = app.run(`(viewMode = 'years', renderHistoryBar(), 0)`) === 0
+    ? app.el('history-bar').children.map(b => b.textContent) : [];
+  assert.ok(labels.includes('◂') && labels.includes('▸') && labels.includes('2025'), 'year pager chips present');
+  // picking a heatmap cell focuses the month AND puts its year on top
+  app.run(`runGridCmd('hm:2024:3')`);
+  assert.deepEqual(app.run('histFocus'), { y: 2024, m: 3 });
+  assert.equal(app.run('histSelYear(histStats())'), 2024);
+  const { flat, html } = app.run(`(() => {
+    const g = makeGrid(histGridRows(histStats()));
+    drawHistYears(g);
+    return { flat: g.ch.map(r => r.join('')).join('\\n'), html: gridToHtml(g) };
+  })()`);
+  assert.ok(/▸ 2024 APR · ⌀ \d+ cm · min \d+ · max \d+ · vs mean \d+ \([+-]?\d+\.\d(σ)\)/u.test(flat), 'readout prints mean, min-max and sigma');
+  assert.ok(html.includes('data-st="cmd:hm:2025:0"'), 'month cells are pick targets');
+  // paging the year drags the readout month along
+  app.run(`stepHistYear(1)`);
+  assert.deepEqual(app.run('histFocus'), { y: 2025, m: 3 });
+});

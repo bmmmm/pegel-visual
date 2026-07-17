@@ -429,8 +429,11 @@
       that month's long-term mean — dry months warm, wet months blue), the
       long-term monthly min–max band with median against the current year, and a
       day-of-year overlay of all years with one year bold — click any year in
-      the heatmap to put it on top. Built from the same daily WSV archive the
-      1Y/5Y/ALL ranges use.</dd>
+      the heatmap to put it on top, or page through the years with the
+      <b>◂ year ▸</b> chips. Clicking a month cell in the heatmap prints its
+      hard numbers in a readout line: monthly mean, min–max and the deviation
+      from the long-term month mean in σ. Built from the same daily WSV archive
+      the 1Y/5Y/ALL ranges use.</dd>
     <dt>wave view</dt>
     <dd>In river mode, the <b>PROFILE / ▦ WAVE</b> chips under the prompt,
       <b>[▦ WAVE]</b> in the header or <b>?view=wave</b> draw the whole
@@ -2359,14 +2362,37 @@ function heatAnom(z) {
 
 let histMode = 'abs';  // 'abs' | 'anom' — heatmap toggle (D lives inside A)
 let histYear = null;   // overlay year picked by clicking a heatmap row; null = current
+let histFocus = null;  // { y, m } — heatmap month cell picked for the numbers readout
+
+// the year the overlay draws bold: the picked one if its data exists, else the
+// current year, else the newest archived year
+function histSelYear(st) {
+  return histYear != null && st.byYear.has(histYear) ? histYear
+    : st.byYear.has(st.curYear) ? st.curYear : st.years[st.years.length - 1];
+}
+
+function setHistYear(y) {
+  histYear = y;
+  if (histFocus) histFocus = { y, m: histFocus.m }; // the readout follows the year
+  dirty = true;
+  renderHistoryBar(); // the ◂ year ▸ chips mirror the selection
+}
+
+// page through the archived years with the bar chips, clamped at both ends
+function stepHistYear(d) {
+  const st = histStats();
+  if (!st.years.length) return;
+  const i = st.years.indexOf(histSelYear(st));
+  setHistYear(st.years[Math.max(0, Math.min(st.years.length - 1, i + d))]);
+}
 
 const HIST_MIN_DAYS = 45; // below this the sections are noise — show a note instead
 const HIST_CLIM_H = 9, HIST_OVER_H = 10;
 
 function histGridRows(st) {
   if (st.daily.length < HIST_MIN_DAYS) return 6;
-  // header+blank · title+monthhdr+years · blank+title+plot+axis (clim) · same (overlay)
-  return 2 + (2 + st.years.length) + (2 + HIST_CLIM_H + 1) + (2 + HIST_OVER_H + 1) + 1;
+  // header+blank · title+monthhdr+years+readout · blank+title+plot+axis (clim) · same (overlay)
+  return 2 + (2 + st.years.length + 1) + (2 + HIST_CLIM_H + 1) + (2 + HIST_OVER_H + 1) + 1;
 }
 
 // a right-aligned [tag] in a dim header rule; returns nothing, marks the cells
@@ -2394,8 +2420,7 @@ function drawHistYears(g) {
     return;
   }
 
-  const selYear = histYear != null && st.byYear.has(histYear) ? histYear
-    : st.byYear.has(st.curYear) ? st.curYear : st.years[st.years.length - 1];
+  const selYear = histSelYear(st);
 
   // — heatmap: rows = years, columns = months split into week-ish cells —
   const cellsPM = compact ? 2 : 4;
@@ -2433,6 +2458,8 @@ function drawHistYears(g) {
     const arr = st.byYear.get(y);
     for (let m = 0; m < 12; m++) {
       const d0 = monthDoy(y, m), d1 = monthDoy(y, m + 1);
+      // every month group is a pick target: its numbers land in the readout row
+      linkCells(g, row, yearW + m * monthW, cellsPM, `cmd:hm:${y}:${m}`);
       for (let c = 0; c < cellsPM; c++) {
         const a = d0 + Math.floor((d1 - d0) * c / cellsPM);
         const b = d0 + Math.floor((d1 - d0) * (c + 1) / cellsPM);
@@ -2454,7 +2481,31 @@ function drawHistYears(g) {
       if (vals.length) put(g, row, yearW + 12 * monthW + 1, '⌀ ' + Math.round(mean(vals)), 'd');
     }
   });
-  r = heatTop + st.years.length + 1;
+
+  // — readout: the hard numbers for the picked heatmap month —
+  const ro = heatTop + st.years.length;
+  if (histFocus && st.byYear.has(histFocus.y)) {
+    const { y, m } = histFocus;
+    const arr = st.byYear.get(y);
+    const days = [];
+    for (let d = monthDoy(y, m); d < monthDoy(y, m + 1); d++) if (arr[d] != null) days.push(arr[d]);
+    if (!days.length) {
+      put(g, ro, 0, `▸ ${y} ${MONTH_ABBR[m]} · no data`, 'd');
+    } else {
+      const mu = mean(days), mn = Math.min(...days), mx = Math.max(...days);
+      const c = st.clim[m];
+      const z = c ? (mu - c.mean) / c.sd : null;
+      const zTxt = z == null ? '' : ` · vs mean ${Math.round(c.mean)} (${z >= 0 ? '+' : ''}${z.toFixed(1)}σ)`;
+      const line = compact
+        ? `▸ ${y} ${MONTH_ABBR[m]} ⌀${Math.round(mu)} ${Math.round(mn)}–${Math.round(mx)}`
+        : `▸ ${y} ${MONTH_ABBR[m]} · ⌀ ${Math.round(mu)} cm · min ${Math.round(mn)} · max ${Math.round(mx)}${zTxt}`;
+      put(g, ro, 0, line);
+      put(g, ro, 0, '▸', 'b');
+    }
+  } else {
+    put(g, ro, 0, compact ? 'tap a month cell for numbers' : 'click a month cell for its numbers · ◂ ▸ chips page the bold year', 'd');
+  }
+  r = ro + 2;
 
   // — monthly range: long-term min–max band + median vs the current year —
   const climTitle = compact
@@ -2710,7 +2761,11 @@ function runGridCmd(c) {
   if (c === 'live') setView('live');
   else if (c === 'wave') setView('wave');
   else if (c === 'abs' || c === 'anom') { histMode = c; dirty = true; renderHistoryBar(); }
-  else if (c.startsWith('hy:')) { histYear = +c.slice(3); dirty = true; }
+  else if (c.startsWith('hm:')) {
+    const [y, m] = c.slice(3).split(':').map(Number);
+    histFocus = { y, m };
+    setHistYear(y); // picking a cell also puts its year on top of the overlay
+  } else if (c.startsWith('hy:')) setHistYear(+c.slice(3));
 }
 
 // ---------- station prompt ----------
@@ -3376,6 +3431,14 @@ function renderHistoryBar() {
     nav.append(' · ');
     chip('ABS', histMode === 'abs', () => runGridCmd('abs'), 'shade the level itself');
     chip('ANOM', histMode === 'anom', () => runGridCmd('anom'), 'shade the deviation from the month mean');
+    const st = histStats();
+    if (st.years.length) {
+      const sel = histSelYear(st);
+      nav.append(' · ');
+      chip('◂', false, () => stepHistYear(-1), 'previous year — overlay + readout follow');
+      chip(String(sel), true, () => setHistYear(st.curYear), 'the bold overlay year · click to jump back to the current year');
+      chip('▸', false, () => stepHistYear(1), 'next year — overlay + readout follow');
+    }
   }
 }
 
