@@ -541,7 +541,7 @@ test('loadRepoArchive: a manifest none-entry skips archive fetches and flags the
     globalThis.__unexpected = url;
     throw new Error('unexpected fetch ' + url);
   }`);
-  await app.run('loadRepoArchive(2000)');
+  await app.run('loadRepoArchive()');
   assert.equal(app.run('state.repoArchive'), 'none');
   assert.equal(globalThis.__unexpected, undefined, 'no year files were requested');
   delete globalThis.__unexpected;
@@ -558,7 +558,7 @@ test('loadRepoArchive: lazily merges current.json into the local archive', async
     if (url === 'archive/test-uuid/current.json') return { y: ${year}, min: ${JSON.stringify(min)}, max: ${JSON.stringify(max)} };
     throw new Error('404 ' + url); // every other year file is missing — must not break the merge
   }`);
-  await app.run('loadRepoArchive(400)');
+  await app.run('loadRepoArchive()');
   const arch = app.run(`loadArchive('BONN')`);
   assert.equal(arch.length, 2, 'one archived day → daily min + max as two points');
   assert.deepEqual(arch.map(p => p[1]), [110, 190]);
@@ -566,7 +566,7 @@ test('loadRepoArchive: lazily merges current.json into the local archive', async
   assert.deepEqual(arch.map(p => p[0]), [mezBase + 6 * 36e5, mezBase + 18 * 36e5]);
 
   // a second call is a no-op (per-session fetch guard), even with new data
-  await app.run('loadRepoArchive(400)');
+  await app.run('loadRepoArchive()');
   assert.equal(app.run(`loadArchive('BONN')`).length, 2);
 });
 
@@ -762,7 +762,7 @@ test('client in January: a not-yet-frozen current.json still maps to its own yea
     if (url === 'archive/jan-uuid/current.json') return { y: 2026, min: ${JSON.stringify(min)}, max: ${JSON.stringify(max)} };
     throw new Error('404 ' + url);
   }`);
-  await app.run('loadRepoArchive(60)'); // 60-day window spans the year boundary
+  await app.run('loadRepoArchive()');
   const arch = app.run(`loadArchive('BONN')`);
   assert.equal(arch.length, 2);
   const dec30 = Date.UTC(2026, 0, 1) - 36e5 + 363 * 864e5;
@@ -815,8 +815,25 @@ test('first-visit ASCII ?station= link self-corrects once the station list arriv
   app.run(`fetch = url => url.includes('stations.json')
     ? Promise.resolve({ ok: true, json: () => Promise.resolve([{ shortname: 'KÖLN', water: { shortname: 'RHEIN' }, km: 688 }]) })
     : Promise.reject(new Error('offline (test stub)'))`);
+  app.run(`history.pushState = () => { globalThis.__pushed = true; };
+    history.replaceState = () => { globalThis.__replaced = true; }`);
   await app.run('loadStationList()');
   assert.equal(app.run('station'), 'KÖLN', 'error screen self-corrected to the canonical station');
+  assert.equal(globalThis.__replaced, true, 'canonical URL replaces the broken one');
+  assert.equal(globalThis.__pushed, undefined, 'Back must not land on the 404 URL again');
+  delete globalThis.__replaced; delete globalThis.__pushed;
+});
+
+test('archive script: migrateStation names the malformed year file instead of a bare SyntaxError', async () => {
+  const { migrateStation } = await import('../scripts/fetch-wsv-archive.mjs');
+  const { mkdtempSync, writeFileSync, readdirSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const dir = mkdtempSync(join(tmpdir(), 'pegel-badmigrate-'));
+  writeFileSync(join(dir, '2000.json'), JSON.stringify({ y: 2000, min: [1], max: [2] }));
+  writeFileSync(join(dir, '2001.json'), '{nope');
+  assert.throws(() => migrateStation(dir), /2001\.json.*re-run --migrate/s, 'error carries the file path and the next step');
+  assert.deepEqual(readdirSync(dir).sort(), ['2000.json', '2001.json'], 'nothing written or deleted on failure');
 });
 
 // ---------- report issue ----------

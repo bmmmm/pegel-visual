@@ -48,8 +48,9 @@ _      _      _      _      _      _      _      _
   into the immutable bundle. The live API covers the newest 30 days on
   top, so the site is never more than a month stale. Multi-year views are
   flagged as *unvalidated raw data*, since WSV serves these values
-  unchecked (outliers and gaps included; the manifest carries a per-station
-  gap-day count). `scripts/fetch-wsv-archive.mjs` builds and refreshes the
+  unchecked (outliers and gaps included; the manifest records a per-station
+  gap-day count as inspection metadata — the page itself does not surface
+  it). `scripts/fetch-wsv-archive.mjs` builds and refreshes the
   data — the full backfill still uses WSV's ZIP download page, which the
   browser cannot fetch cross-origin (it sends its CORS header twice, see
   issue #1). The manual route works too: the `full archive (2000→)` link

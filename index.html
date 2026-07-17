@@ -2207,7 +2207,7 @@ function switchStation(name, adsb, push = true) {
     if (adsbRaw) q.set('adsb', adsbRaw);
     if (aisRaw) q.set('ais', aisRaw);
     if (historyKey !== 'all') q.set('history', historyKey);
-    history.pushState(null, '', '?' + q.toString());
+    history[push === 'replace' ? 'replaceState' : 'pushState'](null, '', '?' + q.toString());
   }
   applyStationChrome();
   applyModeChrome(); // restore the station chrome if we came from river mode
@@ -2602,10 +2602,11 @@ async function loadStationList() {
     fillDatalist(list);
     // a first-ever visitor opening an ASCII-spelled link (?station=koeln) had no
     // cached list to resolve against and 404ed; now that the names are known,
-    // self-correct the error screen to the canonical station
+    // self-correct the error screen to the canonical station. 'replace' like the
+    // boot canonicalization — Back must not land on the broken 404 URL again
     if (state.error && mode === 'station') {
       const fixed = resolveStation(station);
-      if (fixed !== station && knownStations.has(fixed)) switchStation(fixed, adsbInput.value);
+      if (fixed !== station && knownStations.has(fixed)) switchStation(fixed, adsbInput.value, 'replace');
     }
   } catch { /* keep whatever cache we already showed */ }
 }

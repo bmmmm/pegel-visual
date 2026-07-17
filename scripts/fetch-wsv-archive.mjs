@@ -23,7 +23,7 @@
 //    Browsers cannot fetch it (doubled CORS header), so this runs locally / in
 //    CI. Be polite: sequential, throttled, resumable.
 //  - monthly --current refresh: the official REST API (30 days at 15-min
-//    resolution, ?start=P30D) — no CORS quirk, no ZIP prepare step. Condensed
+//    resolution, ?start=P35D) — no CORS quirk, no ZIP prepare step. Condensed
 //    to daily min/max and upserted into current.json. In January the completed
 //    year graduates from current.json into closed.json (the freeze).
 //
@@ -46,10 +46,14 @@
 //   # update the branch README to the closed.json layout, then reseed:
 //   git checkout --orphan seed && git add -A && git commit -m "Seed archive: year bundles (Plan A)"
 //   git branch -M seed archive
-//   git push --force origin archive        # archive branch FIRST
-//   # then from the main worktree, push the client that reads bundles:
+//   # deploy order: main FIRST — the new client degrades gracefully on the old
+//   # data (closed.json 404 is swallowed, current.json still renders), while
+//   # the old client on reseeded data would 404 on every deleted year file.
+//   # pages.yml runs on pushes to both branches with cancel-in-progress, so
+//   # the two pushes collapse into one authoritative deploy anyway:
 //   git push origin main
-//   gh workflow run pages.yml --ref main   # one pages deploy
+//   git push --force origin archive
+//   gh workflow run pages.yml --ref main   # optional; redundant with the push trigger
 //   # verify live as a fresh visitor: pick 20Y, the Network panel shows exactly
 //   # 3 archive requests (manifest.json, closed.json, current.json) and fills.
 import { mkdirSync, writeFileSync, readFileSync, readdirSync, existsSync, unlinkSync } from 'node:fs';
@@ -192,15 +196,18 @@ async function fetchCondensed(uuid, startYear, endDate) {
   }
 }
 
-// the monthly refresh's source: the official REST API serves the last 30 days
-// at 15-min resolution (?start=P30D) — no doubled-CORS quirk, no ZIP prepare
-// step. 30 days comfortably spans the monthly cadence; writeStation's per-day
-// merge absorbs the overlap, so widen the window (P32D...) if a boundary day
-// ever looks thinly sampled. condense buckets by MEZ day, so the live data's
-// DST offset (+02:00 in summer) folds onto the same day boundaries as the ZIP
-// archive's year-round UTC+1 timestamps.
+// the monthly refresh's source: the official REST API at 15-min resolution —
+// no doubled-CORS quirk, no ZIP prepare step. The cron fires on the 3rd of
+// each month, so consecutive runs sit 31 days apart after a 31-day month: a
+// P30D window would leave the boundary day between two runs thinly sampled
+// (missing its afternoon peak), and the January freeze would bake that into
+// the immutable bundle. P35D covers the widest cadence with margin — the
+// overlap is free because writeStation's per-day merge is idempotent.
+// condense buckets by MEZ day, so the live data's DST offset (+02:00 in
+// summer) folds onto the same day boundaries as the ZIP archive's year-round
+// UTC+1 timestamps.
 async function fetchCurrentViaRest(uuid) {
-  const url = `${API}/stations/${uuid}/W/measurements.json?start=P30D`;
+  const url = `${API}/stations/${uuid}/W/measurements.json?start=P35D`;
   const res = await fetch(url, { signal: AbortSignal.timeout(120000) });
   if (!res.ok) throw new Error('REST measurements HTTP ' + res.status);
   const measurements = await res.json();
@@ -317,7 +324,10 @@ export function migrateStation(dir) {
   catch { return 0; }
   if (!files.length) return 0;
   const bundle = files
-    .map(f => JSON.parse(readFileSync(join(dir, f), 'utf8')))
+    .map(f => {
+      try { return JSON.parse(readFileSync(join(dir, f), 'utf8')); }
+      catch (e) { throw new Error(`${join(dir, f)}: ${e.message} — fix or remove the file, then re-run --migrate`); }
+    })
     .sort((a, b) => a.y - b.y);
   writeFileSync(join(dir, 'closed.json'), JSON.stringify(bundle));
   for (const f of files) unlinkSync(join(dir, f));
@@ -332,9 +342,12 @@ function migrateAll(out) {
   try { dirs = readdirSync(out, { withFileTypes: true }).filter(d => d.isDirectory()).map(d => d.name); }
   catch { console.log(`no archive dir at ${out}/`); return; }
   let migrated = 0, entries = 0;
+  const failed = [];
   for (const uuid of dirs) {
-    const n = migrateStation(join(out, uuid));
-    if (n) { migrated++; entries += n; }
+    try {
+      const n = migrateStation(join(out, uuid));
+      if (n) { migrated++; entries += n; }
+    } catch (e) { failed.push(e.message); } // keep migrating; the thrower's year files are untouched
   }
   const old = readJson(join(out, 'manifest.json'));
   if (old && old.stations) {
@@ -344,6 +357,10 @@ function migrateAll(out) {
     console.log(`migrated ${migrated} stations (${entries} year entries) · manifest rebuilt for ${stations.length} stations`);
   } else {
     console.log(`migrated ${migrated} stations (${entries} year entries) · no manifest.json to rebuild`);
+  }
+  if (failed.length) {
+    console.error(`error: ${failed.length} stations failed to migrate (their year files are left in place):\n  ${failed.join('\n  ')}`);
+    process.exitCode = 1;
   }
 }
 
