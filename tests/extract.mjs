@@ -41,7 +41,7 @@ function makeEl(tag = 'div') {
     dispatchEvent() { return true; },
     setAttribute(k, v) { el.attrs[k] = String(v); },
     getAttribute(k) { return el.attrs[k] ?? null; },
-    append() {},
+    append(...nodes) { for (const n of nodes) if (n && typeof n === 'object') el.children.push(n); el.childElementCount = el.children.length; },
     appendChild(c) { el.children.push(c); el.childElementCount = el.children.length; return c; },
     click() {},
     focus() {},
