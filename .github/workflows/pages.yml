@@ -45,7 +45,7 @@ jobs:
             git worktree add /tmp/archive-branch FETCH_HEAD
             cp -R /tmp/archive-branch/archive /tmp/site/archive
           fi
-      - uses: actions/upload-pages-artifact@v3
+      - uses: actions/upload-pages-artifact@v5
         with:
           path: /tmp/site
       - id: deployment
