@@ -28,7 +28,7 @@ jobs:
         with:
           ref: archive
           path: archive-branch
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 24
       - name: Fetch current-year data from WSV (REST, last 30 days)
