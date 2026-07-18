@@ -197,9 +197,10 @@ test('importWsvArchive: unpacks the WSV historical ZIP into the right station', 
   await assert.rejects(() => importWsvArchive(new Uint8Array([0x50, 0x4b, 1, 2, 3])), /zip/);
 });
 
-test('countGaps: only jumps beyond 90 min count', () => {
-  const app = loadApp();
-  const pts = [[0, 1], [30 * 60000, 1], [120 * 60000, 1], [121 * 60000, 1], [400 * 60000, 1]];
+test('countGaps: only jumps beyond 90 min count (recent points)', () => {
+  const app = loadApp({ now: NOON });
+  const base = NOON - 500 * 60000; // recent: the 90-min threshold applies
+  const pts = [[base, 1], [base + 30 * 60000, 1], [base + 120 * 60000, 1], [base + 121 * 60000, 1], [base + 400 * 60000, 1]];
   const g = app.run(`countGaps(${JSON.stringify(pts)})`);
   assert.equal(g.gaps, 1, '90 min exactly is tolerated (thinned cadence), 279 min is a gap');
   assert.ok(Math.abs(g.maxGapH - 4.65) < 0.01);
@@ -1235,4 +1236,132 @@ test('year paging + month readout: chips step and clamp, cells print numbers', (
   // paging the year drags the readout month along
   app.run(`stepHistYear(1)`);
   assert.deepEqual(app.run('histFocus'), { y: 2025, m: 3 });
+});
+
+// ---------- regression tests for the QA-sweep findings ----------
+
+test('switchRiver folds ASCII umlaut spellings like the station path', () => {
+  const app = loadApp();
+  app.run(`fillWaters(['MÜRITZSEE'])`);
+  app.run(`switchRiver('mueritzsee')`);
+  assert.equal(app.run('state.river'), 'MÜRITZSEE');
+  assert.equal(app.run('mode'), 'river');
+});
+
+test('mergeIntoArchive rejects non-numeric values instead of poisoning min/max', () => {
+  const app = loadApp({ now: NOON });
+  const iso = ts => new Date(ts).toISOString();
+  app.run(`mergeIntoArchive('BONN', [
+    { timestamp: '${iso(NOON - 30 * 60000)}', value: 100 },
+    { timestamp: '${iso(NOON - 15 * 60000)}', value: 'n/a' },
+    { timestamp: '${iso(NOON - 10 * 60000)}', value: NaN },
+    { timestamp: '${iso(NOON - 5 * 60000)}', value: 110 },
+  ])`);
+  assert.deepEqual(app.run(`loadArchive('BONN').map(p => p[1])`), [100, 110]);
+});
+
+test('countGaps tolerates the 6-hourly thinned cadence of multi-year points', () => {
+  const app = loadApp({ now: NOON });
+  const old = NOON - 400 * 864e5; // beyond the 1-year thinning cutoff
+  const sixHourly = Array.from({ length: 5 }, (_, i) => [old + i * 6 * 36e5, 100]);
+  assert.equal(app.run(`countGaps(${JSON.stringify(sixHourly)})`).gaps, 0, '6h cadence is not a gap for old points');
+  const twelveHourly = [[old, 100], [old + 12 * 36e5, 100]];
+  assert.equal(app.run(`countGaps(${JSON.stringify(twelveHourly)})`).gaps, 1, '12h IS a gap even for old points');
+  const recent = [[NOON - 4 * 36e5, 100], [NOON - 36e5, 100]];
+  assert.equal(app.run(`countGaps(${JSON.stringify(recent)})`).gaps, 1, '3h stays a gap for recent points');
+});
+
+test('drawSparkline renders a flat series at half height, not as an empty chart', () => {
+  const app = loadApp({ now: NOON });
+  const flat = app.run(`(() => {
+    state.archive = Array.from({ length: 50 }, (_, i) => [${NOON} - (50 - i) * 36e5, 77]);
+    historyKey = 'all';
+    const g = makeGrid(SPLASH_ROWS + SPARK_ROWS + 3);
+    drawSparkline(g, 0, 0);
+    return g.ch.map(r => r.join('')).join('\\n');
+  })()`);
+  assert.ok(flat.includes('█'), 'water body visible for a constant level');
+  assert.ok(flat.includes('min 77  max 77'));
+});
+
+test('histStats cache: switching stations never serves the old station\'s stats', () => {
+  const mk = v => { const pts = []; for (let d = 0; d < 365; d++) { const ts = Date.UTC(2025, 0, 1) + d * 864e5; pts.push([ts + 6 * 36e5, v], [ts + 18 * 36e5, v]); } return pts; };
+  const app = loadApp({ now: JULY, search: '?station=BONN&view=years' });
+  app.run(`state.archive = ${JSON.stringify(mk(300))}; histCache = null;`);
+  app.run(`localStorage.setItem('pegel.archive.KOELN', JSON.stringify(${JSON.stringify(mk(500))}))`);
+  app.run(`histStats()`); // warm the cache with BONN's shape
+  app.run(`switchStation('KOELN')`);
+  assert.equal(app.run(`histStats().byYear.get(2025)[0]`), 500, 'identical archive shape must not collide in the cache');
+});
+
+test('years view: no backwards MONTHLY RANGE title without a completed year', () => {
+  const app = loadApp({ now: JULY });
+  const flat = app.run(`(() => {
+    const pts = [];
+    for (let d = 0; d < 60; d++) { const ts = Date.UTC(2026, 0, 1) + d * 864e5; pts.push([ts + 6 * 36e5, 200]); }
+    state.archive = pts; histCache = null;
+    const g = makeGrid(histGridRows(histStats()));
+    drawHistYears(g);
+    return g.ch.map(r => r.join('')).join('\\n');
+  })()`);
+  assert.ok(!flat.includes('2026–2025'), 'no end-before-start range');
+  assert.ok(flat.includes('MONTHLY RANGE'), 'section title survives');
+  assert.ok(flat.includes('needs at least one completed year'));
+});
+
+test('putHeadRule: long river names ellipsize instead of being overwritten by the tag', () => {
+  const app = loadApp({ width: 390, now: NOON });
+  const sts = Array.from({ length: 12 }, (_, i) => ({
+    name: 'S' + i, km: i * 10, value: 100, elev: 50 - i, kind: 'normal',
+  }));
+  app.run(`state.river = 'MITTELLANDKANAL'`);
+  const row0 = app.run(`(() => {
+    const g = makeGrid(riverGridRows(${JSON.stringify(sts)}));
+    drawRiver(g, ${JSON.stringify(sts)}, 0);
+    return g.ch[0].join('');
+  })()`);
+  assert.ok(row0.includes('[▦ WAVE]'), 'tag present');
+  assert.ok(row0.includes('… '), 'head text ellipsized');
+  assert.ok(/(… |─)\[▦ WAVE\]/.test(row0), 'the tag borders padding or the ellipsis, never clipped text');
+});
+
+test('foldYearsIntoWindow survives malformed archive years without throw or NaN', () => {
+  const app = loadApp();
+  const day0 = app.run(`epochDay(Date.UTC(2026, 0, 1))`);
+  const out = app.run(`(() => {
+    const vals = Array(4).fill(null);
+    foldYearsIntoWindow([
+      { y: 2026, min: [1, 2, 3] },                    // max missing entirely
+      { y: 2026, min: [10, 20, 30], max: [12] },      // max shorter than min
+      null, { y: 'x', min: [], max: [] },             // garbage entries
+    ], vals, ${day0});
+    return vals;
+  })()`);
+  assert.deepEqual(out, [11, null, null, null], 'only the fully-valid day lands; no throw, no NaN');
+});
+
+test('wave cache: the 5-min river poll refreshes the state badges on cached rows', async () => {
+  const app = loadApp({ now: JULY, search: '?river=RHEIN&view=wave' });
+  await app.run(`(async () => {
+    state.riverStations = [{ name: 'A', uuid: 'u1', km: 0, elev: 10, kind: 'normal', value: 100 }];
+    waveData = { river: 'RHEIN', rows: [{ name: 'A', km: 0, kind: 'normal', vals: [] }], day0: 0, nDays: 1, shown: 1, total: 1 };
+    state.riverStations[0].kind = 'high'; // the next poll sees a flood
+    await loadWave();
+  })()`);
+  assert.equal(app.run('waveData.rows[0].kind'), 'high', 'badge follows the live state without a refetch');
+});
+
+test('year overlay: MHW and MNW sharing a row combine their label', () => {
+  const app = loadApp({ now: JULY });
+  seedArchive(app);
+  const flat = app.run(`(() => {
+    state.gauge = { currentMeasurement: { value: 200 }, characteristicValues: [
+      { shortname: 'MHW', value: 212 }, { shortname: 'MNW', value: 210 },
+    ]};
+    const g = makeGrid(histGridRows(histStats()));
+    drawHistYears(g);
+    state.gauge = null;
+    return g.ch.map(r => r.join('')).join('\\n');
+  })()`);
+  assert.ok(flat.includes('┤ MHW+MNW'), 'both levels named on the shared row');
 });

@@ -714,7 +714,7 @@ async function loadData() {
         .catch(e => { if (e.status === 404) return null; throw e; }),
       getJson(`${API}/stations/${enc}/W/measurements.json?start=${encodeURIComponent(start)}`).catch(() => []),
     ]);
-    if (station !== forStation) return; // switched away while fetching — discard
+    if (station !== forStation || mode !== 'station') return; // switched away while fetching — discard
     if (!gauge) {
       state.error = noWaterLevelError(info);
       dirty = true;
@@ -727,7 +727,7 @@ async function loadData() {
       series.includes('WT') ? getJson(`${API}/stations/${enc}/WT.json?includeCurrentMeasurement=true`).catch(() => null) : null,
       series.includes('Q') ? getJson(`${API}/stations/${enc}/Q.json?includeCurrentMeasurement=true`).catch(() => null) : null,
     ]);
-    if (station !== forStation) return; // switched away while fetching — discard
+    if (station !== forStation || mode !== 'station') return; // switched away while fetching — discard
     state.info = info;
     if (mode === 'station' && info.water && info.water.shortname) riverInput.value = info.water.shortname;
     state.gauge = gauge;
@@ -749,7 +749,7 @@ async function loadData() {
       if (!wd || wd > API_MAX_DAYS || viewMode === 'years') loadRepoArchive();
     }
   } catch (e) {
-    if (station !== forStation) return; // stale error from a station we left
+    if (station !== forStation || mode !== 'station') return; // stale error from a station we left
     state.error = `station "${forStation}" failed: ${e.message}\n` +
       `check the name against ${API}/stations.json or try ?station=BONN`;
   }
@@ -767,7 +767,7 @@ async function loadWeather() {
   const forStation = station; // guard against a mid-flight station switch
   try {
     const d = await getJson(`https://api.open-meteo.com/v1/forecast?latitude=${info.latitude}&longitude=${info.longitude}&current=precipitation,snowfall,cloud_cover,wind_speed_10m`);
-    if (station !== forStation) return; // switched away while fetching — discard
+    if (station !== forStation || mode !== 'station') return; // switched away while fetching — discard
     state.weather = (d && d.current) || null;
   } catch {
     if (station !== forStation) return;
@@ -895,7 +895,9 @@ function mergeIntoArchive(name, measurements) {
   const seen = new Set(pts.map(p => p[0]));
   for (const m of measurements) {
     const t = Date.parse(m.timestamp);
-    if (Number.isFinite(t) && m.value != null && !seen.has(t)) { pts.push([t, m.value]); seen.add(t); }
+    // value must be a real number: one stored NaN/string poisons every
+    // Math.min/max over the archive and blanks the whole sparkline
+    if (Number.isFinite(t) && Number.isFinite(m.value) && !seen.has(t)) { pts.push([t, m.value]); seen.add(t); }
   }
   pts.sort((a, b) => a[0] - b[0]);
   // thin to stay within quota: full 15-min cadence for 16 days, hourly up to a
@@ -944,14 +946,18 @@ const isoDay = ts => new Date(ts).toISOString().slice(0, 10);
 const mmdd = ts => new Date(ts).toISOString().slice(5, 10);
 const coverageDays = (first, last) => Math.max(1, Math.round((last - first) / 864e5));
 
-// a gap is a jump larger than 90 min — tolerates the 15 min live cadence and the
-// 1 h thinned cadence for old points, so only real outages/offline stretches count
+// a gap is a jump larger than the thinned cadence at that age plus margin:
+// 90 min for the newest 16 days (15-min live + 1 h thinned), 9 h beyond a year
+// (6-hourly thinning) — so only real outages/offline stretches count
 const GAP_MIN_MS = 90 * 60000;
+const GAP_OLD_MS = 9 * 36e5;
 function countGaps(pts) {
+  const yearCutoff = Date.now() - 365 * 864e5;
   let gaps = 0, maxGap = 0;
   for (let i = 1; i < pts.length; i++) {
     const d = pts[i][0] - pts[i - 1][0];
-    if (d > GAP_MIN_MS) { gaps++; if (d > maxGap) maxGap = d; }
+    const limit = pts[i - 1][0] < yearCutoff ? GAP_OLD_MS : GAP_MIN_MS;
+    if (d > limit) { gaps++; if (d > maxGap) maxGap = d; }
   }
   return { gaps, maxGapH: maxGap / 36e5 };
 }
@@ -1964,7 +1970,10 @@ function drawSparkline(g, row, t) {
   const partial = ' ▁▂▃▄▅▆▇';
   const splashGlyphs = '·˚°∘';
   for (let x = 0; x < chartW; x++) {
-    const level = ((sparkDisplay[x] - min) / span) * SPARK_ROWS * 8;
+    // a perfectly flat window still shows water: pin it to half height instead
+    // of normalizing every point to zero fill (which looked like "no data")
+    const frac = max === min ? 0.5 : (sparkDisplay[x] - min) / span;
+    const level = frac * SPARK_ROWS * 8;
     for (let r = 0; r < SPARK_ROWS; r++) {
       const cellLevel = Math.max(0, Math.min(8, level - r * 8));
       const rr = row + SPLASH_ROWS + 1 + SPARK_ROWS - 1 - r;
@@ -2112,9 +2121,7 @@ function drawRiver(g, stations, t) {
   const head = isCompact()
     ? `─── ${brand} · ${stations.length} st `
     : `─── ${brand} · ${stations.length} stations · KM ${fmtKm(kmMin)}–${fmtKm(kmMax)} `;
-  put(g, 0, 0, head.padEnd(COLS, '─'), 'd');
-  put(g, 0, 4, brand, 'b');
-  putHeaderTag(g, 0, '[▦ WAVE]', 'cmd:wave'); // station × day heatmap of the same river
+  putHeadRule(g, head, brand, '[▦ WAVE]', 'cmd:wave'); // station × day heatmap of the same river
   let lx = 0;
   put(g, 1, lx, RIVER_GLYPH.normal, RIVER_CLS.normal); put(g, 1, lx + 2, 'ok', 'd'); lx += 5;
   put(g, 1, lx, '·', 'd'); lx += 2;
@@ -2402,15 +2409,22 @@ function putHeaderTag(g, row, text, cmd) {
   linkCells(g, row, col, text.length, cmd);
 }
 
+// a dim header rule with the brand bolded and a right-aligned [tag] control —
+// a long head (think MITTELLANDKANAL at 44 cols) is ellipsized so the tag
+// never overwrites real text
+function putHeadRule(g, head, brand, tag, cmd) {
+  const max = COLS - tag.length - 5;
+  const shown = head.length > max ? head.slice(0, Math.max(0, max - 2)) + '… ' : head;
+  put(g, 0, 0, shown.padEnd(COLS, '─'), 'd');
+  put(g, 0, 4, brand.slice(0, Math.max(0, shown.length - 4)), 'b');
+  putHeaderTag(g, 0, tag, cmd);
+}
+
 function drawHistYears(g) {
   const st = histStats();
   const compact = isCompact();
   const brand = `PEGEL://${station}`;
-  const back = '[← LIVE]';
-  const head = `─── ${brand} · YEARS `;
-  put(g, 0, 0, head.padEnd(COLS, '─'), 'd');
-  put(g, 0, 4, brand, 'b');
-  putHeaderTag(g, 0, back, 'cmd:live');
+  putHeadRule(g, `─── ${brand} · YEARS `, brand, '[← LIVE]', 'cmd:live');
 
   if (st.daily.length < HIST_MIN_DAYS) {
     put(g, 2, 2, state.repoArchive === 'none'
@@ -2508,7 +2522,9 @@ function drawHistYears(g) {
   r = ro + 2;
 
   // — monthly range: long-term min–max band + median vs the current year —
-  const climTitle = compact
+  // without a completed year there is no range to name — a fresh station would
+  // otherwise title itself "MONTHLY RANGE 2026–2025"
+  const climTitle = !st.climYears ? 'MONTHLY RANGE' : compact
     ? `RANGE vs ${st.curYear}`
     : `MONTHLY RANGE ${st.years[0]}–${st.curYear - 1} · │ min–max · ┼ median · ● ${st.curYear}`;
   put(g, r, 0, climTitle, 'd');
@@ -2570,12 +2586,16 @@ function drawHistYears(g) {
   // characteristic levels as dashed context lines, like the live chart — their
   // labels yield to the min/max labels above when they land on the same row
   if (state.gauge) {
+    const lineLabels = new Map(); // row -> names; MHW and MNW can share a row on a squeezed scale
     for (const name of ['MHW', 'MNW']) {
       const cm = charValue(name);
       if (cm == null || cm < ovMin || cm > ovMin + ovSpan) continue;
       const row = yOfOv(cm);
       for (let x = 0; x < plotW; x += 2) if (g.ch[row][x] === ' ') put(g, row, x, '╌', 'd');
-      if (g.ch[row][plotW + 1] === ' ') put(g, row, plotW + 1, `┤ ${name}`, 'd');
+      lineLabels.set(row, [...(lineLabels.get(row) || []), name]);
+    }
+    for (const [row, names] of lineLabels) {
+      if (g.ch[row][plotW + 1] === ' ') put(g, row, plotW + 1, `┤ ${names.join('+')}`, 'd');
     }
   }
   const selArr = st.byYear.get(selYear);
@@ -2613,13 +2633,19 @@ function cropWaveWindow(rows, nDays) {
   return 0;
 }
 
-// fold hosted-archive year objects (y, min[], max[]) into a day-window array
+// fold hosted-archive year objects (y, min[], max[]) into a day-window array.
+// Defensive against malformed files: a missing/short max array must skip that
+// day, not throw (which would take the whole river's wave view down) or store
+// NaN (which would flatten the row's per-station scaling)
 function foldYearsIntoWindow(years, vals, day0) {
   for (const yr of years) {
+    if (!yr || !Number.isFinite(yr.y) || !Array.isArray(yr.min) || !Array.isArray(yr.max)) continue;
     const base = epochDay(Date.UTC(yr.y, 0, 1));
     for (let d = 0; d < yr.min.length; d++) {
       const di = base + d - day0;
-      if (di >= 0 && di < vals.length && yr.min[d] != null) vals[di] = (yr.min[d] + yr.max[d]) / 2;
+      if (di < 0 || di >= vals.length) continue;
+      const lo = yr.min[d], hi = yr.max[d];
+      if (Number.isFinite(lo) && Number.isFinite(hi)) vals[di] = (lo + hi) / 2;
     }
   }
 }
@@ -2628,7 +2654,21 @@ async function loadWave() {
   const forRiver = state.river;
   const prepared = state.riverStations;
   if (mode !== 'river' || !prepared) return;
-  if (waveData && waveData.river === forRiver && !waveData.error) return; // one load per river
+  if (waveData && waveData.river === forRiver && !waveData.error) {
+    // the daily history genuinely needs no refetch — but the live ▼/▲ state
+    // badges ride on the cached rows and must follow the 5-min river poll,
+    // or a flood emerging while someone watches would never show
+    if (waveData.rows) {
+      const kinds = new Map(prepared.map(s => [s.name, s.kind]));
+      let changed = false;
+      for (const r of waveData.rows) {
+        const k = kinds.get(r.name);
+        if (k && k !== r.kind) { r.kind = k; changed = true; }
+      }
+      if (changed) dirty = true;
+    }
+    return;
+  }
   waveData = { river: forRiver, loading: true };
   dirty = true;
   try {
@@ -2645,7 +2685,9 @@ async function loadWave() {
     // at most 6 REST calls in flight, to stay polite to the WSV API.
     const chunk = 6;
     for (let i = 0; i < picks.length; i += chunk) {
-      await Promise.all(picks.slice(i, i + chunk).map(async s => {
+      // a per-station try: one broken station (malformed archive file, odd API
+      // shape) drops that row, never the whole river
+      await Promise.all(picks.slice(i, i + chunk).map(async s => { try {
         const vals = Array(WAVE_FETCH_DAYS).fill(null);
         const entry = manifest[s.uuid];
         if (entry && !entry.none) {
@@ -2658,7 +2700,7 @@ async function loadWave() {
         }
         const meas = await getJson(`${API}/stations/${s.uuid}/W/measurements.json?start=P31D`).catch(() => []);
         const pts = meas.map(m => [Date.parse(m.timestamp), m.value])
-          .filter(p => Number.isFinite(p[0]) && p[1] != null).sort((a, b) => a[0] - b[0]);
+          .filter(p => Number.isFinite(p[0]) && Number.isFinite(p[1])).sort((a, b) => a[0] - b[0]);
         for (const { d, v } of dailyMeans(pts)) {
           const di = d - day0;
           if (di >= 0 && di < WAVE_FETCH_DAYS) vals[di] = v;
@@ -2667,7 +2709,7 @@ async function loadWave() {
         if (vals.filter(v => v != null).length >= WAVE_FETCH_DAYS * 0.3) {
           rows.push({ name: s.name, km: s.km, kind: s.kind, vals });
         }
-      }));
+      } catch { /* skip this station's row */ } }));
       if (mode !== 'river' || state.river !== forRiver) return; // switched away mid-fetch
     }
     rows.sort((a, b) => a.km - b.km);
@@ -2699,9 +2741,7 @@ function drawWave(g, w) {
   const dayAt = i => (w.day0 + start + i) * DAY_MS;
 
   const brand = `PEGEL://${w.river}`;
-  put(g, 0, 0, `─── ${brand} · WAVE `.padEnd(COLS, '─'), 'd');
-  put(g, 0, 4, brand, 'b');
-  putHeaderTag(g, 0, '[← PROFILE]', 'cmd:live');
+  putHeadRule(g, `─── ${brand} · WAVE `, brand, '[← PROFILE]', 'cmd:live');
   const range = `${isoDay(dayAt(0))} → ${isoDay(dayAt(nEff - 1))}`;
   const note = w.shown < w.total ? ` · ${w.shown} of ${w.total} stations` : '';
   put(g, 1, 0, compact ? range : `${HEAT_RAMP} low → high, scaled per station · ${range}${note}`, 'd');
@@ -2722,10 +2762,12 @@ function drawWave(g, w) {
     put(g, r, 2, name, row.kind === 'normal' ? 'd' : RIVER_CLS[row.kind]);
     linkCells(g, r, 0, left - 1, row.name);
     const vals = row.vals.slice(start);
-    const present = vals.filter(v => v != null);
+    // Number.isFinite, not != null: one NaN would poison Math.min/max and
+    // flatten the whole row's scaling
+    const present = vals.filter(v => Number.isFinite(v));
     const lo = Math.min(...present), hi = Math.max(...present);
     for (let x = 0; x < nEff; x++) {
-      if (vals[x] == null) continue; // blank = no data that day
+      if (!Number.isFinite(vals[x])) continue; // blank = no data that day
       put(g, r, colAt(x), hi > lo ? heatAbs(vals[x], lo, hi) : '▒');
     }
   });
@@ -2815,10 +2857,9 @@ function switchStation(name, adsb, push = true) {
     if (viewMode !== 'live') q.set('view', viewMode);
     history[push === 'replace' ? 'replaceState' : 'pushState'](null, '', '?' + q.toString());
   }
-  applyStationChrome();
-  applyModeChrome(); // restore the station chrome if we came from river mode
-
-  // drop the previous station's data so render() shows the connecting screen at once
+  // drop the previous station's data so render() shows the connecting screen at
+  // once — BEFORE the chrome renders: the history bar's year chips read the
+  // stats, which must not be computed from the old station's archive
   state.info = null;
   state.gauge = null;
   state.wt = null;
@@ -2830,6 +2871,11 @@ function switchStation(name, adsb, push = true) {
   state.repoArchive = null; // per-station; re-resolved from the manifest on demand
   state.archive = loadArchive(station);
   sparkDisplay = null; // new station's data shouldn't spring in from the old one's shape
+  // the stats cache key is only a shape hash (length + first/last ts) — two fully
+  // backfilled stations can collide on it, so a switch must invalidate explicitly
+  histCache = null;
+  applyStationChrome();
+  applyModeChrome(); // restore the station chrome if we came from river mode
   dirty = true;
   updateLocalBar();
   setScreenAria();
@@ -2862,7 +2908,10 @@ function switchStation(name, adsb, push = true) {
 function switchRiver(name, push = true) {
   dismissHelp();
   dismissSuggest();
-  const next = (name || state.river || '').trim().toUpperCase();
+  const raw = (name || state.river || '').trim();
+  // fold ASCII umlaut spellings like the station path does — a shared
+  // ?river=MUERITZSEE link must open MÜRITZSEE, not 404 against the API
+  const next = resolveWater(raw) || raw.toUpperCase();
   if (!next) return;
   if (mode === 'river' && next === state.river) return;
 
@@ -2874,7 +2923,7 @@ function switchRiver(name, push = true) {
   state.error = null;
   waveData = null; // the wave heatmap is per-river
 
-  if (push) history.pushState(null, '', '?river=' + encodeURIComponent(next) + viewSuffix());
+  if (push) history[push === 'replace' ? 'replaceState' : 'pushState'](null, '', '?river=' + encodeURIComponent(next) + viewSuffix());
   applyRiverChrome();
   applyModeChrome();
   dirty = true;
@@ -3351,6 +3400,12 @@ async function loadWaterList() {
     const list = [...new Set(waters.map(w => (w.shortname || '').toUpperCase()).filter(Boolean))].sort();
     localStorage.setItem(WATERS_CACHE, JSON.stringify({ t: Date.now(), list }));
     fillWaters(list);
+    // mirror the station self-correction: a first-ever visitor opening an
+    // ASCII-spelled ?river= link had no cached water list to fold against
+    if (state.error && mode === 'river') {
+      const fixed = resolveWater(state.river);
+      if (fixed && fixed !== state.river) switchRiver(fixed, 'replace');
+    }
   } catch { /* rivers in the datalist are a bonus, not a requirement */ }
 }
 
@@ -3519,7 +3574,7 @@ async function ensureHistoryCoverage(days) {
   try {
     const enc = encodeURIComponent(forStation);
     const measurements = await getJson(`${API}/stations/${enc}/W/measurements.json?start=${encodeURIComponent('P' + days + 'D')}`);
-    if (station !== forStation) return; // switched away while fetching — discard
+    if (station !== forStation || mode !== 'station') return; // switched away while fetching — discard
     mergeIntoArchive(forStation, measurements);
     state.archive = loadArchive(forStation);
     updateLocalBar();
@@ -3896,7 +3951,10 @@ function render(t) {
     setScreenText(`${wreckFrame(t)}\n\nERROR\n\n${state.error}`);
     return;
   }
-  if (!state.gauge || !state.gauge.currentMeasurement) {
+  if (!state.gauge || !state.gauge.currentMeasurement ||
+      !Number.isFinite(state.gauge.currentMeasurement.value)) {
+    // a non-numeric current value would render blank big digits under a
+    // healthy-looking header — treat it like "no measurement yet" instead
     setScreenText(`connecting to pegelonline.wsv.de ${'·'.repeat(1 + Math.floor(t * 2) % 3)}`);
     return;
   }
