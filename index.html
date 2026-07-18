@@ -896,7 +896,10 @@ function mergeIntoArchive(name, measurements) {
   for (const m of measurements) {
     const t = Date.parse(m.timestamp);
     // value must be a real number: one stored NaN/string poisons every
-    // Math.min/max over the archive and blanks the whole sparkline
+    // Math.min/max over the archive and blanks the whole sparkline.
+    // first write wins (!seen.has): a later WSV re-report for the same timestamp
+    // never overwrites a stored point — keeps the sparkline stable against the
+    // value flapping the API sometimes shows between polls
     if (Number.isFinite(t) && Number.isFinite(m.value) && !seen.has(t)) { pts.push([t, m.value]); seen.add(t); }
   }
   pts.sort((a, b) => a[0] - b[0]);
@@ -2299,7 +2302,9 @@ function cellMean(arr, d0, d1) {
 
 // everything the years view draws from, computed once per archive change:
 // per-year day-of-year matrices, a per-month climatology built from the years
-// BEFORE the current one (so "unusual" is judged against the past, not itself),
+// BEFORE the current one (so "unusual" is judged against the past, not itself;
+// a viewed past year stays in its own reference — no per-year leave-one-out,
+// which would skew more than help across the few years typically available),
 // and robust absolute-scale bounds (2nd..98th percentile resists WSV outliers)
 function buildHistStats(pts, nowMs) {
   const daily = dailyMeans(pts);
