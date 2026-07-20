@@ -169,9 +169,21 @@ export async function fetchStation(st, fromY, toY, doFetch = fetch) {
   const years = new Map();
   const codes = [st.code, ...(st.histCodes || [])];
   let pts = 0;
+  let failed = 0;
   for (let y = fromY; y <= toY; y++) {
     for (const code of codes) {
-      const raw = await fetchYear(code, y, doFetch);
+      // isolate per (code, year): a transient error or an unexpected non-204
+      // empty signal on one year must not discard the whole station's backfill —
+      // log it and move on (a re-run's idempotent merge fills the hole later)
+      let raw;
+      try {
+        raw = await fetchYear(code, y, doFetch);
+      } catch (e) {
+        console.log(`  · ${code} ${y} skipped: ${e.message}`);
+        failed++;
+        await sleep(THROTTLE_MS);
+        continue;
+      }
       pts += raw.length;
       if (raw.length) {
         const mapped = st.offsetCm ? raw.map(m => ({ timestamp: m.timestamp, value: m.value - st.offsetCm })) : raw;
@@ -183,7 +195,7 @@ export async function fetchStation(st, fromY, toY, doFetch = fetch) {
       await sleep(THROTTLE_MS);
     }
   }
-  return { years, pts };
+  return { years, pts, failed };
 }
 
 // upsert only the touched stations into manifest.json (leaving the WSV entries
@@ -236,11 +248,11 @@ async function main() {
     const st = stations[i];
     const tag = `[${i + 1}/${stations.length}] ${st.name} (${st.code})`;
     try {
-      const { years, pts } = await fetchStation(st, fromY, toY);
+      const { years, pts, failed: badYears } = await fetchStation(st, fromY, toY);
       const touched = writeStation(join(OUT, st.uuid), st.name, years, fromY, fetchedThrough,
         { source: SOURCE, datumOffsetCm: st.offsetCm, water: st.water });
       const ys = [...years.keys()].sort((a, b) => a - b);
-      console.log(`${tag} · ${pts} pts -> ${touched} year(s)${ys.length ? ` (${ys[0]}-${ys[ys.length - 1]})` : ''}`);
+      console.log(`${tag} · ${pts} pts -> ${touched} year(s)${ys.length ? ` (${ys[0]}-${ys[ys.length - 1]})` : ''}${badYears ? ` · ${badYears} year(s) skipped` : ''}`);
       ok++;
     } catch (e) {
       console.log(`${tag} · FAILED: ${e.message}`);
