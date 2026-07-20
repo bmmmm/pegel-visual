@@ -658,7 +658,12 @@ const state = {
   river: null,      // river name (uppercase) while in river mode
   riverStations: null, // prepared station array for the longitudinal profile
   repoArchive: null, // 'available' | 'none' once the hosted archive manifest was consulted
+  archiveSource: null, // manifest entry.source (e.g. 'Rijkswaterstaat'); null → WSV
 };
+// who to attribute the hosted multi-year archive to for the current station —
+// most are WSV, a few Dutch gauges are backed by Rijkswaterstaat (see the
+// manifest's per-station `source`); defaults to WSV when the entry omits it
+const archiveSource = () => state.archiveSource || 'WSV';
 
 // ---------- data ----------
 
@@ -1955,7 +1960,7 @@ function drawSparkline(g, row, t) {
   } else if (wd && coveredDays < wd * 0.8) {
     put(g, row, noteCol, isCompact() ? `· ${Math.round(coveredDays)}D only` : `· covers ${Math.round(coveredDays)}D — import the WSV archive ↓`, 's');
   } else if ((wd || spanDays) > API_MAX_DAYS) { // ALL warns too once the archive spans years
-    put(g, row, noteCol, isCompact() ? '· RAW' : '· unvalidated raw data (WSV)', 's');
+    put(g, row, noteCol, isCompact() ? '· RAW' : `· unvalidated raw data (${archiveSource()})`, 's');
   }
 
   // water sloshes past the new level, wobbles, then settles — a damped spring per
@@ -2434,7 +2439,7 @@ function drawHistYears(g) {
   if (st.daily.length < HIST_MIN_DAYS) {
     put(g, 2, 2, state.repoArchive === 'none'
       ? 'WSV keeps no multi-year archive for this station'
-      : 'not enough history yet — fetching the WSV archive (2000 →) …', 'd');
+      : `not enough history yet — fetching the ${archiveSource()} archive …`, 'd');
     put(g, 4, 2, 'the local archive also grows with every visit', 'd');
     return;
   }
@@ -2536,7 +2541,7 @@ function drawHistYears(g) {
   r++;
   const climTop = r;
   if (!st.climYears) {
-    put(g, climTop + 1, 2, 'needs at least one completed year — the WSV archive reaches back to 2000', 'd');
+    put(g, climTop + 1, 2, `needs at least one completed year — the ${archiveSource()} archive reaches back decades`, 'd');
   } else {
     const curArr = st.byYear.get(st.curYear);
     const curMonthly = Array.from({ length: 12 }, (_, m) =>
@@ -2874,6 +2879,7 @@ function switchStation(name, adsb, push = true) {
   state.weather = null;
   state.error = null;
   state.repoArchive = null; // per-station; re-resolved from the manifest on demand
+  state.archiveSource = null;
   state.archive = loadArchive(station);
   sparkDisplay = null; // new station's data shouldn't spring in from the old one's shape
   // the stats cache key is only a shape hash (length + first/last ts) — two fully
@@ -3532,6 +3538,7 @@ async function loadRepoArchive() {
   if (station !== forStation) return; // switched away while the manifest loaded
   if (entry) {
     state.repoArchive = entry.none ? 'none' : 'available';
+    state.archiveSource = entry.source || null;
     dirty = true;
     if (entry.none) return; // known gap — skip the pointless fetches
   }
@@ -3691,7 +3698,7 @@ function buildReportSections(note) {
   const archive = [
     `- history range: ${historyKey}`,
     `- points in local archive: ${state.archive.length}`,
-    `- hosted WSV archive loaded: ${state.repoArchive === 'available'}`,
+    `- hosted archive loaded: ${state.repoArchive === 'available'}${state.repoArchive === 'available' ? ` (source: ${archiveSource()})` : ''}`,
   ];
 
   const viewport = [

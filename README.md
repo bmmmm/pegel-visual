@@ -59,6 +59,16 @@ _      _      _      _      _      _      _      _
   opens the station's WSV download page, and `import` swallows the ZIP
   directly (unpacked in the browser via `DecompressionStream`, still no
   dependencies)
+- **beyond WSV:** ten Dutch gauges PEGELONLINE relays live but WSV keeps no
+  multi-year archive for (LOBITH, PANNERDENSE KOP, TIEL, VUREN, ZALTBOMMEL,
+  NIJMEGEN HAVEN, IJSSELKOP, DORDRECHT, KRIMPEN, ROTTERDAM) are backfilled
+  from [Rijkswaterstaat](https://www.rijkswaterstaat.nl) open data (CC0)
+  instead, back to ~1989. Each carries a `source` marker in the archive
+  manifest so the *unvalidated raw data* attribution names the right origin;
+  `scripts/fetch-rws-archive.mjs` builds and refreshes them. Values were
+  verified seamless with the live PEGELONLINE feed (identical NAP datum). See
+  the [`archive` branch README](../../tree/archive) for the per-source
+  attribution
 - **years view** (`▦ YEARS` chip or `?view=years`) — the station as a
   multi-year statistics terminal, built from the same daily archive:
   a heatmap of every year by month (`ABS` shades the level itself,
