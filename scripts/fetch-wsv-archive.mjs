@@ -243,6 +243,12 @@ export function buildManifest(stations, out) {
     } else {
       entry.none = true; // WSV keeps no pre-30-day archive for this station
     }
+    // a sibling adapter (e.g. fetch-rws-archive.mjs) records a non-WSV origin in
+    // meta.json; surface it so the client can attribute correctly. Absent = WSV,
+    // so the 618 WSV stations stay untouched and this rebuild never strips a
+    // source a sibling adapter wrote (order-independent with the RWS refresh).
+    const src = (readJson(join(dir, 'meta.json')) || {}).source;
+    if (src) entry.source = src;
     manifest.stations[s.uuid] = entry;
   }
   writeFileSync(join(out, 'manifest.json'), JSON.stringify(manifest));
@@ -281,7 +287,7 @@ export function mergeYear(existing, y, data) {
 // bundle and the running-year current.json. A current.json holding a
 // now-completed year graduates into the bundle first (the freeze); years equal
 // to CURRENT_YEAR stay in current.json.
-export function writeStation(dir, name, years, fetchedFrom, fetchedThrough) {
+export function writeStation(dir, name, years, fetchedFrom, fetchedThrough, extraMeta = null) {
   mkdirSync(dir, { recursive: true });
   const closedPath = join(dir, 'closed.json');
   const currentPath = join(dir, 'current.json');
@@ -318,6 +324,7 @@ export function writeStation(dir, name, years, fetchedFrom, fetchedThrough) {
   meta.name = name;
   meta.fetchedFrom = Math.min(meta.fetchedFrom ?? fetchedFrom, fetchedFrom);
   meta.fetchedThrough = Math.max(meta.fetchedThrough || 0, fetchedThrough);
+  if (extraMeta) Object.assign(meta, extraMeta); // e.g. { source, datumOffsetCm, water }
   writeFileSync(metaPath, JSON.stringify(meta));
   return touched;
 }
