@@ -53,6 +53,13 @@
 // Omschrijving literally reads "voorheen Vuren" = formerly Vuren). All ten
 // verified with high confidence; none skipped.
 //
+// One gauge changed RWS code mid-life: TIEL's history lives under
+// `tiel.sluis.waal` (1989..early 2026) and continues under `tiel.waal` (2026->,
+// the live code). They are the same gauge at the same datum (offset 0, verified
+// on their early-2026 overlap), so `code` holds the live one and `histCodes`
+// the retired one; fetchStation unions every code per day. The other nine are a
+// single code each carrying both history and the live feed.
+//
 // ---- Data depth ----
 // Dense 10-min/hourly data reaches back to ~1989 for all ten (the default
 // backfill start). Sparse daily observations exist further back for some (e.g.
@@ -90,7 +97,7 @@ export const STATIONS = [
   { uuid: '46f3bfc1-05ee-4809-bdd3-1a46b0a17fb7', name: 'NIJMEGEN HAVEN',  water: 'WAAL',      code: 'nijmegen.waal',                     offsetCm: 0 },
   { uuid: '3046493f-971f-4d22-9f29-7ef8e3b645a4', name: 'PANNERDENSE KOP', water: 'RHEIN',     code: 'millingenaanderijn.pannerdensekop', offsetCm: 0 },
   { uuid: 'efe13a3d-f239-4655-9c13-4ac56dfa4478', name: 'LOBITH',          water: 'RHEIN',     code: 'lobith.bovenrijn.tolkamer',         offsetCm: 0 },
-  { uuid: 'bd4bb467-45f1-490d-a212-49412fcca219', name: 'TIEL',            water: 'WAAL',      code: 'tiel.waal',                         offsetCm: 0 },
+  { uuid: 'bd4bb467-45f1-490d-a212-49412fcca219', name: 'TIEL',            water: 'WAAL',      code: 'tiel.waal', histCodes: ['tiel.sluis.waal'], offsetCm: 0 },
   { uuid: 'a9f6664a-58bf-4a96-8c32-f606bbae8eaf', name: 'VUREN',           water: 'WAAL',      code: 'dalem',                             offsetCm: 0 },
   { uuid: 'bbaefa8e-b13f-4058-b86f-11d19e9ed17e', name: 'IJSSELKOP',       water: 'IJSSEL',    code: 'westervoort.ijsselkop',             offsetCm: 0 },
   { uuid: '6c6f84c2-b7ea-4720-8ecd-a83c100c6291', name: 'DORDRECHT',       water: 'ALTE_MAAS', code: 'dordrecht.oudemaas.benedenmerwede', offsetCm: 0 },
@@ -154,21 +161,27 @@ function unionYear(a, b) {
 }
 
 // fetch year-by-year (freeing each year's raw before the next) and condense into
-// one {y -> {min,max}} map; offsetCm shifts NAP->target datum (0 for all ten)
-async function fetchStation(st, fromY, toY, doFetch = fetch) {
+// one {y -> {min,max}} map; offsetCm shifts NAP->target datum (0 for all ten).
+// A gauge whose RWS code changed over time (e.g. TIEL: historical tiel.sluis.waal
+// -> current tiel.waal from 2026, same gauge/datum, verified offset 0) lists the
+// extra codes in histCodes; every code's year is unioned per day.
+export async function fetchStation(st, fromY, toY, doFetch = fetch) {
   const years = new Map();
+  const codes = [st.code, ...(st.histCodes || [])];
   let pts = 0;
   for (let y = fromY; y <= toY; y++) {
-    const raw = await fetchYear(st.code, y, doFetch);
-    pts += raw.length;
-    if (raw.length) {
-      const mapped = st.offsetCm ? raw.map(m => ({ timestamp: m.timestamp, value: m.value - st.offsetCm })) : raw;
-      for (const [yy, data] of condense(mapped)) {
-        const ex = years.get(yy);
-        years.set(yy, ex ? unionYear(ex, data) : data);
+    for (const code of codes) {
+      const raw = await fetchYear(code, y, doFetch);
+      pts += raw.length;
+      if (raw.length) {
+        const mapped = st.offsetCm ? raw.map(m => ({ timestamp: m.timestamp, value: m.value - st.offsetCm })) : raw;
+        for (const [yy, data] of condense(mapped)) {
+          const ex = years.get(yy);
+          years.set(yy, ex ? unionYear(ex, data) : data);
+        }
       }
+      await sleep(THROTTLE_MS);
     }
-    await sleep(THROTTLE_MS);
   }
   return { years, pts };
 }

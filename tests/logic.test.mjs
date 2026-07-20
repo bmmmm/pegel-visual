@@ -668,6 +668,9 @@ test('rws adapter: station registry is well-formed (10 unique gauges, kept raw)'
   assert.equal(new Set(STATIONS.map(s => s.uuid)).size, 10, 'unique uuids');
   assert.equal(new Set(STATIONS.map(s => s.code)).size, 10, 'unique RWS codes');
   for (const s of STATIONS) assert.equal(s.offsetCm, 0, `${s.name} kept raw (no datum shift)`);
+  // TIEL is the one gauge whose RWS code changed mid-life; both codes are fetched
+  const tiel = STATIONS.find(s => s.name === 'TIEL');
+  assert.deepEqual(tiel.histCodes, ['tiel.sluis.waal'], 'TIEL keeps its retired historical code');
 });
 
 test('rws adapter: fetchYear parses observations, drops gap sentinels and nulls', async () => {
@@ -687,6 +690,26 @@ test('rws adapter: fetchYear parses observations, drops gap sentinels and nulls'
   assert.deepEqual(await fetchYear('x', 2024, async () => ({ status: 204 })), [], '204 = no data');
   await assert.rejects(() => fetchYear('x', 2024,
     async () => ({ status: 200, json: async () => ({ Succesvol: false, Foutmelding: 'boom' }) })), /boom/);
+});
+
+test("rws adapter: fetchStation unions a gauge's multiple codes per day", async () => {
+  const { fetchStation } = await import('../scripts/fetch-rws-archive.mjs');
+  const byCode = {
+    live: [{ Tijdstip: '2024-01-02T12:00:00+01:00', Meetwaarde: { Waarde_Numeriek: 300 } }],
+    hist: [
+      { Tijdstip: '2024-01-02T12:00:00+01:00', Meetwaarde: { Waarde_Numeriek: 500 } }, // same day → union
+      { Tijdstip: '2024-01-03T12:00:00+01:00', Meetwaarde: { Waarde_Numeriek: 200 } }, // day the live code lacks
+    ],
+  };
+  const fake = async (url, opts) => {
+    const code = JSON.parse(opts.body).Locatie.Code;
+    return { status: 200, json: async () => ({ Succesvol: true, WaarnemingenLijst: [{ MetingenLijst: byCode[code] || [] }] }) };
+  };
+  const { years } = await fetchStation({ code: 'live', histCodes: ['hist'], offsetCm: 0 }, 2024, 2024, fake);
+  const y = years.get(2024);
+  assert.equal(y.max[1], 500, 'Jan 2 unions both codes → higher value wins');
+  assert.equal(y.min[1], 300, 'Jan 2 lower value across both codes');
+  assert.equal(y.min[2], 200, 'Jan 3 comes from the historical code alone');
 });
 
 test('rws adapter: updateManifest upserts source, leaves WSV entries intact', async () => {
