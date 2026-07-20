@@ -38,6 +38,13 @@ jobs:
         # are skipped, stations that never succeeded (newly commissioned, or
         # archive-less so far) get a full 2000->last-year attempt
         run: node scripts/fetch-wsv-archive.mjs --out archive-branch/archive
+      - name: Refresh Rijkswaterstaat gauges (running year)
+        # the 10 Dutch partner gauges WSV has no archive for are backed by
+        # Rijkswaterstaat instead; --current refreshes their running year (in
+        # January it also freezes the completed one). Runs after the WSV sweep so
+        # its manifest upsert (which carries source:"Rijkswaterstaat") lands last.
+        # The one-time 1989-> backfill is seeded separately (see the script header).
+        run: node scripts/fetch-rws-archive.mjs --current --out archive-branch/archive
       - name: Commit and push
         id: push
         run: |
