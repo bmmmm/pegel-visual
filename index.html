@@ -2541,7 +2541,7 @@ function drawHistYears(g) {
   r++;
   const climTop = r;
   if (!st.climYears) {
-    put(g, climTop + 1, 2, 'needs at least one completed year — the WSV archive reaches back to 2000', 'd');
+    put(g, climTop + 1, 2, `needs at least one completed year — the ${archiveSource()} archive reaches back decades`, 'd');
   } else {
     const curArr = st.byYear.get(st.curYear);
     const curMonthly = Array.from({ length: 12 }, (_, m) =>
