@@ -532,6 +532,23 @@ test('archive script: buildManifest marks year ranges and none-stations', async 
   assert.equal(m.stations['uuid-a'].none, undefined);
   assert.deepEqual(m.stations['uuid-b'], { n: 'Marburg', w: 'LAHN', none: true });
   assert.ok(JSON.parse(readFileSync(join(out, 'manifest.json'))).stations['uuid-b'].none, 'written to disk');
+  assert.equal(m.stations['uuid-a'].source, undefined, 'no meta.json source → no source field (WSV default)');
+});
+
+test('archive script: buildManifest carries a station meta.json source into the manifest', async () => {
+  const { buildManifest } = await import('../scripts/fetch-wsv-archive.mjs');
+  const { mkdtempSync, mkdirSync, writeFileSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const out = mkdtempSync(join(tmpdir(), 'pegel-src-'));
+  mkdirSync(join(out, 'uuid-r'));
+  writeFileSync(join(out, 'uuid-r', 'closed.json'), JSON.stringify([{ y: 1990, min: [5], max: [9] }]));
+  writeFileSync(join(out, 'uuid-r', 'meta.json'), JSON.stringify({ name: 'LOBITH', source: 'Rijkswaterstaat' }));
+  // the WSV rebuild runs over the full station list, so it must preserve a
+  // source a sibling adapter wrote (order-independent with the RWS refresh)
+  const m = buildManifest([{ uuid: 'uuid-r', shortname: 'LOBITH', water: { shortname: 'RHEIN' } }], out);
+  assert.equal(m.stations['uuid-r'].source, 'Rijkswaterstaat');
+  assert.equal(m.stations['uuid-r'].from, 1990);
 });
 
 test('loadRepoArchive: a manifest none-entry skips archive fetches and flags the station', async () => {
@@ -602,6 +619,92 @@ test('loadRepoArchive: merges the closed bundle + current.json in exactly 3 requ
   assert.equal(arch.length, 6, 'three archived days across bundle + current → two points each');
   assert.deepEqual(arch.map(p => p[1]), [300, 340, 200, 260, 110, 190]);
   delete globalThis.__reqs;
+});
+
+test('archiveSource: defaults to WSV, else the manifest source', () => {
+  const app = loadApp({ now: NOON });
+  assert.equal(app.run('archiveSource()'), 'WSV', 'no source → WSV');
+  app.run(`state.archiveSource = 'Rijkswaterstaat'`);
+  assert.equal(app.run('archiveSource()'), 'Rijkswaterstaat');
+});
+
+test('loadRepoArchive: an available entry carries its source through to state', async () => {
+  const app = loadApp({ now: NOON });
+  const year = new Date(NOON).getUTCFullYear();
+  app.run(`state.info = { uuid: 'rws-uuid' }`);
+  app.run(`getJson = async url => {
+    if (url === 'archive/manifest.json') return { stations: { 'rws-uuid': { n: 'LOBITH', w: 'RHEIN', from: 1989, to: ${year}, source: 'Rijkswaterstaat' } } };
+    if (url === 'archive/rws-uuid/closed.json') return [];
+    if (url === 'archive/rws-uuid/current.json') return { y: ${year}, min: [100], max: [110] };
+    throw new Error('unexpected fetch ' + url);
+  }`);
+  await app.run('loadRepoArchive()');
+  assert.equal(app.run('state.repoArchive'), 'available');
+  assert.equal(app.run('state.archiveSource'), 'Rijkswaterstaat', 'source flows from the manifest entry');
+});
+
+test('drawHistYears: attributes the hosted archive to its manifest source', () => {
+  for (const [source, label] of [[null, 'WSV'], ['Rijkswaterstaat', 'Rijkswaterstaat']]) {
+    const app = loadApp({ now: NOON });
+    const rows = app.run(`(() => {
+      station = 'LOBITH';
+      state.info = { uuid: 'u', water: { shortname: 'RHEIN' } };
+      state.repoArchive = 'available';
+      state.archiveSource = ${JSON.stringify(source)};
+      state.archive = []; // too little history → the "fetching the … archive" line
+      const g = makeGrid(24);
+      drawHistYears(g);
+      return g.ch.map(r => r.join(''));
+    })()`);
+    assert.ok(rows.join('\n').includes(`fetching the ${label} archive`), `${label} attribution shown in the years view`);
+  }
+});
+
+// ---------- Rijkswaterstaat adapter (scripts/fetch-rws-archive.mjs) ----------
+
+test('rws adapter: station registry is well-formed (10 unique gauges, kept raw)', async () => {
+  const { STATIONS } = await import('../scripts/fetch-rws-archive.mjs');
+  assert.equal(STATIONS.length, 10);
+  assert.equal(new Set(STATIONS.map(s => s.uuid)).size, 10, 'unique uuids');
+  assert.equal(new Set(STATIONS.map(s => s.code)).size, 10, 'unique RWS codes');
+  for (const s of STATIONS) assert.equal(s.offsetCm, 0, `${s.name} kept raw (no datum shift)`);
+});
+
+test('rws adapter: fetchYear parses observations, drops gap sentinels and nulls', async () => {
+  const { fetchYear } = await import('../scripts/fetch-rws-archive.mjs');
+  const fake = async (url, opts) => {
+    const body = JSON.parse(opts.body);
+    assert.equal(body.Locatie.Code, 'lobith.bovenrijn.tolkamer');
+    assert.equal(body.AquoPlusWaarnemingMetadata.AquoMetadata.Grootheid.Code, 'WATHTE');
+    return { status: 200, json: async () => ({ Succesvol: true, WaarnemingenLijst: [{ MetingenLijst: [
+      { Tijdstip: '2024-06-01T12:00:00+02:00', Meetwaarde: { Waarde_Numeriek: 705 } },
+      { Tijdstip: '2024-06-01T12:10:00+02:00', Meetwaarde: { Waarde_Numeriek: 999999999 } }, // sentinel
+      { Tijdstip: '2024-06-01T12:20:00+02:00', Meetwaarde: { Waarde_Numeriek: null } },       // gap
+    ] }] }) };
+  };
+  const pts = await fetchYear('lobith.bovenrijn.tolkamer', 2024, fake);
+  assert.deepEqual(pts, [{ timestamp: '2024-06-01T12:00:00+02:00', value: 705 }], 'only the real value survives');
+  assert.deepEqual(await fetchYear('x', 2024, async () => ({ status: 204 })), [], '204 = no data');
+  await assert.rejects(() => fetchYear('x', 2024,
+    async () => ({ status: 200, json: async () => ({ Succesvol: false, Foutmelding: 'boom' }) })), /boom/);
+});
+
+test('rws adapter: updateManifest upserts source, leaves WSV entries intact', async () => {
+  const { updateManifest } = await import('../scripts/fetch-rws-archive.mjs');
+  const { mkdtempSync, mkdirSync, writeFileSync, readFileSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const out = mkdtempSync(join(tmpdir(), 'pegel-rws-'));
+  writeFileSync(join(out, 'manifest.json'), JSON.stringify({ generated: 'x', stations: {
+    'wsv-1': { n: 'BONN', w: 'RHEIN', from: 2000, to: 2025 } } }));
+  mkdirSync(join(out, 'rws-1'));
+  writeFileSync(join(out, 'rws-1', 'closed.json'), JSON.stringify([{ y: 1989, min: [10], max: [20] }]));
+  writeFileSync(join(out, 'rws-1', 'meta.json'), JSON.stringify({ name: 'LOBITH', source: 'Rijkswaterstaat' }));
+  const m = updateManifest(out, [{ uuid: 'rws-1', name: 'LOBITH', water: 'RHEIN' }]);
+  assert.deepEqual(m.stations['wsv-1'], { n: 'BONN', w: 'RHEIN', from: 2000, to: 2025 }, 'WSV entry untouched');
+  assert.equal(m.stations['rws-1'].source, 'Rijkswaterstaat');
+  assert.equal(m.stations['rws-1'].from, 1989);
+  assert.equal(JSON.parse(readFileSync(join(out, 'manifest.json'))).stations['rws-1'].source, 'Rijkswaterstaat');
 });
 
 // ---------- the January year-freeze (script clock pinned via PEGEL_NOW) ----------
@@ -860,7 +963,7 @@ test('buildReportBody: covers everything the renderer branches on, redacts recei
   assert.match(body, /river km: 654\.8/);
   assert.match(body, /history range: 7d/);
   assert.match(body, /points in local archive: 2/);
-  assert.match(body, /hosted WSV archive loaded: true/);
+  assert.match(body, /hosted archive loaded: true \(source: WSV\)/);
   assert.match(body, /COLS: 84/);
   assert.match(body, /flowLowKm: true/);
   assert.match(body, /neighbors: 3/);
