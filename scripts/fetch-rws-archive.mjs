@@ -85,7 +85,7 @@ const MAX_VALID_CM = 5000; // clamp RWS gap sentinels (large magic numbers); rea
 // verified WSV uuid <-> RWS location code. offsetCm is subtracted from the raw
 // NAP value before condensing; 0 for all ten (see the datum note above). Keep
 // `water` so the manifest upsert can label the entry without the PEGELONLINE list.
-const STATIONS = [
+export const STATIONS = [
   { uuid: '3a8c82a6-51a6-48fa-a81c-b9e7288093a4', name: 'ZALTBOMMEL',      water: 'WAAL',      code: 'zaltbommel',                        offsetCm: 0 },
   { uuid: '46f3bfc1-05ee-4809-bdd3-1a46b0a17fb7', name: 'NIJMEGEN HAVEN',  water: 'WAAL',      code: 'nijmegen.waal',                     offsetCm: 0 },
   { uuid: '3046493f-971f-4d22-9f29-7ef8e3b645a4', name: 'PANNERDENSE KOP', water: 'RHEIN',     code: 'millingenaanderijn.pannerdensekop', offsetCm: 0 },
