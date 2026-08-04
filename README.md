@@ -1,8 +1,11 @@
 # pegel-visual archive data
 
-This branch carries only data: the WSV/PEGELONLINE historical water-level
-archive (raw values since 2000-01-01), condensed to daily min/max per
-station and year by `scripts/fetch-wsv-archive.mjs` on `main`.
+This branch carries only data: the historical water-level archive for the
+PEGELONLINE station set — most stations from WSV (raw values since
+2000-01-01), ten Dutch gauges from Rijkswaterstaat (raw values back to
+~1989) — condensed to daily min/max per station and year by
+`scripts/fetch-wsv-archive.mjs` and `scripts/fetch-rws-archive.mjs` on
+`main`.
 
 Layout: `archive/<station-uuid>/closed.json` (one immutable bundle of all
 completed years, `[{y, min[], max[]}, …]`, extended only by the January
@@ -19,7 +22,33 @@ gaps are possible.
 The `pages` workflow merges this branch's `archive/` directory into the
 deployed site.
 
-## Stations without a WSV archive (120 of 738)
+## Sources & attribution
+
+Most stations come from **WSV** (© Wasserstraßen- und Schifffahrtsverwaltung
+des Bundes), DL-DE->Zero-2.0, condensed by scripts/fetch-wsv-archive.mjs.
+
+Ten Dutch gauges PEGELONLINE relays live but WSV keeps no multi-year archive
+for are backed by **Rijkswaterstaat** instead (source:"Rijkswaterstaat" in the
+manifest), condensed by scripts/fetch-rws-archive.mjs from the Rijkswaterstaat
+DD-API, raw values back to ~1989. Rijkswaterstaat water data is CC0 (public
+domain, no attribution required); attributed here for transparency. Values are
+cm relative to NAP and verified seamless with the live PEGELONLINE feed (median
+offset 0 cm), so no datum shift is applied.
+
+| WSV station | Water | Rijkswaterstaat location |
+|---|---|---|
+| LOBITH | RHEIN | lobith.bovenrijn.tolkamer |
+| PANNERDENSE KOP | RHEIN | millingenaanderijn.pannerdensekop |
+| TIEL | WAAL | tiel.waal (+ historical tiel.sluis.waal) |
+| VUREN | WAAL | dalem ("voorheen Vuren") |
+| ZALTBOMMEL | WAAL | zaltbommel |
+| NIJMEGEN HAVEN | WAAL | nijmegen.waal ("voorheen Nijmegen haven") |
+| IJSSELKOP | IJSSEL | westervoort.ijsselkop |
+| DORDRECHT | ALTE_MAAS | dordrecht.oudemaas.benedenmerwede |
+| KRIMPEN | LEK | krimpenaandelek.lek |
+| ROTTERDAM | NEUE_MAAS | rotterdam.nieuwemaas.boerengat |
+
+## Stations without a WSV archive (110 of 738)
 
 These stations are marked `none` in `archive/manifest.json` — WSV keeps no
 pre-30-day history for them (lock/weir operating gauges, foreign partner
@@ -34,23 +63,18 @@ falls back to the live API for them.
 | MOSEL (11) | Enkirch OP, Grevenmacher OP, Grevenmacher UP, Lehmen OP, Mehring AMS, Müden OP, Sankt Aldegund OP, Stadtbredimus OP, Stadtbredimus UP, Trier OP, Zeltingen OP |
 | SAAR (11) | Güdingen OP, Kanzem OP, Kanzem UP, Lisdorf OP, Mettlach OP, Rehlingen OP, Saarbrücken OP, Saarbrücken UP, Schoden OP, Schoden SKA, Serrig OP |
 | ELBE (6) | BLANKENESE UF, BUNTHAUS, HAMBURG ST. PAULI, HAMBURG-HARBURG, SCHÖPFSTELLE, SEEMANNSHÖFT |
-| RHEIN (5) | Basel-Rheinhalle, KONSTANZ-RHEIN, LOBITH, Neuwied Stadt, PANNERDENSE KOP |
+| RHEIN (3) | Basel-Rheinhalle, KONSTANZ-RHEIN, Neuwied Stadt |
 | MHW (4) | Diemitz OP, Diemitz UP, Strasen OP, Strasen UP |
-| WAAL (4) | NIJMEGEN HAVEN, TIEL, VUREN, ZALTBOMMEL |
 | WDK (3) | FLAESHEIM SCHLEUSE OW, FLAESHEIM SCHLEUSE UW, HÜNXE SCHLEUSE OW |
 | EMS (3) | Rühle, VERSEN WEHR OP, Wachendorf |
 | RUHR (2) | Hattingen, RUHRWEHR OW |
 | OSTE (2) | OSTE-SPERRWERK AP, OSTE-SPERRWERK BP |
 | EHK (2) | Roßdorf, Schlagenthiner Stremme |
 | ELK (1) | DONNERSCHLEUSE OP |
-| ALTE_MAAS (1) | DORDRECHT |
 | ESTE (1) | ESTE INNERES SPERRWERK AP |
 | ILMENAU (1) | FAHRENHOLZ OP |
 | KÜSTENKANAL (1) | Hilkenbrook |
-| IJSSEL (1) | IJSSELKOP |
 | BODENSEE (1) | KONSTANZ |
-| LEK (1) | KRIMPEN |
 | OSTSEE (1) | Prerow |
-| NEUE_MAAS (1) | ROTTERDAM |
 | DEK (1) | VERSEN TRENNSPITZE |
 | MLK (1) | WARBER GRABEN |
