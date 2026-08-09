@@ -13,7 +13,10 @@ _      _      _      _      _      _      _      _
 
 ## What it shows
 
-- current level as big block digits, trend per hour, MNW/MHW state
+- current level as big block digits, trend per hour, MNW/MHW state. The trend
+  averages over 6 hours: gauges report whole centimetres and a big river moves
+  centimetres per *day*, so an hourly slope rounds to a flat `0` almost every
+  time. Under an hour of history it reads `—`, not a made-up zero
 - animated river cross-section: waves at the live level, drifting current,
   seeded riverbed, a little ship, markers for MNW / MW / MHW
 - living scenes: below MNW the sun blazes over a cracked, dried-out bank;
@@ -111,6 +114,7 @@ The prompt is a tiny REPL: type a bare name to switch station, or a
 flag command (flags are matched case-insensitively) to do more in one go:
 
 - `--station NAME` — switch to station NAME (same as typing a bare name)
+- `--rivers` — open the rivers map (same as the `--rivers` button or `?rivers`)
 - `--adsb URL` — set your ADS-B receiver URL; `--adsb` with no value clears it
 - `--ais URL` — set your AIS receiver URL; `--ais` with no value clears it
 - `--history RANGE` — set the sparkline window (`24h`, `3d`, `7d`, `15d`, `30d`,
@@ -134,6 +138,31 @@ page, Escape to dismiss the help screen.
 `share` in the footer hands the station link to your system share sheet
 (or copies it). The page ships a web manifest, so it can be installed as
 an app from the browser menu.
+
+## The rivers map
+
+`--rivers` (the button next to the river field, or `?rivers`) puts every water
+PEGELONLINE serves on one screen — a schematic ASCII outline of Germany with
+each river anchored at the centroid of its own gauges and labelled with how
+many it has. Click a name to open that river's profile.
+
+```
+?rivers
+```
+
+The outline is rasterised from a coarse polygon rather than drawn as fixed
+ASCII art, so it stays a map at any grid width, including the 44-column
+compact layout. Placement is greedy from the busiest water down: names that
+find no free cell are listed under the map instead of being squeezed over a
+neighbour.
+
+Two things are deliberately kept apart: a river's **gauge count** includes
+every gauge, its **position** comes only from gauges that have coordinates.
+PEGELONLINE carries 58 gauges without any — the Austrian Donau, the Czech
+Elbe, the Dutch Rhine — and letting that gap into the count would advertise
+`DONAU 18` for a river whose profile then opens with 27. Waters with no
+located gauge at all are listed under the map with their real count, and the
+list header names how many are missing and why.
 
 ## Whole-river mode
 
