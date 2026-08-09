@@ -156,6 +156,10 @@ compact layout. Placement is greedy from the busiest water down: names that
 find no free cell are listed under the map instead of being squeezed over a
 neighbour.
 
+A `← STATION` button next to `--rivers` leads back to the gauge you came from.
+It shows up in the map and in whole-river mode — neither has a station on
+screen to click, so without it the only way back is typing a name.
+
 Two things are deliberately kept apart: a river's **gauge count** includes
 every gauge, its **position** comes only from gauges that have coordinates.
 PEGELONLINE carries 58 gauges without any — the Austrian Donau, the Czech
