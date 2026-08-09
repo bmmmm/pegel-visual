@@ -397,7 +397,9 @@
   <dl>
     <dt>the gauge</dt>
     <dd>The big digits are the live water level in cm, next to the trend per hour
-      (<b>▲</b> rising · <b>▼</b> falling · <b>▬</b> steady) and the station's state
+      (<b>▲</b> rising · <b>▼</b> falling · <b>▬</b> steady) averaged over the last
+      6 hours — gauges report whole centimetres, so an hourly slope on a big river
+      is mostly rounding noise — and the station's state
       relative to its mean low/high water. Stations that report them also show water
       temperature (<b>WT</b>) and discharge (<b>Q</b>). Data comes from PEGELONLINE
       (WSV) and refreshes every 5 minutes.</dd>
@@ -520,6 +522,13 @@ const PROFILE_ROWS = 1 + PROFILE_PLOT_H + PROFILE_LABEL_ROWS; // caption + plot 
 const PROFILE_GAP = 2;  // blank rows between the sparkline block and the profile
 const PROFILE_FOOT = 1; // the ≋ downstream → marker row under the profile
 const REFRESH_MS = 5 * 60 * 1000;
+// Trend window. Gauges report whole centimetres, so an hourly delta on a big
+// river is mostly quantisation noise — the Rhein moves centimetres per day, and
+// a 1 h reading rounds to a flat 0 almost every time. Six hours of context turns
+// that into a slope worth printing; below an hour of data there is no slope at all.
+const TREND_WINDOW_MS = 6 * 36e5;
+const TREND_MIN_SPAN_MS = 36e5;
+const TREND_FLAT = 0.5; // strictly below this |cm/h| reads as steady, not rising/falling
 
 const screen = document.getElementById('screen');
 const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)');
@@ -612,8 +621,8 @@ function screenSummary() {
   if (!cur) return 'Connecting to PEGELONLINE…';
   const trend = trendPerHour();
   const trendTxt = trend === null ? '' :
-    trend > 1 ? `, rising ${trend.toFixed(0)} cm per hour` :
-    trend < -1 ? `, falling ${Math.abs(trend).toFixed(0)} cm per hour` : ', steady';
+    trend >= TREND_FLAT ? `, rising ${trend.toFixed(1)} cm per hour` :
+    trend <= -TREND_FLAT ? `, falling ${Math.abs(trend).toFixed(1)} cm per hour` : ', steady';
   const km = state.info.km != null ? `, km ${state.info.km}` : '';
   const wtTxt = state.wt != null ? `, water ${state.wt.toFixed(1)} °C` : '';
   return `${station} on ${state.info.water.shortname}${km}: water level ${Math.round(cur.value)} cm${trendTxt}${wtTxt}. State ${cur.stateMnwMhw || 'unknown'}.`;
@@ -634,7 +643,7 @@ function applyLiveChrome() {
   const cur = state.gauge && state.gauge.currentMeasurement;
   if (!cur) return;
   const trend = trendPerHour();
-  const arrow = trend === null ? '' : trend > 1 ? ' ▲' : trend < -1 ? ' ▼' : ' ▬';
+  const arrow = trend === null ? '' : ' ' + trendArrow(trend);
   document.title = `PEGEL://${station} · ${Math.round(cur.value)}cm${arrow}`;
   updateFavicon(cur.value);
 }
@@ -1414,7 +1423,11 @@ function charRecord(name) {
   if (!cv || cv.value == null) return null;
   let year = null;
   if (Array.isArray(cv.occurrences) && cv.occurrences.length) {
-    const dates = cv.occurrences.map(o => o && (o.date || o.timestamp)).filter(Boolean);
+    // the REST API sends occurrences as bare date strings ("1993-12-23"); the object
+    // form is kept for the archive fixtures that carry a date/timestamp field instead
+    const dates = cv.occurrences
+      .map(o => typeof o === 'string' ? o : (o && (o.date || o.timestamp)))
+      .filter(Boolean);
     if (dates.length) year = new Date(dates[dates.length - 1]).getFullYear();
   } else if (cv.timespanEnd) {
     year = new Date(cv.timespanEnd).getFullYear();
@@ -1505,11 +1518,16 @@ function trendPerHour() {
   let ref = null;
   for (let i = a.length - 2; i >= 0; i--) {
     ref = a[i];
-    if (a[i][0] <= tLast - 36e5) break;
+    if (a[i][0] <= tLast - TREND_WINDOW_MS) break;
   }
-  const hours = (tLast - ref[0]) / 36e5;
-  return hours > 0 ? (vLast - ref[1]) / hours : null;
+  const span = tLast - ref[0];
+  if (span < TREND_MIN_SPAN_MS) return null;
+  return (vLast - ref[1]) / (span / 36e5);
 }
+
+// -0.04 cm/h is steady, and printing it as "-0.0" reads like a broken minus sign
+const fmtTrend = t => Math.abs(t) < 0.05 ? '0.0' : (t > 0 ? '+' : '') + t.toFixed(1);
+const trendArrow = t => t === null ? '▬' : t >= TREND_FLAT ? '▲' : t <= -TREND_FLAT ? '▼' : '▬';
 
 function drawHeader(g, row, t) {
   const info = state.info, cur = state.gauge.currentMeasurement;
@@ -1527,9 +1545,9 @@ function drawHeader(g, row, t) {
   put(g, row + 6, x + 1, 'cm', 'd');
 
   const trend = trendPerHour();
-  const arrow = trend === null ? '▬' : trend > 1 ? '▲' : trend < -1 ? '▼' : '▬';
-  const sign = trend === null ? '' : (trend > 0 ? '+' : '') + trend.toFixed(0);
-  put(g, row + 2, x + 6, `${arrow} ${sign} cm/h`, trend > 1 ? 'b' : '');
+  // an em dash where the number goes: too little history is "unknown", not "steady"
+  const trendTxt = trend === null ? '▬ — cm/h' : `${trendArrow(trend)} ${fmtTrend(trend)} cm/h`;
+  put(g, row + 2, x + 6, trendTxt, trend !== null && trend >= TREND_FLAT ? 'b' : '');
   put(g, row + 4, x + 6, `state: [${(cur.stateMnwMhw || 'unknown').toUpperCase()}]`, 'd');
   put(g, row + 6, x + 6, new Date(cur.timestamp).toISOString().replace('T', ' ').slice(0, 16) + ' UTC', 'd');
   if (state.adsbOk !== null) {
@@ -1651,42 +1669,62 @@ function drawChart(g, row, t) {
     }
   }
 
-  // characteristic level markers
-  for (const [label, cm] of [['MHW', mhw], ['MW', mw], ['MNW', mnw]]) {
-    if (cm === null || cm > topCm) continue;
-    const r = rowOf(cm);
-    if (r === surface) continue;
-    for (let x = 0; x < chartW; x += 2) if (g.ch[r][x] === ' ' || g.ch[r][x] === '░') put(g, r, x, '╌', 'd');
-    put(g, r, chartW + 1, `┤ ${label} ${cm}`, 'd');
+  // The label gutter right of the chart is narrow, so an optional suffix (the record
+  // year) is only appended when it actually fits instead of being clipped mid-word.
+  const gutter = COLS - chartW - 1;
+  const fitLabel = (base, extra) => base + (extra && base.length + extra.length <= gutter ? extra : '');
+
+  // Marker placement. The scale is pinned to MHW, so at low water the surface, MNW
+  // and NNW all round onto the same row. The old code dropped whichever marker lost
+  // that race, hiding both low-water marks exactly when a river runs low enough to
+  // care — but nudging a clash to the nearest free row is no good either, since it
+  // can print NNW below a level it actually sits above. Instead every mark is placed
+  // in value order and kept strictly monotonic around the water line, so a mark above
+  // the current level always renders above it and the ranking can never invert.
+  const bottomRow = row + CHART_ROWS - 1;
+  const marks = [];
+  const addMark = (key, cm, step, extra) => {
+    if (cm == null || cm > topCm) return;
+    marks.push({ key, cm, step, text: fitLabel(`┤ ${key} ${cm}`, extra) });
+  };
+  for (const [label, cm] of [['MHW', mhw], ['MW', mw], ['MNW', mnw]]) addMark(label, cm, 2);
+
+  // all-time records: HHW almost always sits above the chart's top scale (unlike the
+  // flood headroom, the scale isn't rescaled for it) and NNW at or below the riverbed
+  // row — in those cases the margin gets an arrow instead of a line in the chart.
+  const hhw = charRecord('HHW'), nnw = charRecord('NNW');
+  const hhwYear = hhw && !isCompact() && hhw.year ? ` (${hhw.year})` : '';
+  const nnwYear = nnw && !isCompact() && nnw.year ? ` (${nnw.year})` : '';
+  let topLimit = row;
+  if (hhw && hhw.value > topCm) {
+    if (g.ch[row][chartW + 1] === ' ') put(g, row, chartW + 1, fitLabel(`↑ HHW ${hhw.value}`, hhwYear), 'd');
+    topLimit = row + 1; // the arrow owns that row now; no line marker may land on it
+  } else if (hhw) addMark('HHW', hhw.value, 4, hhwYear);
+  if (nnw && rowOf(nnw.value) < bottomRow) addMark('NNW', nnw.value, 4, nnwYear);
+
+  // above the water line: ascending by value, each step at least one row higher than
+  // the last. Below it: descending, each at least one row lower. Marks pushed past
+  // the chart edge fall out here and are reported by the margin arrow instead.
+  let prev = surface;
+  for (const m of marks.filter(m => m.cm >= value).sort((a, b) => a.cm - b.cm)) {
+    m.row = Math.min(rowOf(m.cm), prev - 1);
+    prev = m.row;
+  }
+  prev = surface;
+  for (const m of marks.filter(m => m.cm < value).sort((a, b) => b.cm - a.cm)) {
+    m.row = Math.max(rowOf(m.cm), prev + 1);
+    prev = m.row;
   }
 
-  // all-time record hints: HHW almost always sits above the chart's top scale (the
-  // scale isn't rescaled for it, unlike the flood headroom above), NNW almost always
-  // sits at/below the bottom (riverbed) row. Records never overwrite an existing label.
-  const hhw = charRecord('HHW');
-  if (hhw) {
-    const label = `HHW ${hhw.value}` + (!isCompact() && hhw.year ? ` (${hhw.year})` : '');
-    if (hhw.value > topCm) {
-      if (g.ch[row][chartW + 1] === ' ') put(g, row, chartW + 1, `↑ ${label}`, 'd');
-    } else {
-      const r = rowOf(hhw.value);
-      if (r !== surface && g.ch[r][chartW + 1] === ' ') {
-        for (let x = 0; x < chartW; x += 4) if (g.ch[r][x] === ' ' || g.ch[r][x] === '░') put(g, r, x, '·', 'd');
-        put(g, r, chartW + 1, `┤ ${label}`, 'd');
-      }
-    }
+  for (const m of marks) {
+    if (m.row < topLimit || m.row > bottomRow) continue;
+    const glyph = m.step === 2 ? '╌' : '·';
+    for (let x = 0; x < chartW; x += m.step) if (g.ch[m.row][x] === ' ' || g.ch[m.row][x] === '░') put(g, m.row, x, glyph, 'd');
+    put(g, m.row, chartW + 1, m.text, 'd');
+    m.drawn = true;
   }
-  const nnw = charRecord('NNW');
-  if (nnw) {
-    const label = `NNW ${nnw.value}` + (!isCompact() && nnw.year ? ` (${nnw.year})` : '');
-    const bottomRow = row + CHART_ROWS - 1;
-    const r = rowOf(nnw.value);
-    if (r >= bottomRow) {
-      if (g.ch[bottomRow][chartW + 1] === ' ') put(g, bottomRow, chartW + 1, `↓ ${label}`, 'd');
-    } else if (r !== surface && g.ch[r][chartW + 1] === ' ') {
-      for (let x = 0; x < chartW; x += 4) if (g.ch[r][x] === ' ' || g.ch[r][x] === '░') put(g, r, x, '·', 'd');
-      put(g, r, chartW + 1, `┤ ${label}`, 'd');
-    }
+  if (nnw && !marks.some(m => m.key === 'NNW' && m.drawn)) {
+    if (g.ch[bottomRow][chartW + 1] === ' ') put(g, bottomRow, chartW + 1, fitLabel(`↓ NNW ${nnw.value}`, nnwYear), 'd');
   }
 
   // keep the whole label inside COLS — a separate [ICE] tag after the value
