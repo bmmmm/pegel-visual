@@ -118,6 +118,20 @@
   form .cont { padding-left: 8ch; } /* lines up under --station, like a wrapped shell command */
   /* fixed-width flag so the station and river inputs start at the same column */
   form .flag { display: inline-block; min-width: 9ch; }
+  /* --rivers is a control, not a typed flag: dressed like its neighbours but
+     underlined, so the one way out of a single station reads as clickable */
+  form .flag-btn {
+    font: inherit;
+    color: var(--ink);
+    background: none;
+    border: none;
+    padding: 0 0.2ch;
+    margin-left: 1ch;
+    text-decoration: underline;
+    cursor: pointer;
+  }
+  form .flag-btn:hover { background: var(--ink); color: var(--paper); }
+  form .hint { color: var(--mid); }
   /* live typeahead: a custom dropdown (the native datalist can't fold umlauts,
      rank, or carry the km/water context) positioned under the active input */
   #prompt { position: relative; }
@@ -361,6 +375,7 @@
     <div class="cmd">&gt; pegel <span class="flag">--station</span> <input id="station-input" name="station" spellcheck="false" placeholder="station" autocomplete="off" role="combobox" aria-expanded="false" aria-controls="ac" aria-autocomplete="list" aria-label="station name"> --refresh 300s
     </div>
     <div class="cmd cont"><span class="flag">--river</span> <input id="river-input" name="river" spellcheck="false" placeholder="whole river" autocomplete="off" role="combobox" aria-expanded="false" aria-controls="ac" aria-autocomplete="list" aria-label="river name">
+      <button id="rivers-btn" type="button" class="flag-btn">--rivers</button> <span class="hint">all waters on a map</span>
     </div>
     <div class="cmd cont">--adsb
       <input id="adsb-input" name="adsb" spellcheck="false" placeholder="receiver url (optional)"
@@ -454,11 +469,20 @@
       river as one longitudinal profile: every gauge at its live elevation —
       <b>◉</b> normal · <b>▼</b> low · <b>▲</b> high — plus a TROUBLE list of every
       station running low or high. Every marker, label and row is a click target.</dd>
+    <dt>the rivers map</dt>
+    <dd>The <b>--rivers</b> button (or <b>?rivers</b>) puts every water on one
+      screen: a schematic outline of Germany with each river anchored at the
+      centroid of its own gauges, sized by how many it has. Click a name to walk
+      that river gauge by gauge. Whatever the map has no free cell for — and every
+      water PEGELONLINE lists without coordinates, like the Austrian Donau or the
+      Czech Elbe gauges — is listed underneath with its gauge count, so the
+      counts stay true even where the map cannot show them.</dd>
     <dt>the prompt</dt>
     <dd>A tiny REPL. A bare name switches to that station (or river). Flags:
-      <b>--station</b>, <b>--river</b>, <b>--adsb</b>, <b>--history 24h…all</b>,
-      <b>--export</b>, <b>--clear</b>, <b>--info</b>, <b>--help</b>. Press <b>/</b>
-      to focus it from anywhere; <b>Esc</b> dismisses help.</dd>
+      <b>--station</b>, <b>--river</b>, <b>--rivers</b>, <b>--adsb</b>,
+      <b>--history 24h…all</b>, <b>--export</b>, <b>--clear</b>, <b>--info</b>,
+      <b>--help</b>. Press <b>/</b> to focus it from anywhere; <b>Esc</b>
+      dismisses help.</dd>
     <dt>extras</dt>
     <dd>Aircraft overhead from your own ADS-B receiver (<b>--adsb URL</b>) and real
       river traffic on the waterline from your own AIS receiver (<b>--ais URL</b>,
@@ -534,21 +558,23 @@ const screen = document.getElementById('screen');
 const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)');
 let dirty = true; // set whenever state changes; gates redraws under reduced motion
 let station = (new URLSearchParams(location.search).get('station') || 'BONN').toUpperCase();
-// two mutually exclusive views: the single-station terminal, or a whole-river
-// longitudinal profile. ?river= wins over ?station= on load.
-let mode = new URLSearchParams(location.search).get('river') ? 'river' : 'station';
+// three mutually exclusive views: the single-station terminal, a whole-river
+// longitudinal profile, or the rivers map listing every water at once.
+// ?rivers wins over ?river=, which wins over ?station= on load.
+let mode = (p => p.has('rivers') ? 'rivers' : p.get('river') ? 'river' : 'station')(new URLSearchParams(location.search));
 // sub-view within a mode: station mode offers 'years' (multi-year statistics),
 // river mode offers 'wave' (station × day heatmap). 'live' is the default of both.
 const VIEW_KEYS = ['live', 'years', 'wave'];
 let viewMode = (new URLSearchParams(location.search).get('view') || 'live').toLowerCase();
 if (!VIEW_KEYS.includes(viewMode)) viewMode = 'live';
-if (mode === 'river' ? viewMode === 'years' : viewMode === 'wave') viewMode = 'live';
+if (mode === 'rivers') viewMode = 'live'; // the map has no sub-views
+else if (mode === 'river' ? viewMode === 'years' : viewMode === 'wave') viewMode = 'live';
 const viewSuffix = () => viewMode === 'live' ? '' : '&view=' + viewMode;
 const stationLink = document.getElementById('station-link');
 const wsvArchiveLink = document.getElementById('wsv-archive-link');
 
 function applyStationChrome() {
-  if (mode === 'river') return; // river chrome owns the title/link while in river mode
+  if (mode !== 'station') return; // river/rivers chrome owns the title and link there
   document.title = 'PEGEL://' + station;
   stationLink.textContent = '?station=' + station + viewSuffix();
   stationLink.href = '?station=' + encodeURIComponent(station) + viewSuffix();
@@ -560,17 +586,25 @@ function applyRiverChrome() {
   stationLink.href = '?river=' + encodeURIComponent(state.river) + viewSuffix();
 }
 
-// river mode hides the per-station chrome (archive bar, history range, recent chips);
-// the prompt form stays so users can jump back to a station
-function applyModeChrome() {
-  const river = mode === 'river';
-  document.getElementById('localbar').hidden = river;
-  if (river) document.getElementById('recent').hidden = true;
-  else renderRecent();
-  renderHistoryBar(); // stays visible in river mode too — it carries the view chips
+function applyRiversChrome() {
+  document.title = 'PEGEL://RIVERS';
+  stationLink.textContent = '?rivers';
+  stationLink.href = '?rivers';
 }
 
-if (mode !== 'river') applyStationChrome();
+// river and rivers mode hide the per-station chrome (archive bar, history range,
+// recent chips); the prompt form stays so users can jump back to a station
+function applyModeChrome() {
+  const perStation = mode === 'station';
+  document.getElementById('localbar').hidden = !perStation;
+  if (!perStation) document.getElementById('recent').hidden = true;
+  else renderRecent();
+  renderHistoryBar(); // stays visible in river mode too — it carries the view chips
+  // the map has no sub-views and no history window of its own
+  document.getElementById('history-bar').hidden = mode === 'rivers';
+}
+
+if (mode === 'rivers') applyRiversChrome(); else if (mode !== 'river') applyStationChrome();
 
 // live chrome: once data is in, the tab title carries the level + trend, the
 // favicon buddy's waterline tracks the real level (MNW…MHW → low…high), and
@@ -612,6 +646,13 @@ function screenSummary() {
     const low = state.riverStations.filter(s => s.kind === 'low').length;
     const high = state.riverStations.filter(s => s.kind === 'high').length;
     return `${state.river}: ${state.riverStations.length} stations, ${low} low, ${high} high.`;
+  }
+  if (mode === 'rivers') {
+    const rivers = riversOverview();
+    if (!rivers.length) return 'Loading the rivers map…';
+    const gauges = rivers.reduce((a, r) => a + r.n, 0);
+    const top = rivers.slice(0, 5).map(r => `${r.name} (${r.n})`).join(', ');
+    return `Rivers map: ${rivers.length} waters, ${gauges} gauges, placed on an outline of Germany. Busiest: ${top}. Pick one to walk it gauge by gauge.`;
   }
   if (viewMode === 'years' && state.info) {
     const st = histStats();
@@ -2822,6 +2863,217 @@ function drawWave(g, w) {
   put(g, 3 + w.rows.length, 0, '≋ downstream ↓ · time →', 'd');
 }
 
+// ---------- rivers overview (?rivers — the whole network as a locator map) ----------
+
+// Germany's border as (lon, lat) vertices, walked clockwise from the Ems estuary.
+// Coarse on purpose: this locates river names, it is not a chart, and no reading on
+// the page is derived from it. Rasterising a polygon rather than pinning one
+// hand-drawn ASCII shape keeps the outline right at every grid width — the
+// 44-column compact layout gets a real map instead of a clipped one.
+const DE_OUTLINE = [
+  [7.20, 53.24], [6.98, 52.63], [6.72, 52.05], [6.15, 51.90], [6.05, 51.25],
+  [6.02, 50.75], [6.35, 49.85], [6.36, 49.45], [6.55, 49.20], [6.85, 49.15],
+  [7.45, 49.18], [8.23, 48.97], [8.10, 48.65], [7.80, 48.30], [7.58, 47.59],
+  [8.60, 47.65], [9.20, 47.66], [9.75, 47.53], [10.10, 47.37], [10.45, 47.55],
+  [11.25, 47.43], [12.20, 47.71], [13.00, 47.47], [12.95, 47.72], [13.05, 48.28],
+  [13.83, 48.77], [13.40, 49.10], [12.55, 49.55], [12.10, 50.10], [12.95, 50.40],
+  [14.00, 50.90], [14.75, 51.05], [14.70, 51.55], [14.75, 52.07], [14.15, 52.85],
+  [14.40, 53.28], [14.28, 53.70], [13.70, 54.10], [13.40, 54.68], [12.10, 54.18],
+  [11.15, 54.45], [10.15, 54.50], [9.90, 54.80], [8.65, 54.90], [8.60, 54.35],
+  [9.00, 53.90], [8.50, 53.55], [8.20, 53.50], [8.10, 53.70], [7.20, 53.65],
+  [7.00, 53.35],
+];
+const MAP_LON = [5.6, 15.4], MAP_LAT = [47.1, 55.2];
+// A character cell is about twice as tall as it is wide, so a full-width map would
+// squash the country flat. Capping the width and centring it keeps the shape
+// recognisable while leaving the outer columns free for labels to spill into.
+const mapWidth = () => Math.min(COLS, 56);
+const mapHeight = () => isCompact() ? 18 : 28;
+// Cap the map by gauge count, not by whatever happens to fit. Without it the placer
+// keeps going until the cells run out and the outline drowns in a wall of names —
+// including one-gauge canals that carry no information at this zoom. The rest is not
+// lost, it moves to the table, which is the readable place for a long tail anyway.
+const mapLabelCap = () => isCompact() ? 14 : 26;
+const mapX0 = () => Math.floor((COLS - mapWidth()) / 2);
+const mapCol = lon => mapX0() + Math.round((lon - MAP_LON[0]) / (MAP_LON[1] - MAP_LON[0]) * (mapWidth() - 1));
+const mapRow = lat => Math.round((MAP_LAT[1] - lat) / (MAP_LAT[1] - MAP_LAT[0]) * (mapHeight() - 1));
+
+// One entry per water: gauge count plus the centroid of its gauges. A centroid is a
+// blunt anchor for something as long as the Rhein (it lands near Koblenz), but it
+// needs no hand-maintained coordinate table and it never disagrees with the data.
+//
+// Counting and locating are deliberately separate. PEGELONLINE carries 58 gauges
+// with no coordinates at all — the Austrian Donau, the Czech Elbe, the Dutch Rhine —
+// and folding that gap into the count would advertise "DONAU 18" for a river whose
+// profile then opens with 27 gauges. So every gauge counts, only located ones move
+// the anchor, and a water with no located gauge falls through to the table.
+let riversCache = null; // the map redraws every frame; the aggregate only changes when the list grows
+function riversOverview() {
+  if (riversCache && riversCache.size === stationMeta.size) return riversCache.list;
+  const by = new Map();
+  for (const m of stationMeta.values()) {
+    if (!m.w) continue;
+    let e = by.get(m.w);
+    if (!e) by.set(m.w, e = { name: m.w, n: 0, located: 0, la: 0, lo: 0 });
+    e.n++;
+    if (m.la != null && m.lo != null) { e.located++; e.la += m.la; e.lo += m.lo; }
+  }
+  const list = [...by.values()]
+    .map(e => ({
+      name: e.name, n: e.n,
+      la: e.located ? e.la / e.located : null,
+      lo: e.located ? e.lo / e.located : null,
+    }))
+    .sort((a, b) => b.n - a.n || a.name.localeCompare(b.name));
+  riversCache = { size: stationMeta.size, list };
+  return list;
+}
+
+// draw the border, one glyph per segment direction so the coastline reads as a line
+function drawOutline(g, row) {
+  const h = mapHeight();
+  for (let i = 0; i < DE_OUTLINE.length; i++) {
+    const a = DE_OUTLINE[i], b = DE_OUTLINE[(i + 1) % DE_OUTLINE.length];
+    const c0 = mapCol(a[0]), r0 = mapRow(a[1]);
+    const dc = mapCol(b[0]) - c0, dr = mapRow(b[1]) - r0;
+    const steps = Math.max(Math.abs(dc), Math.abs(dr));
+    const glyph = Math.abs(dc) > Math.abs(dr) * 2 ? '─'
+      : Math.abs(dr) > Math.abs(dc) * 2 ? '│'
+      : (dc > 0) === (dr > 0) ? '╲' : '╱';
+    for (let s = 0; s <= steps; s++) {
+      const f = steps ? s / steps : 0;
+      const r = row + Math.round(r0 + dr * f), c = Math.round(c0 + dc * f);
+      if (r < row || r >= row + h || c < 0 || c >= COLS) continue;
+      if (g.ch[r][c] === ' ') put(g, r, c, glyph, 'd');
+    }
+  }
+}
+
+// Biggest water first, so the busiest ones get the readable spots. A label that
+// cannot be placed without colliding is not squeezed in — it falls through to the
+// table below, which is why the map stays legible as the list grows.
+function placeRiverLabels(g, row, rivers) {
+  const h = mapHeight(), spilled = [];
+  // Cells owned by a dot or a label. The outline is *not* in here: a marker may
+  // sit on the border (plenty of gauges do), but nothing may ever land on another
+  // water's text — a stray dot through "RHEIN 36" silently reads as "RHEIN 6".
+  const ink = new Set();
+  const key = (r, c) => r * COLS + c;
+  const claim = (r, c, len) => { for (let i = c; i < c + len; i++) ink.add(key(r, i)); };
+  const freeInk = (r, c, len) => {
+    if (r < row || r >= row + h || c < 0 || c + len > COLS) return false;
+    for (let i = Math.max(0, c - 1); i < Math.min(COLS, c + len + 1); i++) if (ink.has(key(r, i))) return false;
+    return true;
+  };
+  // a label additionally needs blank paper, so it never breaks up the outline
+  const freeLabel = (r, c, len) => {
+    if (!freeInk(r, c, len)) return false;
+    for (let i = Math.max(0, c - 1); i < Math.min(COLS, c + len + 1); i++) if (g.ch[r][i] !== ' ') return false;
+    return true;
+  };
+  let drawn = 0;
+  for (const rv of rivers) {
+    // rivers arrive sorted by gauge count, so the cap keeps the biggest ones
+    if (rv.la == null || rv.lo == null || drawn >= mapLabelCap()) { spilled.push(rv); continue; }
+    const label = `${rv.name} ${rv.n}`;
+    const c0 = mapCol(rv.lo), r0 = row + mapRow(rv.la);
+    if (r0 < row || r0 >= row + h || c0 < 0 || c0 >= COLS || !freeInk(r0, c0, 1)) { spilled.push(rv); continue; }
+    // Candidates ordered by how far they stray from the dot, rows weighted heavier
+    // than columns because a label one row off reads as belonging to a different
+    // place, while one a few columns out still reads as the same spot. The map's
+    // margins are fair game — that is where the outer rivers put their names.
+    const cands = [];
+    for (const dr of [0, -1, 1, -2, 2, -3, 3]) {
+      for (const gap of [2, 5, 9]) {
+        cands.push([r0 + dr, c0 + gap, Math.abs(dr) * 4 + gap]);
+        cands.push([r0 + dr, c0 - label.length - gap, Math.abs(dr) * 4 + gap + 1]);
+      }
+    }
+    cands.sort((a, b) => a[2] - b[2]);
+    const spot = cands.find(([r, c]) => freeLabel(r, c, label.length));
+    if (!spot) { spilled.push(rv); continue; }
+    drawn++;
+    claim(r0, c0, 1);
+    claim(spot[0], spot[1], label.length);
+    put(g, r0, c0, '◉', 'b');
+    linkCells(g, r0, c0, 1, 'river:' + rv.name);
+    put(g, spot[0], spot[1], label);
+    linkCells(g, spot[0], spot[1], label.length, 'river:' + rv.name);
+  }
+  return spilled;
+}
+
+const RIVERS_TABLE_ROWS = 8;
+const RIVERS_CELL_MAX = 20; // "Freiburger Hafenpriel" is 21 and would eat a whole column
+
+// whatever the map could not hold, alphabetically in as many columns as fit. Entries
+// are ellipsized rather than allowed to overrun into the neighbouring column, where
+// they would collide with another water's gauge count and misreport both.
+const riversCell = rv => {
+  const count = ` ${rv.n}`;
+  const room = RIVERS_CELL_MAX - count.length;
+  const name = rv.name.length > room ? rv.name.slice(0, room - 1) + '…' : rv.name;
+  return { name, count: String(rv.n), text: name + count };
+};
+
+function riversTable(spilled) {
+  const names = [...spilled].sort((a, b) => a.name.localeCompare(b.name));
+  const widest = names.length ? Math.max(...names.map(r => riversCell(r).text.length)) : 8;
+  const colW = Math.min(RIVERS_CELL_MAX + 2, widest + 2);
+  const cols = Math.max(1, Math.floor(COLS / colW));
+  const rows = Math.min(RIVERS_TABLE_ROWS, Math.ceil(names.length / cols));
+  const shown = Math.min(names.length, cols * rows);
+  return { names, colW, cols, rows, shown };
+}
+
+// Measuring has to replay the placement exactly as drawRivers will run it, outline
+// included — the border takes cells away from labels, so probing a blank grid would
+// under-count what spills into the table and size the grid short.
+function riversGridRows(rivers) {
+  const probe = makeGrid(mapHeight());
+  drawOutline(probe, 0);
+  const t = riversTable(placeRiverLabels(probe, 0, rivers));
+  return 2 + mapHeight() + 2 + t.rows + 2;
+}
+
+function drawRivers(g, rivers) {
+  const waters = rivers.length;
+  const gauges = rivers.reduce((a, r) => a + r.n, 0);
+  const title = '─── PEGELONLINE://RIVERS ';
+  const meta = isCompact() ? ` ${waters} WATERS ───` : ` ${waters} WATERS · ${gauges} GAUGES ───`;
+  put(g, 0, 0, title.padEnd(Math.max(title.length, COLS - meta.length), '─') + meta, 'd');
+  put(g, 0, 4, 'PEGELONLINE://RIVERS', 'b');
+
+  const mapTop = 2;
+  drawOutline(g, mapTop);
+  const spilled = placeRiverLabels(g, mapTop, rivers);
+
+  let row = mapTop + mapHeight() + 1;
+  put(g, row, 0, 'pick a water to walk it gauge by gauge', 'd');
+  row += 1;
+  if (!spilled.length) return;
+
+  // name the reason for the second list rather than implying the map is complete:
+  // some of these have no coordinates at all, the rest simply found no free cell
+  const unplaced = spilled.filter(r => r.la == null).length;
+  const why = unplaced ? `${spilled.length} not on the map · ${unplaced} without coordinates` : `${spilled.length} not on the map`;
+  const head = `─ ${why} `;
+  put(g, row, 0, head + '─'.repeat(Math.max(0, COLS - head.length)), 'd');
+  row += 1;
+
+  const t = riversTable(spilled);
+  for (let i = 0; i < t.shown; i++) {
+    const cell = riversCell(t.names[i]);
+    const r = row + (i % t.rows), c = Math.floor(i / t.rows) * t.colW;
+    if (c + cell.text.length > COLS) continue;
+    put(g, r, c, cell.name);
+    put(g, r, c + cell.name.length + 1, cell.count, 'd');
+    linkCells(g, r, c, cell.text.length, 'river:' + t.names[i].name);
+  }
+  const rest = t.names.length - t.shown;
+  if (rest > 0) put(g, row + t.rows, 0, `+ ${rest} more — type a name into --river`, 'd');
+}
+
 // ---------- sub-view switching ----------
 
 function setView(v, push = true) {
@@ -2883,10 +3135,13 @@ let refreshTimer = null;
 function switchStation(name, adsb, push = true) {
   dismissHelp(); // a station switch always leaves the man page
   dismissSuggest();
-  const wasRiver = mode === 'river';
+  // any non-station mode must fall through even when the target station is unchanged,
+  // otherwise going back from the river profile or the map to the station you started
+  // on would leave the old view on screen
+  const wasElsewhere = mode !== 'station';
   const next = resolveStation(name || station) || station;
   const nextAdsb = (adsb ?? adsbRaw).trim();
-  if (!wasRiver && next === station && nextAdsb === adsbRaw) return;
+  if (!wasElsewhere && next === station && nextAdsb === adsbRaw) return;
   const adsbChanged = nextAdsb !== adsbRaw;
 
   mode = 'station';
@@ -2990,6 +3245,39 @@ function switchRiver(name, push = true) {
   refreshTimer = setInterval(loadRiver, REFRESH_MS);
 }
 
+// enter the rivers map. Unlike the other two modes this needs no live readings and
+// so no refresh timer — it is drawn entirely from the cached station list, which
+// carries its own weekly TTL.
+function switchRivers(push = true) {
+  dismissHelp();
+  dismissSuggest();
+  if (mode === 'rivers') return;
+
+  mode = 'rivers';
+  viewMode = 'live';
+  state.river = null;
+  state.riverStations = null;
+  state.gauge = null;
+  state.error = null;
+  waveData = null;
+
+  if (push) history[push === 'replace' ? 'replaceState' : 'pushState'](null, '', '?rivers');
+  applyRiversChrome();
+  applyModeChrome();
+  dirty = true;
+  setScreenAria();
+  if (document.startViewTransition && !reduceMotion.matches) {
+    const vt = document.startViewTransition(renderNow);
+    vt.ready.catch(() => {});
+    vt.finished.catch(() => {});
+  }
+
+  stationInput.value = '';
+  riverInput.value = '';
+  clearInterval(refreshTimer);
+  loadStationList(); // no-op when the cache is warm; fills the map when it isn't
+}
+
 function dismissHelp() {
   if (!state.help) return;
   state.help = null;
@@ -3004,7 +3292,7 @@ function dismissHelp() {
 // tell "not given" (undefined) apart from "given empty" (''), e.g. --adsb clearing.
 function parseCommand(raw) {
   const tokens = (raw || '').trim().split(/\s+/).filter(Boolean);
-  const cmd = { station: undefined, adsb: undefined, ais: undefined, history: undefined, river: undefined, view: undefined, help: false, export: false, clear: false, info: false, unknownFlag: null };
+  const cmd = { station: undefined, adsb: undefined, ais: undefined, history: undefined, river: undefined, rivers: false, view: undefined, help: false, export: false, clear: false, info: false, unknownFlag: null };
   let i = 0;
   while (i < tokens.length) {
     const tok = tokens[i];
@@ -3020,6 +3308,7 @@ function parseCommand(raw) {
     else if (flag === 'ais') cmd.ais = value;
     else if (flag === 'history') cmd.history = value.toLowerCase();
     else if (flag === 'river') cmd.river = value;
+    else if (flag === 'rivers') cmd.rivers = true; // plural: the map, not one river
     else if (flag === 'view') cmd.view = value.toLowerCase();
     else if (flag === 'help') cmd.help = true;
     else if (flag === 'export') cmd.export = true;
@@ -3040,13 +3329,14 @@ function helpText(unknownFlag) {
     '    pegel - live ASCII water level terminal for German rivers',
     '',
     'SYNOPSIS',
-    '    > pegel [STATION] [--station NAME] [--river NAME] [--adsb URL] [--ais URL]',
-    '            [--history RANGE] [--export] [--clear] [--info] [--help]',
+    '    > pegel [STATION] [--station NAME] [--river NAME] [--rivers] [--adsb URL]',
+    '            [--ais URL] [--history RANGE] [--export] [--clear] [--info] [--help]',
     '',
     'OPTIONS',
     '    STATION           bare station name, e.g. BONN (shorthand for --station)',
     '    --station NAME    switch to station NAME (umlaut spellings accepted)',
     '    --river NAME      whole-river profile of NAME, e.g. RHEIN (any case, multi-word)',
+    '    --rivers          map of every water, sized by gauge count; pick one to open it',
     '    --adsb URL        set your local ADS-B receiver URL; no value clears it',
     '    --ais URL         set your local AIS receiver URL (AIS-catcher); no value clears it',
     '    --history RANGE   set the sparkline window: 24h 3d 7d 15d 30d all',
@@ -3082,7 +3372,8 @@ function runCommand(raw) {
     return;
   }
   if (cmd.ais !== undefined) setAis(cmd.ais);
-  if (cmd.river !== undefined) switchRiver(cmd.river);
+  if (cmd.rivers) switchRivers();
+  else if (cmd.river !== undefined) switchRiver(cmd.river);
   else if (cmd.station !== undefined || cmd.adsb !== undefined) switchStation(cmd.station, cmd.adsb);
   if (cmd.history !== undefined && HISTORY_PRESETS.some(p => p.k === cmd.history)) setHistory(cmd.history);
   if (cmd.view !== undefined && VIEW_KEYS.includes(cmd.view)) setView(cmd.view);
@@ -3342,7 +3633,8 @@ document.addEventListener('keydown', e => {
 });
 window.addEventListener('popstate', () => {
   const p = new URLSearchParams(location.search);
-  if (p.get('river')) switchRiver(p.get('river'), false);
+  if (p.has('rivers')) switchRivers(false);
+  else if (p.get('river')) switchRiver(p.get('river'), false);
   else switchStation(p.get('station') || 'BONN', p.get('adsb') || '', false);
   // restore the sub-view AFTER the mode is back, so its mode-guard sees the truth
   const v = (p.get('view') || 'live').toLowerCase();
@@ -3354,6 +3646,9 @@ window.addEventListener('popstate', () => {
 const STATIONS_CACHE = 'pegel.stations';
 const WATERS_CACHE = 'pegel.waters';
 const STATIONS_TTL = 7 * 864e5;
+// bumped whenever a cached station record grows a field — v2 added coordinates,
+// which the rivers map needs to anchor each water. An older cache is simply refetched.
+const STATIONS_CACHE_V = 2;
 const knownStations = new Set();
 const knownWaters = new Set();  // UPPERCASE river names — typing one opens river mode
 const stationMeta = new Map(); // UPPERCASE shortname -> { w: water, km }
@@ -3395,7 +3690,7 @@ function fillDatalist(list) {
   for (const s of list) {
     const up = s.n.toUpperCase();
     knownStations.add(up);
-    stationMeta.set(up, { w: s.w, km: s.km });
+    stationMeta.set(up, { w: s.w, km: s.km, la: s.la ?? null, lo: s.lo ?? null });
     for (const key of [foldAe(up), foldStrip(up)]) if (!normMap.has(key)) normMap.set(key, s.n);
   }
 }
@@ -3414,17 +3709,19 @@ async function loadStationList() {
   loadWaterList(); // independent of the station cache's freshness early-return below
   let cached = null;
   try { cached = JSON.parse(localStorage.getItem(STATIONS_CACHE)); } catch {}
-  if (cached && Array.isArray(cached.list)) fillDatalist(cached.list);
-  if (cached && Array.isArray(cached.list) && Date.now() - cached.t < STATIONS_TTL) return; // fresh
+  const usable = cached && cached.v === STATIONS_CACHE_V && Array.isArray(cached.list);
+  if (usable) fillDatalist(cached.list);
+  if (usable && Date.now() - cached.t < STATIONS_TTL) return; // fresh
   try {
     const all = await getJson(`${API}/stations.json`);
     const byName = new Map();
+    const num = v => typeof v === 'number' && Number.isFinite(v) ? v : null;
     for (const s of all) {
       const key = s.shortname.toUpperCase();
-      if (!byName.has(key)) byName.set(key, { n: s.shortname, w: (s.water && s.water.shortname) || '', km: typeof s.km === 'number' ? s.km : null });
+      if (!byName.has(key)) byName.set(key, { n: s.shortname, w: (s.water && s.water.shortname) || '', km: num(s.km), la: num(s.latitude), lo: num(s.longitude) });
     }
     const list = [...byName.values()].sort((a, b) => a.n.localeCompare(b.n));
-    localStorage.setItem(STATIONS_CACHE, JSON.stringify({ t: Date.now(), list }));
+    localStorage.setItem(STATIONS_CACHE, JSON.stringify({ v: STATIONS_CACHE_V, t: Date.now(), list }));
     fillDatalist(list);
     // a first-ever visitor opening an ASCII-spelled link (?station=koeln) had no
     // cached list to resolve against and 404ed; now that the names are known,
@@ -3459,6 +3756,7 @@ async function loadWaterList() {
 }
 
 stationInput.addEventListener('focus', loadStationList, { once: true });
+document.getElementById('rivers-btn').addEventListener('click', () => switchRivers());
 // preload shortly after first paint — requestIdleCallback never fires under the
 // 120 ms render loop, so it would starve indefinitely
 setTimeout(loadStationList, 600);
@@ -3969,6 +4267,18 @@ function render(t) {
     setScreenHtml(gridToHtml(g));
     return;
   }
+  if (mode === 'rivers') {
+    const rivers = riversOverview();
+    if (!rivers.length) {
+      setScreenText(`mapping the network ${'·'.repeat(1 + Math.floor(t * 2) % 3)}`);
+      return;
+    }
+    const g = makeGrid(riversGridRows(rivers));
+    drawRivers(g, rivers);
+    setScreenHtml(gridToHtml(g));
+    if (!fitted) { fitted = true; fitFont(); }
+    return;
+  }
   if (mode === 'river') {
     if (state.error) { setScreenText(`${wreckFrame(t)}\n\nERROR\n\n${state.error}`); return; }
     if (!state.riverStations) {
@@ -4056,7 +4366,12 @@ function fitFont() {
 window.addEventListener('resize', fitFont);
 fitFont();
 updateLocalBar();
-if (mode === 'river') {
+if (mode === 'rivers') {
+  applyModeChrome();
+  stationInput.value = '';
+  setScreenAria();
+  loadStationList(); // the map is the station list, aggregated — nothing else to fetch
+} else if (mode === 'river') {
   state.river = new URLSearchParams(location.search).get('river').toUpperCase();
   applyRiverChrome();
   applyModeChrome();

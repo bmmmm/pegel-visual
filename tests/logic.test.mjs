@@ -1612,6 +1612,144 @@ test('drawChart: low water keeps MNW and NNW visible and in the right order', ()
   }
 });
 
+// ---------- rivers map (?rivers) ----------
+
+const seedRivers = (app, list) => app.run(`(() => {
+  fillDatalist(${JSON.stringify(list)});
+  return riversOverview();
+})()`);
+
+// a grid of waters packed into a few degrees, so the placer runs out of room and
+// has to spill — the crowded case is the one that used to corrupt labels
+const crowd = (count, per = 3) => Array.from({ length: count * per }, (_, i) => {
+  const w = Math.floor(i / per);
+  return { n: `S${i}`, w: `W${String(w).padStart(2, '0')}`, km: i,
+           la: 48.4 + (w % 8) * 0.55, lo: 7.4 + Math.floor(w / 8) * 0.62 };
+});
+
+test('riversOverview: counts every gauge, anchors only on the located ones', () => {
+  const app = loadApp({ search: '?rivers' });
+  // PEGELONLINE lists foreign gauges (Austrian Donau, Czech Elbe) without coordinates.
+  // Folding that gap into the count would advertise a river as smaller than it opens.
+  const out = seedRivers(app, [
+    { n: 'A', w: 'DONAU', km: 1, la: 48.5, lo: 13.0 },
+    { n: 'B', w: 'DONAU', km: 2, la: null, lo: null },
+    { n: 'C', w: 'DONAU', km: 3, la: null, lo: null },
+    { n: 'D', w: 'MOLDAU', km: 1, la: null, lo: null },
+  ]);
+  const donau = out.find(r => r.name === 'DONAU');
+  assert.equal(donau.n, 3, 'every gauge counted, coordinates or not');
+  assert.equal(donau.la, 48.5, 'anchored on the only gauge that has a position');
+  const moldau = out.find(r => r.name === 'MOLDAU');
+  assert.equal(moldau.n, 1, 'counted even with nothing to anchor on');
+  assert.equal(moldau.la, null, 'and left unanchored rather than placed at 0,0');
+});
+
+test('rivers map: every water is either drawn intact or listed, never corrupted', () => {
+  for (const width of [1200, 390]) {
+    const app = loadApp({ search: '?rivers', width });
+    const list = crowd(40);
+    const out = app.run(`(() => {
+      fillDatalist(${JSON.stringify(list)});
+      const rivers = riversOverview();
+      const g = makeGrid(riversGridRows(rivers));
+      // replay the placement to learn which ones drawRivers will spill
+      const probe = makeGrid(mapHeight());
+      drawOutline(probe, 0);
+      const spilled = placeRiverLabels(probe, 0, rivers).map(r => r.name);
+      drawRivers(g, rivers);
+      return { rivers: rivers.map(r => ({ name: r.name, n: r.n })), spilled,
+               rows: g.ch.map(r => r.join('')), cols: COLS };
+    })()`);
+
+    const flat = out.rows.join('\n');
+    const placed = out.rivers.filter(r => !out.spilled.includes(r.name));
+    assert.ok(placed.length > 0, `${width}px: something must reach the map`);
+    // The bug this guards: a later water's dot landing inside an earlier label
+    // turned "RHEIN 36" into "RHEIN ◉6" — a wrong number, rendered confidently.
+    for (const rv of placed) {
+      assert.ok(flat.includes(`${rv.name} ${rv.n}`),
+        `${width}px: ${rv.name} ${rv.n} was placed but is not intact on screen`);
+    }
+    for (const rv of out.rivers) {
+      assert.ok(flat.includes(rv.name), `${width}px: ${rv.name} vanished entirely`);
+    }
+    for (const r of out.rows) {
+      assert.ok(r.replace(/\s+$/, '').length <= out.cols, `${width}px: row wider than COLS`);
+    }
+  }
+});
+
+test('rivers map: the grid is sized for the table it actually draws', () => {
+  // Long names make the table columns wide, so the spill overflows RIVERS_TABLE_ROWS
+  // and the "+ N more" footer appears — the bottom-most row the map ever writes, and
+  // the one an off-by-one in riversGridRows would silently drop.
+  const wide = Array.from({ length: 130 * 2 }, (_, i) => {
+    const w = Math.floor(i / 2);
+    return { n: `S${i}`, w: `LONG_WATER_NAME_${String(w).padStart(3, '0')}`, km: i,
+             la: 48.4 + (w % 9) * 0.5, lo: 7.4 + Math.floor(w / 9) * 0.55 };
+  });
+  for (const width of [1200, 390]) {
+    const app = loadApp({ search: '?rivers', width });
+    const r = app.run(`(() => {
+      fillDatalist(${JSON.stringify(wide)});
+      const rivers = riversOverview();
+      const g = makeGrid(riversGridRows(rivers));
+      drawRivers(g, rivers);
+      const text = g.ch.map(x => x.join(''));
+      return { rows: g.rows, text,
+               lastUsed: text.reduce((acc, x, i) => x.trim() ? i : acc, 0),
+               footer: text.some(x => x.includes('more — type a name')) };
+    })()`);
+    assert.ok(r.footer, `${width}px: the overflow footer is part of this case`);
+    assert.ok(r.lastUsed < r.rows, `${width}px: last written row ${r.lastUsed} outside grid of ${r.rows}`);
+    assert.ok(r.rows - r.lastUsed <= 2, `${width}px: ${r.rows - r.lastUsed} spare rows is oversized`);
+  }
+});
+
+test('rivers map: names and table entries are click targets for their river', () => {
+  const app = loadApp({ search: '?rivers' });
+  const list = crowd(40);
+  const links = app.run(`(() => {
+    fillDatalist(${JSON.stringify(list)});
+    const rivers = riversOverview();
+    const g = makeGrid(riversGridRows(rivers));
+    drawRivers(g, rivers);
+    return [...new Set(g.ln.flat().filter(Boolean))];
+  })()`);
+  assert.ok(links.length >= 40, `every water is reachable, got ${links.length}`);
+  assert.ok(links.every(l => l.startsWith('river:')), 'targets open river mode');
+  assert.ok(links.includes('river:W00'), 'a mapped water is linked');
+});
+
+test('rivers map: long names are ellipsized, never run into the next column', () => {
+  const app = loadApp({ search: '?rivers' });
+  const cell = app.run(`riversCell({ name: 'Freiburger Hafenpriel', n: 1 })`);
+  assert.ok(cell.text.length <= 20, `cell fits its column, got ${cell.text.length}`);
+  assert.ok(cell.name.endsWith('…'), 'the name is visibly truncated, not silently cut');
+  const short = app.run(`riversCell({ name: 'ALLER', n: 5 })`);
+  assert.equal(short.text, 'ALLER 5', 'short names are left alone');
+});
+
+test('rivers map: ?rivers boots into the map and --rivers switches into it', () => {
+  const app = loadApp({ search: '?rivers' });
+  assert.equal(app.run('mode'), 'rivers', '?rivers selects the map on load');
+  assert.equal(app.run('viewMode'), 'live', 'the map has no sub-views');
+
+  // ?rivers wins over ?river=, which wins over ?station=
+  assert.equal(loadApp({ search: '?rivers&river=RHEIN&station=BONN' }).run('mode'), 'rivers');
+  assert.equal(loadApp({ search: '?river=RHEIN&station=BONN' }).run('mode'), 'river');
+  assert.equal(loadApp({ search: '?station=BONN' }).run('mode'), 'station');
+
+  const cmd = loadApp({}).run(`parseCommand('--rivers')`);
+  assert.equal(cmd.rivers, true, '--rivers parses as its own flag');
+  assert.equal(cmd.unknownFlag, null, 'and is not mistaken for a typo of --river');
+  // the singular must not be swallowed by the plural
+  const one = loadApp({}).run(`parseCommand('--river RHEIN')`);
+  assert.equal(one.river, 'RHEIN');
+  assert.equal(one.rivers, false);
+});
+
 test('drawChart: no marker label ever runs past the grid edge', () => {
   for (const [value, width] of [[77, 1200], [1013, 1200], [77, 390], [1013, 390]]) {
     const app = loadApp({ now: NOON, width });
