@@ -1093,6 +1093,29 @@ test('archive script: ZIP freeze skips without fetching and fails loudly without
   assert.deepEqual(JSON.parse(readFileSync(join(dir, 'current.json'))), cur);
 });
 
+test("archive script: a --current run leaves meta.fetchedFrom untouched (regression: collided with the gap sweep's resumability check)", async () => {
+  const { writeStation, condense } = await import('../scripts/fetch-wsv-archive.mjs');
+  const { mkdtempSync, writeFileSync, readFileSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const Y = new Date().getUTCFullYear();
+  const fresh = condense([{ timestamp: `${Y}-03-01T12:00:00+01:00`, value: 100 }]);
+  // a station whose backfill finished long ago but predates the fetchedFrom field
+  // (exactly the state every seeded/migrated station is in on disk today)
+  const dir = mkdtempSync(join(tmpdir(), 'pegel-cur-meta-'));
+  writeFileSync(join(dir, 'meta.json'), JSON.stringify({ name: 'BONN', fetchedThrough: Y - 1 }));
+  writeStation(dir, 'BONN', fresh, null, 0); // the CURRENT_ONLY call shape: no backfill claim, no fetchedThrough claim
+  const meta = JSON.parse(readFileSync(join(dir, 'meta.json')));
+  assert.equal(meta.fetchedFrom, undefined, 'a --current run has no backfill-start claim to make');
+  assert.equal(meta.fetchedThrough, Y - 1, 'unaffected');
+  // a station whose backfill DID record fetchedFrom must keep it across --current runs too
+  const dir2 = mkdtempSync(join(tmpdir(), 'pegel-cur-meta-2-'));
+  writeFileSync(join(dir2, 'meta.json'), JSON.stringify({ name: 'BONN', fetchedFrom: 2000, fetchedThrough: Y - 1 }));
+  writeStation(dir2, 'BONN', fresh, null, 0);
+  const meta2 = JSON.parse(readFileSync(join(dir2, 'meta.json')));
+  assert.equal(meta2.fetchedFrom, 2000, 'an existing backfill-start year survives a --current run');
+});
+
 // ---------- years view (multi-year statistics) ----------
 
 // mid-July noon: the current year has ~half a year of data in the fixtures below

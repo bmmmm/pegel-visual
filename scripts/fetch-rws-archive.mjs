@@ -249,7 +249,9 @@ async function main() {
     const tag = `[${i + 1}/${stations.length}] ${st.name} (${st.code})`;
     try {
       const { years, pts, failed: badYears } = await fetchStation(st, fromY, toY);
-      const touched = writeStation(join(OUT, st.uuid), st.name, years, fromY, fetchedThrough,
+      // CURRENT_ONLY has no backfill-start claim to make (see writeStation in
+      // fetch-wsv-archive.mjs) — only a real backfill run may claim fromY
+      const touched = writeStation(join(OUT, st.uuid), st.name, years, CURRENT_ONLY ? null : fromY, fetchedThrough,
         { source: SOURCE, datumOffsetCm: st.offsetCm, water: st.water });
       const ys = [...years.keys()].sort((a, b) => a - b);
       console.log(`${tag} · ${pts} pts -> ${touched} year(s)${ys.length ? ` (${ys[0]}-${ys[ys.length - 1]})` : ''}${badYears ? ` · ${badYears} year(s) skipped` : ''}`);

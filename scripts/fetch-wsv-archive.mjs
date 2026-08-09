@@ -287,6 +287,12 @@ export function mergeYear(existing, y, data) {
 // bundle and the running-year current.json. A current.json holding a
 // now-completed year graduates into the bundle first (the freeze); years equal
 // to CURRENT_YEAR stay in current.json.
+// fetchedFrom is nullable: a --current run proves nothing about how far back
+// the backfill reaches, so it passes null to leave the field untouched. Once
+// this collided with the backfill's own use of the field — the --current call
+// stamped meta.fetchedFrom = current year, which then failed the gap sweep's
+// `fetchedFrom <= FROM` resumability check and forced a full 2000-> re-backfill
+// of every station on the very next run.
 export function writeStation(dir, name, years, fetchedFrom, fetchedThrough, extraMeta = null) {
   mkdirSync(dir, { recursive: true });
   const closedPath = join(dir, 'closed.json');
@@ -322,7 +328,7 @@ export function writeStation(dir, name, years, fetchedFrom, fetchedThrough, extr
   const metaPath = join(dir, 'meta.json');
   const meta = readJson(metaPath) || {};
   meta.name = name;
-  meta.fetchedFrom = Math.min(meta.fetchedFrom ?? fetchedFrom, fetchedFrom);
+  if (fetchedFrom != null) meta.fetchedFrom = Math.min(meta.fetchedFrom ?? fetchedFrom, fetchedFrom);
   meta.fetchedThrough = Math.max(meta.fetchedThrough || 0, fetchedThrough);
   if (extraMeta) Object.assign(meta, extraMeta); // e.g. { source, datumOffsetCm, water }
   writeFileSync(metaPath, JSON.stringify(meta));
@@ -457,7 +463,10 @@ async function main() {
           }
         }
       }
-      const touched = writeStation(dir, s.shortname, years, startYear, fetchedThrough);
+      // CURRENT_ONLY has no backfill-start claim to make — passing startYear
+      // (the running year) here would wrongly stamp meta.fetchedFrom with it
+      // and fail every future gap sweep's resumability check (see writeStation)
+      const touched = writeStation(dir, s.shortname, years, CURRENT_ONLY ? null : startYear, fetchedThrough);
       console.log(`${tag} · ${pts} pts -> ${touched} year(s)`);
       ok++;
     } catch (e) {

@@ -22,6 +22,11 @@ permissions:
 jobs:
   refresh:
     runs-on: ubuntu-latest
+    # a resumability regression once turned the ~30min gap sweep into a full
+    # 26-year re-backfill of all 737 stations and silently ate the default 6h
+    # cap twice (2026-07-18, 2026-08-03) without ever reaching the push step —
+    # fail fast instead so a repeat shows up as a red run, not a missed month
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v7
       - uses: actions/checkout@v7
