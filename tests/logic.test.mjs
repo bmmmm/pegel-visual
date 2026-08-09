@@ -1750,6 +1750,44 @@ test('rivers map: ?rivers boots into the map and --rivers switches into it', () 
   assert.equal(one.rivers, false);
 });
 
+test('back button: offered in river and map mode, naming the station it returns to', () => {
+  // Neither view shows the station you came from, so without this the only way
+  // back is remembering a name and typing it.
+  for (const [search, where] of [['?rivers', 'the map'], ['?river=RHEIN', 'the river profile']]) {
+    const app = loadApp({ search });
+    const btn = app.run(`(() => {
+      station = 'KÖLN';
+      applyModeChrome();
+      const b = document.getElementById('home-btn');
+      return { hidden: b.hidden, text: b.textContent, title: b.title };
+    })()`);
+    assert.equal(btn.hidden, false, `shown on ${where}`);
+    assert.equal(btn.text, '← KÖLN', `${where}: names its target, not a generic "home"`);
+    assert.match(btn.title, /KÖLN/, `${where}: title names the target too`);
+  }
+
+  // and stays out of the way where it would be a no-op
+  const station = loadApp({ search: '?station=BONN' });
+  assert.equal(station.run(`(() => {
+    applyModeChrome();
+    return document.getElementById('home-btn').hidden;
+  })()`), true, 'hidden in station mode');
+});
+
+test('back button: leaving the map redraws the station even if it never changed', () => {
+  // switchStation used to bail out when the target matched the current station,
+  // which left the map on screen and made the button look broken.
+  const app = loadApp({ search: '?rivers' });
+  const after = app.run(`(() => {
+    const before = mode;
+    switchStation(station, '', false);
+    return { before, after: mode, station };
+  })()`);
+  assert.equal(after.before, 'rivers');
+  assert.equal(after.after, 'station', 'the mode actually changes back');
+  assert.equal(after.station, 'BONN', 'landing on the station the button named');
+});
+
 test('drawChart: no marker label ever runs past the grid edge', () => {
   for (const [value, width] of [[77, 1200], [1013, 1200], [77, 390], [1013, 390]]) {
     const app = loadApp({ now: NOON, width });
