@@ -376,6 +376,7 @@
     </div>
     <div class="cmd cont"><span class="flag">--river</span> <input id="river-input" name="river" spellcheck="false" placeholder="whole river" autocomplete="off" role="combobox" aria-expanded="false" aria-controls="ac" aria-autocomplete="list" aria-label="river name">
       <button id="rivers-btn" type="button" class="flag-btn">--rivers</button> <span class="hint">all waters on a map</span>
+      <button id="home-btn" type="button" class="flag-btn" hidden></button>
     </div>
     <div class="cmd cont">--adsb
       <input id="adsb-input" name="adsb" spellcheck="false" placeholder="receiver url (optional)"
@@ -476,7 +477,10 @@
       that river gauge by gauge. Whatever the map has no free cell for — and every
       water PEGELONLINE lists without coordinates, like the Austrian Donau or the
       Czech Elbe gauges — is listed underneath with its gauge count, so the
-      counts stay true even where the map cannot show them.</dd>
+      counts stay true even where the map cannot show them. The
+      <b>← STATION</b> button next to <b>--rivers</b> goes back to the gauge you
+      came from; it appears in the map and the whole-river view, which otherwise
+      have no station on screen to click.</dd>
     <dt>the prompt</dt>
     <dd>A tiny REPL. A bare name switches to that station (or river). Flags:
       <b>--station</b>, <b>--river</b>, <b>--rivers</b>, <b>--adsb</b>,
@@ -602,6 +606,16 @@ function applyModeChrome() {
   renderHistoryBar(); // stays visible in river mode too — it carries the view chips
   // the map has no sub-views and no history window of its own
   document.getElementById('history-bar').hidden = mode === 'rivers';
+  // The way back. Neither the map nor the river profile shows the station you came
+  // from, so without this the only exit is remembering a name and typing it. The
+  // label names the target rather than saying "home", which would be one more thing
+  // to guess at.
+  const home = document.getElementById('home-btn');
+  home.hidden = perStation;
+  if (!perStation) {
+    home.textContent = `← ${station}`;
+    home.title = `back to the ${station} gauge`;
+  }
 }
 
 if (mode === 'rivers') applyRiversChrome(); else if (mode !== 'river') applyStationChrome();
@@ -3757,6 +3771,7 @@ async function loadWaterList() {
 
 stationInput.addEventListener('focus', loadStationList, { once: true });
 document.getElementById('rivers-btn').addEventListener('click', () => switchRivers());
+document.getElementById('home-btn').addEventListener('click', () => switchStation(station, adsbInput.value));
 // preload shortly after first paint — requestIdleCallback never fires under the
 // 120 ms render loop, so it would starve indefinitely
 setTimeout(loadStationList, 600);
