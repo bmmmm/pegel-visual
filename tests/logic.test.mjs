@@ -1741,8 +1741,10 @@ test('rivers map: names and table entries are click targets for their river', ()
     return [...new Set(g.ln.flat().filter(Boolean))];
   })()`);
   assert.ok(links.length >= 40, `every water is reachable, got ${links.length}`);
-  assert.ok(links.every(l => l.startsWith('river:')), 'targets open river mode');
+  assert.ok(links.every(l => l.startsWith('river:') || l === 'rising'),
+    'targets open river mode (plus the one rising-board link)');
   assert.ok(links.includes('river:W00'), 'a mapped water is linked');
+  assert.ok(links.includes('rising'), 'the rising board is reachable from the map');
 });
 
 test('rivers map: long names are ellipsized, never run into the next column', () => {
@@ -1830,4 +1832,230 @@ test('drawChart: no marker label ever runs past the grid edge', () => {
     })()`);
     assert.ok(longest <= cols, `W=${value} at ${width}px: row of ${longest} exceeds COLS ${cols}`);
   }
+});
+
+// ---------- rising board ----------
+
+// raw bulk-endpoint station entry, same shape the live API returns
+const bulk = (uuid, n, w, value, cvs = [], state = null) => ({
+  uuid, shortname: n, water: { shortname: w },
+  timeseries: [{
+    shortname: 'W',
+    ...(value == null ? {} : { currentMeasurement: { timestamp: 'x', value, stateMnwMhw: state } }),
+    characteristicValues: cvs.map(([shortname, value]) => ({ shortname, value, unit: 'cm' })),
+  }],
+});
+const SPAN = [['MNW', 100], ['MHW', 400]];
+// snapshot shard with a single usable day at `dayIdx`; a value may be a bare
+// number or { v, t } to carry the job's tidal flag
+const shardWith = (y, m, len, dayIdx, iso, values) => ({
+  y, m,
+  days: Array.from({ length: len }, (_, i) => i === dayIdx ? iso : null),
+  stations: Object.fromEntries(Object.entries(values).map(([uuid, val]) => {
+    const { v, t } = typeof val === 'object' ? val : { v: val };
+    const arr = Array(len).fill(null);
+    arr[dayIdx] = v;
+    return [uuid, { n: uuid.toUpperCase(), w: 'X', v: arr, ...(t ? { t: 1 } : {}) }];
+  })),
+});
+
+test('parseBulkStations: keeps live W stations with tidal flag, span and kind', () => {
+  const app = loadApp({});
+  const raw = [
+    bulk('a', 'BONN', 'RHEIN', 76, [['MNW', 121], ['MHW', 680]], 'low'),
+    bulk('b', 'HERBRUM', 'EMS', 250, [['MThw', 300], ['MTnw', 50]]),
+    bulk('c', 'NO-MEASUREMENT', 'X', null),
+    { uuid: 'd', shortname: 'NO-W', water: { shortname: 'X' }, timeseries: [{ shortname: 'Q' }] },
+  ];
+  const out = app.run(`parseBulkStations(${JSON.stringify(raw)})`);
+  assert.equal(out.length, 2, 'stations without a live W value are dropped');
+  assert.deepEqual(out[0], { uuid: 'a', n: 'BONN', w: 'RHEIN', v: 76, tidal: false, mnw: 121, mhw: 680, kind: 'low' });
+  assert.equal(out[1].tidal, true, 'MThw marks the tidal gauge');
+  assert.equal(out[1].mnw, null, 'a tidal gauge has no MNW span');
+});
+
+test('risingOverview: ranks by cm/day, excludes tidal, skips baseline-less stations', () => {
+  const app = loadApp({ now: NOON });
+  const iso = new Date(NOON - 864e5).toISOString(); // exactly one day old → dayIdx 13 (Jan 14)
+  const shard = shardWith(2026, 1, 31, 13, iso, { a: 100, b: 100, d: 100, f: { v: 100, t: 1 } });
+  const raw = [
+    bulk('a', 'UP', 'X', 120, SPAN),        // +20 cm/d
+    bulk('b', 'DOWN', 'X', 90, SPAN),       // -10 cm/d
+    bulk('c', 'TIDE', 'X', 500, [['MThw', 600]]), // excluded by its MThw mark
+    bulk('d', 'FLAT', 'X', 100.4, SPAN),    // steady
+    bulk('e', 'NEW', 'X', 200, SPAN),       // no snapshot entry → skipped silently
+    bulk('f', 'ROTTERDAM', 'X', 300),       // no marks at all — excluded by the shard's t flag
+  ];
+  const d = app.run(`risingOverview(parseBulkStations(${JSON.stringify(raw)}), ${JSON.stringify(shard)}, ${NOON})`);
+  assert.equal(d.noBaseline, false);
+  assert.deepEqual(d.counts, { rising: 1, falling: 1, steady: 1, tidal: 2 });
+  assert.equal(d.risers.length, 1);
+  assert.equal(d.risers[0].n, 'UP');
+  assert.equal(d.risers[0].cmPerDay.toFixed(1), '20.0');
+  assert.equal(d.fallers[0].n, 'DOWN');
+  assert.equal(d.fallers[0].cmPerDay.toFixed(1), '-10.0');
+  assert.equal(d.baselineTs, NOON - 864e5);
+});
+
+test('risingOverview: a missed cron day does not double the rate', () => {
+  const app = loadApp({ now: NOON });
+  // the only usable capture is 3 days old — +30 cm since then is +10 cm/day
+  const iso = new Date(NOON - 3 * 864e5).toISOString();
+  const shard = shardWith(2026, 1, 31, 11, iso, { a: 100 });
+  const raw = [bulk('a', 'UP', 'X', 130, SPAN)];
+  const d = app.run(`risingOverview(parseBulkStations(${JSON.stringify(raw)}), ${JSON.stringify(shard)}, ${NOON})`);
+  assert.equal(d.risers[0].cmPerDay.toFixed(1), '10.0');
+});
+
+test('risingOverview: RISING_FLAT boundary and a too-young capture', () => {
+  const app = loadApp({ now: NOON });
+  const iso = new Date(NOON - 864e5).toISOString();
+  const shard = shardWith(2026, 1, 31, 13, iso, { a: 100, b: 100 });
+  const raw = [bulk('a', 'EDGE', 'X', 101, SPAN), bulk('b', 'UNDER', 'X', 100.9, SPAN)];
+  const d = app.run(`risingOverview(parseBulkStations(${JSON.stringify(raw)}), ${JSON.stringify(shard)}, ${NOON})`);
+  assert.deepEqual(d.counts, { rising: 1, falling: 0, steady: 1, tidal: 0 }, 'exactly 1 cm/d is rising, just under is steady');
+
+  // a capture from 2 hours ago is "today", not a baseline
+  const young = shardWith(2026, 1, 31, 14, new Date(NOON - 2 * 36e5).toISOString(), { a: 100 });
+  const dy = app.run(`risingOverview(parseBulkStations(${JSON.stringify(raw)}), ${JSON.stringify(young)}, ${NOON})`);
+  assert.equal(dy.noBaseline, true);
+  assert.deepEqual(dy.live, { high: 0, low: 0, normal: 2, tidal: 0 }, 'live-only counts still render');
+});
+
+test('risingBadge: HIGH/LOW override the ETA, spanless stations get none', () => {
+  const app = loadApp({});
+  const badge = r => app.run(`risingBadge(${JSON.stringify(r)})`);
+  assert.equal(badge({ mnw: 100, mhw: 400, v: 300, kind: 'normal', cmPerDay: 10 }).text, '→MHW ~10d');
+  assert.equal(badge({ mnw: 100, mhw: 400, v: 150, kind: 'normal', cmPerDay: -10 }).text, '→MNW ~5d');
+  assert.equal(badge({ mnw: 100, mhw: 400, v: 450, kind: 'high', cmPerDay: 10 }).text, 'HIGH');
+  assert.equal(badge({ mnw: 100, mhw: 400, v: 90, kind: 'low', cmPerDay: -2 }).text, 'LOW');
+  assert.equal(badge({ mnw: null, mhw: null, v: 300, kind: 'normal', cmPerDay: 50 }), null, 'no span, no badge');
+  assert.equal(badge({ mnw: 100, mhw: 400, v: 399, kind: 'normal', cmPerDay: 0.001 }), null, 'an ETA beyond 99 days is noise, not a forecast');
+});
+
+test('drawRising: grid is sized for what it draws, rows link to their stations', () => {
+  for (const width of [1200, 390]) {
+    const app = loadApp({ now: NOON, width });
+    const iso = new Date(NOON - 864e5).toISOString();
+    const values = Object.fromEntries(Array.from({ length: 30 }, (_, i) => [`s${i}`, 100]));
+    const shard = shardWith(2026, 1, 31, 13, iso, values);
+    // 25 risers (overflow past the top 20), 4 fallers, 1 steady
+    const raw = Array.from({ length: 30 }, (_, i) => {
+      const v = i < 25 ? 110 + i : i < 29 ? 90 - i : 100;
+      return bulk(`s${i}`, `ST${String(i).padStart(2, '0')}`, 'RIVER', v, SPAN);
+    });
+    const r = app.run(`(() => {
+      const d = risingOverview(parseBulkStations(${JSON.stringify(raw)}), ${JSON.stringify(shard)}, ${NOON});
+      const g = makeGrid(risingGridRows(d));
+      drawRising(g, d);
+      const rows = g.ch.map(r => r.join('').replace(/\\s+$/, ''));
+      return { d, rows, gridRows: g.rows, cols: COLS,
+        links: [...new Set(g.ln.flat().filter(Boolean))],
+        lastUsed: rows.reduce((a, r, i) => r ? i : a, 0) };
+    })()`);
+    assert.equal(r.d.risers.length, 20, 'capped at the top 20');
+    assert.equal(r.d.counts.rising, 25);
+    assert.equal(r.lastUsed, r.gridRows - 1, `at ${width}px the grid ends exactly at its last drawn row`);
+    assert.ok(r.rows.some(x => x.includes('… 5 more rising')), 'overflow names what it hides');
+    assert.ok(r.rows.every(x => x.length <= r.cols), `no row exceeds COLS at ${width}px`);
+    assert.ok(r.links.includes('ST24') && r.links.includes('ST26'),
+      'the fastest riser and a faller row are click targets (ST00 rose slowest — overflowed)');
+    assert.ok(r.links.every(l => /^ST\d\d$/.test(l)), 'targets are plain station names');
+  }
+});
+
+test('drawRising: without a baseline the board says so and shows live counts', () => {
+  const app = loadApp({ now: NOON });
+  const raw = [bulk('a', 'A', 'X', 500, SPAN, 'high'), bulk('b', 'B', 'X', 90, SPAN, 'low'), bulk('c', 'C', 'X', 250, [['MThw', 300]])];
+  const rows = app.run(`(() => {
+    const d = risingOverview(parseBulkStations(${JSON.stringify(raw)}), null, ${NOON});
+    const g = makeGrid(risingGridRows(d));
+    drawRising(g, d);
+    return g.ch.map(r => r.join('').replace(/\\s+$/, ''));
+  })()`);
+  assert.ok(rows.some(x => x.includes('no baseline yet')), 'names the missing piece');
+  assert.ok(rows.some(x => x.includes('1 high') && x.includes('1 low') && x.includes('1 tidal')), 'live counts still render');
+});
+
+test('rising board: ?rising boots into it and --rising switches into it', () => {
+  const app = loadApp({ search: '?rising' });
+  assert.equal(app.run('mode'), 'rising', '?rising selects the board on load');
+  assert.equal(app.run('viewMode'), 'live', 'the board has no sub-views');
+  // ?rising wins over everything else
+  assert.equal(loadApp({ search: '?rising&rivers&river=RHEIN&station=BONN' }).run('mode'), 'rising');
+
+  const cmd = loadApp({}).run(`parseCommand('--rising')`);
+  assert.equal(cmd.rising, true, '--rising parses as its own flag');
+  assert.equal(cmd.unknownFlag, null);
+  assert.equal(loadApp({}).run(`parseCommand('--river RHEIN')`).rising, false, 'the singular river flag is not mistaken for it');
+
+  const sw = loadApp({ search: '?station=BONN' });
+  sw.run(`runCommand('--rising')`);
+  assert.equal(sw.run('mode'), 'rising', 'the REPL flag switches the mode');
+
+  const back = loadApp({ search: '?rising' });
+  back.run(`actOnGridTarget('BONN')`);
+  assert.equal(back.run('mode'), 'station', 'a board row leads to its station');
+  const entry = loadApp({ search: '?rivers' });
+  entry.run(`actOnGridTarget('rising')`);
+  assert.equal(entry.run('mode'), 'rising', "the map's entry link opens the board");
+});
+
+test('loadRising: bulk + snapshot happy path, and a missing snapshot is not an error', async () => {
+  const app = loadApp({ now: NOON });
+  const iso = new Date(NOON - 864e5).toISOString();
+  const shard = shardWith(2026, 1, 31, 13, iso, { a: 100 });
+  const raw = [bulk('a', 'UP', 'X', 120, SPAN)];
+  app.run(`mode = 'rising'`);
+  app.run(`getJson = async url => {
+    if (url.includes('stations.json')) return ${JSON.stringify(raw)};
+    if (url === 'archive/snapshots/2026-01.json') return ${JSON.stringify(shard)};
+    throw new Error('404 ' + url);
+  }`);
+  await app.run('loadRising()');
+  assert.equal(app.run('state.rising.error'), null);
+  assert.equal(app.run('state.rising.data.risers[0].n'), 'UP');
+
+  // snapshot 404s (fresh deploy, local checkout): degraded, not broken
+  const bare = loadApp({ now: NOON });
+  bare.run(`mode = 'rising'`);
+  bare.run(`getJson = async url => {
+    if (url.includes('stations.json')) return ${JSON.stringify(raw)};
+    throw new Error('404 ' + url);
+  }`);
+  await bare.run('loadRising()');
+  assert.equal(bare.run('state.rising.error'), null);
+  assert.equal(bare.run('state.rising.data.noBaseline'), true);
+});
+
+test('loadRising: early in a month the baseline comes from the previous shard', async () => {
+  const feb1 = Date.UTC(2026, 1, 1, 12);
+  const app = loadApp({ now: feb1 });
+  // current month: only a 2h-old capture; previous month: yesterday's
+  const cur = shardWith(2026, 2, 28, 0, new Date(feb1 - 2 * 36e5).toISOString(), { a: 115 });
+  const prev = shardWith(2026, 1, 31, 30, new Date(feb1 - 864e5).toISOString(), { a: 100 });
+  app.run(`mode = 'rising'`);
+  app.run(`getJson = async url => {
+    if (url.includes('stations.json')) return ${JSON.stringify([bulk('a', 'UP', 'X', 120, SPAN)])};
+    if (url === 'archive/snapshots/2026-02.json') return ${JSON.stringify(cur)};
+    if (url === 'archive/snapshots/2026-01.json') return ${JSON.stringify(prev)};
+    throw new Error('404 ' + url);
+  }`);
+  await app.run('loadRising()');
+  assert.equal(app.run('state.rising.data.baselineTs'), feb1 - 864e5, 'January 31 is the baseline');
+  assert.equal(app.run('state.rising.data.risers[0].cmPerDay').toFixed(1), '20.0');
+});
+
+test('loadRising: a hard bulk failure reports, switching away mid-fetch discards', async () => {
+  const app = loadApp({ now: NOON });
+  app.run(`mode = 'rising'`);
+  app.run(`getJson = async () => { throw new Error('WSV down'); }`);
+  await app.run('loadRising()');
+  assert.match(app.run('state.rising.error'), /WSV down/);
+
+  const away = loadApp({ now: NOON });
+  away.run(`mode = 'rising'`);
+  away.run(`getJson = async url => url.includes('stations.json') ? [] : (() => { throw new Error('404'); })()`);
+  await away.run(`(() => { const p = loadRising(); mode = 'station'; return p; })()`);
+  assert.equal(away.run('state.rising'), null, 'a stale response never lands in another mode');
 });

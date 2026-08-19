@@ -19,6 +19,12 @@ permissions:
   contents: write
   actions: write # to dispatch the pages deploy afterwards
 
+# shared with snapshot-update.yml — both push to the `archive` branch, so the
+# runs serialize instead of racing (no cancel-in-progress: a queued data
+# commit must never be dropped)
+concurrency:
+  group: archive-branch-write
+
 jobs:
   refresh:
     runs-on: ubuntu-latest
