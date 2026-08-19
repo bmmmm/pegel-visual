@@ -376,6 +376,7 @@
     </div>
     <div class="cmd cont"><span class="flag">--river</span> <input id="river-input" name="river" spellcheck="false" placeholder="whole river" autocomplete="off" role="combobox" aria-expanded="false" aria-controls="ac" aria-autocomplete="list" aria-label="river name">
       <button id="rivers-btn" type="button" class="flag-btn">--rivers</button> <span class="hint">all waters on a map</span>
+      <button id="rising-btn" type="button" class="flag-btn">--rising</button> <span class="hint">who's rising right now</span>
       <button id="home-btn" type="button" class="flag-btn" hidden></button>
     </div>
     <div class="cmd cont">--adsb
@@ -481,12 +482,25 @@
       <b>← STATION</b> button next to <b>--rivers</b> goes back to the gauge you
       came from; it appears in the map and the whole-river view, which otherwise
       have no station on screen to click.</dd>
+    <dt>the rising board</dt>
+    <dd>The <b>--rising</b> button (or <b>?rising</b>) ranks every gauge by how
+      fast it moved since yesterday, in cm per day: top risers first, the
+      steepest fallers below, every row a click away from its station. The
+      "yesterday" is a daily snapshot of all stations, captured by this site's
+      data pipeline (the live API only tells the present). Where a station has
+      mean low/high water marks, the row adds context: already <b>HIGH</b> /
+      <b>LOW</b>, or a rough straight-line ETA like <b>→MHW ~18d</b>. Tidal
+      gauges are counted but never ranked — a day apart, the tide phase has
+      wandered ~50 minutes, so their day diff measures the tide, not the
+      river. They are recognized by their <b>MThw</b> mark or, where the API
+      carries no marks at all (Rotterdam, Helgoland, the barrage gauges), by
+      the tide in their own daily record.</dd>
     <dt>the prompt</dt>
     <dd>A tiny REPL. A bare name switches to that station (or river). Flags:
-      <b>--station</b>, <b>--river</b>, <b>--rivers</b>, <b>--adsb</b>,
-      <b>--history 24h…all</b>, <b>--export</b>, <b>--clear</b>, <b>--info</b>,
-      <b>--help</b>. Press <b>/</b> to focus it from anywhere; <b>Esc</b>
-      dismisses help.</dd>
+      <b>--station</b>, <b>--river</b>, <b>--rivers</b>, <b>--rising</b>,
+      <b>--adsb</b>, <b>--history 24h…all</b>, <b>--export</b>, <b>--clear</b>,
+      <b>--info</b>, <b>--help</b>. Press <b>/</b> to focus it from anywhere;
+      <b>Esc</b> dismisses help.</dd>
     <dt>extras</dt>
     <dd>Aircraft overhead from your own ADS-B receiver (<b>--adsb URL</b>) and real
       river traffic on the waterline from your own AIS receiver (<b>--ais URL</b>,
@@ -562,16 +576,17 @@ const screen = document.getElementById('screen');
 const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)');
 let dirty = true; // set whenever state changes; gates redraws under reduced motion
 let station = (new URLSearchParams(location.search).get('station') || 'BONN').toUpperCase();
-// three mutually exclusive views: the single-station terminal, a whole-river
-// longitudinal profile, or the rivers map listing every water at once.
-// ?rivers wins over ?river=, which wins over ?station= on load.
-let mode = (p => p.has('rivers') ? 'rivers' : p.get('river') ? 'river' : 'station')(new URLSearchParams(location.search));
+// four mutually exclusive views: the single-station terminal, a whole-river
+// longitudinal profile, the rivers map listing every water at once, or the
+// rising board ranking every gauge by its daily rise.
+// ?rising wins over ?rivers, then ?river=, then ?station= on load.
+let mode = (p => p.has('rising') ? 'rising' : p.has('rivers') ? 'rivers' : p.get('river') ? 'river' : 'station')(new URLSearchParams(location.search));
 // sub-view within a mode: station mode offers 'years' (multi-year statistics),
 // river mode offers 'wave' (station × day heatmap). 'live' is the default of both.
 const VIEW_KEYS = ['live', 'years', 'wave'];
 let viewMode = (new URLSearchParams(location.search).get('view') || 'live').toLowerCase();
 if (!VIEW_KEYS.includes(viewMode)) viewMode = 'live';
-if (mode === 'rivers') viewMode = 'live'; // the map has no sub-views
+if (mode === 'rivers' || mode === 'rising') viewMode = 'live'; // neither the map nor the rising board has sub-views
 else if (mode === 'river' ? viewMode === 'years' : viewMode === 'wave') viewMode = 'live';
 const viewSuffix = () => viewMode === 'live' ? '' : '&view=' + viewMode;
 const stationLink = document.getElementById('station-link');
@@ -596,6 +611,12 @@ function applyRiversChrome() {
   stationLink.href = '?rivers';
 }
 
+function applyRisingChrome() {
+  document.title = 'PEGEL://RISING';
+  stationLink.textContent = '?rising';
+  stationLink.href = '?rising';
+}
+
 // river and rivers mode hide the per-station chrome (archive bar, history range,
 // recent chips); the prompt form stays so users can jump back to a station
 function applyModeChrome() {
@@ -604,8 +625,8 @@ function applyModeChrome() {
   if (!perStation) document.getElementById('recent').hidden = true;
   else renderRecent();
   renderHistoryBar(); // stays visible in river mode too — it carries the view chips
-  // the map has no sub-views and no history window of its own
-  document.getElementById('history-bar').hidden = mode === 'rivers';
+  // neither the map nor the rising board has sub-views or a history window
+  document.getElementById('history-bar').hidden = mode === 'rivers' || mode === 'rising';
   // The way back. Neither the map nor the river profile shows the station you came
   // from, so without this the only exit is remembering a name and typing it. The
   // label names the target rather than saying "home", which would be one more thing
@@ -618,7 +639,9 @@ function applyModeChrome() {
   }
 }
 
-if (mode === 'rivers') applyRiversChrome(); else if (mode !== 'river') applyStationChrome();
+if (mode === 'rivers') applyRiversChrome();
+else if (mode === 'rising') applyRisingChrome();
+else if (mode !== 'river') applyStationChrome();
 
 // live chrome: once data is in, the tab title carries the level + trend, the
 // favicon buddy's waterline tracks the real level (MNW…MHW → low…high), and
@@ -660,6 +683,16 @@ function screenSummary() {
     const low = state.riverStations.filter(s => s.kind === 'low').length;
     const high = state.riverStations.filter(s => s.kind === 'high').length;
     return `${state.river}: ${state.riverStations.length} stations, ${low} low, ${high} high.`;
+  }
+  if (mode === 'rising') {
+    if (!state.rising) return 'Diffing every gauge against yesterday…';
+    if (state.rising.error) return 'The rising board failed to load.';
+    const d = state.rising.data;
+    if (d.noBaseline) return 'Rising board: no baseline yet — the daily snapshot needs another day.';
+    const top = d.risers.slice(0, 3).map(r => `${r.n} +${r.cmPerDay.toFixed(1)}`).join(', ');
+    return `Rising board: ${d.counts.rising} gauges rising, ${d.counts.falling} falling, ` +
+      `${d.counts.steady} steady, in cm per day; ${d.counts.tidal} tidal gauges excluded.` +
+      (top ? ` Fastest: ${top}.` : '');
   }
   if (mode === 'rivers') {
     const rivers = riversOverview();
@@ -721,6 +754,7 @@ const state = {
   suggest: null,    // { q, matches } while the did-you-mean screen is shown
   river: null,      // river name (uppercase) while in river mode
   riverStations: null, // prepared station array for the longitudinal profile
+  rising: null,     // { data: risingOverview() result, error } while in rising mode
   repoArchive: null, // 'available' | 'none' once the hosted archive manifest was consulted
   archiveSource: null, // manifest entry.source (e.g. 'Rijkswaterstaat'); null → WSV
 };
@@ -3058,6 +3092,11 @@ function drawRivers(g, rivers) {
   put(g, 0, 0, title.padEnd(Math.max(title.length, COLS - meta.length), '─') + meta, 'd');
   put(g, 0, 4, 'PEGELONLINE://RIVERS', 'b');
 
+  // row 1 sits empty between the title and the map — hand it to the sibling view
+  const risingLink = "▲ who's rising right now";
+  put(g, 1, 0, risingLink, 'w2');
+  linkCells(g, 1, 0, risingLink.length, 'rising');
+
   const mapTop = 2;
   drawOutline(g, mapTop);
   const spilled = placeRiverLabels(g, mapTop, rivers);
@@ -3086,6 +3125,222 @@ function drawRivers(g, rivers) {
   }
   const rest = t.names.length - t.shown;
   if (rest > 0) put(g, row + t.rows, 0, `+ ${rest} more — type a name into --river`, 'd');
+}
+
+// ---------- rising board: every gauge ranked by its daily rise ----------
+
+// The REST API has no bulk history — one request carries every station's
+// current value, but nothing to diff it against. The daily CI snapshot on the
+// archive branch (archive/snapshots/YYYY-MM.json, written by
+// scripts/snapshot-wsv.mjs) is the "yesterday" the board diffs against.
+const RISING_FLAT = 1; // |cm/day| below this reads as steady — gauges report whole
+                       // centimetres, so 1 cm/day sits at the reporting resolution
+                       // (same spirit as TREND_FLAT); revisit against real noise
+const RISING_TOP_N = 20;
+const RISING_FALLERS_N = 8;
+// a capture younger than this is "today", not a baseline — the cron writes
+// once a day, so the usable day is normally yesterday's
+const RISING_BASELINE_MIN_AGE_MS = 12 * 36e5;
+
+// one entry per station with a live W value: current cm, tidal flag (MThw
+// present — the tide phase wanders ~50 min/day, so a day-apart point diff
+// measures the tide, not the river), MNW/MHW where the station has them, and
+// the low/normal/high classification
+function parseBulkStations(raw) {
+  const out = [];
+  for (const s of raw) {
+    const w = (s.timeseries || []).find(t => t.shortname === 'W');
+    if (!w || !w.currentMeasurement || !Number.isFinite(w.currentMeasurement.value)) continue;
+    const cv = w.characteristicValues || [];
+    const find = name => {
+      const e = cv.find(c => c.shortname === name);
+      return e && Number.isFinite(e.value) ? e.value : null;
+    };
+    out.push({
+      uuid: s.uuid, n: s.shortname, w: (s.water && s.water.shortname) || '',
+      v: w.currentMeasurement.value,
+      tidal: cv.some(c => c.shortname === 'MThw'),
+      mnw: find('MNW'), mhw: find('MHW'),
+      kind: troubleKind(w.currentMeasurement.stateMnwMhw),
+    });
+  }
+  return out;
+}
+
+function newestUsableDayIndex(shard, nowTs) {
+  for (let i = shard.days.length - 1; i >= 0; i--) {
+    const t = shard.days[i] && Date.parse(shard.days[i]);
+    if (t && nowTs - t >= RISING_BASELINE_MIN_AGE_MS) return i;
+  }
+  return -1;
+}
+
+// a one-glance answer to "does this rate matter HERE?": already beyond the
+// mean high/low water, or a linear ETA towards it — a rough extrapolation
+// from two points, hence the ~. Only stations with an MNW/MHW span get one.
+function risingBadge(r) {
+  if (r.mnw == null || r.mhw == null) return null;
+  if (r.kind === 'high') return { text: 'HIGH', cls: 'w2' };
+  if (r.kind === 'low') return { text: 'LOW', cls: 's' };
+  const eta = (dist, rate) => {
+    const days = Math.round(dist / rate);
+    return days >= 1 && days <= 99 ? days : null;
+  };
+  if (r.cmPerDay > 0 && r.v < r.mhw) {
+    const days = eta(r.mhw - r.v, r.cmPerDay);
+    return days ? { text: `→MHW ~${days}d`, cls: 'd' } : null;
+  }
+  if (r.cmPerDay < 0 && r.v > r.mnw) {
+    const days = eta(r.v - r.mnw, -r.cmPerDay);
+    return days ? { text: `→MNW ~${days}d`, cls: 'd' } : null;
+  }
+  return null;
+}
+
+// pure: live bulk stations + snapshot shard -> ranked board data. cm/day is
+// normalized over the real elapsed time, so a missed cron day (baseline two
+// days old) does not double the apparent rate.
+function risingOverview(nowStations, snapshot, nowTs) {
+  const counts = { rising: 0, falling: 0, steady: 0, tidal: 0 };
+  const dayIdx = snapshot ? newestUsableDayIndex(snapshot, nowTs) : -1;
+  if (dayIdx < 0) {
+    // no usable baseline (first day after launch, or the snapshot is missing):
+    // surface what the live values alone can say
+    const live = { high: 0, low: 0, normal: 0, tidal: 0 };
+    for (const s of nowStations) s.tidal ? live.tidal++ : live[s.kind]++;
+    return { noBaseline: true, live, risers: [], fallers: [], counts };
+  }
+  const baselineTs = Date.parse(snapshot.days[dayIdx]);
+  const elapsedDays = (nowTs - baselineTs) / 864e5;
+  const ranked = [];
+  for (const s of nowStations) {
+    const entry = snapshot.stations[s.uuid];
+    // tidal by MThw mark, or flagged by the snapshot job from the station's own
+    // daily record — the bulk API leaves Rotterdam, Helgoland and the barrage
+    // gauges without any characteristic values at all
+    if (s.tidal || (entry && entry.t)) { counts.tidal++; continue; }
+    const base = entry ? entry.v[dayIdx] : null;
+    if (base == null) continue; // station without a baseline this round
+    const cmPerDay = (s.v - base) / elapsedDays;
+    if (cmPerDay >= RISING_FLAT) counts.rising++;
+    else if (cmPerDay <= -RISING_FLAT) counts.falling++;
+    else { counts.steady++; continue; } // steady never makes either list
+    ranked.push({ ...s, cmPerDay });
+  }
+  ranked.sort((a, b) => b.cmPerDay - a.cmPerDay);
+  const risers = ranked.filter(r => r.cmPerDay > 0).slice(0, RISING_TOP_N);
+  const fallers = ranked.filter(r => r.cmPerDay < 0).slice(-RISING_FALLERS_N).reverse();
+  for (const r of risers) r.badge = risingBadge(r);
+  for (const r of fallers) r.badge = risingBadge(r);
+  return { noBaseline: false, risers, fallers, counts, baselineTs, elapsedDays };
+}
+
+// compact drops the threshold name from the ETA badge: "→MHW ~18d" -> "→18d"
+const risingBadgeText = badge => isCompact() ? badge.text.replace(/→M[NH]W ~/, '→') : badge.text;
+
+function risingRow(rank, r) {
+  const rk = String(rank).padStart(2);
+  const glyph = r.cmPerDay > 0 ? RIVER_GLYPH.high : RIVER_GLYPH.low;
+  const val = (r.cmPerDay > 0 ? '+' : '') + r.cmPerDay.toFixed(1);
+  if (isCompact()) {
+    const badge = r.badge ? ' ' + risingBadgeText(r.badge) : '';
+    return `${rk}${glyph} ${r.n.slice(0, 12).padEnd(12)} ${val.padStart(6)}${badge}`;
+  }
+  const badge = r.badge ? ` · ${risingBadgeText(r.badge)}` : '';
+  return `${rk}${glyph} ${r.n.slice(0, 16).padEnd(16)} ${r.w.slice(0, 12).padEnd(12)} ${(val + ' cm/d').padStart(11)}${badge}`;
+}
+
+function risingGridRows(d) {
+  if (d.noBaseline) return 7;
+  let rows = 2 + 1 + 1 + d.risers.length; // title + baseline line + blank + RISING header + rows
+  if (d.counts.rising > d.risers.length) rows += 1; // "… n more" overflow
+  if (d.fallers.length) rows += 1 + 1 + d.fallers.length; // blank + FALLING header + rows
+  return rows + 2; // blank + footer counts
+}
+
+function drawRising(g, d) {
+  const title = '─── PEGELONLINE://RISING ';
+  put(g, 0, 0, title.padEnd(COLS, '─'), 'd');
+  put(g, 0, 4, 'PEGELONLINE://RISING', 'b');
+  if (d.noBaseline) {
+    put(g, 2, 0, 'no baseline yet — the daily snapshot needs another day', '');
+    put(g, 4, 0, isCompact()
+      ? `now: ${d.live.high}▲ high ${d.live.low}▼ low`
+      : `right now: ${d.live.high} high · ${d.live.low} low · ${d.live.normal} normal · ${d.live.tidal} tidal`, 'd');
+    put(g, 6, 0, 'come back tomorrow for cm per day', 'd');
+    return;
+  }
+  const hrs = d.elapsedDays * 24;
+  put(g, 1, 0, isCompact()
+    ? `vs snapshot ${hrs.toFixed(0)}h ago`
+    : `every gauge vs its snapshot from ${hrs.toFixed(1)}h ago — sorted by cm per day`, 'd');
+
+  let row = 3;
+  const list = (header, entries) => {
+    put(g, row++, 0, header, 'b');
+    entries.forEach((r, i) => {
+      const line = risingRow(i + 1, r);
+      put(g, row, 0, line);
+      put(g, row, 2, line[2], r.cmPerDay > 0 ? RIVER_CLS.high : RIVER_CLS.low);
+      if (r.badge) {
+        const bt = risingBadgeText(r.badge);
+        put(g, row, line.length - bt.length, bt, r.badge.cls);
+      }
+      linkCells(g, row, 0, line.length, r.n);
+      row++;
+    });
+  };
+  list('RISING', d.risers);
+  if (d.counts.rising > d.risers.length) {
+    put(g, row++, 0, `… ${d.counts.rising - d.risers.length} more rising`, 'd');
+  }
+  if (d.fallers.length) {
+    row++;
+    list('FALLING', d.fallers);
+  }
+  row++;
+  const c = d.counts;
+  put(g, row, 0, isCompact()
+    ? `▲${c.rising} ▼${c.falling} ▬${c.steady} ~${c.tidal} tidal`
+    : `▲ ${c.rising} rising · ▼ ${c.falling} falling · ▬ ${c.steady} steady · ${c.tidal} tidal excluded (the tide beats any day diff)`, 'd');
+}
+
+// the shard changes once a day at most — remember the resolved one per month
+// within the session instead of refetching on every board entry
+let risingShardCache = null; // { key: 'y-m', shard }
+
+async function loadRisingSnapshot(nowTs) {
+  const mez = new Date(nowTs + 36e5);
+  let y = mez.getUTCFullYear(), m = mez.getUTCMonth() + 1;
+  const key = `${y}-${m}`;
+  if (risingShardCache && risingShardCache.key === key) return risingShardCache.shard;
+  const url = (yy, mm) => `archive/snapshots/${yy}-${String(mm).padStart(2, '0')}.json`;
+  // served same-origin like the rest of archive/ (404s locally — swallowed);
+  // early in a month yesterday lives in the previous shard, so fall back once
+  let shard = await getJson(url(y, m)).catch(() => null);
+  if (!shard || newestUsableDayIndex(shard, nowTs) < 0) {
+    if (m === 1) { y--; m = 12; } else m--;
+    const prev = await getJson(url(y, m)).catch(() => null);
+    if (prev && newestUsableDayIndex(prev, nowTs) >= 0) shard = prev;
+  }
+  if (shard) risingShardCache = { key, shard }; // a miss may be transient — retry next entry
+  return shard;
+}
+
+async function loadRising() {
+  try {
+    const raw = await getJson(`${API}/stations.json?includeTimeseries=true&includeCurrentMeasurement=true&includeCharacteristicValues=true`);
+    if (mode !== 'rising') return; // switched away mid-fetch
+    const nowTs = Date.now();
+    const snapshot = await loadRisingSnapshot(nowTs);
+    if (mode !== 'rising') return;
+    state.rising = { data: risingOverview(parseBulkStations(raw), snapshot, nowTs), error: null };
+  } catch (e) {
+    if (mode !== 'rising') return;
+    state.rising = { data: null, error: `the rising board failed: ${e.message}` };
+  }
+  dirty = true;
+  setScreenAria();
 }
 
 // ---------- sub-view switching ----------
@@ -3292,6 +3547,38 @@ function switchRivers(push = true) {
   loadStationList(); // no-op when the cache is warm; fills the map when it isn't
 }
 
+function switchRising(push = true) {
+  dismissHelp();
+  dismissSuggest();
+  if (mode === 'rising') return;
+
+  mode = 'rising';
+  viewMode = 'live';
+  state.river = null;
+  state.riverStations = null;
+  state.gauge = null;
+  state.error = null;
+  state.rising = null; // re-entering refetches — the board is a point-in-time diff
+  waveData = null;
+
+  if (push) history[push === 'replace' ? 'replaceState' : 'pushState'](null, '', '?rising');
+  applyRisingChrome();
+  applyModeChrome();
+  dirty = true;
+  setScreenAria();
+  if (document.startViewTransition && !reduceMotion.matches) {
+    const vt = document.startViewTransition(renderNow);
+    vt.ready.catch(() => {});
+    vt.finished.catch(() => {});
+  }
+
+  stationInput.value = '';
+  riverInput.value = '';
+  clearInterval(refreshTimer);
+  // no refresh interval: the baseline moves once a day, not every 5 minutes
+  loadRising();
+}
+
 function dismissHelp() {
   if (!state.help) return;
   state.help = null;
@@ -3306,7 +3593,7 @@ function dismissHelp() {
 // tell "not given" (undefined) apart from "given empty" (''), e.g. --adsb clearing.
 function parseCommand(raw) {
   const tokens = (raw || '').trim().split(/\s+/).filter(Boolean);
-  const cmd = { station: undefined, adsb: undefined, ais: undefined, history: undefined, river: undefined, rivers: false, view: undefined, help: false, export: false, clear: false, info: false, unknownFlag: null };
+  const cmd = { station: undefined, adsb: undefined, ais: undefined, history: undefined, river: undefined, rivers: false, rising: false, view: undefined, help: false, export: false, clear: false, info: false, unknownFlag: null };
   let i = 0;
   while (i < tokens.length) {
     const tok = tokens[i];
@@ -3323,6 +3610,7 @@ function parseCommand(raw) {
     else if (flag === 'history') cmd.history = value.toLowerCase();
     else if (flag === 'river') cmd.river = value;
     else if (flag === 'rivers') cmd.rivers = true; // plural: the map, not one river
+    else if (flag === 'rising') cmd.rising = true;
     else if (flag === 'view') cmd.view = value.toLowerCase();
     else if (flag === 'help') cmd.help = true;
     else if (flag === 'export') cmd.export = true;
@@ -3343,14 +3631,16 @@ function helpText(unknownFlag) {
     '    pegel - live ASCII water level terminal for German rivers',
     '',
     'SYNOPSIS',
-    '    > pegel [STATION] [--station NAME] [--river NAME] [--rivers] [--adsb URL]',
-    '            [--ais URL] [--history RANGE] [--export] [--clear] [--info] [--help]',
+    '    > pegel [STATION] [--station NAME] [--river NAME] [--rivers] [--rising]',
+    '            [--adsb URL] [--ais URL] [--history RANGE] [--export] [--clear]',
+    '            [--info] [--help]',
     '',
     'OPTIONS',
     '    STATION           bare station name, e.g. BONN (shorthand for --station)',
     '    --station NAME    switch to station NAME (umlaut spellings accepted)',
     '    --river NAME      whole-river profile of NAME, e.g. RHEIN (any case, multi-word)',
     '    --rivers          map of every water, sized by gauge count; pick one to open it',
+    '    --rising          every gauge ranked by cm/day vs yesterday (tidal excluded)',
     '    --adsb URL        set your local ADS-B receiver URL; no value clears it',
     '    --ais URL         set your local AIS receiver URL (AIS-catcher); no value clears it',
     '    --history RANGE   set the sparkline window: 24h 3d 7d 15d 30d all',
@@ -3386,7 +3676,8 @@ function runCommand(raw) {
     return;
   }
   if (cmd.ais !== undefined) setAis(cmd.ais);
-  if (cmd.rivers) switchRivers();
+  if (cmd.rising) switchRising();
+  else if (cmd.rivers) switchRivers();
   else if (cmd.river !== undefined) switchRiver(cmd.river);
   else if (cmd.station !== undefined || cmd.adsb !== undefined) switchStation(cmd.station, cmd.adsb);
   if (cmd.history !== undefined && HISTORY_PRESETS.some(p => p.k === cmd.history)) setHistory(cmd.history);
@@ -3614,6 +3905,7 @@ function actOnGridTarget(st) {
   // cmd:… are in-grid controls (view switches, heatmap toggles)
   if (st.startsWith('cmd:')) runGridCmd(st.slice(4));
   else if (st.startsWith('river:')) switchRiver(st.slice(6));
+  else if (st === 'rising') switchRising(); // no station is named plain lowercase "rising"
   else switchStation(st, adsbInput.value);
 }
 let pressSt = null, pressX = 0, pressY = 0;
@@ -3647,7 +3939,8 @@ document.addEventListener('keydown', e => {
 });
 window.addEventListener('popstate', () => {
   const p = new URLSearchParams(location.search);
-  if (p.has('rivers')) switchRivers(false);
+  if (p.has('rising')) switchRising(false);
+  else if (p.has('rivers')) switchRivers(false);
   else if (p.get('river')) switchRiver(p.get('river'), false);
   else switchStation(p.get('station') || 'BONN', p.get('adsb') || '', false);
   // restore the sub-view AFTER the mode is back, so its mode-guard sees the truth
@@ -3771,6 +4064,7 @@ async function loadWaterList() {
 
 stationInput.addEventListener('focus', loadStationList, { once: true });
 document.getElementById('rivers-btn').addEventListener('click', () => switchRivers());
+document.getElementById('rising-btn').addEventListener('click', () => switchRising());
 document.getElementById('home-btn').addEventListener('click', () => switchStation(station, adsbInput.value));
 // preload shortly after first paint — requestIdleCallback never fires under the
 // 120 ms render loop, so it would starve indefinitely
@@ -4294,6 +4588,21 @@ function render(t) {
     if (!fitted) { fitted = true; fitFont(); }
     return;
   }
+  if (mode === 'rising') {
+    if (state.rising && state.rising.error) {
+      setScreenText(`${wreckFrame(t)}\n\nERROR\n\n${state.rising.error}`);
+      return;
+    }
+    if (!state.rising) {
+      setScreenText(`diffing every gauge against yesterday ${'·'.repeat(1 + Math.floor(t * 2) % 3)}`);
+      return;
+    }
+    const g = makeGrid(risingGridRows(state.rising.data));
+    drawRising(g, state.rising.data);
+    setScreenHtml(gridToHtml(g));
+    if (!fitted) { fitted = true; fitFont(); }
+    return;
+  }
   if (mode === 'river') {
     if (state.error) { setScreenText(`${wreckFrame(t)}\n\nERROR\n\n${state.error}`); return; }
     if (!state.riverStations) {
@@ -4386,6 +4695,11 @@ if (mode === 'rivers') {
   stationInput.value = '';
   setScreenAria();
   loadStationList(); // the map is the station list, aggregated — nothing else to fetch
+} else if (mode === 'rising') {
+  applyModeChrome();
+  stationInput.value = '';
+  setScreenAria();
+  loadRising(); // no refresh interval — the baseline moves once a day
 } else if (mode === 'river') {
   state.river = new URLSearchParams(location.search).get('river').toUpperCase();
   applyRiverChrome();
