@@ -2059,3 +2059,179 @@ test('loadRising: a hard bulk failure reports, switching away mid-fetch discards
   await away.run(`(() => { const p = loadRising(); mode = 'station'; return p; })()`);
   assert.equal(away.run('state.rising'), null, 'a stale response never lands in another mode');
 });
+
+// ---------- total overview (?total) ----------
+
+// 7 rivers with fixed per-day sums: R1..R5 become the bands, R6+R7 fold into
+// OTHER. Two overview years (2024 leap, 2025 current).
+const TOTAL_RIVERS = [['R1', 700], ['R2', 600], ['R3', 500], ['R4', 400], ['R5', 300], ['R6', 200], ['R7', 100]];
+
+const totalOverviewFix = (() => {
+  const rivers = {};
+  for (const [name, v] of TOTAL_RIVERS) rivers[name] = Array(24).fill(v);
+  rivers.R1[13] = null; // Feb 2025: R1 has no data
+  return { generated: 'g-ov', fromYear: 2024, months: 24, currentYear: 2025, excludedStations: 68, rivers };
+})();
+
+const totalShardFix = (() => {
+  const rivers = {};
+  TOTAL_RIVERS.forEach(([name, val], i) => {
+    rivers[name] = { v: Array(365).fill(val), n: Array(365).fill(i + 1) };
+  });
+  rivers.R1.v[130] = null; rivers.R1.n[130] = null; // May 11: R1 silent
+  return { y: 2025, generated: 'g-25', provisionalFrom: 300, rivers };
+})();
+
+const seedTotal = (app, zoom = 'null, null, null') => app.run(`(() => {
+  state.total = { overview: ${JSON.stringify(totalOverviewFix)}, top: totalTopRivers(${JSON.stringify(totalOverviewFix)}), error: null };
+  totalShardCache.set(2025, ${JSON.stringify(totalShardFix)});
+  [totalYear, totalMonth, totalDay] = [${zoom}];
+  const view = totalView();
+  const g = makeGrid(totalGridRows(view));
+  drawTotal(g, view);
+  return { html: gridToHtml(g), rows: g.ch.map(r => r.join('')), level: view.level, cols: COLS };
+})()`);
+
+test('totalTopRivers: fixed all-time ranking, exactly K bands', () => {
+  const app = loadApp({ search: '?total' });
+  assert.deepEqual(app.run(`totalTopRivers(${JSON.stringify(totalOverviewFix)})`), ['R1', 'R2', 'R3', 'R4', 'R5']);
+});
+
+test('total bars: bands stack to the column total, OTHER folds the tail', () => {
+  const app = loadApp({ search: '?total' });
+  const out = app.run(`(() => {
+    const ov = ${JSON.stringify(totalOverviewFix)};
+    const top = totalTopRivers(ov);
+    const years = totalYearBars(ov, top);
+    const months = totalMonthBars(ov, top, 2025);
+    const days = totalDayBars(${JSON.stringify(totalShardFix)}, top, 2025, 4);
+    return { years, months, days };
+  })()`);
+  assert.equal(out.years.length, 2);
+  assert.equal(out.years[0].total, 2800, '2024: all seven rivers, every month');
+  assert.equal(out.years[0].bands.at(-1).name, 'OTHER');
+  assert.equal(out.years[0].bands.at(-1).v, 300, 'OTHER = R6 + R7');
+  assert.equal(out.years[0].cmd, 'cmd:ty:2024');
+  // 2025: R1's null February must not drag its yearly mean down
+  assert.equal(out.years[1].bands[0].v, 700, 'mean over the non-null months only');
+  assert.equal(out.months.length, 12);
+  assert.equal(out.months[1].bands[0].v, 0, 'R1 contributes nothing to its null month');
+  assert.equal(out.months[1].total, 2100);
+  assert.equal(out.months[4].cmd, 'cmd:tm:2025:4');
+  assert.equal(out.days.length, 31, 'May has 31 day bars');
+  assert.equal(out.days[11].cmd, 'cmd:td:2025:4:12');
+  assert.equal(out.days[10].total, 2100, 'May 11: R1 silent');
+  assert.equal(out.days[11].total, 2800);
+});
+
+test('totalDayBreakdown: full ranked list, shares and the provisional flag', () => {
+  const app = loadApp({ search: '?total' });
+  const bd = app.run(`totalDayBreakdown(${JSON.stringify(totalShardFix)}, 2025, 4, 12)`);
+  assert.equal(bd.rows.length, 7);
+  assert.deepEqual(bd.rows.map(r => r.name), ['R1', 'R2', 'R3', 'R4', 'R5', 'R6', 'R7'], 'sorted by sum, desc');
+  assert.equal(bd.total, 2800);
+  assert.equal(bd.gauges, 1 + 2 + 3 + 4 + 5 + 6 + 7);
+  assert.ok(Math.abs(bd.rows.reduce((a, r) => a + r.v / bd.total, 0) - 1) < 1e-9, 'shares sum to 1');
+  assert.equal(bd.provisional, false);
+  const prov = app.run(`totalDayBreakdown(${JSON.stringify(totalShardFix)}, 2025, 10, 7)`);
+  assert.equal(prov.provisional, true, 'day 310 sits past provisionalFrom 300');
+  const gap = app.run(`totalDayBreakdown(${JSON.stringify(totalShardFix)}, 2025, 4, 11)`);
+  assert.equal(gap.rows.length, 6, 'a silent river leaves the list, not a zero row');
+});
+
+test('humanizeSum: metres, then kilometres', () => {
+  const app = loadApp({ search: '?total' });
+  assert.equal(app.run('humanizeSum(4200)'), '42m');
+  assert.equal(app.run('humanizeSum(1000000)'), '10.0km');
+});
+
+test('drawTotal: every level carries its zoom targets, at both widths', () => {
+  for (const width of [1200, 390]) {
+    const all = seedTotal(loadApp({ search: '?total', width }));
+    assert.equal(all.level, 'all');
+    assert.ok(all.html.includes('data-st="cmd:ty:2024"'), `${width}px: year bars clickable`);
+    assert.ok(all.html.includes('data-st="river:R1"'), `${width}px: legend river linked`);
+    assert.ok(all.html.includes('OTHER'), `${width}px: OTHER in the legend`);
+    assert.ok(!all.html.includes('data-st="river:OTHER"'), `${width}px: OTHER is not a river`);
+
+    const year = seedTotal(loadApp({ search: '?total', width }), '2025, null, null');
+    assert.equal(year.level, 'year');
+    assert.ok(year.html.includes('data-st="cmd:tm:2025:4"'), `${width}px: month bars clickable`);
+    assert.ok(year.html.includes('data-st="cmd:tback"'), `${width}px: back tag present`);
+
+    const month = seedTotal(loadApp({ search: '?total', width }), '2025, 4, null');
+    assert.equal(month.level, 'month');
+    assert.ok(month.html.includes('data-st="cmd:td:2025:4:12"'), `${width}px: day bars clickable`);
+
+    const day = seedTotal(loadApp({ search: '?total', width }), '2025, 4, 12');
+    assert.equal(day.level, 'day');
+    assert.ok(day.html.includes('data-st="river:R1"'), `${width}px: ranked rows link to rivers`);
+    assert.ok(day.html.includes('data-st="cmd:tback"'), `${width}px: back tag present`);
+    for (const r of day.rows) {
+      assert.ok(r.replace(/\s+$/, '').length <= day.cols, `${width}px: row wider than COLS`);
+    }
+  }
+});
+
+test('drawTotal: the day list spills into a counted rest line when it overflows', () => {
+  const app = loadApp({ search: '?total', width: 390 }); // compact: 8 rows
+  const out = app.run(`(() => {
+    const rivers = {};
+    for (let i = 0; i < 17; i++) rivers['X' + String(i).padStart(2, '0')] = { v: Array(365).fill(100 + i), n: Array(365).fill(1) };
+    const shard = { y: 2025, generated: 'g', rivers };
+    const ov = ${JSON.stringify(totalOverviewFix)};
+    state.total = { overview: ov, top: totalTopRivers(ov), error: null };
+    totalShardCache.set(2025, shard);
+    [totalYear, totalMonth, totalDay] = [2025, 4, 12];
+    const view = totalView();
+    const g = makeGrid(totalGridRows(view));
+    drawTotal(g, view);
+    return g.ch.map(r => r.join('')).join('\\n');
+  })()`);
+  assert.ok(out.includes('+ 9 more rivers'), 'compact shows 8 of 17, the rest is counted');
+});
+
+test('boot: ?total routes by deep link, day clamped to the real month length', () => {
+  assert.equal(loadApp({ search: '?total' }).run('mode'), 'total');
+  assert.equal(loadApp({ search: '?total' }).run('totalYear'), null);
+  const y = loadApp({ search: '?total&y=2024' });
+  assert.equal(y.run('totalYear'), 2024);
+  assert.equal(y.run('totalMonth'), null);
+  const d = loadApp({ search: '?total&y=2024&d=2024-05-12' });
+  assert.deepEqual([d.run('totalYear'), d.run('totalMonth'), d.run('totalDay')], [2024, 4, 12]);
+  const clamp = loadApp({ search: '?total&d=2024-02-31' });
+  assert.equal(clamp.run('totalDay'), 29, 'leap February caps at 29');
+  assert.equal(loadApp({ search: '?rising&total' }).run('mode'), 'rising', '?rising wins');
+});
+
+test('totalQuery/totalSyncFromUrl: the deep link round-trips', () => {
+  const app = loadApp({ search: '?total' });
+  const q = app.run(`(() => {
+    totalYear = 2024; totalMonth = 4; totalDay = 12;
+    return totalQuery();
+  })()`);
+  assert.equal(q, '?total&y=2024&d=2024-05-12');
+  assert.deepEqual(app.run(`(() => {
+    totalSyncFromUrl(new URLSearchParams('${q}'));
+    return [totalYear, totalMonth, totalDay];
+  })()`), [2024, 4, 12]);
+  assert.equal(app.run(`(() => { totalDay = null; return totalQuery(); })()`), '?total&y=2024&m=5');
+});
+
+test('prompt: --total switches, the man page names it', () => {
+  const app = loadApp();
+  assert.equal(app.run(`parseCommand('--total').total`), true);
+  assert.ok(app.run('helpText()').includes('--total'));
+  app.run(`runCommand('--total')`);
+  assert.equal(app.run('mode'), 'total');
+});
+
+test('total chrome: breadcrumb in the history bar, home button offered', () => {
+  const app = loadApp({ search: '?total&y=2025&d=2025-05-12' });
+  assert.equal(app.el('history-bar').hidden, false, 'the bar carries the breadcrumb');
+  assert.equal(app.el('home-btn').hidden, false, 'the way back to the station');
+  // the element stub accumulates children across renders (textContent = ''
+  // clears nothing there), so only the last render's chips are asserted
+  const labels = app.el('history-bar').children.map(b => b.textContent);
+  assert.deepEqual(labels.slice(-4), ['ALL', '2025', 'MAY', '12']);
+});
