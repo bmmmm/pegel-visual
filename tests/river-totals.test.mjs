@@ -220,7 +220,8 @@ test('rebuildAll: forecast days beyond today never land in the running year', ()
 
 test('buildOverview: a river absent in one year still spans all months', () => {
   const n24 = daysInYear(2024), n25 = daysInYear(2025);
-  const acc = (len, fill) => ({ sumF: Array(len).fill(fill), n: Array(len).fill(fill ? 1 : 0) });
+  const acc = (len, fill) => ({ sumF: Array(len).fill(fill), n: Array(len).fill(fill ? 1 : 0),
+    dvF: Array(len).fill(0), dn: Array(len).fill(0) });
   const byYear = new Map([
     [2024, new Map([['RHEIN', acc(n24, 100)], ['ELBE', acc(n24, 50)]])],
     [2025, new Map([['RHEIN', acc(n25, 110)]])],
@@ -230,4 +231,53 @@ test('buildOverview: a river absent in one year still spans all months', () => {
   assert.equal(ov.rivers.ELBE[0], 50);
   assert.equal(ov.rivers.ELBE[12], null, 'absent year reads null, not 0');
   assert.equal(ov.rivers.RHEIN[23], 110);
+});
+
+test('paired diffs: coverage ramp cancels out, sentinels break pairs on both sides', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'pegel-diffs-'));
+  const arch = join(dir, 'archive');
+  mkdirSync(arch, { recursive: true });
+  writeFileSync(join(arch, 'manifest.json'), JSON.stringify({ generated: 'x', stations: {
+    a: { n: 'A', w: 'RHEIN', from: 2024, to: 2024 },
+    b: { n: 'B', w: 'RHEIN', from: 2024, to: 2024 },
+  } }));
+  const n = daysInYear(2024);
+  const series = vals => {
+    const min = Array(n).fill(null), max = Array(n).fill(null);
+    vals.forEach((v, d) => { if (v != null) { min[d] = v; max[d] = v; } });
+    return [{ y: 2024, min, max }];
+  };
+  mkdirSync(join(arch, 'a')); // day 2 carries a sentinel reading
+  writeFileSync(join(arch, 'a', 'closed.json'), JSON.stringify(series([100, 110, 99999, 130, 131])));
+  mkdirSync(join(arch, 'b')); // appears mid-ramp on day 2
+  writeFileSync(join(arch, 'b', 'closed.json'), JSON.stringify(series([null, null, 500, 510, 505])));
+  const out = join(dir, 'totals');
+  rebuildAll({ archiveDir: arch, outDir: out,
+    unitsDoc: { generated: 'x', units: { a: 'cm', b: 'cm' }, excluded: [] }, nowDate: NOW });
+
+  const { dv, dn } = JSON.parse(readFileSync(join(out, '2024.json'), 'utf8')).rivers.RHEIN;
+  assert.equal(dv[0], null, 'Jan 1 is never paired');
+  assert.deepEqual([dv[1], dn[1]], [10, 1]);
+  assert.deepEqual([dv[2], dn[2]], [null, null],
+    'sentinel breaks a, b just appeared — the 500cm arrival is no phantom jump');
+  assert.deepEqual([dv[3], dn[3]], [10, 1], 'a cannot pair across its sentinel gap');
+  assert.deepEqual([dv[4], dn[4]], [-4, 2], 'mixed signs sum: +1 and -5');
+
+  const ov = JSON.parse(readFileSync(join(out, 'overview.json'), 'utf8'));
+  assert.equal(ov.diff.RHEIN[0], 16, 'January net change = sum of the paired deltas');
+  assert.equal(ov.diff.RHEIN[1], null, 'no pairs, no cell');
+});
+
+test('appendCurrent: patches the running year of overview.diff, upgrades a pre-diff overview', () => {
+  const { arch, out, unitsDoc } = fixtureArchive();
+  rebuildAll({ archiveDir: arch, outDir: out, unitsDoc, nowDate: NOW });
+  // simulate an overview written before the diff series existed
+  const stripped = JSON.parse(readFileSync(join(out, 'overview.json'), 'utf8'));
+  delete stripped.diff;
+  writeFileSync(join(out, 'overview.json'), JSON.stringify(stripped));
+  appendCurrent({ archiveDir: arch, outDir: out, unitsDoc, nowDate: NOW });
+  const ov = JSON.parse(readFileSync(join(out, 'overview.json'), 'utf8'));
+  assert.ok(ov.diff, 'diff series initialized');
+  assert.equal(ov.diff.RHEIN[24 + 7], 0, 'running-year Aug: constant gauge, zero net change');
+  assert.equal(ov.diff.RHEIN[0], null, 'closed 2024 stays unfilled until the next rebuild');
 });
