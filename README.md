@@ -115,6 +115,8 @@ flag command (flags are matched case-insensitively) to do more in one go:
 
 - `--station NAME` — switch to station NAME (same as typing a bare name)
 - `--rivers` — open the rivers map (same as the `--rivers` button or `?rivers`)
+- `--rising` — open the rising board: every gauge ranked by cm/day vs yesterday
+  (same as the `--rising` button or `?rising`)
 - `--adsb URL` — set your ADS-B receiver URL; `--adsb` with no value clears it
 - `--ais URL` — set your AIS receiver URL; `--ais` with no value clears it
 - `--history RANGE` — set the sparkline window (`24h`, `3d`, `7d`, `15d`, `30d`,
@@ -167,6 +169,35 @@ Elbe, the Dutch Rhine — and letting that gap into the count would advertise
 `DONAU 18` for a river whose profile then opens with 27. Waters with no
 located gauge at all are listed under the map with their real count, and the
 list header names how many are missing and why.
+
+## The rising board
+
+`--rising` (or `?rising`, or the `▲ who's rising right now` link on the rivers
+map) ranks every gauge by how fast it moved since yesterday, in cm per day:
+the top 20 risers, the steepest fallers below, and every row a click away
+from its station.
+
+```
+?rising
+```
+
+The live API only tells the present — it has no bulk history — so the
+"yesterday" comes from a daily snapshot of all stations that a scheduled
+workflow captures onto the `archive` data branch
+(`archive/snapshots/YYYY-MM.json`, one value per station per day, written by
+`scripts/snapshot-wsv.mjs`). The rate is normalized over the real time since
+that capture, so a missed snapshot day cannot double an apparent rise. Until
+the first snapshot is a day old, the board says so and shows what the live
+values alone can: how many gauges sit high, low, normal.
+
+Where a station has mean low/high water marks, its row adds context: already
+`HIGH` / `LOW`, or a rough straight-line ETA like `→MHW ~18d`. Tidal gauges
+are counted but never ranked — a day apart, the tide phase has wandered
+~50 minutes, so their day diff would measure the tide, not the river. They
+are recognized by their `MThw` mark or, where the API carries no marks at all
+(Rotterdam, Helgoland, the barrage gauges), by the snapshot job from the tide
+in their own archived daily record (median daily span ≥ 40 cm — rivers
+measure 3–6 cm, tidal gauges 195–280).
 
 ## Whole-river mode
 
@@ -247,6 +278,18 @@ mixed-content caveat as for ADS-B applies.
 python3 -m http.server 8123
 open http://127.0.0.1:8123/
 ```
+
+The rising board's snapshot files live on the `archive` branch, so `?rising`
+shows its no-baseline state locally. To rehearse it with real data, capture
+one backdated day slot into the git-ignored `archive/` directory and reload —
+the board diffs the live values against it (the diffs stay near zero, since
+the "yesterday" values are really today's):
+
+```
+PEGEL_NOW=$(date -u -v-1d +%Y-%m-%dT03:00:00Z) node scripts/snapshot-wsv.mjs --out archive/snapshots
+```
+
+(BSD `date`; on Linux use `date -u -d yesterday +%Y-%m-%dT03:00:00Z`.)
 
 ## Tests
 
