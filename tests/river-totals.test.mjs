@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import {
   isExcludedUnit, midOf, dayOfYear, parseLiveUnits, mergeUnitsDoc,
   stationYearMids, loadSnapshotShards, buildOverview, accumulateTotals,
-  finalizeYear, rebuildAll, appendCurrent,
+  finalizeYear, rebuildAll, appendCurrent, lastBegunDoy,
 } from '../scripts/build-river-totals.mjs';
 import { daysInYear } from '../scripts/fetch-wsv-archive.mjs';
 
@@ -195,6 +195,27 @@ test('appendCurrent: falls back to a full rebuild when no overview exists yet', 
   const res = appendCurrent({ archiveDir: arch, outDir: out, unitsDoc, nowDate: NOW });
   assert.deepEqual(res.years, [2024, 2026], 'the fallback covered every year');
   assert.ok(JSON.parse(readFileSync(join(out, 'overview.json'), 'utf8')).rivers.RHEIN);
+});
+
+test('lastBegunDoy: MEZ day boundary, year edges', () => {
+  assert.equal(lastBegunDoy(2026, new Date('2026-08-20T12:00:00Z')), dayOfYear(2026, 8, 20));
+  // 23:30 UTC Dec 31 is already Jan 1 MEZ — the old year is fully begun
+  assert.equal(lastBegunDoy(2026, new Date('2026-12-31T23:30:00Z')), daysInYear(2026) - 1);
+  assert.equal(lastBegunDoy(2027, new Date('2026-12-31T22:30:00Z')), -1, 'next year not begun yet');
+});
+
+test('rebuildAll: forecast days beyond today never land in the running year', () => {
+  const { arch, out, unitsDoc } = fixtureArchive();
+  // the RWS feed relays tide forecasts: current.json filled to Dec 31
+  const n = daysInYear(2026);
+  writeFileSync(join(arch, 'a', 'current.json'),
+    JSON.stringify({ y: 2026, min: Array(n).fill(500), max: Array(n).fill(502) }));
+  rebuildAll({ archiveDir: arch, outDir: out, unitsDoc, nowDate: NOW });
+  const y2026 = JSON.parse(readFileSync(join(out, '2026.json'), 'utf8'));
+  const today = dayOfYear(2026, 8, 20);
+  assert.equal(y2026.rivers.RHEIN.v[today], 501 + 500, 'today: forecast gauge + snapshot gauge');
+  assert.equal(y2026.rivers.RHEIN.v[today + 1], null, 'tomorrow stays empty');
+  assert.equal(y2026.rivers.RHEIN.v[n - 1], null, 'Dec 31 stays empty');
 });
 
 test('buildOverview: a river absent in one year still spans all months', () => {
