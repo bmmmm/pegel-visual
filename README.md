@@ -14,6 +14,16 @@ freeze), `current.json` (running year, refreshed monthly by the
 `archive/manifest.json` maps every station to its year range (`from`/`to`,
 plus a `gaps` day count as inspection metadata) or marks it `none`.
 
+`archive/snapshots/YYYY-MM.json` is the daily global snapshot behind the
+site's `?rising` board, appended by the `snapshot-update` workflow (one bulk
+capture per day, written by `scripts/snapshot-wsv.mjs` on `main`):
+`{y, m, days: [iso-capture-timestamp|null, …], stations: {uuid: {n, w,
+v: [cm|null, …], t?: 1}}}` — one point value per station per day,
+day boundaries in MEZ (UTC+1), `t: 1` marking gauges whose own daily
+min/max record says the tide dominates them (median daily span ≥ 40 cm).
+Shards accumulate indefinitely; `--max-months` on the script is the
+so-far-unused pruning lever.
+
 Data: © Wasserstraßen- und Schifffahrtsverwaltung des Bundes (WSV),
 provided as unvalidated raw data under
 [DL-DE→Zero-2.0](https://www.govdata.de/dl-de/zero-2-0). Outliers and
