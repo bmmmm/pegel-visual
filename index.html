@@ -3584,8 +3584,13 @@ function drawTotalBars(g, view) {
     if (!filled && b.total > 0) { // a sub-half-row day still deserves a base cell
       const biggest = b.bands.reduce((a, x) => x.v > a.v ? x : a);
       put(g, y0 + H - 1, c0, '█'.repeat(barW), totalBandCls(biggest.name, top));
+      filled = 1;
     }
-    for (let r = y0; r < y0 + H; r++) linkCells(g, r, c0, slot, b.cmd);
+    // click target: the bar plus a breath above it (at least 4 rows for tiny
+    // bars) — linking the whole empty column would paint the [data-st] dotted
+    // underline as a grid across the blank chart area
+    const reach = Math.min(H, Math.max(filled + 1, 4));
+    for (let r = y0 + H - reach; r < y0 + H; r++) linkCells(g, r, c0, slot, b.cmd);
   });
 
   // x tick labels, thinned to what the slot width can carry
