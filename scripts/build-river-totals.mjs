@@ -7,15 +7,22 @@
 //
 //   archive/totals/overview.json   { generated, fromYear, months, currentYear,
 //                                    excludedStations,
-//                                    rivers: { RHEIN: [cm|null per month], ... } }
-//                                  every river, monthly grain: MEAN of the
-//                                  month's daily sums, so bar heights compare
-//                                  across zoom levels (a 28-day February is not
-//                                  systematically shorter than a 31-day March)
+//                                    rivers: { RHEIN: [cm|null per month], ... },
+//                                    diff:   { RHEIN: [cm|null per month], ... } }
+//                                  every river, monthly grain: `rivers` is the
+//                                  MEAN of the month's daily sums, so bar
+//                                  heights compare across zoom levels (a 28-day
+//                                  February is not systematically shorter than
+//                                  a 31-day March); `diff` is the SUM of the
+//                                  month's paired daily deltas (net change)
 //   archive/totals/<year>.json     { y, generated, provisionalFrom?,
 //                                    rivers: { RHEIN: { v: [cm|null per day],
-//                                                       n: [gauges|null] }, ... } }
-//                                  every river, daily grain, for the day drilldown
+//                                                       n: [gauges|null],
+//                                                       dv: [cm|null], dn: [pairs|null] }, ... } }
+//                                  every river, daily grain, for the day
+//                                  drilldown; dv/dn are the paired day-over-day
+//                                  delta (stations present on both days only —
+//                                  coverage ramps cancel out; Jan 1 unpaired)
 //   archive/totals/units.json      { generated, units: {uuid: unit}, excluded: [uuid] }
 //                                  sidecar persisting each station's live-API unit
 //
@@ -175,10 +182,16 @@ export function accumulateTotals({ manifest, unitsDoc, archiveDir, currentYear, 
           yr = byYear.get(y) || byYear.set(y, new Map()).get(y);
           acc = yr.get(river) || yr.set(river, {
             sumF: Array(mid.length).fill(0), n: Array(mid.length).fill(0),
+            dvF: Array(mid.length).fill(0), dn: Array(mid.length).fill(0),
           }).get(river);
         }
         acc.sumF[d] += mid[d];
         acc.n[d]++;
+        // paired day-over-day delta: only stations present on both days count,
+        // so coverage ramps cancel out (a gauge contributes nothing the day it
+        // appears). Jan 1 stays unpaired — no cross-year pairing, which also
+        // sidesteps the archive's flattened Dec-31 values.
+        if (d > 0 && mid[d - 1] != null) { acc.dvF[d] += mid[d] - mid[d - 1]; acc.dn[d]++; }
         contributed = true;
       }
     }
@@ -191,10 +204,12 @@ export function accumulateTotals({ manifest, unitsDoc, archiveDir, currentYear, 
 export function finalizeYear(y, yearAcc, provisionalFrom, nowIso) {
   const rivers = {};
   for (const river of [...yearAcc.keys()].sort()) {
-    const { sumF, n } = yearAcc.get(river);
+    const { sumF, n, dvF, dn } = yearAcc.get(river);
     rivers[river] = {
       v: sumF.map((s, d) => n[d] ? Math.round(s) : null),
       n: n.map(c => c || null),
+      dv: dvF.map((s, d) => dn[d] ? Math.round(s) : null),
+      dn: dn.map(c => c || null),
     };
   }
   const out = { y, generated: nowIso };
@@ -205,27 +220,30 @@ export function finalizeYear(y, yearAcc, provisionalFrom, nowIso) {
 
 // monthly grain = MEAN of the month's daily sums (comparable across month
 // lengths and across zoom levels), computed from the float accumulators so
-// rounding happens exactly once
+// rounding happens exactly once. The parallel `diff` series carries the SUM of
+// the month's paired daily deltas — a net change is additive, not a mean.
 export function buildOverview(byYear, currentYear, excludedStations, nowIso) {
   const years = [...byYear.keys()].sort((a, b) => a - b);
   const fromYear = years.length ? years[0] : currentYear;
   const months = (currentYear - fromYear + 1) * 12;
   const names = [...new Set(years.flatMap(y => [...byYear.get(y).keys()]))].sort();
-  const rivers = {};
-  for (const name of names) rivers[name] = Array(months).fill(null);
+  const rivers = {}, diff = {};
+  for (const name of names) { rivers[name] = Array(months).fill(null); diff[name] = Array(months).fill(null); }
   for (const y of years) {
-    for (const [name, { sumF, n }] of byYear.get(y)) {
+    for (const [name, { sumF, n, dvF, dn }] of byYear.get(y)) {
       for (let m = 1; m <= 12; m++) {
         const start = dayOfYear(y, m, 1);
-        let sum = 0, cnt = 0;
+        let sum = 0, cnt = 0, dsum = 0, dcnt = 0;
         for (let d = start; d < start + daysInMonth(y, m); d++) {
           if (n[d]) { sum += sumF[d]; cnt++; }
+          if (dn[d]) { dsum += dvF[d]; dcnt++; }
         }
         if (cnt) rivers[name][(y - fromYear) * 12 + (m - 1)] = Math.round(sum / cnt);
+        if (dcnt) diff[name][(y - fromYear) * 12 + (m - 1)] = Math.round(dsum);
       }
     }
   }
-  return { generated: nowIso, fromYear, months, currentYear, excludedStations, rivers };
+  return { generated: nowIso, fromYear, months, currentYear, excludedStations, rivers, diff };
 }
 
 async function fetchLiveUnits() {
@@ -277,23 +295,24 @@ export function appendCurrent({ archiveDir, outDir, unitsDoc, nowDate }) {
   writeFileSync(join(outDir, `${currentYear}.json`),
     JSON.stringify(finalizeYear(currentYear, yearAcc, provisionalFrom, nowIso)));
 
-  // patch: extend every series to cover the (possibly rolled-over) year, then
-  // overwrite just the running year's twelve monthly cells
+  // patch: extend every series to cover the (possibly rolled-over) year, clear
+  // the running year's twelve cells (a river that lost its last reporting
+  // gauge must not keep stale cells from the previous append), then overwrite
+  // them from the fresh partial build — same dance for sums and diffs
   const months = (currentYear - overview.fromYear + 1) * 12;
-  for (const name of Object.keys(overview.rivers)) {
-    while (overview.rivers[name].length < months) overview.rivers[name].push(null);
-  }
   const patch = buildOverview(byYear, currentYear, excluded, nowIso);
   const base = (currentYear - overview.fromYear) * 12;
   const patchBase = (currentYear - patch.fromYear) * 12;
-  // clear first: a river that lost its last reporting gauge this year must not
-  // keep stale monthly cells from the previous append
-  for (const name of Object.keys(overview.rivers)) {
-    for (let m = 0; m < 12; m++) overview.rivers[name][base + m] = null;
-  }
-  for (const name of Object.keys(patch.rivers)) {
-    if (!overview.rivers[name]) overview.rivers[name] = Array(months).fill(null);
-    for (let m = 0; m < 12; m++) overview.rivers[name][base + m] = patch.rivers[name][patchBase + m];
+  if (!overview.diff) overview.diff = {}; // overview predating the diff series
+  for (const [series, patchSeries] of [[overview.rivers, patch.rivers], [overview.diff, patch.diff]]) {
+    for (const name of Object.keys(series)) {
+      while (series[name].length < months) series[name].push(null);
+      for (let m = 0; m < 12; m++) series[name][base + m] = null;
+    }
+    for (const name of Object.keys(patchSeries)) {
+      if (!series[name]) series[name] = Array(months).fill(null);
+      for (let m = 0; m < 12; m++) series[name][base + m] = patchSeries[name][patchBase + m];
+    }
   }
   overview.generated = nowIso;
   overview.months = months;
