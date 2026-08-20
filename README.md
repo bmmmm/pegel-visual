@@ -117,6 +117,9 @@ flag command (flags are matched case-insensitively) to do more in one go:
 - `--rivers` — open the rivers map (same as the `--rivers` button or `?rivers`)
 - `--rising` — open the rising board: every gauge ranked by cm/day vs yesterday
   (same as the `--rising` button or `?rising`)
+- `--total` — open the total overview: every river's summed gauge readings
+  stacked over the years, zoomable down to a single day (same as the
+  `--total` button or `?total`)
 - `--adsb URL` — set your ADS-B receiver URL; `--adsb` with no value clears it
 - `--ais URL` — set your AIS receiver URL; `--ais` with no value clears it
 - `--history RANGE` — set the sparkline window (`24h`, `3d`, `7d`, `15d`, `30d`,
@@ -198,6 +201,36 @@ are recognized by their `MThw` mark or, where the API carries no marks at all
 (Rotterdam, Helgoland, the barrage gauges), by the snapshot job from the tide
 in their own archived daily record (median daily span ≥ 40 cm — rivers
 measure 3–6 cm, tidal gauges 195–280).
+
+## The total overview
+
+`--total` (or `?total`) stacks every river's summed gauge readings into one
+bar chart and zooms interactively: all years → one year's months → one
+month's days → a single day, where every river is ranked by its share of
+that day's sum, each row a click away from its river profile. The five
+all-time biggest rivers keep a fixed band color at every level; the rest
+folds into `OTHER`. Every zoom level is a shareable link:
+
+```
+?total
+?total&y=2024
+?total&y=2024&d=2024-05-12
+```
+
+The metric is deliberately transparent: the sum of every reporting gauge's
+daily mid value `(min+max)/2` in cm — a reading of the network, not a
+volume, since every gauge zero is an arbitrary datum. The handful of gauges
+that report absolute elevation in metres (`m+NN` — reservoirs, barrages) are
+excluded before summing; their unit only exists in the live API, so a unit
+sidecar is persisted alongside the aggregate.
+
+The data is pre-aggregated on the `archive` branch by
+`scripts/build-river-totals.mjs` (`archive/totals/overview.json` — every
+river at monthly grain, one fetch for the zoomed-out levels;
+`archive/totals/<year>.json` — every river at daily grain, fetched lazily
+per visited year). The monthly workflow rebuilds it from the full
+per-station archive; the daily snapshot workflow appends today, marking
+snapshot-sourced days as provisional until the next monthly rebuild.
 
 ## Whole-river mode
 

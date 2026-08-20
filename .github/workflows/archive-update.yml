@@ -56,6 +56,12 @@ jobs:
         # its manifest upsert (which carries source:"Rijkswaterstaat") lands last.
         # The one-time 1989-> backfill is seeded separately (see the script header).
         run: node scripts/fetch-rws-archive.mjs --current --out archive-branch/archive
+      - name: Rebuild river totals (?total view)
+        # aggregates the freshly refreshed per-station files into per-river
+        # daily sums (archive/totals/); --fetch-units refreshes the unit
+        # sidecar so metre-reporting elevation gauges stay excluded. Runs last
+        # so it sees the WSV refresh, the gap sweep and the RWS upsert.
+        run: node scripts/build-river-totals.mjs --rebuild --archive archive-branch/archive --out archive-branch/archive/totals --fetch-units
       - name: Commit and push
         id: push
         run: |

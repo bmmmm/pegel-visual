@@ -36,13 +36,17 @@ jobs:
           node-version: 24
       - name: Snapshot current water levels
         run: node scripts/snapshot-wsv.mjs --out archive-branch/archive/snapshots
+      - name: Append today into river totals (?total view)
+        # folds the fresh snapshot into the running year's per-river totals —
+        # no network (reuses the persisted unit sidecar), stays cheap
+        run: node scripts/build-river-totals.mjs --append --archive archive-branch/archive --out archive-branch/archive/totals
       - name: Commit and push
         id: push
         run: |
           cd archive-branch
           git config user.name 'github-actions[bot]'
           git config user.email 'github-actions[bot]@users.noreply.github.com'
-          git add archive/snapshots
+          git add archive
           git diff --cached --quiet && { echo 'no changes'; exit 0; }
           git commit -m "Snapshot water levels ($(date -u +%Y-%m-%d))"
           git push
