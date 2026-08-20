@@ -66,7 +66,16 @@ const readJson = path => { try { return JSON.parse(readFileSync(path, 'utf8')); 
 // absolute elevations, and an unknown unit could be either, so it fails closed
 export const isExcludedUnit = unit => unit !== 'cm';
 
-export const midOf = (min, max) => min != null && max != null ? (min + max) / 2 : null;
+// the raw feeds carry sentinel error values straight into the daily min/max
+// (LOBITH 2026-08: a 99999 day-max next to a real 614 min — one bad reading
+// per day is enough); the widest real cm stages are canal gauges around
+// 5600, so anything outside these bounds is a sensor artifact, not water,
+// and the station's day becomes a gap rather than a lie
+export const PLAUSIBLE_MIN_CM = -2000;
+export const PLAUSIBLE_MAX_CM = 20000;
+export const plausibleCm = v => v != null && v >= PLAUSIBLE_MIN_CM && v <= PLAUSIBLE_MAX_CM;
+
+export const midOf = (min, max) => plausibleCm(min) && plausibleCm(max) ? (min + max) / 2 : null;
 
 export const dayOfYear = (y, m, d) => Math.floor((Date.UTC(y, m - 1, d) - Date.UTC(y, 0, 1)) / 864e5);
 
@@ -105,7 +114,7 @@ export function stationYearMids(bundle, year, shardsByMonth, uuid) {
       if (!st || !Array.isArray(st.v)) continue;
       const start = dayOfYear(year, m, 1);
       for (let i = 0; i < st.v.length; i++) {
-        if (st.v[i] == null || mid[start + i] != null) continue;
+        if (!plausibleCm(st.v[i]) || mid[start + i] != null) continue;
         mid[start + i] = st.v[i];
         if (provisionalFrom == null || start + i < provisionalFrom) provisionalFrom = start + i;
       }
