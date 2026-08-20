@@ -44,7 +44,7 @@ import { mkdirSync, writeFileSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { daysInYear } from './fetch-wsv-archive.mjs';
-import { daysInMonth, shardName } from './snapshot-wsv.mjs';
+import { daysInMonth, mezParts, shardName } from './snapshot-wsv.mjs';
 
 const API = 'https://www.pegelonline.wsv.de/webservices/rest-api/v2';
 // PEGEL_NOW pins the clock for tests and deterministic rebuilds
@@ -132,10 +132,20 @@ export function loadSnapshotShards(snapshotsDir, year) {
   return shards;
 }
 
+// last day (0-based day-of-year) of `year` that has already begun in MEZ —
+// the Dutch RWS feed relays tide FORECASTS, so a refreshed current.json can
+// carry values weeks into the future; totals must stop at today
+export function lastBegunDoy(year, nowDate) {
+  const mez = mezParts(nowDate);
+  if (mez.y > year) return daysInYear(year) - 1;
+  if (mez.y < year) return -1;
+  return dayOfYear(mez.y, mez.m, mez.dayIdx + 1);
+}
+
 // core pass: fold every included station's daily mids into per-year per-river
 // float accumulators. Stations are visited in sorted-uuid order and rivers are
 // written sorted, so a rebuild against identical input is byte-identical.
-export function accumulateTotals({ manifest, unitsDoc, archiveDir, currentYear, shardsByMonth, onlyCurrentYear = false }) {
+export function accumulateTotals({ manifest, unitsDoc, archiveDir, currentYear, shardsByMonth, todayDoy = null, onlyCurrentYear = false }) {
   const byYear = new Map(); // y -> Map(river -> {sumF:[], n:[]})
   let provisionalFrom = null;
   let included = 0, excluded = 0, unattributed = 0;
@@ -154,6 +164,9 @@ export function accumulateTotals({ manifest, unitsDoc, archiveDir, currentYear, 
     for (const y of years) {
       const { mid, provisionalFrom: pf } = stationYearMids(
         byBundleYear.get(y), y, y === currentYear ? shardsByMonth : null, uuid);
+      if (y === currentYear && todayDoy != null) {
+        for (let d = todayDoy + 1; d < mid.length; d++) mid[d] = null; // forecasts are not readings
+      }
       if (pf != null) provisionalFrom = provisionalFrom == null ? pf : Math.min(provisionalFrom, pf);
       let yr = null, acc = null;
       for (let d = 0; d < mid.length; d++) {
@@ -228,8 +241,10 @@ export function rebuildAll({ archiveDir, outDir, unitsDoc, nowDate }) {
   const currentYear = nowDate.getUTCFullYear();
   const shardsByMonth = loadSnapshotShards(join(archiveDir, 'snapshots'), currentYear);
   const nowIso = nowDate.toISOString();
-  const { byYear, provisionalFrom, included, excluded, unattributed } =
-    accumulateTotals({ manifest, unitsDoc, archiveDir, currentYear, shardsByMonth });
+  const { byYear, provisionalFrom, included, excluded, unattributed } = accumulateTotals({
+    manifest, unitsDoc, archiveDir, currentYear, shardsByMonth,
+    todayDoy: lastBegunDoy(currentYear, nowDate),
+  });
 
   mkdirSync(outDir, { recursive: true });
   for (const y of [...byYear.keys()].sort((a, b) => a - b)) {
@@ -254,7 +269,8 @@ export function appendCurrent({ archiveDir, outDir, unitsDoc, nowDate }) {
   const shardsByMonth = loadSnapshotShards(join(archiveDir, 'snapshots'), currentYear);
   const nowIso = nowDate.toISOString();
   const { byYear, provisionalFrom, included, excluded, unattributed } = accumulateTotals({
-    manifest, unitsDoc, archiveDir, currentYear, shardsByMonth, onlyCurrentYear: true,
+    manifest, unitsDoc, archiveDir, currentYear, shardsByMonth,
+    todayDoy: lastBegunDoy(currentYear, nowDate), onlyCurrentYear: true,
   });
 
   const yearAcc = byYear.get(currentYear) || new Map();
