@@ -377,6 +377,7 @@
     <div class="cmd cont"><span class="flag">--river</span> <input id="river-input" name="river" spellcheck="false" placeholder="whole river" autocomplete="off" role="combobox" aria-expanded="false" aria-controls="ac" aria-autocomplete="list" aria-label="river name">
       <button id="rivers-btn" type="button" class="flag-btn">--rivers</button> <span class="hint">all waters on a map</span>
       <button id="rising-btn" type="button" class="flag-btn">--rising</button> <span class="hint">who's rising right now</span>
+      <button id="total-btn" type="button" class="flag-btn">--total</button> <span class="hint">all rivers, summed</span>
       <button id="home-btn" type="button" class="flag-btn" hidden></button>
     </div>
     <div class="cmd cont">--adsb
@@ -495,12 +496,24 @@
       river. They are recognized by their <b>MThw</b> mark or, where the API
       carries no marks at all (Rotterdam, Helgoland, the barrage gauges), by
       the tide in their own daily record.</dd>
+    <dt>the total overview</dt>
+    <dd>The <b>--total</b> button (or <b>?total</b>) stacks every river's summed
+      gauge readings into one chart and lets you zoom: years → one year's months
+      → one month's days → a single day, where every river is ranked by its
+      share of that day's sum. The five all-time biggest rivers keep their own
+      band and color at every level; everything else folds into <b>OTHER</b>.
+      A day's view is a shareable link (<b>?total&amp;y=2024&amp;d=2024-05-12</b>).
+      Honesty note: gauge zeros are arbitrary datums, so the sum is a
+      transparent reading of the network, not a volume — and the handful of
+      gauges reporting elevation in metres are excluded before summing. Built
+      daily by this site's data pipeline from the same hosted archive the
+      station statistics use.</dd>
     <dt>the prompt</dt>
     <dd>A tiny REPL. A bare name switches to that station (or river). Flags:
       <b>--station</b>, <b>--river</b>, <b>--rivers</b>, <b>--rising</b>,
-      <b>--adsb</b>, <b>--history 24h…all</b>, <b>--export</b>, <b>--clear</b>,
-      <b>--info</b>, <b>--help</b>. Press <b>/</b> to focus it from anywhere;
-      <b>Esc</b> dismisses help.</dd>
+      <b>--total</b>, <b>--adsb</b>, <b>--history 24h…all</b>, <b>--export</b>,
+      <b>--clear</b>, <b>--info</b>, <b>--help</b>. Press <b>/</b> to focus it
+      from anywhere; <b>Esc</b> dismisses help.</dd>
     <dt>extras</dt>
     <dd>Aircraft overhead from your own ADS-B receiver (<b>--adsb URL</b>) and real
       river traffic on the waterline from your own AIS receiver (<b>--ais URL</b>,
@@ -576,19 +589,53 @@ const screen = document.getElementById('screen');
 const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)');
 let dirty = true; // set whenever state changes; gates redraws under reduced motion
 let station = (new URLSearchParams(location.search).get('station') || 'BONN').toUpperCase();
-// four mutually exclusive views: the single-station terminal, a whole-river
-// longitudinal profile, the rivers map listing every water at once, or the
-// rising board ranking every gauge by its daily rise.
-// ?rising wins over ?rivers, then ?river=, then ?station= on load.
-let mode = (p => p.has('rising') ? 'rising' : p.has('rivers') ? 'rivers' : p.get('river') ? 'river' : 'station')(new URLSearchParams(location.search));
+// five mutually exclusive views: the single-station terminal, a whole-river
+// longitudinal profile, the rivers map listing every water at once, the
+// rising board ranking every gauge by its daily rise, or the total overview
+// stacking every river's summed gauge readings over the full archive.
+// ?rising wins over ?rivers, then ?total, then ?river=, then ?station= on load.
+let mode = (p => p.has('rising') ? 'rising' : p.has('rivers') ? 'rivers' : p.has('total') ? 'total' : p.get('river') ? 'river' : 'station')(new URLSearchParams(location.search));
 // sub-view within a mode: station mode offers 'years' (multi-year statistics),
 // river mode offers 'wave' (station × day heatmap). 'live' is the default of both.
 const VIEW_KEYS = ['live', 'years', 'wave'];
 let viewMode = (new URLSearchParams(location.search).get('view') || 'live').toLowerCase();
 if (!VIEW_KEYS.includes(viewMode)) viewMode = 'live';
-if (mode === 'rivers' || mode === 'rising') viewMode = 'live'; // neither the map nor the rising board has sub-views
+if (mode === 'rivers' || mode === 'rising' || mode === 'total') viewMode = 'live'; // no sub-views there
 else if (mode === 'river' ? viewMode === 'years' : viewMode === 'wave') viewMode = 'live';
 const viewSuffix = () => viewMode === 'live' ? '' : '&view=' + viewMode;
+
+// ?total zoom state: ALL years → one year → one month → one day. Ephemeral like
+// histYear/histFocus, but URL-synced — a day's breakdown must be shareable as a
+// link (?total&y=2024&d=2024-05-12). The level is derived, never stored.
+let totalYear = null, totalMonth = null, totalDay = null; // month 0-11, day 1-31
+function totalSyncFromUrl(p) {
+  totalYear = totalMonth = totalDay = null;
+  const d = p.get('d');
+  if (d && /^\d{4}-\d{2}-\d{2}$/.test(d)) {
+    const [y, m, dd] = d.split('-').map(Number);
+    if (m >= 1 && m <= 12) {
+      totalYear = y; totalMonth = m - 1;
+      // clamp inline — runs at boot, before the later chart consts exist
+      totalDay = Math.max(1, Math.min(dd, new Date(Date.UTC(y, m, 0)).getUTCDate()));
+    }
+    return;
+  }
+  const y = p.get('y');
+  if (y && /^\d{4}$/.test(y)) {
+    totalYear = +y;
+    const m = p.get('m');
+    if (m && /^\d{1,2}$/.test(m) && +m >= 1 && +m <= 12) totalMonth = +m - 1;
+  }
+}
+if (mode === 'total') totalSyncFromUrl(new URLSearchParams(location.search));
+function totalQuery() {
+  if (totalDay != null) {
+    const iso = `${totalYear}-${String(totalMonth + 1).padStart(2, '0')}-${String(totalDay).padStart(2, '0')}`;
+    return `?total&y=${totalYear}&d=${iso}`;
+  }
+  if (totalYear != null) return `?total&y=${totalYear}` + (totalMonth != null ? `&m=${totalMonth + 1}` : '');
+  return '?total';
+}
 const stationLink = document.getElementById('station-link');
 const wsvArchiveLink = document.getElementById('wsv-archive-link');
 
@@ -617,6 +664,12 @@ function applyRisingChrome() {
   stationLink.href = '?rising';
 }
 
+function applyTotalChrome() {
+  document.title = 'PEGEL://TOTAL';
+  stationLink.textContent = totalQuery();
+  stationLink.href = totalQuery();
+}
+
 // river and rivers mode hide the per-station chrome (archive bar, history range,
 // recent chips); the prompt form stays so users can jump back to a station
 function applyModeChrome() {
@@ -641,6 +694,7 @@ function applyModeChrome() {
 
 if (mode === 'rivers') applyRiversChrome();
 else if (mode === 'rising') applyRisingChrome();
+else if (mode === 'total') applyTotalChrome();
 else if (mode !== 'river') applyStationChrome();
 
 // live chrome: once data is in, the tab title carries the level + trend, the
@@ -693,6 +747,17 @@ function screenSummary() {
     return `Rising board: ${d.counts.rising} gauges rising, ${d.counts.falling} falling, ` +
       `${d.counts.steady} steady, in cm per day; ${d.counts.tidal} tidal gauges excluded.` +
       (top ? ` Fastest: ${top}.` : '');
+  }
+  if (mode === 'total') {
+    if (!state.total) return 'Summing every gauge reading…';
+    if (state.total.error) return 'The total overview failed to load.';
+    const ov = state.total.overview;
+    const scope = totalDay != null ? `${MONTH_ABBR[totalMonth]} ${totalDay}, ${totalYear}: ranked river breakdown`
+      : totalMonth != null ? `${MONTH_ABBR[totalMonth]} ${totalYear}, one bar per day`
+      : totalYear != null ? `${totalYear}, one bar per month`
+      : `${ov.fromYear} to ${ov.currentYear}, one bar per year`;
+    return `Total overview: every river's summed gauge readings stacked, ${scope}. ` +
+      `${Object.keys(ov.rivers).length} rivers; the top ${TOTAL_TOP_K} carry their own band, the rest fold into OTHER.`;
   }
   if (mode === 'rivers') {
     const rivers = riversOverview();
@@ -755,6 +820,7 @@ const state = {
   river: null,      // river name (uppercase) while in river mode
   riverStations: null, // prepared station array for the longitudinal profile
   rising: null,     // { data: risingOverview() result, error } while in rising mode
+  total: null,      // { overview, top, error } while in total mode (see loadTotal)
   repoArchive: null, // 'available' | 'none' once the hosted archive manifest was consulted
   archiveSource: null, // manifest entry.source (e.g. 'Rijkswaterstaat'); null → WSV
 };
@@ -3343,6 +3409,320 @@ async function loadRising() {
   setScreenAria();
 }
 
+// ---------- total overview (?total: every river's summed readings, stacked) ----------
+
+// The metric is a transparent toy: the sum of every reporting gauge's daily
+// mid reading in cm ("Summe der Pegelstände") — gauge zeros are arbitrary
+// datums, so this is not a volume, and the view says so. Data comes from the
+// CI-built aggregate (scripts/build-river-totals.mjs): overview.json carries
+// every river at monthly grain (mean of the daily sums, so bars compare across
+// zoom levels), <year>.json carries every river at daily grain for the
+// drilldown. Elevation-reporting gauges (m+NN) are excluded at build time.
+const TOTAL_TOP_K = 5; // named bands; + OTHER = the 6 existing semantic classes
+const TOTAL_BAND_CLASS = ['b', 'w2', 'w', 's', 'bed'];
+const TOTAL_BAND_GLYPH = ['●', '◆', '▲', '■', '▶'];
+const totalChartH = () => isCompact() ? 12 : 18;
+const TOTAL_DAY_ROWS = () => isCompact() ? 8 : 15;
+
+// band identity is fixed for the whole dataset (ranked by all-time mean sum),
+// never by a single column's ranking — a river's color must not jump around
+function totalTopRivers(overview) {
+  return Object.entries(overview.rivers)
+    .map(([name, vs]) => ({ name, sum: vs.reduce((a, v) => a + (v || 0), 0) }))
+    .sort((a, b) => b.sum - a.sum || a.name.localeCompare(b.name))
+    .slice(0, TOTAL_TOP_K)
+    .map(r => r.name);
+}
+const totalBandCls = (name, top) => { const i = top.indexOf(name); return i >= 0 ? TOTAL_BAND_CLASS[i] : 'd'; };
+const totalBandGlyph = (name, top) => { const i = top.indexOf(name); return i >= 0 ? TOTAL_BAND_GLYPH[i] : '·'; };
+
+// summed stages get big: humanize cm to metres, then kilometres
+function humanizeSum(cm) {
+  const m = cm / 100;
+  return m >= 10000 ? (m / 1000).toFixed(1) + 'km' : Math.round(m) + 'm';
+}
+
+// fold one time slice's per-river values into top-K bands + OTHER
+function totalFold(top, eachRiver) {
+  const bands = top.map(name => ({ name, v: 0 }));
+  const other = { name: 'OTHER', v: 0 };
+  eachRiver((name, v) => {
+    const i = top.indexOf(name);
+    if (i >= 0) bands[i].v += v; else other.v += v;
+  });
+  const all = [...bands, other];
+  return { bands: all, total: all.reduce((a, b) => a + b.v, 0) };
+}
+
+// ALL level: one bar per year — a river's year value is the mean of its
+// non-null monthly cells, so sparse first years don't read as droughts
+function totalYearBars(overview, top) {
+  const bars = [];
+  for (let y = overview.fromYear; y <= overview.currentYear; y++) {
+    const yi = y - overview.fromYear;
+    const fold = totalFold(top, add => {
+      for (const [name, vs] of Object.entries(overview.rivers)) {
+        let s = 0, n = 0;
+        for (let m = 0; m < 12; m++) { const v = vs[yi * 12 + m]; if (v != null) { s += v; n++; } }
+        if (n) add(name, s / n);
+      }
+    });
+    bars.push({ key: y, label: String(y), cmd: 'cmd:ty:' + y, ...fold });
+  }
+  return bars;
+}
+
+// YEAR level: one bar per month, straight from the overview's monthly cells
+function totalMonthBars(overview, top, year) {
+  const yi = year - overview.fromYear;
+  return MONTH_ABBR.map((label, m) => {
+    const fold = totalFold(top, add => {
+      for (const [name, vs] of Object.entries(overview.rivers)) {
+        const v = vs[yi * 12 + m];
+        if (v != null) add(name, v);
+      }
+    });
+    return { key: m, label, cmd: `cmd:tm:${year}:${m}`, ...fold };
+  });
+}
+
+// MONTH level: one bar per day, from the year shard's daily sums
+function totalDayBars(shard, top, year, month) {
+  const start = monthDoy(year, month), end = monthDoy(year, month + 1);
+  const bars = [];
+  for (let d = start; d < end; d++) {
+    const day = d - start + 1;
+    const fold = totalFold(top, add => {
+      for (const [name, rv] of Object.entries(shard.rivers)) {
+        if (rv.v[d] != null) add(name, rv.v[d]);
+      }
+    });
+    bars.push({ key: day, label: String(day), cmd: `cmd:td:${year}:${month}:${day}`, ...fold });
+  }
+  return bars;
+}
+
+// DAY level: the full ranked list — every river that reported, not just bands
+function totalDayBreakdown(shard, year, month, day) {
+  const d = monthDoy(year, month) + day - 1;
+  const rows = [];
+  let total = 0, gauges = 0;
+  for (const [name, rv] of Object.entries(shard.rivers)) {
+    if (rv.v[d] == null) continue;
+    rows.push({ name, v: rv.v[d], n: rv.n[d] || 0 });
+    total += rv.v[d]; gauges += rv.n[d] || 0;
+  }
+  rows.sort((a, b) => b.v - a.v || a.name.localeCompare(b.name));
+  return { total, gauges, rows,
+    provisional: shard.provisionalFrom != null && d >= shard.provisionalFrom };
+}
+
+// render runs at 8 fps — assemble the view once per zoom/data/width change
+let totalViewCache = null;
+function totalView() {
+  const { overview: ov, top } = state.total;
+  // an out-of-range deep link falls back to the top level, not a blank chart
+  if (totalYear != null && (totalYear < ov.fromYear || totalYear > ov.currentYear)) {
+    totalYear = totalMonth = totalDay = null;
+  }
+  const shard = totalMonth != null ? totalShardCache.get(totalYear) : null;
+  const key = [totalYear, totalMonth, totalDay, COLS, ov.generated,
+    shard && shard.rivers ? shard.generated : ''].join('|');
+  if (totalViewCache && totalViewCache.key === key) return totalViewCache.view;
+  let view;
+  if (totalMonth != null && (!shard || !shard.rivers)) {
+    view = { level: 'pending', error: shard && shard.error };
+  } else if (totalDay != null) {
+    view = { level: 'day', top, breakdown: totalDayBreakdown(shard, totalYear, totalMonth, totalDay) };
+  } else if (totalMonth != null) {
+    view = { level: 'month', top, bars: totalDayBars(shard, top, totalYear, totalMonth),
+      provisionalFrom: shard.provisionalFrom };
+  } else if (totalYear != null) {
+    view = { level: 'year', top, bars: totalMonthBars(ov, top, totalYear) };
+  } else {
+    view = { level: 'all', top, bars: totalYearBars(ov, top) };
+  }
+  totalViewCache = { key, view };
+  return view;
+}
+
+function totalGridRows(view) {
+  if (view.level === 'day') {
+    const shown = Math.min(view.breakdown.rows.length, TOTAL_DAY_ROWS());
+    return 3 + shown + (view.breakdown.rows.length > shown ? 1 : 0) + 2;
+  }
+  return totalChartH() + 10;
+}
+
+const TOTAL_LABEL_W = 7; // y-axis gutter: "12.3km" + axis glyph
+
+function drawTotalBars(g, view) {
+  const H = totalChartH(), y0 = 3, top = view.top;
+  const bars = view.bars;
+  const avail = COLS - TOTAL_LABEL_W;
+  const slot = Math.max(1, Math.floor(avail / bars.length));
+  const barW = slot > 1 ? slot - 1 : 1;
+  const peak = Math.max(1, ...bars.map(b => b.total));
+
+  put(g, y0, 0, humanizeSum(peak).padStart(TOTAL_LABEL_W - 1), 'd');
+  put(g, y0, TOTAL_LABEL_W - 1, '┤', 'd');
+  for (let r = y0 + 1; r < y0 + H; r++) put(g, r, TOTAL_LABEL_W - 1, '│', 'd');
+  put(g, y0 + H, TOTAL_LABEL_W - 1, '└' + '─'.repeat(Math.min(avail - 1, slot * bars.length)), 'd');
+
+  bars.forEach((b, i) => {
+    const c0 = TOTAL_LABEL_W + i * slot;
+    let cum = 0, filled = 0;
+    for (const band of b.bands) {
+      if (band.v <= 0) continue;
+      cum += band.v;
+      const upto = Math.round(cum / peak * H);
+      for (let r = filled; r < upto; r++) {
+        put(g, y0 + H - 1 - r, c0, '█'.repeat(barW), totalBandCls(band.name, top));
+      }
+      filled = Math.max(filled, upto);
+    }
+    if (!filled && b.total > 0) { // a sub-half-row day still deserves a base cell
+      const biggest = b.bands.reduce((a, x) => x.v > a.v ? x : a);
+      put(g, y0 + H - 1, c0, '█'.repeat(barW), totalBandCls(biggest.name, top));
+    }
+    for (let r = y0; r < y0 + H; r++) linkCells(g, r, c0, slot, b.cmd);
+  });
+
+  // x tick labels, thinned to what the slot width can carry
+  const tickRow = y0 + H + 1;
+  if (view.level === 'all') {
+    const step = slot >= 5 ? 1 : Math.ceil(5 / slot);
+    bars.forEach((b, i) => { if (i % step === 0) put(g, tickRow, TOTAL_LABEL_W + i * slot, b.label, 'd'); });
+  } else if (view.level === 'year') {
+    bars.forEach((b, i) => put(g, tickRow, TOTAL_LABEL_W + i * slot, slot >= 4 ? b.label : b.label[0], 'd'));
+  } else {
+    bars.forEach((b, i) => {
+      if (b.key === 1 || b.key % 5 === 0) put(g, tickRow, TOTAL_LABEL_W + i * slot, b.label, 'd');
+    });
+  }
+
+  // legend: 2 rows × 3 entries, band swatch + across-view share
+  const grand = bars.reduce((a, b) => a + b.total, 0);
+  const sums = new Map();
+  for (const b of bars) for (const band of b.bands) sums.set(band.name, (sums.get(band.name) || 0) + band.v);
+  const legendRow = y0 + H + 3, w = Math.floor(COLS / 3);
+  [...top, 'OTHER'].forEach((name, i) => {
+    const r = legendRow + Math.floor(i / 3), c = (i % 3) * w;
+    const share = grand ? (sums.get(name) || 0) / grand : 0;
+    const label = ` ${name.slice(0, w - 7)} ${Math.round(share * 100)}%`;
+    put(g, r, c, totalBandGlyph(name, top), totalBandCls(name, top));
+    put(g, r, c + 1, label);
+    if (name !== 'OTHER') linkCells(g, r, c, label.length + 1, 'river:' + name);
+  });
+}
+
+function drawTotal(g, view) {
+  const ov = state.total.overview;
+  const brand = 'PEGEL://TOTAL';
+  const scope = view.level === 'all' ? `${ov.fromYear}→${ov.currentYear}`
+    : view.level === 'year' ? String(totalYear)
+    : `${MONTH_ABBR[totalMonth]} ${totalYear}` + (view.level === 'day' ? ` · ${totalDay}` : '');
+  const head = `─── ${brand} · ${scope} `;
+  if (view.level === 'all') {
+    put(g, 0, 0, head.padEnd(COLS, '─'), 'd');
+    put(g, 0, 4, brand, 'b');
+  } else {
+    const parent = view.level === 'year' ? 'ALL'
+      : view.level === 'month' ? String(totalYear)
+      : `${MONTH_ABBR[totalMonth]} ${totalYear}`;
+    putHeadRule(g, head, brand, `[← ${parent}]`, 'cmd:tback');
+  }
+
+  if (view.level === 'day') {
+    const b = view.breakdown;
+    put(g, 1, 0, `Σ ${humanizeSum(b.total)} summed stage · ${b.gauges} gauges reporting`
+      + (b.provisional ? ' · provisional' : ''), 'd');
+    const shown = Math.min(b.rows.length, TOTAL_DAY_ROWS());
+    const compact = isCompact();
+    const nameW = compact ? 10 : 16, barLen = compact ? 10 : 20;
+    for (let i = 0; i < shown; i++) {
+      const r = b.rows[i], row = 3 + i;
+      const share = b.total ? r.v / b.total : 0;
+      const fill = Math.round(share * barLen);
+      const cls = totalBandCls(r.name, view.top);
+      const pct = (Math.round(share * 100) + '%').padStart(4);
+      const bar = '█'.repeat(fill) + '░'.repeat(barLen - fill);
+      const line = `${String(i + 1).padStart(2)}${totalBandGlyph(r.name, view.top)} `
+        + `${r.name.slice(0, nameW).padEnd(nameW)} ${pct} ${bar} ${humanizeSum(r.v).padStart(6)}`
+        + (compact ? '' : ` ×${r.n}`);
+      put(g, row, 0, line);
+      put(g, row, 2, line[2], cls);
+      put(g, row, 5 + nameW + 5, '█'.repeat(fill), cls);
+      put(g, row, 5 + nameW + 5 + fill, '░'.repeat(barLen - fill), 'd');
+      linkCells(g, row, 0, line.length, 'river:' + r.name);
+    }
+    let row = 3 + shown;
+    if (b.rows.length > shown) {
+      const rest = b.rows.slice(shown);
+      put(g, row++, 0, `+ ${rest.length} more rivers · Σ ${humanizeSum(rest.reduce((a, r) => a + r.v, 0))}`, 'd');
+    }
+    put(g, row + 1, 0, compact ? 'tap a river to open it' : 'click a river to open its profile — every reading is cm above its own gauge zero', 'd');
+    return;
+  }
+
+  const sub = view.level === 'all'
+    ? (isCompact() ? 'Σ of every gauge reading · tap a year' : 'every gauge reading summed, stacked by river · click a year to zoom in')
+    : view.level === 'year'
+      ? (isCompact() ? 'monthly means · tap a month' : 'monthly mean of the daily sums · click a month to zoom in')
+      : (isCompact() ? 'daily sums · tap a day' : 'one bar per day · click a day for its ranked breakdown')
+        + (view.provisionalFrom != null ? ' · newest days provisional' : '');
+  put(g, 1, 0, sub, 'd');
+  drawTotalBars(g, view);
+  put(g, totalChartH() + 9, 0, isCompact() ? 'tap a name for its profile'
+    : 'not a volume — gauge zeros are arbitrary · click a river name to open its profile', 'd');
+}
+
+// overview once per session, year shards lazily per visited year
+const totalShardCache = new Map(); // year -> {y,rivers,...} | {error} | null (in flight)
+
+async function loadTotal() {
+  if (state.total && state.total.overview) return; // totals move once a day at most
+  try {
+    const overview = await getJson('archive/totals/overview.json');
+    if (mode !== 'total') return;
+    state.total = { overview, top: totalTopRivers(overview), error: null };
+  } catch (e) {
+    if (mode !== 'total') return;
+    state.total = { overview: null, top: null, error: `the totals aren't built yet: ${e.message}` };
+  }
+  dirty = true;
+  setScreenAria();
+}
+
+async function loadTotalYear(y) {
+  totalShardCache.set(y, null); // in-flight marker — render must not re-trigger
+  try {
+    const shard = await getJson(`archive/totals/${y}.json`);
+    totalShardCache.set(y, shard);
+  } catch (e) {
+    totalShardCache.set(y, { error: `no daily totals for ${y}: ${e.message}` });
+  }
+  dirty = true;
+  setScreenAria();
+}
+
+// zoom within the view: cheap, no refetch — the mode-switch/zoom split mirrors
+// switchStation vs setHistYear
+function totalSetZoom(y, m, d, push = true) {
+  totalYear = y; totalMonth = m; totalDay = d;
+  history[push ? 'pushState' : 'replaceState'](null, '', totalQuery());
+  applyTotalChrome();
+  renderHistoryBar();
+  dirty = true;
+  setScreenAria();
+}
+
+function totalZoomOut() {
+  if (totalDay != null) totalSetZoom(totalYear, totalMonth, null);
+  else if (totalMonth != null) totalSetZoom(totalYear, null, null);
+  else if (totalYear != null) totalSetZoom(null, null, null);
+}
+
 // ---------- sub-view switching ----------
 
 function setView(v, push = true) {
@@ -3377,6 +3757,15 @@ function runGridCmd(c) {
     histFocus = { y, m };
     setHistYear(y); // picking a cell also puts its year on top of the overlay
   } else if (c.startsWith('hy:')) setHistYear(+c.slice(3));
+  else if (c.startsWith('ty:')) totalSetZoom(+c.slice(3), null, null);
+  else if (c.startsWith('tm:')) {
+    const [y, m] = c.slice(3).split(':').map(Number);
+    totalSetZoom(y, m, null);
+  } else if (c.startsWith('td:')) {
+    const [y, m, d] = c.slice(3).split(':').map(Number);
+    totalSetZoom(y, m, d);
+  } else if (c === 'tback') totalZoomOut();
+  else if (c === 'tall') totalSetZoom(null, null, null);
 }
 
 // ---------- station prompt ----------
@@ -3579,6 +3968,43 @@ function switchRising(push = true) {
   loadRising();
 }
 
+function switchTotal(push = true) {
+  dismissHelp();
+  dismissSuggest();
+  if (mode === 'total') { // already here: only the zoom state may have moved (popstate)
+    applyTotalChrome();
+    renderHistoryBar();
+    dirty = true;
+    setScreenAria();
+    return;
+  }
+
+  mode = 'total';
+  viewMode = 'live';
+  state.river = null;
+  state.riverStations = null;
+  state.gauge = null;
+  state.error = null;
+  waveData = null;
+
+  if (push) history[push === 'replace' ? 'replaceState' : 'pushState'](null, '', totalQuery());
+  applyTotalChrome();
+  applyModeChrome();
+  dirty = true;
+  setScreenAria();
+  if (document.startViewTransition && !reduceMotion.matches) {
+    const vt = document.startViewTransition(renderNow);
+    vt.ready.catch(() => {});
+    vt.finished.catch(() => {});
+  }
+
+  stationInput.value = '';
+  riverInput.value = '';
+  clearInterval(refreshTimer);
+  // no refresh interval: the aggregate moves once a day at most
+  loadTotal();
+}
+
 function dismissHelp() {
   if (!state.help) return;
   state.help = null;
@@ -3593,7 +4019,7 @@ function dismissHelp() {
 // tell "not given" (undefined) apart from "given empty" (''), e.g. --adsb clearing.
 function parseCommand(raw) {
   const tokens = (raw || '').trim().split(/\s+/).filter(Boolean);
-  const cmd = { station: undefined, adsb: undefined, ais: undefined, history: undefined, river: undefined, rivers: false, rising: false, view: undefined, help: false, export: false, clear: false, info: false, unknownFlag: null };
+  const cmd = { station: undefined, adsb: undefined, ais: undefined, history: undefined, river: undefined, rivers: false, rising: false, total: false, view: undefined, help: false, export: false, clear: false, info: false, unknownFlag: null };
   let i = 0;
   while (i < tokens.length) {
     const tok = tokens[i];
@@ -3611,6 +4037,7 @@ function parseCommand(raw) {
     else if (flag === 'river') cmd.river = value;
     else if (flag === 'rivers') cmd.rivers = true; // plural: the map, not one river
     else if (flag === 'rising') cmd.rising = true;
+    else if (flag === 'total') cmd.total = true;
     else if (flag === 'view') cmd.view = value.toLowerCase();
     else if (flag === 'help') cmd.help = true;
     else if (flag === 'export') cmd.export = true;
@@ -3632,8 +4059,8 @@ function helpText(unknownFlag) {
     '',
     'SYNOPSIS',
     '    > pegel [STATION] [--station NAME] [--river NAME] [--rivers] [--rising]',
-    '            [--adsb URL] [--ais URL] [--history RANGE] [--export] [--clear]',
-    '            [--info] [--help]',
+    '            [--total] [--adsb URL] [--ais URL] [--history RANGE] [--export]',
+    '            [--clear] [--info] [--help]',
     '',
     'OPTIONS',
     '    STATION           bare station name, e.g. BONN (shorthand for --station)',
@@ -3641,6 +4068,7 @@ function helpText(unknownFlag) {
     '    --river NAME      whole-river profile of NAME, e.g. RHEIN (any case, multi-word)',
     '    --rivers          map of every water, sized by gauge count; pick one to open it',
     '    --rising          every gauge ranked by cm/day vs yesterday (tidal excluded)',
+    '    --total           every river summed and stacked over the years; zoom to a day',
     '    --adsb URL        set your local ADS-B receiver URL; no value clears it',
     '    --ais URL         set your local AIS receiver URL (AIS-catcher); no value clears it',
     '    --history RANGE   set the sparkline window: 24h 3d 7d 15d 30d all',
@@ -3678,6 +4106,7 @@ function runCommand(raw) {
   if (cmd.ais !== undefined) setAis(cmd.ais);
   if (cmd.rising) switchRising();
   else if (cmd.rivers) switchRivers();
+  else if (cmd.total) switchTotal();
   else if (cmd.river !== undefined) switchRiver(cmd.river);
   else if (cmd.station !== undefined || cmd.adsb !== undefined) switchStation(cmd.station, cmd.adsb);
   if (cmd.history !== undefined && HISTORY_PRESETS.some(p => p.k === cmd.history)) setHistory(cmd.history);
@@ -3941,6 +4370,7 @@ window.addEventListener('popstate', () => {
   const p = new URLSearchParams(location.search);
   if (p.has('rising')) switchRising(false);
   else if (p.has('rivers')) switchRivers(false);
+  else if (p.has('total')) { totalSyncFromUrl(p); switchTotal(false); }
   else if (p.get('river')) switchRiver(p.get('river'), false);
   else switchStation(p.get('station') || 'BONN', p.get('adsb') || '', false);
   // restore the sub-view AFTER the mode is back, so its mode-guard sees the truth
@@ -4065,6 +4495,7 @@ async function loadWaterList() {
 stationInput.addEventListener('focus', loadStationList, { once: true });
 document.getElementById('rivers-btn').addEventListener('click', () => switchRivers());
 document.getElementById('rising-btn').addEventListener('click', () => switchRising());
+document.getElementById('total-btn').addEventListener('click', () => switchTotal());
 document.getElementById('home-btn').addEventListener('click', () => switchStation(station, adsbInput.value));
 // preload shortly after first paint — requestIdleCallback never fires under the
 // 120 ms render loop, so it would starve indefinitely
@@ -4108,8 +4539,9 @@ function renderRecent() {
 
 // ---------- history range chips ----------
 
-// one bar, three shapes: range presets + YEARS toggle (station live), YEARS +
-// ABS/ANOM (years view), PROFILE/WAVE view chips (river mode)
+// one bar, four shapes: range presets + YEARS toggle (station live), YEARS +
+// ABS/ANOM (years view), PROFILE/WAVE view chips (river mode), and the zoom
+// breadcrumb (total mode)
 function renderHistoryBar() {
   const nav = document.getElementById('history-bar');
   nav.textContent = '';
@@ -4127,6 +4559,21 @@ function renderHistoryBar() {
     nav.append('view ');
     chip('PROFILE', viewMode !== 'wave', () => setView('live'), 'longitudinal profile with live elevations');
     chip('▦ WAVE', viewMode === 'wave', () => setView('wave'), 'station × day heatmap — the wave rolls downstream');
+    return;
+  }
+  if (mode === 'total') {
+    // breadcrumb: each crumb jumps back to its level; the deepest one is lit
+    nav.setAttribute('aria-label', 'total zoom');
+    nav.append('zoom ');
+    chip('ALL', totalYear == null, () => runGridCmd('tall'), 'every year, one bar each');
+    if (totalYear != null) {
+      chip(String(totalYear), totalMonth == null, () => runGridCmd('ty:' + totalYear), `${totalYear}, one bar per month`);
+    }
+    if (totalMonth != null) {
+      chip(MONTH_ABBR[totalMonth], totalDay == null, () => runGridCmd(`tm:${totalYear}:${totalMonth}`),
+        `${MONTH_ABBR[totalMonth]} ${totalYear}, one bar per day`);
+    }
+    if (totalDay != null) chip(String(totalDay), true, () => {}, 'the ranked day breakdown');
     return;
   }
   nav.setAttribute('aria-label', 'history range');
@@ -4603,6 +5050,32 @@ function render(t) {
     if (!fitted) { fitted = true; fitFont(); }
     return;
   }
+  if (mode === 'total') {
+    if (state.total && state.total.error) {
+      setScreenText(`${wreckFrame(t)}\n\nERROR\n\n${state.total.error}`);
+      return;
+    }
+    if (!state.total) {
+      setScreenText(`summing every gauge ${'·'.repeat(1 + Math.floor(t * 2) % 3)}`);
+      return;
+    }
+    // month/day levels need the year shard — fetch it lazily on first sight
+    if (totalMonth != null && totalShardCache.get(totalYear) === undefined) loadTotalYear(totalYear);
+    const view = totalView();
+    if (view.level === 'pending') {
+      if (view.error) {
+        setScreenText(`${wreckFrame(t)}\n\nERROR\n\n${view.error}`);
+      } else {
+        setScreenText(`summing ${totalYear} day by day ${'·'.repeat(1 + Math.floor(t * 2) % 3)}`);
+      }
+      return;
+    }
+    const g = makeGrid(totalGridRows(view));
+    drawTotal(g, view);
+    setScreenHtml(gridToHtml(g));
+    if (!fitted) { fitted = true; fitFont(); }
+    return;
+  }
   if (mode === 'river') {
     if (state.error) { setScreenText(`${wreckFrame(t)}\n\nERROR\n\n${state.error}`); return; }
     if (!state.riverStations) {
@@ -4700,6 +5173,11 @@ if (mode === 'rivers') {
   stationInput.value = '';
   setScreenAria();
   loadRising(); // no refresh interval — the baseline moves once a day
+} else if (mode === 'total') {
+  applyModeChrome();
+  stationInput.value = '';
+  setScreenAria();
+  loadTotal(); // no refresh interval — the aggregate moves once a day at most
 } else if (mode === 'river') {
   state.river = new URLSearchParams(location.search).get('river').toUpperCase();
   applyRiverChrome();
