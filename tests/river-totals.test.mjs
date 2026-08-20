@@ -18,11 +18,17 @@ test('isExcludedUnit: only literal cm passes, unknown fails closed', () => {
   assert.equal(isExcludedUnit(undefined), true);
 });
 
-test('midOf: averages, null when either side is missing', () => {
+test('midOf: averages, null when either side is missing or implausible', () => {
   assert.equal(midOf(100, 101), 100.5);
   assert.equal(midOf(100, null), null);
   assert.equal(midOf(null, 101), null);
   assert.equal(midOf(0, 0), 0); // zero is a value, not a gap
+  // the LOBITH case: one sentinel reading poisons the day-max — the day must
+  // become a gap, not a 50000cm reading
+  assert.equal(midOf(614, 99999), null);
+  assert.equal(midOf(-9999, 620), null);
+  assert.equal(midOf(-300, 620), 160, 'real NAP ebb values stay in');
+  assert.equal(midOf(5600, 5620), 5610, 'canal stages stay in');
 });
 
 test('dayOfYear: leap Feb 29 indexes cleanly', () => {
@@ -66,10 +72,12 @@ test('stationYearMids: archived mid wins, snapshots only fill its gaps', () => {
   const shard = { y: 2026, m: 1, stations: { u: { v: Array(31).fill(null) } } };
   shard.stations.u.v[0] = 999; // snapshot also has Jan 1 — must lose
   shard.stations.u.v[1] = 120; // Jan 2 only in the snapshot — provisional
+  shard.stations.u.v[3] = 99999; // Jan 4: sentinel in the snapshot — dropped
   const { mid, provisionalFrom } = stationYearMids(bundle, 2026, new Map([[1, shard]]), 'u');
   assert.equal(mid[0], 105);
   assert.equal(mid[1], 120);
   assert.equal(mid[2], null, 'a gap in both sources stays a gap');
+  assert.equal(mid[3], null, 'a sentinel snapshot value never lands');
   assert.equal(provisionalFrom, 1);
   // no snapshots at all (closed years): nothing provisional
   const closedOnly = stationYearMids(bundle, 2026, null, 'u');
