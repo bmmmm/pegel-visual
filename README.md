@@ -215,6 +215,7 @@ folds into `OTHER`. Every zoom level is a shareable link:
 ?total
 ?total&y=2024
 ?total&y=2024&d=2024-05-12
+?total&diff
 ```
 
 The metric is deliberately transparent: the sum of every reporting gauge's
@@ -223,6 +224,14 @@ volume, since every gauge zero is an arbitrary datum. The handful of gauges
 that report absolute elevation in metres (`m+NN` — reservoirs, barrages) are
 excluded before summing; their unit only exists in the live API, so a unit
 sidecar is persisted alongside the aggregate.
+
+Because the absolute sum grows with every gauge that joins the archive (and
+carries the arbitrary datums as a huge constant baseline), trends belong to
+the `Δ DIFF` toggle (`?total&diff`): the net day-over-day change, counting
+only gauge pairs that reported on both days. A gauge's first reporting day
+never contributes, so coverage ramps cancel out and the diverging bars show
+how much water actually arrived or left — per day, netted per month, and
+netted per year at the zoomed-out levels.
 
 The data is pre-aggregated on the `archive` branch by
 `scripts/build-river-totals.mjs` (`archive/totals/overview.json` — every

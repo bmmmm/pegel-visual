@@ -2062,23 +2062,27 @@ test('loadRising: a hard bulk failure reports, switching away mid-fetch discards
 
 // ---------- total overview (?total) ----------
 
-// 7 rivers with fixed per-day sums: R1..R5 become the bands, R6+R7 fold into
-// OTHER. Two overview years (2024 leap, 2025 current).
-const TOTAL_RIVERS = [['R1', 700], ['R2', 600], ['R3', 500], ['R4', 400], ['R5', 300], ['R6', 200], ['R7', 100]];
+// 7 rivers with fixed per-day sums (2nd field) and net deltas (3rd field):
+// R1..R5 become the bands, R6+R7 fold into OTHER. Two overview years (2024
+// leap, 2025 current). Per-month deltas across all rivers net to +11.
+const TOTAL_RIVERS = [['R1', 700, 12], ['R2', 600, -6], ['R3', 500, 4], ['R4', 400, 0],
+  ['R5', 300, 2], ['R6', 200, -2], ['R7', 100, 1]];
 
 const totalOverviewFix = (() => {
-  const rivers = {};
-  for (const [name, v] of TOTAL_RIVERS) rivers[name] = Array(24).fill(v);
-  rivers.R1[13] = null; // Feb 2025: R1 has no data
-  return { generated: 'g-ov', fromYear: 2024, months: 24, currentYear: 2025, excludedStations: 68, rivers };
+  const rivers = {}, diff = {};
+  for (const [name, v, dv] of TOTAL_RIVERS) { rivers[name] = Array(24).fill(v); diff[name] = Array(24).fill(dv); }
+  rivers.R1[13] = null; diff.R1[13] = null; // Feb 2025: R1 has no data
+  return { generated: 'g-ov', fromYear: 2024, months: 24, currentYear: 2025, excludedStations: 68, rivers, diff };
 })();
 
 const totalShardFix = (() => {
   const rivers = {};
-  TOTAL_RIVERS.forEach(([name, val], i) => {
-    rivers[name] = { v: Array(365).fill(val), n: Array(365).fill(i + 1) };
+  TOTAL_RIVERS.forEach(([name, val, dval], i) => {
+    rivers[name] = { v: Array(365).fill(val), n: Array(365).fill(i + 1),
+      dv: Array(365).fill(dval), dn: Array(365).fill(i + 1) };
   });
   rivers.R1.v[130] = null; rivers.R1.n[130] = null; // May 11: R1 silent
+  rivers.R1.dv[130] = null; rivers.R1.dn[130] = null;
   return { y: 2025, generated: 'g-25', provisionalFrom: 300, rivers };
 })();
 
@@ -2143,6 +2147,116 @@ test('humanizeSum: metres, then kilometres', () => {
   const app = loadApp({ search: '?total' });
   assert.equal(app.run('humanizeSum(4200)'), '42m');
   assert.equal(app.run('humanizeSum(1000000)'), '10.0km');
+});
+
+test('humanizeDiff: always signed, cm-fine below a metre', () => {
+  const app = loadApp({ search: '?total' });
+  assert.equal(app.run('humanizeDiff(0)'), '+0cm');
+  assert.equal(app.run('humanizeDiff(-42)'), '-42cm');
+  assert.equal(app.run('humanizeDiff(431)'), '+4.3m');
+  assert.equal(app.run('humanizeDiff(-25000)'), '-250m');
+  assert.equal(app.run('humanizeDiff(-1234567)'), '-12.3km');
+});
+
+test('total diff bars: net change summed across rivers, signs preserved', () => {
+  const app = loadApp({ search: '?total&diff' });
+  const out = app.run(`(() => {
+    const ov = ${JSON.stringify(totalOverviewFix)};
+    return {
+      years: totalDiffYearBars(ov),
+      months: totalDiffMonthBars(ov, 2025),
+      days: totalDiffDayBars(${JSON.stringify(totalShardFix)}, 2025, 4),
+    };
+  })()`);
+  assert.equal(out.years.length, 2);
+  assert.equal(out.years[0].v, 132, '2024: 12 months × net +11');
+  assert.equal(out.years[0].cmd, 'cmd:ty:2024');
+  assert.equal(out.years[1].v, 120, "2025: R1's null February drops its +12");
+  assert.equal(out.months[1].v, -1, 'Feb 2025 without R1 nets negative');
+  assert.equal(out.months[4].cmd, 'cmd:tm:2025:4');
+  assert.equal(out.days.length, 31, 'May has 31 day bars');
+  assert.equal(out.days[10].v, -1, 'May 11: R1 silent, the rest nets negative');
+  assert.equal(out.days[11].v, 11);
+  assert.equal(out.days[11].cmd, 'cmd:td:2025:4:12');
+});
+
+test('totalDiffDayBreakdown: risers first, paired-gauge counts, signs kept', () => {
+  const app = loadApp({ search: '?total&diff' });
+  const bd = app.run(`totalDiffDayBreakdown(${JSON.stringify(totalShardFix)}, 2025, 4, 12)`);
+  assert.deepEqual(bd.rows.map(r => r.name), ['R1', 'R3', 'R5', 'R7', 'R4', 'R6', 'R2'], 'sorted by delta, desc');
+  assert.equal(bd.total, 11);
+  assert.equal(bd.pairs, 1 + 2 + 3 + 4 + 5 + 6 + 7);
+  assert.equal(bd.provisional, false);
+  const gap = app.run(`totalDiffDayBreakdown(${JSON.stringify(totalShardFix)}, 2025, 4, 11)`);
+  assert.equal(gap.rows.length, 6, 'a silent river leaves the list, not a zero row');
+});
+
+test('boot: ?total&diff routes and the deep link round-trips', () => {
+  const app = loadApp({ search: '?total&diff&y=2024&d=2024-05-12' });
+  assert.equal(app.run('mode'), 'total');
+  assert.equal(app.run('totalDiff'), true);
+  assert.equal(app.run('totalQuery()'), '?total&diff&y=2024&d=2024-05-12');
+  assert.equal(loadApp({ search: '?total' }).run('totalDiff'), false, 'sum stays the default');
+  const rt = loadApp({ search: '?total' });
+  const q = rt.run(`(() => {
+    totalSyncFromUrl(new URLSearchParams('?total&diff&y=2024&m=5'));
+    return totalQuery();
+  })()`);
+  assert.equal(q, '?total&diff&y=2024&m=5');
+});
+
+test('tsum/tdiff: the grid command flips the metric and rewrites the URL', () => {
+  const app = loadApp({ search: '?total' });
+  app.run(`runGridCmd('tdiff')`);
+  assert.equal(app.run('totalDiff'), true);
+  assert.equal(app.run('totalQuery()'), '?total&diff');
+  app.run(`runGridCmd('tsum')`);
+  assert.equal(app.run('totalDiff'), false);
+  assert.equal(app.run('totalQuery()'), '?total');
+});
+
+const seedTotalDiff = (app, zoom = 'null, null, null', overview = totalOverviewFix, shard = totalShardFix) => app.run(`(() => {
+  totalDiff = true;
+  state.total = { overview: ${JSON.stringify(overview)}, top: totalTopRivers(${JSON.stringify(overview)}), error: null };
+  totalShardCache.set(2025, ${JSON.stringify(shard)});
+  [totalYear, totalMonth, totalDay] = [${zoom}];
+  const view = totalView();
+  const g = makeGrid(totalGridRows(view));
+  drawTotal(g, view);
+  return { html: gridToHtml(g), rows: g.ch.map(r => r.join('')), level: view.level, cols: COLS };
+})()`);
+
+test('drawTotal diff: diverging bars carry zoom targets, day list links rivers', () => {
+  for (const width of [1200, 390]) {
+    const all = seedTotalDiff(loadApp({ search: '?total&diff', width }));
+    assert.equal(all.level, 'all');
+    assert.ok(all.html.includes('data-st="cmd:ty:2024"'), `${width}px: year bars clickable`);
+    assert.ok(all.rows.join('').includes('Σ net'), `${width}px: net footer present`);
+
+    const month = seedTotalDiff(loadApp({ search: '?total&diff', width }), '2025, 4, null');
+    assert.equal(month.level, 'month');
+    assert.ok(month.html.includes('data-st="cmd:td:2025:4:12"'), `${width}px: day bars clickable`);
+    assert.ok(month.rows.join('').includes('last 7 days'), `${width}px: trailing week footer`);
+
+    const day = seedTotalDiff(loadApp({ search: '?total&diff', width }), '2025, 4, 12');
+    assert.equal(day.level, 'day');
+    assert.ok(day.html.includes('data-st="river:R1"'), `${width}px: ranked rows link to rivers`);
+    assert.ok(day.rows.join('').includes('paired gauges'), `${width}px: paired-gauge count shown`);
+    for (const r of day.rows) {
+      assert.ok(r.replace(/\s+$/, '').length <= day.cols, `${width}px: row wider than COLS`);
+    }
+  }
+});
+
+test('drawTotal diff: data built before the diff series degrades to a note', () => {
+  const { diff, ...ovNoDiff } = totalOverviewFix;
+  const preDiff = seedTotalDiff(loadApp({ search: '?total&diff' }), 'null, null, null', ovNoDiff);
+  assert.equal(preDiff.level, 'missing');
+  assert.ok(preDiff.rows.join('').includes('not built yet'));
+  const shardNoDv = JSON.parse(JSON.stringify(totalShardFix));
+  for (const rv of Object.values(shardNoDv.rivers)) { delete rv.dv; delete rv.dn; }
+  const oldShard = seedTotalDiff(loadApp({ search: '?total&diff' }), '2025, 4, null', totalOverviewFix, shardNoDv);
+  assert.equal(oldShard.level, 'missing');
 });
 
 test('drawTotal: every level carries its zoom targets, at both widths', () => {
