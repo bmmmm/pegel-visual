@@ -2319,6 +2319,198 @@ test('loadRising: early in a month the baseline comes from the previous shard', 
   assert.equal(app.run('state.rising.data.risers[0].cmPerDay').toFixed(1), '20.0');
 });
 
+// ---------- rising board: the 7-day lookback ----------
+
+// the timestamp the daily snapshot cron writes for that day (the Aug 13-19
+// backfill slots carry exactly this 11:30Z shape)
+const capture = (y, m, d) => new Date(Date.UTC(y, m - 1, d, 11, 30)).toISOString();
+// snapshot shard with several captured days: `days` maps day index -> iso,
+// `values` maps uuid -> { <day index>: cm } (plus t: 1 for the tidal flag)
+const shardOf = (y, m, len, days, values) => ({
+  y, m,
+  days: Array.from({ length: len }, (_, i) => days[i] || null),
+  stations: Object.fromEntries(Object.entries(values).map(([uuid, slots]) => {
+    const v = Array(len).fill(null);
+    for (const [i, cm] of Object.entries(slots)) if (i !== 't') v[+i] = cm;
+    return [uuid, { n: uuid.toUpperCase(), w: 'X', v, ...(slots.t ? { t: 1 } : {}) }];
+  })),
+});
+// Jan 7..15 2026 captured daily, NOON = Jan 15 12:00 → yesterday is index 13
+const JAN_DAYS = Object.fromEntries(Array.from({ length: 9 }, (_, i) => [i + 6, capture(2026, 1, i + 7)]));
+
+test('risingBaselineIndex: 1D takes the newest capture, 7D aims at the day a week back', () => {
+  const app = loadApp({ now: NOON });
+  const full = shardOf(2026, 1, 31, JAN_DAYS, { a: {} });
+  const idx = (shard, n) => app.run(`risingBaselineIndex(${JSON.stringify(shard)}, ${NOON}, ${n})`);
+  assert.equal(app.run(`newestUsableDayIndex(${JSON.stringify(full)}, ${NOON})`), 13,
+    "today's own capture is half an hour old — yesterday's is the baseline");
+  assert.equal(idx(full, 1), 13, 'the 1-day view is unchanged: the newest usable capture');
+  assert.equal(idx(full, 7), 7,
+    'Jan 8 — the capture nearest 7×24h back, not seven slots back from the newest (which would be Jan 7, eight days out)');
+
+  // the cron missed that day: the nearest capture on either side wins
+  const gap = shardOf(2026, 1, 31, { ...JAN_DAYS, 7: null }, { a: {} });
+  assert.equal(idx(gap, 7), 8, 'Jan 9 (6.0 days) beats Jan 7 (8.0 days) by half a day');
+  assert.equal(idx(gap, 1), 13, 'the 1-day baseline is untouched by a hole a week back');
+
+  // a young archive has nothing a week back — the view says so instead of
+  // passing a three-day-old capture off as a week
+  const young = shardOf(2026, 1, 31, { 11: capture(2026, 1, 12) }, { a: {} });
+  assert.equal(idx(young, 1), 11);
+  assert.equal(idx(young, 7), -1, 'three days back is not "a week ago"');
+});
+
+test('mergeSnapshotShards: two months as one day axis, padded and tidal-flag preserving', () => {
+  const app = loadApp({});
+  const jul = shardOf(2026, 7, 31, { 30: capture(2026, 7, 31) }, { a: { 30: 100 }, b: { 30: 50, t: 1 } });
+  const aug = shardOf(2026, 8, 31, { 0: capture(2026, 8, 1) }, { a: { 0: 110 }, c: { 0: 7 } });
+  const m = app.run(`mergeSnapshotShards(${JSON.stringify(jul)}, ${JSON.stringify(aug)})`);
+  assert.equal(m.days.length, 62, 'July then August, one continuous day axis');
+  assert.deepEqual([m.days[30], m.days[31]], [capture(2026, 7, 31), capture(2026, 8, 1)]);
+  assert.equal(m.stations.a.v.length, 62);
+  assert.deepEqual([m.stations.a.v[30], m.stations.a.v[31]], [100, 110]);
+  assert.equal(m.stations.b.v[31], null, 'a station missing from August keeps null slots there');
+  assert.equal(m.stations.b.t, 1, "the snapshot job's tidal flag survives the merge");
+  assert.equal(m.stations.c.v[30], null, 'a station new in August has no July values');
+  assert.deepEqual([m.y, m.m], [2026, 8], 'the merged shard is named after the newer month');
+  assert.equal(app.run(`mergeSnapshotShards(null, ${JSON.stringify(aug)}).days.length`), 31, 'a missing half is not a merge');
+  assert.equal(app.run(`mergeSnapshotShards(${JSON.stringify(jul)}, null).days.length`), 31);
+});
+
+test('risingOverview: the 7-day view normalises over the real span and skips week-less stations', () => {
+  const app = loadApp({ now: NOON });
+  const shard = shardOf(2026, 1, 31, JAN_DAYS, {
+    a: { 7: 100, 13: 160 }, // +70 over the week, +10 since yesterday
+    b: { 13: 200 },         // no slot a week back — rankable in 1D only
+  });
+  const raw = [bulk('a', 'WEEK', 'X', 170, SPAN), bulk('b', 'FRESH', 'X', 220, SPAN)];
+  const over = n => app.run(`risingOverview(parseBulkStations(${JSON.stringify(raw)}), ${JSON.stringify(shard)}, ${NOON}, ${n})`);
+
+  const d1 = over(1);
+  assert.deepEqual(d1.risers.map(r => r.n), ['FRESH', 'WEEK'], 'both rank against yesterday');
+  assert.equal(d1.lookbackDays, 1);
+
+  const d7 = over(7);
+  assert.deepEqual(d7.risers.map(r => r.n), ['WEEK'], 'the station without a week-old slot is skipped, not zeroed');
+  assert.deepEqual(d7.counts, { rising: 1, falling: 0, steady: 0, tidal: 0 }, 'and counts in no bucket at all');
+  assert.equal(d7.elapsedDays.toFixed(2), '7.02', 'the span is the real one: 7 days plus the half hour of capture drift');
+  assert.equal(d7.risers[0].cmPerDay.toFixed(1), '10.0', '70 cm over 7.02 days, not 70 cm/day');
+  assert.equal(d7.risers[0].deltaCm, 70, 'the row also carries the whole span in centimetres');
+  assert.equal(d7.baselineTs, Date.parse(capture(2026, 1, 8)));
+  assert.equal(d7.lookbackDays, 7);
+});
+
+test('drawRising: the 7-day view labels the span it really measured, and fits both widths', () => {
+  const shard = shardOf(2026, 1, 31, { ...JAN_DAYS, 7: null }, { a: { 8: 105, 13: 160 } });
+  const raw = [bulk('a', 'WEEK', 'RHEIN', 170, SPAN)];
+  for (const width of [1200, 390]) {
+    const app = loadApp({ now: NOON, width });
+    const r = app.run(`(() => {
+      const d = risingOverview(parseBulkStations(${JSON.stringify(raw)}), ${JSON.stringify(shard)}, ${NOON}, 7);
+      const g = makeGrid(risingGridRows(d));
+      drawRising(g, d);
+      const rows = g.ch.map(r => r.join('').replace(/\\s+$/, ''));
+      return { d, rows, cols: COLS, gridRows: g.rows, lastUsed: rows.reduce((a, r, i) => r ? i : a, 0) };
+    })()`);
+    assert.equal(r.d.elapsedDays.toFixed(1), '6.0', 'the missed Jan 8 leaves a six-day span');
+    assert.ok(r.rows.some(x => x.includes('Δ6.0d')), `at ${width}px the header states the real span, not the nominal seven`);
+    assert.ok(r.rows.some(x => x.includes(width === 1200 ? '(+65 cm)' : '(+65)')),
+      `at ${width}px the row carries the centimetres of the whole span next to the rate`);
+    assert.ok(r.rows.some(x => x.includes('+10.8')), '65 cm over 6.02 days');
+    assert.ok(r.rows.every(x => x.length <= r.cols), `no row exceeds COLS at ${width}px`);
+    assert.equal(r.lastUsed, r.gridRows - 1, 'the grid still ends exactly at its last drawn row');
+  }
+});
+
+test('drawRising: without a week-old baseline the 7-day view names what is missing', () => {
+  const app = loadApp({ now: NOON });
+  const shard = shardOf(2026, 1, 31, { 11: capture(2026, 1, 12) }, { a: { 11: 100 } });
+  const raw = [bulk('a', 'A', 'X', 500, SPAN, 'high'), bulk('b', 'B', 'X', 90, SPAN, 'low')];
+  const rows = app.run(`(() => {
+    const d = risingOverview(parseBulkStations(${JSON.stringify(raw)}), ${JSON.stringify(shard)}, ${NOON}, 7);
+    const g = makeGrid(risingGridRows(d));
+    drawRising(g, d);
+    return g.ch.map(r => r.join('').replace(/\\s+$/, ''));
+  })()`);
+  assert.ok(rows.some(x => x.includes('no baseline a week back yet')), 'the empty state is about the week, not the day');
+  assert.ok(rows.some(x => x.includes('1D view')), 'and points at the view that does work');
+  assert.ok(rows.some(x => x.includes('1 high') && x.includes('1 low')), 'live counts still render');
+});
+
+test('loadRising: the 7-day baseline crosses into the previous month\'s shard', async () => {
+  const aug5 = Date.UTC(2026, 7, 5, 12);
+  const jul = shardOf(2026, 7, 31, Object.fromEntries(Array.from({ length: 7 }, (_, i) => [i + 24, capture(2026, 7, i + 25)])),
+    { a: { 28: 100, 30: 150 } });
+  const aug = shardOf(2026, 8, 31, Object.fromEntries(Array.from({ length: 4 }, (_, i) => [i, capture(2026, 8, i + 1)])),
+    { a: { 0: 160, 1: 162, 2: 165, 3: 168 } });
+  const raw = [bulk('a', 'UP', 'X', 170, SPAN)];
+  const stub = `getJson = async url => {
+    globalThis.__fetched.push(url);
+    if (url.includes('stations.json')) return ${JSON.stringify(raw)};
+    if (url === 'archive/snapshots/2026-08.json') return ${JSON.stringify(aug)};
+    if (url === 'archive/snapshots/2026-07.json') return ${JSON.stringify(jul)};
+    throw new Error('404 ' + url);
+  }`;
+
+  const week = loadApp({ now: aug5, search: '?rising&d7' });
+  week.run('globalThis.__fetched = []');
+  week.run(stub);
+  await week.run('loadRising()');
+  assert.equal(week.run('state.rising.error'), null);
+  assert.equal(week.run('state.rising.data.baselineTs'), Date.parse(capture(2026, 7, 29)),
+    'July 29 is the baseline, seven days back across the month boundary');
+  assert.equal(week.run('state.rising.data.risers[0].cmPerDay').toFixed(1), '10.0', '70 cm over 7.02 days');
+  assert.equal(week.run('state.rising.data.risers[0].deltaCm'), 70);
+  assert.deepEqual(week.run('globalThis.__fetched').filter(u => u.includes('snapshots')),
+    ['archive/snapshots/2026-08.json', 'archive/snapshots/2026-07.json'], 'the current shard first, the previous one only because the week reaches into it');
+  await week.run('loadRising()');
+  assert.deepEqual(week.run('globalThis.__fetched').filter(u => u.includes('snapshots')).length, 2,
+    'the auto-refresh reuses both cached shards');
+
+  // the 1-day path on the same day never touches the previous shard
+  const day = loadApp({ now: aug5, search: '?rising' });
+  day.run('globalThis.__fetched = []');
+  day.run(stub);
+  await day.run('loadRising()');
+  assert.equal(day.run('state.rising.data.baselineTs'), Date.parse(capture(2026, 8, 4)));
+  assert.equal(day.run('state.rising.data.risers[0].cmPerDay').toFixed(1), '2.0');
+  assert.deepEqual(day.run('globalThis.__fetched').filter(u => u.includes('snapshots')), ['archive/snapshots/2026-08.json']);
+});
+
+test('rising board: the 1D/7D toggle rides the URL and fills the history bar', () => {
+  const chips = app => app.el('history-bar').children.slice(-2);
+  const boot = loadApp({ search: '?rising&d7' });
+  assert.equal(boot.run('risingDays'), 7, '?rising&d7 boots into the week view');
+  assert.equal(boot.run('currentModeQuery()'), '?rising&d7', 'and shares as that link');
+  assert.equal(boot.el('history-bar').hidden, false, 'the board fills the bar instead of hiding it');
+  assert.equal(boot.el('station-link').textContent, '?rising&d7');
+  assert.equal(boot.document.title, 'PEGEL://RISING · 7D', 'the tab says which board this is');
+  assert.deepEqual(chips(boot).map(b => b.textContent), ['1D', '7D']);
+  assert.deepEqual(chips(boot).map(b => b.className), ['', 'on'], 'the active lookback is lit');
+
+  const plain = loadApp({ search: '?rising' });
+  assert.equal(plain.run('risingDays'), 1, 'the default stays 1D');
+  assert.equal(plain.run('currentModeQuery()'), '?rising');
+  assert.deepEqual(chips(plain).map(b => b.className), ['on', '']);
+  plain.run(`state.rising = { data: { noBaseline: true }, error: null }`);
+  plain.run('risingSetDays(7)');
+  assert.equal(plain.run('currentModeQuery()'), '?rising&d7', 'flipping the chip rewrites the link');
+  assert.equal(plain.run('state.rising'), null, 'and drops the board built on the other baseline');
+  assert.deepEqual(chips(plain).map(b => b.className), ['', 'on']);
+  plain.run('risingSetDays(1)');
+  assert.equal(plain.run('currentModeQuery()'), '?rising');
+  assert.deepEqual(chips(plain).map(b => b.className), ['on', '']);
+  plain.run('risingSetDays(3)');
+  assert.equal(plain.run('risingDays'), 1, 'only the two offered lookbacks are reachable');
+
+  // entering the board from a station carries the current lookback into the URL
+  const from = loadApp({ search: '?station=BONN' });
+  from.run('risingDays = 7; switchRising()');
+  assert.equal(from.run('currentModeQuery()'), '?rising&d7');
+  assert.equal(from.el('history-bar').hidden, false);
+  assert.equal(loadApp({ search: '?rivers' }).el('history-bar').hidden, true, 'the map still has nothing to put in the bar');
+});
+
 test('loadRising: a hard bulk failure reports, switching away mid-fetch discards', async () => {
   const app = loadApp({ now: NOON });
   app.run(`mode = 'rising'`);
