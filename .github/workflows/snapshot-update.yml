@@ -16,6 +16,7 @@ on:
 permissions:
   contents: write
   actions: write # to dispatch the pages deploy afterwards
+  issues: write # to report a failed run to the data-freshness issue
 
 concurrency:
   group: archive-branch-write
@@ -24,7 +25,7 @@ jobs:
   snapshot:
     runs-on: ubuntu-latest
     # one bulk request and a JSON write — a stuck run should fail fast and red
-    timeout-minutes: 10
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
       - uses: actions/checkout@v7
@@ -58,3 +59,23 @@ jobs:
         run: gh workflow run pages.yml --ref main
         env:
           GH_TOKEN: ${{ github.token }}
+      - name: Report a failed run to the data-freshness issue
+        # the timeout above turns a hang into a red run instead of a silent
+        # wait — surface it the same way data-freshness.yml would, so a
+        # broken daily snapshot is visible without waiting for the 36h
+        # staleness check to catch up
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh label create data-freshness --force --color B60205 \
+            --description "Data pipeline freshness / failure watchdog" >/dev/null
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          ISSUE_NUM=$(gh issue list --label data-freshness --state open --json number --jq '.[0].number')
+          if [ -n "$ISSUE_NUM" ]; then
+            gh issue comment "$ISSUE_NUM" --body "snapshot-update run failed: $RUN_URL"
+          else
+            BODY="The snapshot-update workflow run failed: $RUN_URL"$'\n\n'"This issue was opened automatically and is never closed automatically — close it once the pipeline is confirmed caught up."
+            gh issue create --title "Data pipeline stale: snapshot-update run failed" --label data-freshness --body "$BODY"
+          fi

@@ -18,6 +18,7 @@ on:
 permissions:
   contents: write
   actions: write # to dispatch the pages deploy afterwards
+  issues: write # to report a failed run to the data-freshness issue
 
 # shared with snapshot-update.yml — both push to the `archive` branch, so the
 # runs serialize instead of racing (no cancel-in-progress: a queued data
@@ -31,8 +32,9 @@ jobs:
     # a resumability regression once turned the ~30min gap sweep into a full
     # 26-year re-backfill of all 737 stations and silently ate the default 6h
     # cap twice (2026-07-18, 2026-08-03) without ever reaching the push step —
-    # fail fast instead so a repeat shows up as a red run, not a missed month
-    timeout-minutes: 60
+    # fail fast instead so a repeat shows up as a red run, not a missed month.
+    # the healthy run takes ~30-40min; 120 leaves headroom for WSV throttling
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v7
       - uses: actions/checkout@v7
@@ -80,3 +82,23 @@ jobs:
         run: gh workflow run pages.yml --ref main
         env:
           GH_TOKEN: ${{ github.token }}
+      - name: Report a failed run to the data-freshness issue
+        # the timeout above turns a hang into a red run instead of a silent
+        # 6h wait — surface it the same way data-freshness.yml would, so a
+        # broken pipeline is visible without waiting for the 36h staleness
+        # check to catch up
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh label create data-freshness --force --color B60205 \
+            --description "Data pipeline freshness / failure watchdog" >/dev/null
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          ISSUE_NUM=$(gh issue list --label data-freshness --state open --json number --jq '.[0].number')
+          if [ -n "$ISSUE_NUM" ]; then
+            gh issue comment "$ISSUE_NUM" --body "archive-update run failed: $RUN_URL"
+          else
+            BODY="The archive-update workflow run failed: $RUN_URL"$'\n\n'"This issue was opened automatically and is never closed automatically — close it once the pipeline is confirmed caught up."
+            gh issue create --title "Data pipeline stale: archive-update run failed" --label data-freshness --body "$BODY"
+          fi
