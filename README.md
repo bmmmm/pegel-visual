@@ -58,12 +58,20 @@ offset 0 cm), so no datum shift is applied.
 | KRIMPEN | LEK | krimpenaandelek.lek |
 | ROTTERDAM | NEUE_MAAS | rotterdam.nieuwemaas.boerengat |
 
-## Stations without a WSV archive (110 of 738)
+## Stations without a WSV long-term archive (110 of 738)
 
-These stations are marked `none` in `archive/manifest.json` — WSV keeps no
-pre-30-day history for them (lock/weir operating gauges, foreign partner
-gauges, some harbor and barrage gauges; re-verified individually). The page
-falls back to the live API for them.
+WSV keeps no pre-30-day ZIP history for these stations (lock/weir operating
+gauges, foreign partner gauges, some harbor and barrage gauges; re-verified
+individually). Since 2026-07 the monthly REST refresh accumulates their
+running-year data anyway, so they carry a growing `current.json` and appear
+in `archive/manifest.json` with a normal `from`/`to` range (starting 2026)
+instead of the former `none` mark — `none` only ever marks a station the
+refresh has not reached yet. Their pre-2026 past stays unavailable; the page's
+live-API fallback covers the last 30 days as before.
+
+A station that disappears from the live WSV list keeps its manifest entry for
+as long as its data directory exists (precedent: ILMENAU, archived 2002–2025,
+delisted by WSV in 2026).
 
 | Water | Stations |
 |---|---|
