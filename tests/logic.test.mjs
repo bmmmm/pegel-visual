@@ -79,12 +79,19 @@ test('parseCommand: flags, values, booleans', () => {
   assert.equal(parse('BONN').station, undefined, 'bare names are not parsed as --station (applyPrompt handles them)');
 });
 
-test('helpText: the man page lists every flag', () => {
+test('helpText: the man page lists every flag parseCommand recognises, and every history range', () => {
   const app = loadApp();
   const man = app.run('helpText(null)');
-  for (const flag of ['--station', '--river', '--adsb', '--ais', '--history', '--export', '--clear', '--info', '--help']) {
-    assert.ok(man.includes(flag), `man page mentions ${flag}`);
-  }
+  // derived, not hand-written: parseCommand('') returns one key per flag it parses
+  // (unknownFlag is the catch-all, not a flag itself) — a flag added there without
+  // a matching helpText line now fails this test instead of silently going undocumented
+  const flags = app.run(`Object.keys(parseCommand('')).filter(k => k !== 'unknownFlag')`);
+  assert.ok(flags.length >= 10, 'sanity: parseCommand recognises a realistic number of flags');
+  for (const flag of flags) assert.ok(man.includes('--' + flag), `man page mentions --${flag}`);
+  // same for the sparkline/archive range presets — 24h..30d live API, 1y..20y hosted archive
+  const ranges = app.run('HISTORY_PRESETS.map(p => p.k)');
+  assert.ok(ranges.length >= 8, 'sanity: HISTORY_PRESETS still covers both the API and archive ranges');
+  for (const k of ranges) assert.ok(man.includes(k), `man page's --history line mentions ${k}`);
   assert.ok(app.run('helpText("--nope")').startsWith('unknown flag: --nope'));
 });
 
@@ -1188,6 +1195,7 @@ test('drawHistYears: all three sections render inside the grid, at both widths',
     const flat = rows.join('\n');
     for (const y of ['2024', '2025', '2026']) assert.ok(flat.includes(y), `${cols} cols: year row ${y}`);
     assert.ok(flat.includes('[ABS]') && flat.includes('[ANOM]'), `${cols} cols: mode toggles`);
+    assert.ok(flat.includes('low → high'), `${cols} cols: heat-ramp legend present (default ABS mode)`);
     assert.ok(html.includes('data-st="cmd:live"'), `${cols} cols: back target`);
     assert.ok(html.includes('data-st="cmd:hy:2024"'), `${cols} cols: year rows are pickable`);
     // the overlay's month axis is the last drawn row — if it shows, nothing was clipped
@@ -1260,11 +1268,14 @@ test('drawWave: rows render per-station scaled, labeled and inside the grid', ()
     })()`);
     const flat = rows.join('\n');
     assert.ok(flat.includes('OBEN') && flat.includes('MITTE'), `${cols} cols: station names`);
-    assert.ok(flat.includes('3 of 5') || cols === 44, `${cols} cols: sampling is disclosed`);
+    assert.ok(flat.includes('3 of 5'), `${cols} cols: sampling is disclosed`);
+    assert.ok(flat.includes('low') && flat.includes('scaled per station'),
+      `${cols} cols: ramp legend + per-station-scaling caveat present`);
     assert.ok(flat.includes('≋ downstream ↓'), `${cols} cols: flow marker`);
     assert.ok(html.includes('data-st="OBEN"'), `${cols} cols: rows are click targets`);
     assert.ok(html.includes('data-st="cmd:live"'), `${cols} cols: back target`);
-    const flatRow = rows[5];
+    // compact wraps the info line onto an extra row, pushing the station rows down by one
+    const flatRow = rows[cols === 44 ? 6 : 5];
     assert.ok(/▒+\s*$/.test(flatRow) && !flatRow.includes('█'), `${cols} cols: a flat station renders mid-shade, not noise`);
     for (const r of rows) assert.ok(r.length <= cols, `${cols} cols: no row overflows`);
   }
@@ -1431,6 +1442,188 @@ test('drawSparkline renders a flat series at half height, not as an empty chart'
   })()`);
   assert.ok(flat.includes('█'), 'water body visible for a constant level');
   assert.ok(flat.includes('min 77  max 77'));
+});
+
+test('bucketSeries: buckets tile the window, extremes come from every point', () => {
+  const app = loadApp();
+  // 12 points into 4 columns: three per bucket, nothing dropped
+  const b = app.run('bucketSeries([5, 1, 9, 4, 4, 4, 7, 2, 8, 0, 6, 3], 4)');
+  assert.deepEqual(b.lo, [1, 4, 2, 0]);
+  assert.deepEqual(b.hi, [9, 4, 8, 6]);
+  assert.equal(b.min, 0, 'window min is the smallest point, not the smallest sampled one');
+  assert.equal(b.max, 9);
+
+  // fewer points than columns: every bucket holds at most one point, so lo === hi
+  // and both equal series[floor(x * step)] — exactly what the old renderer drew
+  const series = [10, 40, 20, 30];
+  const s = app.run(`bucketSeries(${JSON.stringify(series)}, 9)`);
+  const old = Array.from({ length: 9 }, (_, x) => series[Math.min(3, Math.floor(x * (4 / 9)))]);
+  assert.deepEqual(s.lo, old, 'degrades to the old one-point-per-column sampling');
+  assert.deepEqual(s.hi, old);
+  assert.deepEqual(s.lo, s.hi, 'no band at all when a bucket holds one point');
+  assert.equal(s.min, 10);
+  assert.equal(s.max, 40);
+
+  // exactly as many points as columns: still one per bucket
+  const e = app.run('bucketSeries([3, 1, 2], 3)');
+  assert.deepEqual(e.lo, [3, 1, 2]);
+  assert.deepEqual(e.hi, [3, 1, 2]);
+});
+
+// the hosted archive merges as two synthetic points per day (min 06:00, max
+// 18:00), so one sample per column used to be a coin flip between the two — and
+// the caption described that subsample rather than the window
+test('drawSparkline: the caption reports the window extremes, not a column subsample', () => {
+  const app = loadApp({ now: NOON });
+  const grid = app.run(`(() => {
+    const pts = [];
+    for (let d = 0; d < 900; d++) {
+      const ts = ${NOON} - (900 - d) * 864e5;
+      pts.push([ts + 6 * 36e5, 200 - (d % 7)], [ts + 18 * 36e5, 260 + (d % 7)]);
+    }
+    // the record low and the record high sit on one single day in the middle
+    pts[900][1] = 12;
+    pts[901][1] = 987;
+    state.archive = pts;
+    historyKey = 'all';
+    sparkDisplay = null;
+    const g = makeGrid(12);
+    drawSparkline(g, 0, 0);
+    return g.ch.map(r => r.join(''));
+  })()`);
+  assert.ok(grid[0].includes('min 12  max 987'),
+    `caption carries the real extremes: "${grid[0].trim()}"`);
+  const body = grid.slice(3, 7).join('\n');
+  assert.ok(/[▒▓]/.test(body), 'columns that merged more than one point draw a min–max band');
+  assert.ok(grid[4].includes('▒ range'), 'the hatched span is named beside the chart');
+});
+
+test('drawSparkline: windows with fewer points than columns stay solid, unbanded', () => {
+  for (const width of [390, 1200]) {
+    const app = loadApp({ now: NOON, width });
+    const grid = app.run(`(() => {
+      // 20 hourly readings — fewer than either grid's column count
+      state.archive = Array.from({ length: 20 }, (_, i) => [${NOON} - (20 - i) * 36e5, 100 + i * 3]);
+      historyKey = '24h';
+      sparkDisplay = null;
+      const g = makeGrid(12);
+      drawSparkline(g, 0, 0);
+      return g.ch.map(r => r.join(''));
+    })()`);
+    const flat = grid.join('\n');
+    assert.ok(!/[▒▓]/.test(flat), `${width}px: no band glyphs when every bucket holds one point`);
+    assert.ok(!flat.includes('▒ range'), `${width}px: no band legend either`);
+    assert.ok(flat.includes('█'), `${width}px: solid water body`);
+    assert.ok(grid[0].includes('min 100  max 157'), `${width}px: caption: "${grid[0].trim()}"`);
+  }
+});
+
+// ---------- "is this unusual?" line ----------
+
+// a station's stats stand-in: `n` archived daily means 1..n, and a climatology
+// for the month under test
+const fakeStats = (n, clim = null, years = 26) => ({
+  allSorted: Array.from({ length: n }, (_, i) => i + 1),
+  clim: Array.from({ length: 12 }, (_, m) => (m === 7 ? clim : null)),
+  years: Array.from({ length: years }, (_, i) => 2000 + i),
+});
+
+test('unusualStats: percentile rank over the archived distribution, edges included', () => {
+  const app = loadApp();
+  const st = JSON.stringify(fakeStats(100));
+  const pct = cm => app.run(`unusualStats(${st}, ${cm}, 7)`).pct;
+  assert.equal(pct(0.5), 0, 'below every archived day → 0th percentile');
+  assert.equal(pct(1), 1, 'equal to the single lowest day');
+  assert.equal(pct(50), 50);
+  assert.equal(pct(100), 100, 'equal to the highest day → 100th percentile');
+  assert.equal(pct(9999), 100, 'above every archived day stays capped at 100');
+  assert.equal(app.run(`unusualStats(${st}, 91, 7)`).years, 26);
+  assert.equal(app.run(`unusualStats(${st}, 91, 7)`).cm, 91, 'the level is rounded, not reformatted');
+});
+
+test('unusualStats: null without an archive, without a reading, or below the noise floor', () => {
+  const app = loadApp();
+  assert.equal(app.run('unusualStats(null, 342, 7)'), null, 'no stats at all');
+  assert.equal(app.run(`unusualStats({ allSorted: [], clim: [], years: [] }, 342, 7)`), null, 'empty archive');
+  assert.equal(app.run(`unusualStats(${JSON.stringify(fakeStats(44))}, 20, 7)`), null,
+    'one day short of HIST_MIN_DAYS stays silent');
+  assert.ok(app.run(`unusualStats(${JSON.stringify(fakeStats(45))}, 20, 7)`), 'exactly HIST_MIN_DAYS speaks');
+  assert.equal(app.run(`unusualStats(${JSON.stringify(fakeStats(100))}, NaN, 7)`), null, 'no numeric reading');
+  // an archive that reaches back far enough but has no completed year for this
+  // month yet: rank still works, the climatology half is simply absent
+  const noClim = app.run(`unusualStats(${JSON.stringify(fakeStats(100))}, 50, 7)`);
+  assert.equal(noClim.climMean, null);
+  assert.equal(noClim.z, null);
+  assert.equal(app.run(`unusualText(${JSON.stringify(noClim)}, false)`), '50 cm · 50th pct of 26y');
+});
+
+test('unusualStats: σ distance, incl. the sd floor that keeps tiny samples sane', () => {
+  const app = loadApp();
+  const st = n => JSON.stringify(fakeStats(60, { mean: 268, sd: n, min: 1, max: 2, med: 1 }));
+  const u = app.run(`unusualStats(${st(50)}, 338, 7)`);
+  assert.equal(u.climMean, 268);
+  assert.equal(u.z.toFixed(2), '1.40', '(338 - 268) / 50');
+  // buildHistStats floors sd at 1 cm; a floored sd must still produce a finite z
+  const tiny = app.run(`unusualStats(${st(1)}, 271, 7)`);
+  assert.equal(tiny.z, 3, 'a 1 cm sd gives a large but finite σ distance');
+  assert.ok(Number.isFinite(app.run(`unusualStats(${st(1)}, 268, 7)`).z), 'zero deviation stays finite');
+  assert.equal(app.run(`unusualStats(${st(50)}, 218, 7)`).z.toFixed(1), '-1.0', 'below the mean goes negative');
+});
+
+test('unusualText: terminal one-liner, compact variant fits 44 columns', () => {
+  const app = loadApp();
+  const u = { cm: 342, pct: 91, years: 26, month: 7, climMean: 268, z: 1.42 };
+  assert.equal(app.run(`unusualText(${JSON.stringify(u)}, false)`),
+    '342 cm · 91st pct of 26y · AUG mean 268 (+1.4σ)');
+  const compact = app.run(`unusualText(${JSON.stringify(u)}, true)`);
+  assert.equal(compact, '91st pct of 26y · AUG ⌀268 +1.4σ');
+  assert.ok(compact.length <= 44, `compact line fits the 44-column grid (${compact.length})`);
+  // widest plausible numbers must still fit the compact grid
+  const wide = app.run(`unusualText(${JSON.stringify({ cm: 1234, pct: 100, years: 26, month: 11, climMean: -100, z: -12.34 })}, true)`);
+  assert.ok(wide.length <= 44, `worst case still fits (${wide.length}): "${wide}"`);
+  assert.equal(app.run('unusualText(null, false)'), '');
+  // ordinals: the 11/12/13 exception and the plain cases
+  const pctText = p => app.run(`unusualText(${JSON.stringify({ ...u, pct: p })}, true)`).split(' ')[0];
+  assert.deepEqual([0, 1, 2, 3, 4, 11, 12, 13, 21, 42, 100].map(pctText),
+    ['0th', '1st', '2nd', '3rd', '4th', '11th', '12th', '13th', '21st', '42nd', '100th']);
+});
+
+test('drawSparkline: the unusual line appears only with an archive, and costs one row', () => {
+  const mk = search => {
+    const app = loadApp({ now: JULY, search });
+    seedArchive(app);
+    app.run(`historyKey = 'all'; sparkDisplay = null;`);
+    return app;
+  };
+  // no gauge reading yet → the line (and its grid row) must not exist
+  const bare = mk('?station=BONN');
+  assert.equal(bare.run('unusualNow()'), null, 'no current measurement, no verdict');
+  assert.equal(bare.run(`(() => { const g = makeGrid(12); return drawSparkline(g, 0, 0); })()`),
+    bare.run('SPLASH_ROWS + SPARK_ROWS + 2'), 'grid height unchanged without the line');
+
+  const app = mk('?station=BONN');
+  app.run(`state.gauge = { currentMeasurement: { value: 342, timestamp: ${JULY} } }`);
+  const u = app.run('unusualNow()');
+  assert.ok(u, 'three seeded years are enough archive to judge against');
+  assert.equal(u.month, 6, 'JULY fixture → the July climatology');
+  assert.equal(app.run(`(() => { const g = makeGrid(12); return drawSparkline(g, 0, 0); })()`),
+    app.run('SPLASH_ROWS + SPARK_ROWS + 3'), 'the line takes exactly one extra row');
+  const { text, cls } = app.run(`(() => {
+    const g = makeGrid(12);
+    drawSparkline(g, 0, 0);
+    const r = SPLASH_ROWS + SPARK_ROWS + 2; // axis row + 1
+    return { text: g.ch[r].join('').trim(), cls: g.cl[r].join('') };
+  })()`);
+  assert.match(text, /^342 cm · \d+(st|nd|rd|th) pct of 3y · JUL mean \d+ \([+-][\d.]+σ\)$/,
+    `line reads as designed: "${text}"`);
+  // the seeded summer trough sits far below 342 cm → a wet anomaly wears the flood accent
+  assert.ok(u.z >= 1.5 && cls.includes('w2'), `far-out σ takes the flood accent (z=${u.z})`);
+
+  // a station WSV keeps no archive for renders exactly as before
+  const none = loadApp({ now: JULY, search: '?station=BONN' });
+  none.run(`state.archive = [[${JULY} - 36e5, 300], [${JULY}, 342]]; histCache = null;`);
+  none.run(`state.gauge = { currentMeasurement: { value: 342, timestamp: ${JULY} } }; state.repoArchive = 'none';`);
+  assert.equal(none.run('unusualNow()'), null, 'two local points are not a distribution');
 });
 
 test('histStats cache: switching stations never serves the old station\'s stats', () => {
@@ -1775,6 +1968,86 @@ test('rivers map: ?rivers boots into the map and --rivers switches into it', () 
   assert.equal(one.rivers, false);
 });
 
+test('currentModeQuery: the share link follows whatever mode is actually on screen', () => {
+  // used to hard-code ?station=<gauge> regardless of mode, so sharing from ?total,
+  // ?rising, ?rivers or ?river= silently shared the last-viewed gauge instead
+  assert.equal(loadApp({ search: '?station=BONN' }).run('currentModeQuery()'), '?station=BONN');
+  assert.equal(loadApp({ search: '?station=KÖLN&view=years' }).run('currentModeQuery()'),
+    '?station=' + encodeURIComponent('KÖLN') + '&view=years', 'umlaut-encoded, sub-view preserved');
+  assert.equal(loadApp({ search: '?river=RHEIN' }).run('currentModeQuery()'), '?river=RHEIN');
+  assert.equal(loadApp({ search: '?river=MÜRITZSEE&view=wave' }).run('currentModeQuery()'),
+    '?river=' + encodeURIComponent('MÜRITZSEE') + '&view=wave');
+  assert.equal(loadApp({ search: '?rivers' }).run('currentModeQuery()'), '?rivers');
+  assert.equal(loadApp({ search: '?rising' }).run('currentModeQuery()'), '?rising');
+  assert.equal(loadApp({ search: '?total' }).run('currentModeQuery()'), '?total');
+  assert.equal(loadApp({ search: '?total&y=2024&m=5' }).run('currentModeQuery()'), '?total&y=2024&m=5', 'zoom level round-trips');
+  assert.equal(loadApp({ search: '?total&y=2024&d=2024-05-12' }).run('currentModeQuery()'), '?total&y=2024&d=2024-05-12');
+
+  // and it tracks a live mode switch, not just the URL a page happened to boot from
+  const app = loadApp({ search: '?station=BONN' });
+  app.run('switchTotal()');
+  assert.equal(app.run('currentModeQuery()'), '?total', 'follows the switch into ?total');
+  app.run('switchRising()');
+  assert.equal(app.run('currentModeQuery()'), '?rising', 'and into ?rising');
+});
+
+test('applyModeChrome: marks the active global-view button, footer label matches the mode', () => {
+  const rivers = loadApp({ search: '?rivers' });
+  assert.equal(rivers.el('rivers-btn').className, 'flag-btn on', 'the active button gets .on');
+  assert.equal(rivers.el('rivers-btn').getAttribute('aria-current'), 'page');
+  assert.equal(rivers.el('rising-btn').className, 'flag-btn', 'the other two stay plain');
+  assert.equal(rivers.el('rising-btn').getAttribute('aria-current'), 'false');
+  assert.equal(rivers.el('total-btn').className, 'flag-btn');
+  assert.equal(rivers.el('footer-perma-label').textContent, 'rivers link:');
+
+  const rising = loadApp({ search: '?rising' });
+  assert.equal(rising.el('rising-btn').className, 'flag-btn on');
+  assert.equal(rising.el('footer-perma-label').textContent, 'rising link:');
+
+  const total = loadApp({ search: '?total' });
+  assert.equal(total.el('total-btn').className, 'flag-btn on');
+  assert.equal(total.el('footer-perma-label').textContent, 'total link:');
+
+  // station mode: none of the three global-view buttons is "the current mode".
+  // Station-mode boot never calls applyModeChrome() itself (the static markup's
+  // default class is already correct there), so call it explicitly, same as the
+  // "back button" test above does for the same reason.
+  const station = loadApp({ search: '?station=BONN' });
+  station.run('applyModeChrome()');
+  for (const id of ['rivers-btn', 'rising-btn', 'total-btn']) {
+    assert.equal(station.el(id).className, 'flag-btn', `${id} unmarked in station mode`);
+    assert.equal(station.el(id).getAttribute('aria-current'), 'false');
+  }
+  assert.equal(station.el('footer-perma-label').textContent, 'station link:');
+
+  const river = loadApp({ search: '?river=RHEIN' });
+  assert.equal(river.el('footer-perma-label').textContent, 'river link:');
+});
+
+test('applyTotalChrome: the tab title carries the zoom scope, so history entries differ', () => {
+  const app = loadApp({ search: '?total' });
+  const all = app.document.title;
+  app.run('totalSetZoom(2024, null, null)');
+  const year = app.document.title;
+  app.run('totalSetZoom(2024, 4, null)');
+  const month = app.document.title;
+  app.run('totalSetZoom(2024, 4, 12)');
+  const day = app.document.title;
+  assert.equal(all, 'PEGEL://TOTAL · ALL');
+  assert.equal(year, 'PEGEL://TOTAL · 2024');
+  assert.equal(month, 'PEGEL://TOTAL · MAY 2024');
+  assert.equal(day, 'PEGEL://TOTAL · MAY 2024 · 12');
+  assert.equal(new Set([all, year, month, day]).size, 4, 'all four zoom levels are distinguishable');
+});
+
+test('boot: a deep link straight into a ?total month/day zoom titles the tab without crashing', () => {
+  // applyTotalChrome runs at boot, before `state` (and originally MONTH_ABBR) exist —
+  // a direct ?total&y=…&m=… / &d=… link used to be the only way to reach that code
+  // path with totalMonth already set, so it is the one that would have caught the TDZ
+  assert.equal(loadApp({ search: '?total&y=2024&m=5' }).document.title, 'PEGEL://TOTAL · MAY 2024');
+  assert.equal(loadApp({ search: '?total&y=2024&d=2024-05-12' }).document.title, 'PEGEL://TOTAL · MAY 2024 · 12');
+});
+
 test('back button: offered in river and map mode, naming the station it returns to', () => {
   // Neither view shows the station you came from, so without this the only way
   // back is remembering a name and typing it.
@@ -2044,6 +2317,198 @@ test('loadRising: early in a month the baseline comes from the previous shard', 
   await app.run('loadRising()');
   assert.equal(app.run('state.rising.data.baselineTs'), feb1 - 864e5, 'January 31 is the baseline');
   assert.equal(app.run('state.rising.data.risers[0].cmPerDay').toFixed(1), '20.0');
+});
+
+// ---------- rising board: the 7-day lookback ----------
+
+// the timestamp the daily snapshot cron writes for that day (the Aug 13-19
+// backfill slots carry exactly this 11:30Z shape)
+const capture = (y, m, d) => new Date(Date.UTC(y, m - 1, d, 11, 30)).toISOString();
+// snapshot shard with several captured days: `days` maps day index -> iso,
+// `values` maps uuid -> { <day index>: cm } (plus t: 1 for the tidal flag)
+const shardOf = (y, m, len, days, values) => ({
+  y, m,
+  days: Array.from({ length: len }, (_, i) => days[i] || null),
+  stations: Object.fromEntries(Object.entries(values).map(([uuid, slots]) => {
+    const v = Array(len).fill(null);
+    for (const [i, cm] of Object.entries(slots)) if (i !== 't') v[+i] = cm;
+    return [uuid, { n: uuid.toUpperCase(), w: 'X', v, ...(slots.t ? { t: 1 } : {}) }];
+  })),
+});
+// Jan 7..15 2026 captured daily, NOON = Jan 15 12:00 → yesterday is index 13
+const JAN_DAYS = Object.fromEntries(Array.from({ length: 9 }, (_, i) => [i + 6, capture(2026, 1, i + 7)]));
+
+test('risingBaselineIndex: 1D takes the newest capture, 7D aims at the day a week back', () => {
+  const app = loadApp({ now: NOON });
+  const full = shardOf(2026, 1, 31, JAN_DAYS, { a: {} });
+  const idx = (shard, n) => app.run(`risingBaselineIndex(${JSON.stringify(shard)}, ${NOON}, ${n})`);
+  assert.equal(app.run(`newestUsableDayIndex(${JSON.stringify(full)}, ${NOON})`), 13,
+    "today's own capture is half an hour old — yesterday's is the baseline");
+  assert.equal(idx(full, 1), 13, 'the 1-day view is unchanged: the newest usable capture');
+  assert.equal(idx(full, 7), 7,
+    'Jan 8 — the capture nearest 7×24h back, not seven slots back from the newest (which would be Jan 7, eight days out)');
+
+  // the cron missed that day: the nearest capture on either side wins
+  const gap = shardOf(2026, 1, 31, { ...JAN_DAYS, 7: null }, { a: {} });
+  assert.equal(idx(gap, 7), 8, 'Jan 9 (6.0 days) beats Jan 7 (8.0 days) by half a day');
+  assert.equal(idx(gap, 1), 13, 'the 1-day baseline is untouched by a hole a week back');
+
+  // a young archive has nothing a week back — the view says so instead of
+  // passing a three-day-old capture off as a week
+  const young = shardOf(2026, 1, 31, { 11: capture(2026, 1, 12) }, { a: {} });
+  assert.equal(idx(young, 1), 11);
+  assert.equal(idx(young, 7), -1, 'three days back is not "a week ago"');
+});
+
+test('mergeSnapshotShards: two months as one day axis, padded and tidal-flag preserving', () => {
+  const app = loadApp({});
+  const jul = shardOf(2026, 7, 31, { 30: capture(2026, 7, 31) }, { a: { 30: 100 }, b: { 30: 50, t: 1 } });
+  const aug = shardOf(2026, 8, 31, { 0: capture(2026, 8, 1) }, { a: { 0: 110 }, c: { 0: 7 } });
+  const m = app.run(`mergeSnapshotShards(${JSON.stringify(jul)}, ${JSON.stringify(aug)})`);
+  assert.equal(m.days.length, 62, 'July then August, one continuous day axis');
+  assert.deepEqual([m.days[30], m.days[31]], [capture(2026, 7, 31), capture(2026, 8, 1)]);
+  assert.equal(m.stations.a.v.length, 62);
+  assert.deepEqual([m.stations.a.v[30], m.stations.a.v[31]], [100, 110]);
+  assert.equal(m.stations.b.v[31], null, 'a station missing from August keeps null slots there');
+  assert.equal(m.stations.b.t, 1, "the snapshot job's tidal flag survives the merge");
+  assert.equal(m.stations.c.v[30], null, 'a station new in August has no July values');
+  assert.deepEqual([m.y, m.m], [2026, 8], 'the merged shard is named after the newer month');
+  assert.equal(app.run(`mergeSnapshotShards(null, ${JSON.stringify(aug)}).days.length`), 31, 'a missing half is not a merge');
+  assert.equal(app.run(`mergeSnapshotShards(${JSON.stringify(jul)}, null).days.length`), 31);
+});
+
+test('risingOverview: the 7-day view normalises over the real span and skips week-less stations', () => {
+  const app = loadApp({ now: NOON });
+  const shard = shardOf(2026, 1, 31, JAN_DAYS, {
+    a: { 7: 100, 13: 160 }, // +70 over the week, +10 since yesterday
+    b: { 13: 200 },         // no slot a week back — rankable in 1D only
+  });
+  const raw = [bulk('a', 'WEEK', 'X', 170, SPAN), bulk('b', 'FRESH', 'X', 220, SPAN)];
+  const over = n => app.run(`risingOverview(parseBulkStations(${JSON.stringify(raw)}), ${JSON.stringify(shard)}, ${NOON}, ${n})`);
+
+  const d1 = over(1);
+  assert.deepEqual(d1.risers.map(r => r.n), ['FRESH', 'WEEK'], 'both rank against yesterday');
+  assert.equal(d1.lookbackDays, 1);
+
+  const d7 = over(7);
+  assert.deepEqual(d7.risers.map(r => r.n), ['WEEK'], 'the station without a week-old slot is skipped, not zeroed');
+  assert.deepEqual(d7.counts, { rising: 1, falling: 0, steady: 0, tidal: 0 }, 'and counts in no bucket at all');
+  assert.equal(d7.elapsedDays.toFixed(2), '7.02', 'the span is the real one: 7 days plus the half hour of capture drift');
+  assert.equal(d7.risers[0].cmPerDay.toFixed(1), '10.0', '70 cm over 7.02 days, not 70 cm/day');
+  assert.equal(d7.risers[0].deltaCm, 70, 'the row also carries the whole span in centimetres');
+  assert.equal(d7.baselineTs, Date.parse(capture(2026, 1, 8)));
+  assert.equal(d7.lookbackDays, 7);
+});
+
+test('drawRising: the 7-day view labels the span it really measured, and fits both widths', () => {
+  const shard = shardOf(2026, 1, 31, { ...JAN_DAYS, 7: null }, { a: { 8: 105, 13: 160 } });
+  const raw = [bulk('a', 'WEEK', 'RHEIN', 170, SPAN)];
+  for (const width of [1200, 390]) {
+    const app = loadApp({ now: NOON, width });
+    const r = app.run(`(() => {
+      const d = risingOverview(parseBulkStations(${JSON.stringify(raw)}), ${JSON.stringify(shard)}, ${NOON}, 7);
+      const g = makeGrid(risingGridRows(d));
+      drawRising(g, d);
+      const rows = g.ch.map(r => r.join('').replace(/\\s+$/, ''));
+      return { d, rows, cols: COLS, gridRows: g.rows, lastUsed: rows.reduce((a, r, i) => r ? i : a, 0) };
+    })()`);
+    assert.equal(r.d.elapsedDays.toFixed(1), '6.0', 'the missed Jan 8 leaves a six-day span');
+    assert.ok(r.rows.some(x => x.includes('Δ6.0d')), `at ${width}px the header states the real span, not the nominal seven`);
+    assert.ok(r.rows.some(x => x.includes(width === 1200 ? '(+65 cm)' : '(+65)')),
+      `at ${width}px the row carries the centimetres of the whole span next to the rate`);
+    assert.ok(r.rows.some(x => x.includes('+10.8')), '65 cm over 6.02 days');
+    assert.ok(r.rows.every(x => x.length <= r.cols), `no row exceeds COLS at ${width}px`);
+    assert.equal(r.lastUsed, r.gridRows - 1, 'the grid still ends exactly at its last drawn row');
+  }
+});
+
+test('drawRising: without a week-old baseline the 7-day view names what is missing', () => {
+  const app = loadApp({ now: NOON });
+  const shard = shardOf(2026, 1, 31, { 11: capture(2026, 1, 12) }, { a: { 11: 100 } });
+  const raw = [bulk('a', 'A', 'X', 500, SPAN, 'high'), bulk('b', 'B', 'X', 90, SPAN, 'low')];
+  const rows = app.run(`(() => {
+    const d = risingOverview(parseBulkStations(${JSON.stringify(raw)}), ${JSON.stringify(shard)}, ${NOON}, 7);
+    const g = makeGrid(risingGridRows(d));
+    drawRising(g, d);
+    return g.ch.map(r => r.join('').replace(/\\s+$/, ''));
+  })()`);
+  assert.ok(rows.some(x => x.includes('no baseline a week back yet')), 'the empty state is about the week, not the day');
+  assert.ok(rows.some(x => x.includes('1D view')), 'and points at the view that does work');
+  assert.ok(rows.some(x => x.includes('1 high') && x.includes('1 low')), 'live counts still render');
+});
+
+test('loadRising: the 7-day baseline crosses into the previous month\'s shard', async () => {
+  const aug5 = Date.UTC(2026, 7, 5, 12);
+  const jul = shardOf(2026, 7, 31, Object.fromEntries(Array.from({ length: 7 }, (_, i) => [i + 24, capture(2026, 7, i + 25)])),
+    { a: { 28: 100, 30: 150 } });
+  const aug = shardOf(2026, 8, 31, Object.fromEntries(Array.from({ length: 4 }, (_, i) => [i, capture(2026, 8, i + 1)])),
+    { a: { 0: 160, 1: 162, 2: 165, 3: 168 } });
+  const raw = [bulk('a', 'UP', 'X', 170, SPAN)];
+  const stub = `getJson = async url => {
+    globalThis.__fetched.push(url);
+    if (url.includes('stations.json')) return ${JSON.stringify(raw)};
+    if (url === 'archive/snapshots/2026-08.json') return ${JSON.stringify(aug)};
+    if (url === 'archive/snapshots/2026-07.json') return ${JSON.stringify(jul)};
+    throw new Error('404 ' + url);
+  }`;
+
+  const week = loadApp({ now: aug5, search: '?rising&d7' });
+  week.run('globalThis.__fetched = []');
+  week.run(stub);
+  await week.run('loadRising()');
+  assert.equal(week.run('state.rising.error'), null);
+  assert.equal(week.run('state.rising.data.baselineTs'), Date.parse(capture(2026, 7, 29)),
+    'July 29 is the baseline, seven days back across the month boundary');
+  assert.equal(week.run('state.rising.data.risers[0].cmPerDay').toFixed(1), '10.0', '70 cm over 7.02 days');
+  assert.equal(week.run('state.rising.data.risers[0].deltaCm'), 70);
+  assert.deepEqual(week.run('globalThis.__fetched').filter(u => u.includes('snapshots')),
+    ['archive/snapshots/2026-08.json', 'archive/snapshots/2026-07.json'], 'the current shard first, the previous one only because the week reaches into it');
+  await week.run('loadRising()');
+  assert.deepEqual(week.run('globalThis.__fetched').filter(u => u.includes('snapshots')).length, 2,
+    'the auto-refresh reuses both cached shards');
+
+  // the 1-day path on the same day never touches the previous shard
+  const day = loadApp({ now: aug5, search: '?rising' });
+  day.run('globalThis.__fetched = []');
+  day.run(stub);
+  await day.run('loadRising()');
+  assert.equal(day.run('state.rising.data.baselineTs'), Date.parse(capture(2026, 8, 4)));
+  assert.equal(day.run('state.rising.data.risers[0].cmPerDay').toFixed(1), '2.0');
+  assert.deepEqual(day.run('globalThis.__fetched').filter(u => u.includes('snapshots')), ['archive/snapshots/2026-08.json']);
+});
+
+test('rising board: the 1D/7D toggle rides the URL and fills the history bar', () => {
+  const chips = app => app.el('history-bar').children.slice(-2);
+  const boot = loadApp({ search: '?rising&d7' });
+  assert.equal(boot.run('risingDays'), 7, '?rising&d7 boots into the week view');
+  assert.equal(boot.run('currentModeQuery()'), '?rising&d7', 'and shares as that link');
+  assert.equal(boot.el('history-bar').hidden, false, 'the board fills the bar instead of hiding it');
+  assert.equal(boot.el('station-link').textContent, '?rising&d7');
+  assert.equal(boot.document.title, 'PEGEL://RISING · 7D', 'the tab says which board this is');
+  assert.deepEqual(chips(boot).map(b => b.textContent), ['1D', '7D']);
+  assert.deepEqual(chips(boot).map(b => b.className), ['', 'on'], 'the active lookback is lit');
+
+  const plain = loadApp({ search: '?rising' });
+  assert.equal(plain.run('risingDays'), 1, 'the default stays 1D');
+  assert.equal(plain.run('currentModeQuery()'), '?rising');
+  assert.deepEqual(chips(plain).map(b => b.className), ['on', '']);
+  plain.run(`state.rising = { data: { noBaseline: true }, error: null }`);
+  plain.run('risingSetDays(7)');
+  assert.equal(plain.run('currentModeQuery()'), '?rising&d7', 'flipping the chip rewrites the link');
+  assert.equal(plain.run('state.rising'), null, 'and drops the board built on the other baseline');
+  assert.deepEqual(chips(plain).map(b => b.className), ['', 'on']);
+  plain.run('risingSetDays(1)');
+  assert.equal(plain.run('currentModeQuery()'), '?rising');
+  assert.deepEqual(chips(plain).map(b => b.className), ['on', '']);
+  plain.run('risingSetDays(3)');
+  assert.equal(plain.run('risingDays'), 1, 'only the two offered lookbacks are reachable');
+
+  // entering the board from a station carries the current lookback into the URL
+  const from = loadApp({ search: '?station=BONN' });
+  from.run('risingDays = 7; switchRising()');
+  assert.equal(from.run('currentModeQuery()'), '?rising&d7');
+  assert.equal(from.el('history-bar').hidden, false);
+  assert.equal(loadApp({ search: '?rivers' }).el('history-bar').hidden, true, 'the map still has nothing to put in the bar');
 });
 
 test('loadRising: a hard bulk failure reports, switching away mid-fetch discards', async () => {
