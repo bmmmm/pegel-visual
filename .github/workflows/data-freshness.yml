@@ -1,0 +1,56 @@
+name: data-freshness
+
+# Watchdog for the data pipeline: archive-update.yml (monthly) and
+# snapshot-update.yml (daily) both push to the orphan `archive` branch, and a
+# push to that branch cannot trigger any workflow itself — so if either job
+# silently stops running (schedule disabled, token expiry, a hung run eating
+# its timeout unnoticed) nothing else would ever say so. This runs a few
+# hours after the daily snapshot slot and checks how old the archive
+# branch's last commit is; past 36h it opens (or comments on) a single
+# tracking issue labeled data-freshness. It never closes issues itself —
+# closing the loop once the pipeline has caught up is a manual step.
+
+on:
+  schedule:
+    - cron: '47 19 * * *'
+  workflow_dispatch:
+
+permissions:
+  issues: write
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check archive branch freshness
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          gh label create data-freshness --force --color B60205 \
+            --description "Data pipeline freshness / failure watchdog" >/dev/null
+
+          COMMIT_DATE=$(gh api "repos/${{ github.repository }}/branches/archive" --jq '.commit.commit.committer.date')
+          COMMIT_EPOCH=$(date -d "$COMMIT_DATE" +%s)
+          NOW_EPOCH=$(date -u +%s)
+          AGE_HOURS=$(( (NOW_EPOCH - COMMIT_EPOCH) / 3600 ))
+
+          echo "archive branch last commit: $COMMIT_DATE (${AGE_HOURS}h ago)"
+
+          if [ "$AGE_HOURS" -le 36 ]; then
+            echo "fresh, nothing to do"
+            exit 0
+          fi
+
+          TITLE="Data pipeline stale: archive branch last updated $COMMIT_DATE"
+          ISSUE_NUM=$(gh issue list --label data-freshness --state open --json number --jq '.[0].number')
+
+          if [ -n "$ISSUE_NUM" ]; then
+            gh issue comment "$ISSUE_NUM" --body "Still stale: the archive branch's last commit is $COMMIT_DATE (${AGE_HOURS}h ago)."
+          else
+            BODY="The archive branch's last commit is ${AGE_HOURS}h old (committed $COMMIT_DATE), past the 36h freshness threshold."$'\n\n'"Expected cadence: snapshot-update.yml runs daily, archive-update.yml runs monthly. Check both workflows' recent runs for failures or a disabled schedule."$'\n\n'"This issue was opened automatically by data-freshness.yml and is never closed automatically — close it once the pipeline is confirmed caught up."
+            gh issue create --title "$TITLE" --label data-freshness --body "$BODY"
+          fi

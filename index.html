@@ -130,7 +130,8 @@
     text-decoration: underline;
     cursor: pointer;
   }
-  form .flag-btn:hover { background: var(--ink); color: var(--paper); }
+  form .flag-btn:hover,
+  form .flag-btn.on { background: var(--ink); color: var(--paper); }
   form .hint { color: var(--mid); }
   /* live typeahead: a custom dropdown (the native datalist can't fold umlauts,
      rank, or carry the km/water context) positioned under the active input */
@@ -495,7 +496,11 @@
       wandered ~50 minutes, so their day diff measures the tide, not the
       river. They are recognized by their <b>MThw</b> mark or, where the API
       carries no marks at all (Rotterdam, Helgoland, the barrage gauges), by
-      the tide in their own daily record.</dd>
+      the tide in their own daily record. The <b>1D</b> / <b>7D</b> chips switch
+      the baseline between yesterday and a week back (<b>?rising&amp;d7</b>): the
+      week view keeps the same cm/day unit, adds the total centimetres of the
+      span in brackets, and states the span it actually measured — a missed
+      snapshot day makes it <b>Δ6.8d</b> rather than exactly seven.</dd>
     <dt>the total overview</dt>
     <dd>The <b>--total</b> button (or <b>?total</b>) stacks every river's summed
       gauge readings into one chart and lets you zoom: years → one year's months
@@ -515,9 +520,10 @@
     <dt>the prompt</dt>
     <dd>A tiny REPL. A bare name switches to that station (or river). Flags:
       <b>--station</b>, <b>--river</b>, <b>--rivers</b>, <b>--rising</b>,
-      <b>--total</b>, <b>--adsb</b>, <b>--history 24h…all</b>, <b>--export</b>,
-      <b>--clear</b>, <b>--info</b>, <b>--help</b>. Press <b>/</b> to focus it
-      from anywhere; <b>Esc</b> dismisses help.</dd>
+      <b>--total</b>, <b>--adsb</b>, <b>--ais</b>, <b>--history 24h…all</b>,
+      <b>--view</b>, <b>--export</b>, <b>--clear</b>, <b>--info</b>,
+      <b>--help</b>. Press <b>/</b> to focus it from anywhere; <b>Esc</b>
+      dismisses help.</dd>
     <dt>extras</dt>
     <dd>Aircraft overhead from your own ADS-B receiver (<b>--adsb URL</b>) and real
       river traffic on the waterline from your own AIS receiver (<b>--ais URL</b>,
@@ -553,7 +559,7 @@
     · <a href="https://github.com/bmmmm/pegel-visual" rel="noopener">source</a>
     · <a href="https://ko-fi.com/bmabma" rel="noopener">support on ko-fi</a>
   </nav>
-  <p id="footer-perma">station link: <a id="station-link" href="?station=BONN">?station=BONN</a></p>
+  <p id="footer-perma"><span id="footer-perma-label">station link:</span> <a id="station-link" href="?station=BONN">?station=BONN</a></p>
   <p id="footer-credits">
     <span>data: <a href="https://www.pegelonline.wsv.de" rel="noopener">PEGELONLINE</a> &copy; WSV, refreshed every 5 min</span>
     <span>⛅ weather: <a href="https://open-meteo.com" rel="noopener">open-meteo</a></span>
@@ -588,6 +594,10 @@ const REFRESH_MS = 5 * 60 * 1000;
 const TREND_WINDOW_MS = 6 * 36e5;
 const TREND_MIN_SPAN_MS = 36e5;
 const TREND_FLAT = 0.5; // strictly below this |cm/h| reads as steady, not rising/falling
+// hoisted above its thematic home in the multi-year-statistics section: a boot straight
+// into a deep-linked ?total&y=…&m=… runs applyTotalChrome (and its month name) before
+// that section's consts would otherwise exist
+const MONTH_ABBR = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
 
 const screen = document.getElementById('screen');
 const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)');
@@ -645,38 +655,73 @@ function totalQuery() {
   if (totalYear != null) return `${base}&y=${totalYear}` + (totalMonth != null ? `&m=${totalMonth + 1}` : '');
   return base;
 }
+// ?rising lookback: 1 = against the newest daily snapshot ("since yesterday"),
+// 7 = against a week back. A display flip like ?total&diff, URL-synced as the
+// same kind of bare flag so a shared link reproduces the view.
+let risingDays = new URLSearchParams(location.search).has('d7') ? 7 : 1;
+const risingQuery = () => risingDays > 1 ? '?rising&d7' : '?rising';
+
 const stationLink = document.getElementById('station-link');
+const permaLabel = document.getElementById('footer-perma-label');
 const wsvArchiveLink = document.getElementById('wsv-archive-link');
+
+// the query string (with leading ?) for the current mode's canonical deep link —
+// the same value each apply*Chrome function below puts on the station-link href,
+// factored out so the share handler can reuse it instead of hard-coding ?station=
+// (which used to silently share the gauge even from ?total, ?rising, ?rivers, …)
+function currentModeQuery() {
+  if (mode === 'river') return '?river=' + encodeURIComponent(state.river) + viewSuffix();
+  if (mode === 'rivers') return '?rivers';
+  if (mode === 'rising') return risingQuery();
+  if (mode === 'total') return totalQuery();
+  return '?station=' + encodeURIComponent(station) + viewSuffix();
+}
+
+// the ?total zoom level as a short label ("ALL", "2024", "MAI 2024", "MAI 2024 · 12") —
+// shared by the tab title (applyTotalChrome, which can run at boot, before `state`
+// itself exists — hence the optional ov rather than reading state.total directly)
+// and the on-screen header (drawTotal, which always has the overview in hand and
+// passes it, so the richer fromYear→currentYear range shows instead of the fallback)
+function totalScope(ov) {
+  if (totalYear == null) return ov ? `${ov.fromYear}→${ov.currentYear}` : 'ALL';
+  if (totalMonth == null) return String(totalYear);
+  return `${MONTH_ABBR[totalMonth]} ${totalYear}` + (totalDay != null ? ` · ${totalDay}` : '');
+}
 
 function applyStationChrome() {
   if (mode !== 'station') return; // river/rivers chrome owns the title and link there
   document.title = 'PEGEL://' + station;
   stationLink.textContent = '?station=' + station + viewSuffix();
-  stationLink.href = '?station=' + encodeURIComponent(station) + viewSuffix();
+  stationLink.href = currentModeQuery();
+  permaLabel.textContent = 'station link:';
 }
 
 function applyRiverChrome() {
   document.title = 'PEGEL://' + state.river;
   stationLink.textContent = '?river=' + state.river + viewSuffix();
-  stationLink.href = '?river=' + encodeURIComponent(state.river) + viewSuffix();
+  stationLink.href = currentModeQuery();
+  permaLabel.textContent = 'river link:';
 }
 
 function applyRiversChrome() {
   document.title = 'PEGEL://RIVERS';
   stationLink.textContent = '?rivers';
-  stationLink.href = '?rivers';
+  stationLink.href = currentModeQuery();
+  permaLabel.textContent = 'rivers link:';
 }
 
 function applyRisingChrome() {
-  document.title = 'PEGEL://RISING';
-  stationLink.textContent = '?rising';
-  stationLink.href = '?rising';
+  document.title = 'PEGEL://RISING' + (risingDays > 1 ? ' · 7D' : '');
+  stationLink.textContent = risingQuery();
+  stationLink.href = currentModeQuery();
+  permaLabel.textContent = 'rising link:';
 }
 
 function applyTotalChrome() {
-  document.title = 'PEGEL://TOTAL';
+  document.title = 'PEGEL://TOTAL · ' + totalScope();
   stationLink.textContent = totalQuery();
-  stationLink.href = totalQuery();
+  stationLink.href = currentModeQuery();
+  permaLabel.textContent = 'total link:';
 }
 
 // river and rivers mode hide the per-station chrome (archive bar, history range,
@@ -687,8 +732,9 @@ function applyModeChrome() {
   if (!perStation) document.getElementById('recent').hidden = true;
   else renderRecent();
   renderHistoryBar(); // stays visible in river mode too — it carries the view chips
-  // neither the map nor the rising board has sub-views or a history window
-  document.getElementById('history-bar').hidden = mode === 'rivers' || mode === 'rising';
+  // only the map has nothing to put in the bar: the rising board fills it with
+  // its 1D/7D lookback chips, river mode with the view chips, total with the zoom crumbs
+  document.getElementById('history-bar').hidden = mode === 'rivers';
   // The way back. Neither the map nor the river profile shows the station you came
   // from, so without this the only exit is remembering a name and typing it. The
   // label names the target rather than saying "home", which would be one more thing
@@ -698,6 +744,16 @@ function applyModeChrome() {
   if (!perStation) {
     home.textContent = `← ${station}`;
     home.title = `back to the ${station} gauge`;
+  }
+  // the three global-view buttons double as a mode tab strip — mark whichever one
+  // is active, same .on convention as the history-bar chips (renderHistoryBar's chip())
+  for (const [id, m] of [['rivers-btn', 'rivers'], ['rising-btn', 'rising'], ['total-btn', 'total']]) {
+    const btn = document.getElementById(id);
+    const on = mode === m;
+    btn.className = 'flag-btn' + (on ? ' on' : '');
+    // 'false' (not removal) is a valid aria-current value and the implicit default,
+    // so this never needs a matching removeAttribute on the inactive two
+    btn.setAttribute('aria-current', on ? 'page' : 'false');
   }
 }
 
@@ -748,12 +804,16 @@ function screenSummary() {
     return `${state.river}: ${state.riverStations.length} stations, ${low} low, ${high} high.`;
   }
   if (mode === 'rising') {
-    if (!state.rising) return 'Diffing every gauge against yesterday…';
+    if (!state.rising) return risingDays > 1 ? 'Diffing every gauge against a week ago…' : 'Diffing every gauge against yesterday…';
     if (state.rising.error) return 'The rising board failed to load.';
     const d = state.rising.data;
-    if (d.noBaseline) return 'Rising board: no baseline yet — the daily snapshot needs another day.';
+    if (d.noBaseline) {
+      return d.lookbackDays > 1
+        ? 'Rising board, 7-day view: no baseline a week back yet — the daily snapshot needs more days.'
+        : 'Rising board: no baseline yet — the daily snapshot needs another day.';
+    }
     const top = d.risers.slice(0, 3).map(r => `${r.n} +${r.cmPerDay.toFixed(1)}`).join(', ');
-    return `Rising board: ${d.counts.rising} gauges rising, ${d.counts.falling} falling, ` +
+    return `Rising board over the last ${d.elapsedDays.toFixed(1)} days: ${d.counts.rising} gauges rising, ${d.counts.falling} falling, ` +
       `${d.counts.steady} steady, in cm per day; ${d.counts.tidal} tidal gauges excluded.` +
       (top ? ` Fastest: ${top}.` : '');
   }
@@ -791,7 +851,16 @@ function screenSummary() {
     trend <= -TREND_FLAT ? `, falling ${Math.abs(trend).toFixed(1)} cm per hour` : ', steady';
   const km = state.info.km != null ? `, km ${state.info.km}` : '';
   const wtTxt = state.wt != null ? `, water ${state.wt.toFixed(1)} °C` : '';
-  return `${station} on ${state.info.water.shortname}${km}: water level ${Math.round(cur.value)} cm${trendTxt}${wtTxt}. State ${cur.stateMnwMhw || 'unknown'}.`;
+  // the sparkline's "is this unusual?" line is drawn into the grid, which the
+  // aria-label replaces — so it has to be spelled out here too, or it reaches
+  // sighted readers only
+  const u = unusualNow();
+  const unusualTxt = !u ? ''
+    : ` Against ${u.years} archived years this level ranks ${ordinal(u.pct)} percentile` +
+      (u.climMean == null ? '.'
+        : `; the ${MONTH_ABBR[u.month]} mean is ${u.climMean} cm, ` +
+          `${Math.abs(u.z).toFixed(1)} sigma ${u.z >= 0 ? 'above' : 'below'} it.`);
+  return `${station} on ${state.info.water.shortname}${km}: water level ${Math.round(cur.value)} cm${trendTxt}${wtTxt}. State ${cur.stateMnwMhw || 'unknown'}.${unusualTxt}`;
 }
 
 // while --help is shown, the screen holds a man page instead of the live grid,
@@ -2135,6 +2204,34 @@ const historyPreset = () => HISTORY_PRESETS.find(p => p.k === historyKey);
 // whenever there isn't enough data, so a new dataset snaps in instead of springing from junk
 let sparkDisplay = null, sparkVelocity = null, sparkLastT = null;
 
+// One min–max band per column, bucketed by index RANGE — not one sampled point
+// per column. The hosted archive merges in as two synthetic points per day (the
+// daily min at 06:00, the daily max at 18:00), so the default ALL window carries
+// ~19k points across ~72 columns and picking series[floor(x * step)] was a coin
+// flip between each day's low and its high. Buckets tile the window exactly, so
+// no point is dropped and the caption can describe the whole window. With fewer
+// points than columns (24H, 3D) every bucket holds at most one point and
+// lo === hi === the point the old code sampled — those windows render unchanged.
+function bucketSeries(series, cols) {
+  const step = series.length / cols;
+  const lo = new Array(cols), hi = new Array(cols);
+  for (let x = 0; x < cols; x++) {
+    const a = Math.floor(x * step), b = Math.floor((x + 1) * step);
+    if (b <= a) { lo[x] = hi[x] = series[Math.min(series.length - 1, a)]; continue; }
+    let mn = Infinity, mx = -Infinity;
+    for (let i = a; i < b; i++) {
+      const v = series[i];
+      if (v < mn) mn = v;
+      if (v > mx) mx = v;
+    }
+    lo[x] = mn; hi[x] = mx;
+  }
+  // window extremes, not the extremes of whatever the columns happened to hit
+  let min = Infinity, max = -Infinity;
+  for (const v of series) { if (v < min) min = v; if (v > max) max = v; }
+  return { lo, hi, min, max, step };
+}
+
 function drawSparkline(g, row, t) {
   const wd = historyPreset().d;
   const cutoff = wd ? Date.now() - wd * 864e5 : 0;
@@ -2147,9 +2244,9 @@ function drawSparkline(g, row, t) {
   }
   const spanDays = Math.max(1, Math.round((arch[arch.length - 1][0] - arch[0][0]) / 864e5));
   const chartW = COLS - 12;
-  const step = series.length / chartW;
-  const vals = Array.from({ length: chartW }, (_, x) => series[Math.min(series.length - 1, Math.floor(x * step))]);
-  const min = Math.min(...vals), max = Math.max(...vals), span = Math.max(max - min, 1);
+  const { lo, hi, min, max, step } = bucketSeries(series, chartW);
+  const span = Math.max(max - min, 1);
+  const banded = lo.some((v, x) => v < hi[x]); // true once a column merges >1 point
   // ALL says how much it really is: day count while short, years once it spans them
   const label = `HISTORY · ${wd ? historyPreset().label : spanDays > 730 ? (spanDays / 365.25).toFixed(1) + 'Y' : spanDays + 'D'}`;
   put(g, row, 0, label, 'd');
@@ -2173,26 +2270,38 @@ function drawSparkline(g, row, t) {
   // column instead of a flat snap, so history-range changes read as the level moving
   const dt = sparkLastT === null ? 0.12 : Math.min(0.2, t - sparkLastT);
   sparkLastT = t;
-  if (reduceMotion.matches || !sparkDisplay || sparkDisplay.length !== chartW) { sparkDisplay = vals.slice(); sparkVelocity = vals.map(() => 0); }
+  // the spring animates the band TOP per column — the silhouette the eye follows —
+  // and the band bottom rides one band height below it, so the hatched span never
+  // lags behind the surface it belongs to (and vanishes entirely when lo === hi)
+  if (reduceMotion.matches || !sparkDisplay || sparkDisplay.length !== chartW) { sparkDisplay = hi.slice(); sparkVelocity = hi.map(() => 0); }
   for (let x = 0; x < chartW; x++) {
     const springK = 45 + (x % 7) * 4, damping = 7 + (x % 5) * 0.6; // slight per-column variation → organic slosh
-    const accel = (vals[x] - sparkDisplay[x]) * springK - sparkVelocity[x] * damping;
+    const accel = (hi[x] - sparkDisplay[x]) * springK - sparkVelocity[x] * damping;
     sparkVelocity[x] += accel * dt;
     sparkDisplay[x] += sparkVelocity[x] * dt;
   }
 
   const partial = ' ▁▂▃▄▅▆▇';
   const splashGlyphs = '·˚°∘';
+  // a perfectly flat window still shows water: pin it to half height instead
+  // of normalizing every point to zero fill (which looked like "no data")
+  const fracOf = v => max === min ? 0.5 : (v - min) / span;
   for (let x = 0; x < chartW; x++) {
-    // a perfectly flat window still shows water: pin it to half height instead
-    // of normalizing every point to zero fill (which looked like "no data")
-    const frac = max === min ? 0.5 : (sparkDisplay[x] - min) / span;
-    const level = frac * SPARK_ROWS * 8;
+    const level = fracOf(sparkDisplay[x]) * SPARK_ROWS * 8;
+    const floorLevel = fracOf(sparkDisplay[x] - (hi[x] - lo[x])) * SPARK_ROWS * 8;
     for (let r = 0; r < SPARK_ROWS; r++) {
       const cellLevel = Math.max(0, Math.min(8, level - r * 8));
+      if (cellLevel < 1) continue;
+      const cellFloor = Math.max(0, Math.min(8, floorLevel - r * 8));
       const rr = row + SPLASH_ROWS + 1 + SPARK_ROWS - 1 - r;
-      if (cellLevel >= 8) put(g, rr, x, '█', 'w');
-      else if (cellLevel >= 1) put(g, rr, x, partial[Math.floor(cellLevel)], 'w');
+      // ink density carries the band — solid below the column's low, hatched
+      // through the span it swung across, the sub-cell ramp for the surface
+      // itself. A cell the low crosses takes an intermediate density rather than
+      // flipping at the halfway mark, which dithered █/▒ across neighbors whose
+      // lows straddled it. A one-point bucket has cellFloor === cellLevel === 8,
+      // so short windows stay solid exactly as before.
+      if (cellLevel < 8) put(g, rr, x, partial[Math.floor(cellLevel)], 'w');
+      else put(g, rr, x, cellFloor >= 6 ? '█' : cellFloor >= 2 ? '▓' : '▒', 'w');
     }
     // overshoot above the frame: the water briefly splashes over the top
     const overflow = level - SPARK_ROWS * 8;
@@ -2205,6 +2314,8 @@ function drawSparkline(g, row, t) {
     }
   }
   put(g, row + SPLASH_ROWS + 1, chartW + 1, `┐ now`, 'd');
+  // the hatched span needs naming, but only on windows where columns merge points
+  if (banded) put(g, row + SPLASH_ROWS + 2, chartW + 1, `│ ▒ range`, 'd');
   put(g, row + SPLASH_ROWS + SPARK_ROWS, chartW + 1, `┘ ${series.length} pts`, 'd');
 
   // time axis under the bars. Columns sample the archive by index, not by time
@@ -2230,7 +2341,16 @@ function drawSparkline(g, row, t) {
     lastEnd = lx + lbl.length;
     lastLbl = lbl;
   }
-  return row + SPLASH_ROWS + SPARK_ROWS + 2;
+  // one line of context under the axis: where this reading sits in the station's
+  // own record. Stations without an archive never reach it — see unusualNow()
+  const u = unusualNow();
+  if (!u) return row + SPLASH_ROWS + SPARK_ROWS + 2;
+  const uText = unusualText(u, isCompact());
+  put(g, axisRow + 1, 0, uText, 'd');
+  // far out of season wears the anomaly heatmap's accents: wet up, dry down
+  const sig = /[+-][\d.]+σ/.exec(uText);
+  if (sig && Math.abs(u.z) >= 1.5) put(g, axisRow + 1, sig.index, sig[0], u.z > 0 ? 'w2' : 's');
+  return row + SPLASH_ROWS + SPARK_ROWS + 3;
 }
 
 function drawProfile(g, row) {
@@ -2487,7 +2607,6 @@ const DAY_MS = 864e5;
 const epochDay = ts => Math.floor(ts / DAY_MS);
 // day-of-year index into a year's 366-slot array; m=12 rolls into Jan 1 next year
 const monthDoy = (y, m) => epochDay(Date.UTC(y, m, 1)) - epochDay(Date.UTC(y, 0, 1));
-const MONTH_ABBR = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
 
 // [ts, cm] pairs (sorted) -> per-UTC-day means: [{ d: epochDay, v }]
 function dailyMeans(pts) {
@@ -2551,7 +2670,7 @@ function buildHistStats(pts, nowMs) {
   let lo = quantile(allSorted, 0.02), hi = quantile(allSorted, 0.98);
   if (lo != null && hi - lo < 4) { lo = allSorted[0]; hi = allSorted[allSorted.length - 1]; }
   return {
-    daily, byYear, years, curYear, clim, lo, hi,
+    daily, byYear, years, curYear, clim, lo, hi, allSorted,
     allMin: allSorted.length ? allSorted[0] : null,
     allMax: allSorted.length ? allSorted[allSorted.length - 1] : null,
     climYears: years.filter(y => y < curYear).length,
@@ -2612,10 +2731,62 @@ function stepHistYear(d) {
 const HIST_MIN_DAYS = 45; // below this the sections are noise — show a note instead
 const HIST_CLIM_H = 9, HIST_OVER_H = 10;
 
+// "is this unusual?" — the header only carries the WSV three-bucket state, while
+// the archive knows the whole distribution. Pure over a buildHistStats result plus
+// a level in cm: percentile rank among the archived daily means, how many years
+// those cover, and the current month's climatological mean with the σ-distance to
+// it. null whenever the archive is too thin to say anything honest — same
+// threshold the years view uses before it draws its sections.
+function unusualStats(st, cm, monthIdx) {
+  if (!st || !Number.isFinite(cm)) return null;
+  const sorted = st.allSorted || [];
+  if (sorted.length < HIST_MIN_DAYS) return null;
+  // percentile rank = share of archived days at or below this level; binary
+  // search for that upper bound so the line costs nothing at 8 fps
+  let a = 0, b = sorted.length;
+  while (a < b) { const m = (a + b) >> 1; if (sorted[m] <= cm) a = m + 1; else b = m; }
+  const c = st.clim[monthIdx];
+  return {
+    cm: Math.round(cm),
+    pct: Math.round((a / sorted.length) * 100),
+    years: st.years.length,
+    month: monthIdx,
+    // no completed year covering this month yet → no climatology to compare against
+    climMean: c ? Math.round(c.mean) : null,
+    z: c ? (cm - c.mean) / c.sd : null,
+  };
+}
+
+const ordinal = n => n + (n % 100 >= 11 && n % 100 <= 13 ? 'th' : ['th', 'st', 'nd', 'rd'][n % 10] || 'th');
+
+// terminal-style one-liner, e.g. "342 cm · 91st pct of 26y · AUG mean 268 (+1.4σ)".
+// Compact drops the level — the big digits two blocks up already say it — and the
+// spelled-out "mean", which is what makes the full line overflow 44 columns.
+function unusualText(u, compact) {
+  if (!u) return '';
+  const rank = `${ordinal(u.pct)} pct of ${u.years}y`;
+  if (u.climMean == null) return compact ? rank : `${u.cm} cm · ${rank}`;
+  const sig = `${u.z >= 0 ? '+' : ''}${u.z.toFixed(1)}σ`;
+  return compact
+    ? `${rank} · ${MONTH_ABBR[u.month]} ⌀${u.climMean} ${sig}`
+    : `${u.cm} cm · ${rank} · ${MONTH_ABBR[u.month]} mean ${u.climMean} (${sig})`;
+}
+
+// the live reading judged against this station's own archive, or null when there
+// is no archive (or no reading) to judge it by — the line is then simply absent
+// and the grid keeps exactly the height it had before
+function unusualNow() {
+  const cur = state.gauge && state.gauge.currentMeasurement;
+  if (!cur || !Number.isFinite(cur.value)) return null;
+  return unusualStats(histStats(), cur.value, new Date().getUTCMonth());
+}
+
 function histGridRows(st) {
   if (st.daily.length < HIST_MIN_DAYS) return 6;
   // header+blank · title+monthhdr+years+readout · blank+title+plot+axis (clim) · same (overlay)
-  return 2 + (2 + st.years.length + 1) + (2 + HIST_CLIM_H + 1) + (2 + HIST_OVER_H + 1) + 1;
+  // compact has no room for the heat-ramp legend beside the ABS/ANOM toggle, so it
+  // wraps onto its own extra row instead of being dropped (see drawHistYears)
+  return 2 + (2 + st.years.length + 1) + (2 + HIST_CLIM_H + 1) + (2 + HIST_OVER_H + 1) + 1 + (isCompact() ? 1 : 0);
 }
 
 // a right-aligned [tag] in a dim header rule; returns nothing, marks the cells
@@ -2674,6 +2845,20 @@ function drawHistYears(g) {
     }
   }
   r++;
+  // compact has no columns to spare beside the ABS/ANOM toggle (col 21 onward would
+  // overflow 44), so the same legend reflows onto its own row instead of vanishing —
+  // histGridRows() reserves the row this consumes
+  if (compact) {
+    if (histMode === 'abs') {
+      put(g, r, 0, HEAT_RAMP + ' low → high');
+    } else {
+      put(g, r, 0, '█▓▒░', 's');
+      put(g, r, 5, 'dry · wet', 'd');
+      put(g, r, 15, '░▒▓█', 'w2');
+      put(g, r, 21, 'vs month mean', 'd');
+    }
+    r++;
+  }
   for (let m = 0; m < 12; m++) {
     put(g, r, yearW + m * monthW, compact ? 'JFMAMJJASOND'[m] : MONTH_ABBR[m].slice(0, 3), 'd');
   }
@@ -2943,7 +3128,9 @@ async function loadWave() {
   setScreenAria();
 }
 
-function waveGridRows(w) { return 3 + w.rows.length + 1; }
+// compact wraps the info line onto a second row instead of dropping the ramp
+// legend, the per-station-scaling caveat and the coverage note (see drawWave)
+function waveGridRows(w) { return 4 + w.rows.length + (isCompact() ? 1 : 0); }
 
 function drawWave(g, w) {
   const compact = isCompact();
@@ -2960,19 +3147,28 @@ function drawWave(g, w) {
   putHeadRule(g, `─── ${brand} · WAVE `, brand, '[← PROFILE]', 'cmd:live');
   const range = `${isoDay(dayAt(0))} → ${isoDay(dayAt(nEff - 1))}`;
   const note = w.shown < w.total ? ` · ${w.shown} of ${w.total} stations` : '';
-  put(g, 1, 0, compact ? range : `${HEAT_RAMP} low → high, scaled per station · ${range}${note}`, 'd');
+  // compact has no room for the ramp legend, the per-station-scaling caveat and the
+  // coverage note beside the date range on one row — wrap them onto a second row
+  // instead of dropping them (waveGridRows() reserves the row this consumes)
+  const monthRow = compact ? 3 : 2;
+  if (compact) {
+    put(g, 1, 0, range + note, 'd');
+    put(g, 2, 0, `${HEAT_RAMP} low → high, scaled per station`, 'd');
+  } else {
+    put(g, 1, 0, `${HEAT_RAMP} low → high, scaled per station · ${range}${note}`, 'd');
+  }
 
   // month names along the top, anchored at each 1st of the month
   for (let i = 0; i < nEff; i++) {
     const dt = new Date(dayAt(i));
     if (dt.getUTCDate() === 1) {
       const lbl = compact ? MONTH_ABBR[dt.getUTCMonth()].slice(0, 1) : MONTH_ABBR[dt.getUTCMonth()].slice(0, 3);
-      if (colAt(i) + lbl.length <= COLS) put(g, 2, colAt(i), lbl, 'd');
+      if (colAt(i) + lbl.length <= COLS) put(g, monthRow, colAt(i), lbl, 'd');
     }
   }
 
   w.rows.forEach((row, i) => {
-    const r = 3 + i;
+    const r = monthRow + 1 + i;
     put(g, r, 0, RIVER_GLYPH[row.kind], RIVER_CLS[row.kind]);
     const name = row.name.slice(0, nameW);
     put(g, r, 2, name, row.kind === 'normal' ? 'd' : RIVER_CLS[row.kind]);
@@ -2987,7 +3183,7 @@ function drawWave(g, w) {
       put(g, r, colAt(x), hi > lo ? heatAbs(vals[x], lo, hi) : '▒');
     }
   });
-  put(g, 3 + w.rows.length, 0, '≋ downstream ↓ · time →', 'd');
+  put(g, monthRow + 1 + w.rows.length, 0, '≋ downstream ↓ · time →', 'd');
 }
 
 // ---------- rivers overview (?rivers — the whole network as a locator map) ----------
@@ -3220,6 +3416,14 @@ const RISING_FALLERS_N = 8;
 // a capture younger than this is "today", not a baseline — the cron writes
 // once a day, so the usable day is normally yesterday's
 const RISING_BASELINE_MIN_AGE_MS = 12 * 36e5;
+// the two lookbacks the board offers: yesterday's capture, or the one a week
+// back (the slower swell — a river can be flat since yesterday and still 40 cm
+// up over the week)
+const RISING_LOOKBACKS = [1, 7];
+// how far the multi-day baseline may miss its target before the view gives up:
+// a missed cron day shifts the nearest capture to 6 or 8 days, which the board
+// normalises and labels honestly — but a 3-day-old capture is not "a week ago"
+const RISING_SPAN_TOLERANCE_DAYS = 3;
 
 // one entry per station with a live W value: current cm, tidal flag (MThw
 // present — the tide phase wanders ~50 min/day, so a day-apart point diff
@@ -3254,6 +3458,52 @@ function newestUsableDayIndex(shard, nowTs) {
   return -1;
 }
 
+// which day slot the board diffs against. One day back is "the newest usable
+// capture" — the cron's yesterday, whenever it ran. A longer lookback aims at a
+// point in TIME instead (nowTs - n days) and takes the capture nearest to it,
+// because counting seven slots back from the newest one lands eight days out as
+// soon as the newest is itself a day old. Within RISING_SPAN_TOLERANCE_DAYS the
+// nearest capture is good enough — the caller normalises over the real span and
+// says how long it actually was.
+function risingBaselineIndex(shard, nowTs, lookbackDays = 1) {
+  const newest = newestUsableDayIndex(shard, nowTs);
+  if (newest < 0 || !(lookbackDays > 1)) return newest;
+  const target = nowTs - lookbackDays * 864e5;
+  let best = -1, bestGap = Infinity;
+  for (let i = newest; i >= 0; i--) {
+    const t = shard.days[i] && Date.parse(shard.days[i]);
+    if (!t) continue;
+    const gap = Math.abs(t - target);
+    if (gap >= bestGap) break; // days run chronologically — going further back only widens it
+    bestGap = gap; best = i;
+  }
+  return bestGap <= RISING_SPAN_TOLERANCE_DAYS * 864e5 ? best : -1;
+}
+
+// Two adjacent monthly shards as one continuous day axis, older first, so a
+// lookback that crosses the month boundary stays an ordinary index. Stations
+// that appear in only one month keep null slots in the other; the snapshot job's
+// tidal flag survives from whichever month carries it.
+function mergeSnapshotShards(older, newer) {
+  if (!older || !Array.isArray(older.days) || !older.stations) return newer;
+  if (!newer || !Array.isArray(newer.days) || !newer.stations) return older;
+  const total = older.days.length + newer.days.length;
+  const stations = {};
+  const fold = (src, offset) => {
+    for (const [uuid, e] of Object.entries(src.stations)) {
+      const cur = stations[uuid] || (stations[uuid] = { n: e.n, w: e.w, v: Array(total).fill(null) });
+      if (e.n) cur.n = e.n;
+      if (e.w) cur.w = e.w;
+      if (e.t) cur.t = 1;
+      const v = Array.isArray(e.v) ? e.v : [];
+      for (let i = 0; i < src.days.length; i++) if (v[i] != null) cur.v[offset + i] = v[i];
+    }
+  };
+  fold(older, 0);
+  fold(newer, older.days.length);
+  return { y: newer.y, m: newer.m, days: older.days.concat(newer.days), stations };
+}
+
 // a one-glance answer to "does this rate matter HERE?": already beyond the
 // mean high/low water, or a linear ETA towards it — a rough extrapolation
 // from two points, hence the ~. Only stations with an MNW/MHW span get one.
@@ -3278,16 +3528,18 @@ function risingBadge(r) {
 
 // pure: live bulk stations + snapshot shard -> ranked board data. cm/day is
 // normalized over the real elapsed time, so a missed cron day (baseline two
-// days old) does not double the apparent rate.
-function risingOverview(nowStations, snapshot, nowTs) {
+// days old) does not double the apparent rate — and so the 1-day and 7-day
+// lookbacks stay the same unit, comparable side by side.
+function risingOverview(nowStations, snapshot, nowTs, lookbackDays = 1) {
   const counts = { rising: 0, falling: 0, steady: 0, tidal: 0 };
-  const dayIdx = snapshot ? newestUsableDayIndex(snapshot, nowTs) : -1;
+  const dayIdx = snapshot ? risingBaselineIndex(snapshot, nowTs, lookbackDays) : -1;
   if (dayIdx < 0) {
-    // no usable baseline (first day after launch, or the snapshot is missing):
-    // surface what the live values alone can say
+    // no usable baseline (first day after launch, the snapshot is missing, or
+    // the archive does not reach a week back yet): surface what the live values
+    // alone can say
     const live = { high: 0, low: 0, normal: 0, tidal: 0 };
     for (const s of nowStations) s.tidal ? live.tidal++ : live[s.kind]++;
-    return { noBaseline: true, live, risers: [], fallers: [], counts };
+    return { noBaseline: true, live, risers: [], fallers: [], counts, lookbackDays };
   }
   const baselineTs = Date.parse(snapshot.days[dayIdx]);
   const elapsedDays = (nowTs - baselineTs) / 864e5;
@@ -3299,34 +3551,40 @@ function risingOverview(nowStations, snapshot, nowTs) {
     // gauges without any characteristic values at all
     if (s.tidal || (entry && entry.t)) { counts.tidal++; continue; }
     const base = entry ? entry.v[dayIdx] : null;
-    if (base == null) continue; // station without a baseline this round
+    // no value in that slot: a station that only started reporting since, or a
+    // capture that missed it. Skipped either way — silently, as in the 1-day view
+    if (base == null) continue;
     const cmPerDay = (s.v - base) / elapsedDays;
     if (cmPerDay >= RISING_FLAT) counts.rising++;
     else if (cmPerDay <= -RISING_FLAT) counts.falling++;
     else { counts.steady++; continue; } // steady never makes either list
-    ranked.push({ ...s, cmPerDay });
+    ranked.push({ ...s, cmPerDay, deltaCm: s.v - base });
   }
   ranked.sort((a, b) => b.cmPerDay - a.cmPerDay);
   const risers = ranked.filter(r => r.cmPerDay > 0).slice(0, RISING_TOP_N);
   const fallers = ranked.filter(r => r.cmPerDay < 0).slice(-RISING_FALLERS_N).reverse();
   for (const r of risers) r.badge = risingBadge(r);
   for (const r of fallers) r.badge = risingBadge(r);
-  return { noBaseline: false, risers, fallers, counts, baselineTs, elapsedDays };
+  return { noBaseline: false, risers, fallers, counts, baselineTs, elapsedDays, lookbackDays };
 }
 
 // compact drops the threshold name from the ETA badge: "→MHW ~18d" -> "→18d"
 const risingBadgeText = badge => isCompact() ? badge.text.replace(/→M[NH]W ~/, '→') : badge.text;
 
-function risingRow(rank, r) {
+// over a multi-day lookback the rate alone hides the size of the move, so the
+// row carries the total centimetres of the span next to the cm/day it averages
+function risingRow(rank, r, withSpan = false) {
   const rk = String(rank).padStart(2);
   const glyph = r.cmPerDay > 0 ? RIVER_GLYPH.high : RIVER_GLYPH.low;
   const val = (r.cmPerDay > 0 ? '+' : '') + r.cmPerDay.toFixed(1);
+  const sum = withSpan && r.deltaCm != null ? (r.deltaCm > 0 ? '+' : '') + Math.round(r.deltaCm) : '';
   if (isCompact()) {
     const badge = r.badge ? ' ' + risingBadgeText(r.badge) : '';
-    return `${rk}${glyph} ${r.n.slice(0, 12).padEnd(12)} ${val.padStart(6)}${badge}`;
+    return `${rk}${glyph} ${r.n.slice(0, 12).padEnd(12)} ${val.padStart(6)}${sum ? ` (${sum})` : ''}${badge}`;
   }
   const badge = r.badge ? ` · ${risingBadgeText(r.badge)}` : '';
-  return `${rk}${glyph} ${r.n.slice(0, 16).padEnd(16)} ${r.w.slice(0, 12).padEnd(12)} ${(val + ' cm/d').padStart(11)}${badge}`;
+  return `${rk}${glyph} ${r.n.slice(0, 16).padEnd(16)} ${r.w.slice(0, 12).padEnd(12)} ${(val + ' cm/d').padStart(11)}` +
+    `${sum ? ` (${sum} cm)` : ''}${badge}`;
 }
 
 function risingGridRows(d) {
@@ -3342,23 +3600,31 @@ function drawRising(g, d) {
   put(g, 0, 0, title.padEnd(COLS, '─'), 'd');
   put(g, 0, 4, 'PEGELONLINE://RISING', 'b');
   if (d.noBaseline) {
-    put(g, 2, 0, 'no baseline yet — the daily snapshot needs another day', '');
+    put(g, 2, 0, d.lookbackDays > 1
+      ? 'no baseline a week back yet — the daily snapshot needs more days'
+      : 'no baseline yet — the daily snapshot needs another day', '');
     put(g, 4, 0, isCompact()
       ? `now: ${d.live.high}▲ high ${d.live.low}▼ low`
       : `right now: ${d.live.high} high · ${d.live.low} low · ${d.live.normal} normal · ${d.live.tidal} tidal`, 'd');
-    put(g, 6, 0, 'come back tomorrow for cm per day', 'd');
+    put(g, 6, 0, d.lookbackDays > 1 ? 'the 1D view works with a single day of snapshots' : 'come back tomorrow for cm per day', 'd');
     return;
   }
+  // the span is stated, never rounded to the nominal lookback: a missed cron day
+  // makes the "7-day" baseline 6 or 8 days old, and the rate says so
   const hrs = d.elapsedDays * 24;
-  put(g, 1, 0, isCompact()
-    ? `vs snapshot ${hrs.toFixed(0)}h ago`
-    : `every gauge vs its snapshot from ${hrs.toFixed(1)}h ago — sorted by cm per day`, 'd');
+  put(g, 1, 0, d.lookbackDays > 1
+    ? (isCompact()
+      ? `vs Δ${d.elapsedDays.toFixed(1)}d ago · cm/d (span)`
+      : `every gauge vs its snapshot Δ${d.elapsedDays.toFixed(1)}d ago — cm per day, span total in brackets`)
+    : (isCompact()
+      ? `vs snapshot ${hrs.toFixed(0)}h ago`
+      : `every gauge vs its snapshot from ${hrs.toFixed(1)}h ago — sorted by cm per day`), 'd');
 
   let row = 3;
   const list = (header, entries) => {
     put(g, row++, 0, header, 'b');
     entries.forEach((r, i) => {
-      const line = risingRow(i + 1, r);
+      const line = risingRow(i + 1, r, d.lookbackDays > 1);
       put(g, row, 0, line);
       put(g, row, 2, line[2], r.cmPerDay > 0 ? RIVER_CLS.high : RIVER_CLS.low);
       if (r.badge) {
@@ -3384,42 +3650,70 @@ function drawRising(g, d) {
     : `▲ ${c.rising} rising · ▼ ${c.falling} falling · ▬ ${c.steady} steady · ${c.tidal} tidal excluded (the tide beats any day diff)`, 'd');
 }
 
-// the shard changes once a day at most — remember the resolved one per month
-// within the session instead of refetching on every board entry
-let risingShardCache = null; // { key: 'y-m', shard }
+// a shard grows by one slot a day at most — remember every month fetched this
+// session instead of refetching on every board entry or lookback flip
+const risingShardCache = new Map(); // 'YYYY-MM' -> shard
 
-async function loadRisingSnapshot(nowTs) {
-  const mez = new Date(nowTs + 36e5);
-  let y = mez.getUTCFullYear(), m = mez.getUTCMonth() + 1;
-  const key = `${y}-${m}`;
-  if (risingShardCache && risingShardCache.key === key) return risingShardCache.shard;
-  const url = (yy, mm) => `archive/snapshots/${yy}-${String(mm).padStart(2, '0')}.json`;
-  // served same-origin like the rest of archive/ (404s locally — swallowed);
-  // early in a month yesterday lives in the previous shard, so fall back once
-  let shard = await getJson(url(y, m)).catch(() => null);
-  if (!shard || newestUsableDayIndex(shard, nowTs) < 0) {
-    if (m === 1) { y--; m = 12; } else m--;
-    const prev = await getJson(url(y, m)).catch(() => null);
-    if (prev && newestUsableDayIndex(prev, nowTs) >= 0) shard = prev;
-  }
-  if (shard) risingShardCache = { key, shard }; // a miss may be transient — retry next entry
+// served same-origin like the rest of archive/ (404s locally — swallowed, the
+// board degrades to its no-baseline state instead of erroring)
+async function fetchSnapshotShard(y, m) {
+  const key = `${y}-${String(m).padStart(2, '0')}`;
+  if (risingShardCache.has(key)) return risingShardCache.get(key);
+  const shard = await getJson(`archive/snapshots/${key}.json`).catch(() => null);
+  if (shard) risingShardCache.set(key, shard); // a miss may be transient — retry next entry
   return shard;
 }
 
+// the month a timestamp belongs to in MEZ (fixed UTC+1) — the day boundary the
+// snapshot job shards by
+const mezMonth = ts => { const d = new Date(ts + 36e5); return { y: d.getUTCFullYear(), m: d.getUTCMonth() + 1 }; };
+
+// The shards are monthly, the lookback is not: for the whole first week of a
+// month, "a week back" lies in the previous shard. Whenever the multi-day
+// lookback reaches across that boundary — or the current shard has no usable day
+// at all, the 1-day fallback that has always been here — the previous shard is
+// fetched too and the two are handed on as one continuous day axis.
+async function loadRisingSnapshot(nowTs, lookbackDays = 1) {
+  const { y, m } = mezMonth(nowTs);
+  const cur = await fetchSnapshotShard(y, m);
+  const back = mezMonth(nowTs - lookbackDays * 864e5);
+  const crosses = lookbackDays > 1 && (back.y !== y || back.m !== m);
+  if (!crosses && cur && newestUsableDayIndex(cur, nowTs) >= 0) return cur;
+  const prev = await fetchSnapshotShard(m === 1 ? y - 1 : y, m === 1 ? 12 : m - 1);
+  return prev ? mergeSnapshotShards(prev, cur) : cur;
+}
+
 async function loadRising() {
+  const want = risingDays; // the lookback in flight — a flip mid-fetch discards this one
   try {
     const raw = await getJson(`${API}/stations.json?includeTimeseries=true&includeCurrentMeasurement=true&includeCharacteristicValues=true`);
-    if (mode !== 'rising') return; // switched away mid-fetch
+    if (mode !== 'rising' || risingDays !== want) return; // switched away mid-fetch
     const nowTs = Date.now();
-    const snapshot = await loadRisingSnapshot(nowTs);
-    if (mode !== 'rising') return;
-    state.rising = { data: risingOverview(parseBulkStations(raw), snapshot, nowTs), error: null };
+    const snapshot = await loadRisingSnapshot(nowTs, want);
+    if (mode !== 'rising' || risingDays !== want) return;
+    state.rising = { data: risingOverview(parseBulkStations(raw), snapshot, nowTs, want), error: null };
   } catch (e) {
-    if (mode !== 'rising') return;
+    if (mode !== 'rising' || risingDays !== want) return;
     state.rising = { data: null, error: `the rising board failed: ${e.message}` };
   }
   dirty = true;
   setScreenAria();
+}
+
+// 1D ↔ 7D — a display flip like the ?total Σ/Δ switch, so it replaces the
+// history entry instead of pushing one. The board is a diff against a different
+// baseline, so the data goes with it. `push` false = the URL already says this
+// (boot, popstate).
+function risingSetDays(n, push = true) {
+  if (!RISING_LOOKBACKS.includes(n) || n === risingDays) return;
+  risingDays = n;
+  if (push) history.replaceState(null, '', risingQuery());
+  applyRisingChrome();
+  renderHistoryBar();
+  state.rising = null;
+  dirty = true;
+  setScreenAria();
+  if (mode === 'rising') loadRising();
 }
 
 // ---------- total overview (?total: every river's summed readings, stacked) ----------
@@ -3787,7 +4081,6 @@ function drawTotalDiffBars(g, view) {
 }
 
 function drawTotal(g, view) {
-  const ov = state.total.overview;
   const brand = 'PEGEL://TOTAL';
   if (view.level === 'missing') {
     put(g, 0, 0, `─── ${brand} · Δ `.padEnd(COLS, '─'), 'd');
@@ -3796,9 +4089,7 @@ function drawTotal(g, view) {
     put(g, 3, 0, 'the next archive rebuild adds it', 'd');
     return;
   }
-  const scope = (view.diff ? 'Δ ' : '') + (view.level === 'all' ? `${ov.fromYear}→${ov.currentYear}`
-    : view.level === 'year' ? String(totalYear)
-    : `${MONTH_ABBR[totalMonth]} ${totalYear}` + (view.level === 'day' ? ` · ${totalDay}` : ''));
+  const scope = (view.diff ? 'Δ ' : '') + totalScope(state.total.overview);
   const head = `─── ${brand} · ${scope} `;
   if (view.level === 'all') {
     put(g, 0, 0, head.padEnd(COLS, '─'), 'd');
@@ -4187,7 +4478,7 @@ function switchRising(push = true) {
   state.rising = null; // re-entering refetches — the board is a point-in-time diff
   waveData = null;
 
-  if (push) history[push === 'replace' ? 'replaceState' : 'pushState'](null, '', '?rising');
+  if (push) history[push === 'replace' ? 'replaceState' : 'pushState'](null, '', risingQuery());
   applyRisingChrome();
   applyModeChrome();
   dirty = true;
@@ -4201,8 +4492,10 @@ function switchRising(push = true) {
   stationInput.value = '';
   riverInput.value = '';
   clearInterval(refreshTimer);
-  // no refresh interval: the baseline moves once a day, not every 5 minutes
+  // the daily baseline itself doesn't move, but the live half of the diff (and
+  // the "vs snapshot X.Xh ago" header) does — same 5-min cadence as every other mode
   loadRising();
+  refreshTimer = setInterval(loadRising, REFRESH_MS);
 }
 
 function switchTotal(push = true) {
@@ -4296,8 +4589,8 @@ function helpText(unknownFlag) {
     '',
     'SYNOPSIS',
     '    > pegel [STATION] [--station NAME] [--river NAME] [--rivers] [--rising]',
-    '            [--total] [--adsb URL] [--ais URL] [--history RANGE] [--export]',
-    '            [--clear] [--info] [--help]',
+    '            [--total] [--adsb URL] [--ais URL] [--history RANGE] [--view MODE]',
+    '            [--export] [--clear] [--info] [--help]',
     '',
     'OPTIONS',
     '    STATION           bare station name, e.g. BONN (shorthand for --station)',
@@ -4305,11 +4598,12 @@ function helpText(unknownFlag) {
     '    --river NAME      whole-river profile of NAME, e.g. RHEIN (any case, multi-word)',
     '    --rivers          map of every water, sized by gauge count; pick one to open it',
     '    --rising          every gauge ranked by cm/day vs yesterday (tidal excluded)',
+    '                      (the 1D/7D chips move the baseline a week back, ?rising&d7)',
     '    --total           every river summed and stacked over the years; zoom to a day',
     '                      (the Σ/Δ chips switch to net daily change, ?total&diff)',
     '    --adsb URL        set your local ADS-B receiver URL; no value clears it',
     '    --ais URL         set your local AIS receiver URL (AIS-catcher); no value clears it',
-    '    --history RANGE   set the sparkline window: 24h 3d 7d 15d 30d all',
+    `    --history RANGE   set the sparkline window: ${HISTORY_PRESETS.map(p => p.k).join(' ')}`,
     '    --view MODE       live | years (station statistics) | wave (river heatmap)',
     '    --export          download the whole local archive as JSON',
     '    --clear           delete the local archive (no confirmation - you typed it)',
@@ -4606,7 +4900,9 @@ document.addEventListener('keydown', e => {
 });
 window.addEventListener('popstate', () => {
   const p = new URLSearchParams(location.search);
-  if (p.has('rising')) switchRising(false);
+  // the lookback flip replaces rather than pushes, so a popped ?rising entry only
+  // carries a different lookback when the board was entered with one
+  if (p.has('rising')) { risingSetDays(p.has('d7') ? 7 : 1, false); switchRising(false); }
   else if (p.has('rivers')) switchRivers(false);
   else if (p.has('total')) { totalSyncFromUrl(p); switchTotal(false); }
   else if (p.get('river')) switchRiver(p.get('river'), false);
@@ -4799,6 +5095,15 @@ function renderHistoryBar() {
     chip('▦ WAVE', viewMode === 'wave', () => setView('wave'), 'station × day heatmap — the wave rolls downstream');
     return;
   }
+  if (mode === 'rising') {
+    // the board has no history window and no sub-views — the bar carries its
+    // one control instead: how far back the diff reaches
+    nav.setAttribute('aria-label', 'rising lookback');
+    nav.append('rise over ');
+    chip('1D', risingDays === 1, () => risingSetDays(1), 'against yesterday\'s snapshot — cm per day');
+    chip('7D', risingDays === 7, () => risingSetDays(7), 'against the snapshot a week back — the slower swell, still cm per day');
+    return;
+  }
   if (mode === 'total') {
     // metric first, then the breadcrumb: each crumb jumps back to its level;
     // the deepest one is lit
@@ -4971,11 +5276,13 @@ document.getElementById('info-link').addEventListener('click', e => {
 });
 document.getElementById('infobox-close').addEventListener('click', () => infobox.close());
 
-// share the current station: native share sheet where available, else clipboard
+// share whatever the current mode is showing: native share sheet where
+// available, else clipboard — ?total&y=…, ?rising, ?rivers and ?river= each
+// share their own canonical deep link, not the last-viewed station
 const shareLink = document.getElementById('share-link');
 shareLink.addEventListener('click', async e => {
   e.preventDefault();
-  const url = location.origin + location.pathname + '?station=' + encodeURIComponent(station);
+  const url = location.origin + location.pathname + currentModeQuery();
   try {
     if (navigator.share) await navigator.share({ title: document.title, url });
     else {
@@ -5364,7 +5671,7 @@ function render(t) {
     return;
   }
   const g = makeGrid(HEADER_ROWS + CHART_ROWS + 1 + SPLASH_ROWS + SPARK_ROWS + 2 +
-    PROFILE_GAP + PROFILE_ROWS + PROFILE_FOOT);
+    (unusualNow() ? 1 : 0) + PROFILE_GAP + PROFILE_ROWS + PROFILE_FOOT);
   let row = drawHeader(g, 0, t);
   row = drawChart(g, row, t);
   row = drawSparkline(g, row, t);
@@ -5413,7 +5720,8 @@ if (mode === 'rivers') {
   applyModeChrome();
   stationInput.value = '';
   setScreenAria();
-  loadRising(); // no refresh interval — the baseline moves once a day
+  loadRising();
+  refreshTimer = setInterval(loadRising, REFRESH_MS); // the live half of the diff still polls
 } else if (mode === 'total') {
   applyModeChrome();
   stationInput.value = '';
