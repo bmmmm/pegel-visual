@@ -79,12 +79,19 @@ test('parseCommand: flags, values, booleans', () => {
   assert.equal(parse('BONN').station, undefined, 'bare names are not parsed as --station (applyPrompt handles them)');
 });
 
-test('helpText: the man page lists every flag', () => {
+test('helpText: the man page lists every flag parseCommand recognises, and every history range', () => {
   const app = loadApp();
   const man = app.run('helpText(null)');
-  for (const flag of ['--station', '--river', '--adsb', '--ais', '--history', '--export', '--clear', '--info', '--help']) {
-    assert.ok(man.includes(flag), `man page mentions ${flag}`);
-  }
+  // derived, not hand-written: parseCommand('') returns one key per flag it parses
+  // (unknownFlag is the catch-all, not a flag itself) — a flag added there without
+  // a matching helpText line now fails this test instead of silently going undocumented
+  const flags = app.run(`Object.keys(parseCommand('')).filter(k => k !== 'unknownFlag')`);
+  assert.ok(flags.length >= 10, 'sanity: parseCommand recognises a realistic number of flags');
+  for (const flag of flags) assert.ok(man.includes('--' + flag), `man page mentions --${flag}`);
+  // same for the sparkline/archive range presets — 24h..30d live API, 1y..20y hosted archive
+  const ranges = app.run('HISTORY_PRESETS.map(p => p.k)');
+  assert.ok(ranges.length >= 8, 'sanity: HISTORY_PRESETS still covers both the API and archive ranges');
+  for (const k of ranges) assert.ok(man.includes(k), `man page's --history line mentions ${k}`);
   assert.ok(app.run('helpText("--nope")').startsWith('unknown flag: --nope'));
 });
 
@@ -1188,6 +1195,7 @@ test('drawHistYears: all three sections render inside the grid, at both widths',
     const flat = rows.join('\n');
     for (const y of ['2024', '2025', '2026']) assert.ok(flat.includes(y), `${cols} cols: year row ${y}`);
     assert.ok(flat.includes('[ABS]') && flat.includes('[ANOM]'), `${cols} cols: mode toggles`);
+    assert.ok(flat.includes('low → high'), `${cols} cols: heat-ramp legend present (default ABS mode)`);
     assert.ok(html.includes('data-st="cmd:live"'), `${cols} cols: back target`);
     assert.ok(html.includes('data-st="cmd:hy:2024"'), `${cols} cols: year rows are pickable`);
     // the overlay's month axis is the last drawn row — if it shows, nothing was clipped
@@ -1260,11 +1268,14 @@ test('drawWave: rows render per-station scaled, labeled and inside the grid', ()
     })()`);
     const flat = rows.join('\n');
     assert.ok(flat.includes('OBEN') && flat.includes('MITTE'), `${cols} cols: station names`);
-    assert.ok(flat.includes('3 of 5') || cols === 44, `${cols} cols: sampling is disclosed`);
+    assert.ok(flat.includes('3 of 5'), `${cols} cols: sampling is disclosed`);
+    assert.ok(flat.includes('low') && flat.includes('scaled per station'),
+      `${cols} cols: ramp legend + per-station-scaling caveat present`);
     assert.ok(flat.includes('≋ downstream ↓'), `${cols} cols: flow marker`);
     assert.ok(html.includes('data-st="OBEN"'), `${cols} cols: rows are click targets`);
     assert.ok(html.includes('data-st="cmd:live"'), `${cols} cols: back target`);
-    const flatRow = rows[5];
+    // compact wraps the info line onto an extra row, pushing the station rows down by one
+    const flatRow = rows[cols === 44 ? 6 : 5];
     assert.ok(/▒+\s*$/.test(flatRow) && !flatRow.includes('█'), `${cols} cols: a flat station renders mid-shade, not noise`);
     for (const r of rows) assert.ok(r.length <= cols, `${cols} cols: no row overflows`);
   }
@@ -1773,6 +1784,86 @@ test('rivers map: ?rivers boots into the map and --rivers switches into it', () 
   const one = loadApp({}).run(`parseCommand('--river RHEIN')`);
   assert.equal(one.river, 'RHEIN');
   assert.equal(one.rivers, false);
+});
+
+test('currentModeQuery: the share link follows whatever mode is actually on screen', () => {
+  // used to hard-code ?station=<gauge> regardless of mode, so sharing from ?total,
+  // ?rising, ?rivers or ?river= silently shared the last-viewed gauge instead
+  assert.equal(loadApp({ search: '?station=BONN' }).run('currentModeQuery()'), '?station=BONN');
+  assert.equal(loadApp({ search: '?station=KÖLN&view=years' }).run('currentModeQuery()'),
+    '?station=' + encodeURIComponent('KÖLN') + '&view=years', 'umlaut-encoded, sub-view preserved');
+  assert.equal(loadApp({ search: '?river=RHEIN' }).run('currentModeQuery()'), '?river=RHEIN');
+  assert.equal(loadApp({ search: '?river=MÜRITZSEE&view=wave' }).run('currentModeQuery()'),
+    '?river=' + encodeURIComponent('MÜRITZSEE') + '&view=wave');
+  assert.equal(loadApp({ search: '?rivers' }).run('currentModeQuery()'), '?rivers');
+  assert.equal(loadApp({ search: '?rising' }).run('currentModeQuery()'), '?rising');
+  assert.equal(loadApp({ search: '?total' }).run('currentModeQuery()'), '?total');
+  assert.equal(loadApp({ search: '?total&y=2024&m=5' }).run('currentModeQuery()'), '?total&y=2024&m=5', 'zoom level round-trips');
+  assert.equal(loadApp({ search: '?total&y=2024&d=2024-05-12' }).run('currentModeQuery()'), '?total&y=2024&d=2024-05-12');
+
+  // and it tracks a live mode switch, not just the URL a page happened to boot from
+  const app = loadApp({ search: '?station=BONN' });
+  app.run('switchTotal()');
+  assert.equal(app.run('currentModeQuery()'), '?total', 'follows the switch into ?total');
+  app.run('switchRising()');
+  assert.equal(app.run('currentModeQuery()'), '?rising', 'and into ?rising');
+});
+
+test('applyModeChrome: marks the active global-view button, footer label matches the mode', () => {
+  const rivers = loadApp({ search: '?rivers' });
+  assert.equal(rivers.el('rivers-btn').className, 'flag-btn on', 'the active button gets .on');
+  assert.equal(rivers.el('rivers-btn').getAttribute('aria-current'), 'page');
+  assert.equal(rivers.el('rising-btn').className, 'flag-btn', 'the other two stay plain');
+  assert.equal(rivers.el('rising-btn').getAttribute('aria-current'), 'false');
+  assert.equal(rivers.el('total-btn').className, 'flag-btn');
+  assert.equal(rivers.el('footer-perma-label').textContent, 'rivers link:');
+
+  const rising = loadApp({ search: '?rising' });
+  assert.equal(rising.el('rising-btn').className, 'flag-btn on');
+  assert.equal(rising.el('footer-perma-label').textContent, 'rising link:');
+
+  const total = loadApp({ search: '?total' });
+  assert.equal(total.el('total-btn').className, 'flag-btn on');
+  assert.equal(total.el('footer-perma-label').textContent, 'total link:');
+
+  // station mode: none of the three global-view buttons is "the current mode".
+  // Station-mode boot never calls applyModeChrome() itself (the static markup's
+  // default class is already correct there), so call it explicitly, same as the
+  // "back button" test above does for the same reason.
+  const station = loadApp({ search: '?station=BONN' });
+  station.run('applyModeChrome()');
+  for (const id of ['rivers-btn', 'rising-btn', 'total-btn']) {
+    assert.equal(station.el(id).className, 'flag-btn', `${id} unmarked in station mode`);
+    assert.equal(station.el(id).getAttribute('aria-current'), 'false');
+  }
+  assert.equal(station.el('footer-perma-label').textContent, 'station link:');
+
+  const river = loadApp({ search: '?river=RHEIN' });
+  assert.equal(river.el('footer-perma-label').textContent, 'river link:');
+});
+
+test('applyTotalChrome: the tab title carries the zoom scope, so history entries differ', () => {
+  const app = loadApp({ search: '?total' });
+  const all = app.document.title;
+  app.run('totalSetZoom(2024, null, null)');
+  const year = app.document.title;
+  app.run('totalSetZoom(2024, 4, null)');
+  const month = app.document.title;
+  app.run('totalSetZoom(2024, 4, 12)');
+  const day = app.document.title;
+  assert.equal(all, 'PEGEL://TOTAL · ALL');
+  assert.equal(year, 'PEGEL://TOTAL · 2024');
+  assert.equal(month, 'PEGEL://TOTAL · MAY 2024');
+  assert.equal(day, 'PEGEL://TOTAL · MAY 2024 · 12');
+  assert.equal(new Set([all, year, month, day]).size, 4, 'all four zoom levels are distinguishable');
+});
+
+test('boot: a deep link straight into a ?total month/day zoom titles the tab without crashing', () => {
+  // applyTotalChrome runs at boot, before `state` (and originally MONTH_ABBR) exist —
+  // a direct ?total&y=…&m=… / &d=… link used to be the only way to reach that code
+  // path with totalMonth already set, so it is the one that would have caught the TDZ
+  assert.equal(loadApp({ search: '?total&y=2024&m=5' }).document.title, 'PEGEL://TOTAL · MAY 2024');
+  assert.equal(loadApp({ search: '?total&y=2024&d=2024-05-12' }).document.title, 'PEGEL://TOTAL · MAY 2024 · 12');
 });
 
 test('back button: offered in river and map mode, naming the station it returns to', () => {
