@@ -130,7 +130,8 @@
     text-decoration: underline;
     cursor: pointer;
   }
-  form .flag-btn:hover { background: var(--ink); color: var(--paper); }
+  form .flag-btn:hover,
+  form .flag-btn.on { background: var(--ink); color: var(--paper); }
   form .hint { color: var(--mid); }
   /* live typeahead: a custom dropdown (the native datalist can't fold umlauts,
      rank, or carry the km/water context) positioned under the active input */
@@ -515,9 +516,10 @@
     <dt>the prompt</dt>
     <dd>A tiny REPL. A bare name switches to that station (or river). Flags:
       <b>--station</b>, <b>--river</b>, <b>--rivers</b>, <b>--rising</b>,
-      <b>--total</b>, <b>--adsb</b>, <b>--history 24h…all</b>, <b>--export</b>,
-      <b>--clear</b>, <b>--info</b>, <b>--help</b>. Press <b>/</b> to focus it
-      from anywhere; <b>Esc</b> dismisses help.</dd>
+      <b>--total</b>, <b>--adsb</b>, <b>--ais</b>, <b>--history 24h…all</b>,
+      <b>--view</b>, <b>--export</b>, <b>--clear</b>, <b>--info</b>,
+      <b>--help</b>. Press <b>/</b> to focus it from anywhere; <b>Esc</b>
+      dismisses help.</dd>
     <dt>extras</dt>
     <dd>Aircraft overhead from your own ADS-B receiver (<b>--adsb URL</b>) and real
       river traffic on the waterline from your own AIS receiver (<b>--ais URL</b>,
@@ -553,7 +555,7 @@
     · <a href="https://github.com/bmmmm/pegel-visual" rel="noopener">source</a>
     · <a href="https://ko-fi.com/bmabma" rel="noopener">support on ko-fi</a>
   </nav>
-  <p id="footer-perma">station link: <a id="station-link" href="?station=BONN">?station=BONN</a></p>
+  <p id="footer-perma"><span id="footer-perma-label">station link:</span> <a id="station-link" href="?station=BONN">?station=BONN</a></p>
   <p id="footer-credits">
     <span>data: <a href="https://www.pegelonline.wsv.de" rel="noopener">PEGELONLINE</a> &copy; WSV, refreshed every 5 min</span>
     <span>⛅ weather: <a href="https://open-meteo.com" rel="noopener">open-meteo</a></span>
@@ -588,6 +590,10 @@ const REFRESH_MS = 5 * 60 * 1000;
 const TREND_WINDOW_MS = 6 * 36e5;
 const TREND_MIN_SPAN_MS = 36e5;
 const TREND_FLAT = 0.5; // strictly below this |cm/h| reads as steady, not rising/falling
+// hoisted above its thematic home in the multi-year-statistics section: a boot straight
+// into a deep-linked ?total&y=…&m=… runs applyTotalChrome (and its month name) before
+// that section's consts would otherwise exist
+const MONTH_ABBR = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
 
 const screen = document.getElementById('screen');
 const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)');
@@ -646,37 +652,66 @@ function totalQuery() {
   return base;
 }
 const stationLink = document.getElementById('station-link');
+const permaLabel = document.getElementById('footer-perma-label');
 const wsvArchiveLink = document.getElementById('wsv-archive-link');
+
+// the query string (with leading ?) for the current mode's canonical deep link —
+// the same value each apply*Chrome function below puts on the station-link href,
+// factored out so the share handler can reuse it instead of hard-coding ?station=
+// (which used to silently share the gauge even from ?total, ?rising, ?rivers, …)
+function currentModeQuery() {
+  if (mode === 'river') return '?river=' + encodeURIComponent(state.river) + viewSuffix();
+  if (mode === 'rivers') return '?rivers';
+  if (mode === 'rising') return '?rising';
+  if (mode === 'total') return totalQuery();
+  return '?station=' + encodeURIComponent(station) + viewSuffix();
+}
+
+// the ?total zoom level as a short label ("ALL", "2024", "MAI 2024", "MAI 2024 · 12") —
+// shared by the tab title (applyTotalChrome, which can run at boot, before `state`
+// itself exists — hence the optional ov rather than reading state.total directly)
+// and the on-screen header (drawTotal, which always has the overview in hand and
+// passes it, so the richer fromYear→currentYear range shows instead of the fallback)
+function totalScope(ov) {
+  if (totalYear == null) return ov ? `${ov.fromYear}→${ov.currentYear}` : 'ALL';
+  if (totalMonth == null) return String(totalYear);
+  return `${MONTH_ABBR[totalMonth]} ${totalYear}` + (totalDay != null ? ` · ${totalDay}` : '');
+}
 
 function applyStationChrome() {
   if (mode !== 'station') return; // river/rivers chrome owns the title and link there
   document.title = 'PEGEL://' + station;
   stationLink.textContent = '?station=' + station + viewSuffix();
-  stationLink.href = '?station=' + encodeURIComponent(station) + viewSuffix();
+  stationLink.href = currentModeQuery();
+  permaLabel.textContent = 'station link:';
 }
 
 function applyRiverChrome() {
   document.title = 'PEGEL://' + state.river;
   stationLink.textContent = '?river=' + state.river + viewSuffix();
-  stationLink.href = '?river=' + encodeURIComponent(state.river) + viewSuffix();
+  stationLink.href = currentModeQuery();
+  permaLabel.textContent = 'river link:';
 }
 
 function applyRiversChrome() {
   document.title = 'PEGEL://RIVERS';
   stationLink.textContent = '?rivers';
-  stationLink.href = '?rivers';
+  stationLink.href = currentModeQuery();
+  permaLabel.textContent = 'rivers link:';
 }
 
 function applyRisingChrome() {
   document.title = 'PEGEL://RISING';
   stationLink.textContent = '?rising';
-  stationLink.href = '?rising';
+  stationLink.href = currentModeQuery();
+  permaLabel.textContent = 'rising link:';
 }
 
 function applyTotalChrome() {
-  document.title = 'PEGEL://TOTAL';
+  document.title = 'PEGEL://TOTAL · ' + totalScope();
   stationLink.textContent = totalQuery();
-  stationLink.href = totalQuery();
+  stationLink.href = currentModeQuery();
+  permaLabel.textContent = 'total link:';
 }
 
 // river and rivers mode hide the per-station chrome (archive bar, history range,
@@ -698,6 +733,16 @@ function applyModeChrome() {
   if (!perStation) {
     home.textContent = `← ${station}`;
     home.title = `back to the ${station} gauge`;
+  }
+  // the three global-view buttons double as a mode tab strip — mark whichever one
+  // is active, same .on convention as the history-bar chips (renderHistoryBar's chip())
+  for (const [id, m] of [['rivers-btn', 'rivers'], ['rising-btn', 'rising'], ['total-btn', 'total']]) {
+    const btn = document.getElementById(id);
+    const on = mode === m;
+    btn.className = 'flag-btn' + (on ? ' on' : '');
+    // 'false' (not removal) is a valid aria-current value and the implicit default,
+    // so this never needs a matching removeAttribute on the inactive two
+    btn.setAttribute('aria-current', on ? 'page' : 'false');
   }
 }
 
@@ -2487,7 +2532,6 @@ const DAY_MS = 864e5;
 const epochDay = ts => Math.floor(ts / DAY_MS);
 // day-of-year index into a year's 366-slot array; m=12 rolls into Jan 1 next year
 const monthDoy = (y, m) => epochDay(Date.UTC(y, m, 1)) - epochDay(Date.UTC(y, 0, 1));
-const MONTH_ABBR = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
 
 // [ts, cm] pairs (sorted) -> per-UTC-day means: [{ d: epochDay, v }]
 function dailyMeans(pts) {
@@ -2615,7 +2659,9 @@ const HIST_CLIM_H = 9, HIST_OVER_H = 10;
 function histGridRows(st) {
   if (st.daily.length < HIST_MIN_DAYS) return 6;
   // header+blank · title+monthhdr+years+readout · blank+title+plot+axis (clim) · same (overlay)
-  return 2 + (2 + st.years.length + 1) + (2 + HIST_CLIM_H + 1) + (2 + HIST_OVER_H + 1) + 1;
+  // compact has no room for the heat-ramp legend beside the ABS/ANOM toggle, so it
+  // wraps onto its own extra row instead of being dropped (see drawHistYears)
+  return 2 + (2 + st.years.length + 1) + (2 + HIST_CLIM_H + 1) + (2 + HIST_OVER_H + 1) + 1 + (isCompact() ? 1 : 0);
 }
 
 // a right-aligned [tag] in a dim header rule; returns nothing, marks the cells
@@ -2674,6 +2720,20 @@ function drawHistYears(g) {
     }
   }
   r++;
+  // compact has no columns to spare beside the ABS/ANOM toggle (col 21 onward would
+  // overflow 44), so the same legend reflows onto its own row instead of vanishing —
+  // histGridRows() reserves the row this consumes
+  if (compact) {
+    if (histMode === 'abs') {
+      put(g, r, 0, HEAT_RAMP + ' low → high');
+    } else {
+      put(g, r, 0, '█▓▒░', 's');
+      put(g, r, 5, 'dry · wet', 'd');
+      put(g, r, 15, '░▒▓█', 'w2');
+      put(g, r, 21, 'vs month mean', 'd');
+    }
+    r++;
+  }
   for (let m = 0; m < 12; m++) {
     put(g, r, yearW + m * monthW, compact ? 'JFMAMJJASOND'[m] : MONTH_ABBR[m].slice(0, 3), 'd');
   }
@@ -2943,7 +3003,9 @@ async function loadWave() {
   setScreenAria();
 }
 
-function waveGridRows(w) { return 3 + w.rows.length + 1; }
+// compact wraps the info line onto a second row instead of dropping the ramp
+// legend, the per-station-scaling caveat and the coverage note (see drawWave)
+function waveGridRows(w) { return 4 + w.rows.length + (isCompact() ? 1 : 0); }
 
 function drawWave(g, w) {
   const compact = isCompact();
@@ -2960,19 +3022,28 @@ function drawWave(g, w) {
   putHeadRule(g, `─── ${brand} · WAVE `, brand, '[← PROFILE]', 'cmd:live');
   const range = `${isoDay(dayAt(0))} → ${isoDay(dayAt(nEff - 1))}`;
   const note = w.shown < w.total ? ` · ${w.shown} of ${w.total} stations` : '';
-  put(g, 1, 0, compact ? range : `${HEAT_RAMP} low → high, scaled per station · ${range}${note}`, 'd');
+  // compact has no room for the ramp legend, the per-station-scaling caveat and the
+  // coverage note beside the date range on one row — wrap them onto a second row
+  // instead of dropping them (waveGridRows() reserves the row this consumes)
+  const monthRow = compact ? 3 : 2;
+  if (compact) {
+    put(g, 1, 0, range + note, 'd');
+    put(g, 2, 0, `${HEAT_RAMP} low → high, scaled per station`, 'd');
+  } else {
+    put(g, 1, 0, `${HEAT_RAMP} low → high, scaled per station · ${range}${note}`, 'd');
+  }
 
   // month names along the top, anchored at each 1st of the month
   for (let i = 0; i < nEff; i++) {
     const dt = new Date(dayAt(i));
     if (dt.getUTCDate() === 1) {
       const lbl = compact ? MONTH_ABBR[dt.getUTCMonth()].slice(0, 1) : MONTH_ABBR[dt.getUTCMonth()].slice(0, 3);
-      if (colAt(i) + lbl.length <= COLS) put(g, 2, colAt(i), lbl, 'd');
+      if (colAt(i) + lbl.length <= COLS) put(g, monthRow, colAt(i), lbl, 'd');
     }
   }
 
   w.rows.forEach((row, i) => {
-    const r = 3 + i;
+    const r = monthRow + 1 + i;
     put(g, r, 0, RIVER_GLYPH[row.kind], RIVER_CLS[row.kind]);
     const name = row.name.slice(0, nameW);
     put(g, r, 2, name, row.kind === 'normal' ? 'd' : RIVER_CLS[row.kind]);
@@ -2987,7 +3058,7 @@ function drawWave(g, w) {
       put(g, r, colAt(x), hi > lo ? heatAbs(vals[x], lo, hi) : '▒');
     }
   });
-  put(g, 3 + w.rows.length, 0, '≋ downstream ↓ · time →', 'd');
+  put(g, monthRow + 1 + w.rows.length, 0, '≋ downstream ↓ · time →', 'd');
 }
 
 // ---------- rivers overview (?rivers — the whole network as a locator map) ----------
@@ -3787,7 +3858,6 @@ function drawTotalDiffBars(g, view) {
 }
 
 function drawTotal(g, view) {
-  const ov = state.total.overview;
   const brand = 'PEGEL://TOTAL';
   if (view.level === 'missing') {
     put(g, 0, 0, `─── ${brand} · Δ `.padEnd(COLS, '─'), 'd');
@@ -3796,9 +3866,7 @@ function drawTotal(g, view) {
     put(g, 3, 0, 'the next archive rebuild adds it', 'd');
     return;
   }
-  const scope = (view.diff ? 'Δ ' : '') + (view.level === 'all' ? `${ov.fromYear}→${ov.currentYear}`
-    : view.level === 'year' ? String(totalYear)
-    : `${MONTH_ABBR[totalMonth]} ${totalYear}` + (view.level === 'day' ? ` · ${totalDay}` : ''));
+  const scope = (view.diff ? 'Δ ' : '') + totalScope(state.total.overview);
   const head = `─── ${brand} · ${scope} `;
   if (view.level === 'all') {
     put(g, 0, 0, head.padEnd(COLS, '─'), 'd');
@@ -4201,8 +4269,10 @@ function switchRising(push = true) {
   stationInput.value = '';
   riverInput.value = '';
   clearInterval(refreshTimer);
-  // no refresh interval: the baseline moves once a day, not every 5 minutes
+  // the daily baseline itself doesn't move, but the live half of the diff (and
+  // the "vs snapshot X.Xh ago" header) does — same 5-min cadence as every other mode
   loadRising();
+  refreshTimer = setInterval(loadRising, REFRESH_MS);
 }
 
 function switchTotal(push = true) {
@@ -4296,8 +4366,8 @@ function helpText(unknownFlag) {
     '',
     'SYNOPSIS',
     '    > pegel [STATION] [--station NAME] [--river NAME] [--rivers] [--rising]',
-    '            [--total] [--adsb URL] [--ais URL] [--history RANGE] [--export]',
-    '            [--clear] [--info] [--help]',
+    '            [--total] [--adsb URL] [--ais URL] [--history RANGE] [--view MODE]',
+    '            [--export] [--clear] [--info] [--help]',
     '',
     'OPTIONS',
     '    STATION           bare station name, e.g. BONN (shorthand for --station)',
@@ -4309,7 +4379,7 @@ function helpText(unknownFlag) {
     '                      (the Σ/Δ chips switch to net daily change, ?total&diff)',
     '    --adsb URL        set your local ADS-B receiver URL; no value clears it',
     '    --ais URL         set your local AIS receiver URL (AIS-catcher); no value clears it',
-    '    --history RANGE   set the sparkline window: 24h 3d 7d 15d 30d all',
+    `    --history RANGE   set the sparkline window: ${HISTORY_PRESETS.map(p => p.k).join(' ')}`,
     '    --view MODE       live | years (station statistics) | wave (river heatmap)',
     '    --export          download the whole local archive as JSON',
     '    --clear           delete the local archive (no confirmation - you typed it)',
@@ -4971,11 +5041,13 @@ document.getElementById('info-link').addEventListener('click', e => {
 });
 document.getElementById('infobox-close').addEventListener('click', () => infobox.close());
 
-// share the current station: native share sheet where available, else clipboard
+// share whatever the current mode is showing: native share sheet where
+// available, else clipboard — ?total&y=…, ?rising, ?rivers and ?river= each
+// share their own canonical deep link, not the last-viewed station
 const shareLink = document.getElementById('share-link');
 shareLink.addEventListener('click', async e => {
   e.preventDefault();
-  const url = location.origin + location.pathname + '?station=' + encodeURIComponent(station);
+  const url = location.origin + location.pathname + currentModeQuery();
   try {
     if (navigator.share) await navigator.share({ title: document.title, url });
     else {
@@ -5413,7 +5485,8 @@ if (mode === 'rivers') {
   applyModeChrome();
   stationInput.value = '';
   setScreenAria();
-  loadRising(); // no refresh interval — the baseline moves once a day
+  loadRising();
+  refreshTimer = setInterval(loadRising, REFRESH_MS); // the live half of the diff still polls
 } else if (mode === 'total') {
   applyModeChrome();
   stationInput.value = '';
