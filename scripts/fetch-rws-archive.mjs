@@ -125,13 +125,24 @@ const ONLY = (opt('station', '') || '').toLowerCase();
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const readJson = path => { try { return JSON.parse(readFileSync(path, 'utf8')); } catch { return null; } };
 
+// format `d` as a +01:00 wall-clock timestamp, matching the flat (non-DST)
+// UTC+1 convention the year boundaries below already use
+function rwsTimestamp(d) {
+  const shifted = new Date(d.getTime() + 60 * 60 * 1000);
+  return `${shifted.toISOString().slice(0, 19)}+01:00`;
+}
+
 // one calendar year, boundaries in +01:00 so condense's MEZ bucketing keeps every
-// point inside year y (no spill into the neighbouring year's bundle)
+// point inside year y (no spill into the neighbouring year's bundle). The DD-API
+// returns tide FORECASTS for future timestamps (the 4 tidal gauges especially),
+// so the running year's window is capped at `now` — never request, and belt-and-
+// braces never keep, a point past the current moment.
 export async function fetchYear(code, y, doFetch = fetch) {
+  const end = y === CURRENT_YEAR ? rwsTimestamp(now) : `${y}-12-31T23:59:59+01:00`;
   const body = {
     Locatie: { Code: code },
     AquoPlusWaarnemingMetadata: { AquoMetadata: { Compartiment: { Code: 'OW' }, Grootheid: { Code: 'WATHTE' } } },
-    Periode: { Begindatumtijd: `${y}-01-01T00:00:00+01:00`, Einddatumtijd: `${y}-12-31T23:59:59+01:00` },
+    Periode: { Begindatumtijd: `${y}-01-01T00:00:00+01:00`, Einddatumtijd: end },
   };
   const res = await doFetch(OPHALEN, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -144,6 +155,7 @@ export async function fetchYear(code, y, doFetch = fetch) {
   for (const w of j.WaarnemingenLijst || []) for (const m of w.MetingenLijst || []) {
     const v = m.Meetwaarde && m.Meetwaarde.Waarde_Numeriek;
     if (v == null || Math.abs(v) > MAX_VALID_CM) continue; // gap sentinel — dropped, values kept raw
+    if (Date.parse(m.Tijdstip) > now.getTime()) continue; // belt-and-braces: never keep a forecast point
     out.push({ timestamp: m.Tijdstip, value: v });
   }
   return out;
