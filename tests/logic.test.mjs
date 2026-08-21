@@ -1444,6 +1444,188 @@ test('drawSparkline renders a flat series at half height, not as an empty chart'
   assert.ok(flat.includes('min 77  max 77'));
 });
 
+test('bucketSeries: buckets tile the window, extremes come from every point', () => {
+  const app = loadApp();
+  // 12 points into 4 columns: three per bucket, nothing dropped
+  const b = app.run('bucketSeries([5, 1, 9, 4, 4, 4, 7, 2, 8, 0, 6, 3], 4)');
+  assert.deepEqual(b.lo, [1, 4, 2, 0]);
+  assert.deepEqual(b.hi, [9, 4, 8, 6]);
+  assert.equal(b.min, 0, 'window min is the smallest point, not the smallest sampled one');
+  assert.equal(b.max, 9);
+
+  // fewer points than columns: every bucket holds at most one point, so lo === hi
+  // and both equal series[floor(x * step)] — exactly what the old renderer drew
+  const series = [10, 40, 20, 30];
+  const s = app.run(`bucketSeries(${JSON.stringify(series)}, 9)`);
+  const old = Array.from({ length: 9 }, (_, x) => series[Math.min(3, Math.floor(x * (4 / 9)))]);
+  assert.deepEqual(s.lo, old, 'degrades to the old one-point-per-column sampling');
+  assert.deepEqual(s.hi, old);
+  assert.deepEqual(s.lo, s.hi, 'no band at all when a bucket holds one point');
+  assert.equal(s.min, 10);
+  assert.equal(s.max, 40);
+
+  // exactly as many points as columns: still one per bucket
+  const e = app.run('bucketSeries([3, 1, 2], 3)');
+  assert.deepEqual(e.lo, [3, 1, 2]);
+  assert.deepEqual(e.hi, [3, 1, 2]);
+});
+
+// the hosted archive merges as two synthetic points per day (min 06:00, max
+// 18:00), so one sample per column used to be a coin flip between the two — and
+// the caption described that subsample rather than the window
+test('drawSparkline: the caption reports the window extremes, not a column subsample', () => {
+  const app = loadApp({ now: NOON });
+  const grid = app.run(`(() => {
+    const pts = [];
+    for (let d = 0; d < 900; d++) {
+      const ts = ${NOON} - (900 - d) * 864e5;
+      pts.push([ts + 6 * 36e5, 200 - (d % 7)], [ts + 18 * 36e5, 260 + (d % 7)]);
+    }
+    // the record low and the record high sit on one single day in the middle
+    pts[900][1] = 12;
+    pts[901][1] = 987;
+    state.archive = pts;
+    historyKey = 'all';
+    sparkDisplay = null;
+    const g = makeGrid(12);
+    drawSparkline(g, 0, 0);
+    return g.ch.map(r => r.join(''));
+  })()`);
+  assert.ok(grid[0].includes('min 12  max 987'),
+    `caption carries the real extremes: "${grid[0].trim()}"`);
+  const body = grid.slice(3, 7).join('\n');
+  assert.ok(/[▒▓]/.test(body), 'columns that merged more than one point draw a min–max band');
+  assert.ok(grid[4].includes('▒ range'), 'the hatched span is named beside the chart');
+});
+
+test('drawSparkline: windows with fewer points than columns stay solid, unbanded', () => {
+  for (const width of [390, 1200]) {
+    const app = loadApp({ now: NOON, width });
+    const grid = app.run(`(() => {
+      // 20 hourly readings — fewer than either grid's column count
+      state.archive = Array.from({ length: 20 }, (_, i) => [${NOON} - (20 - i) * 36e5, 100 + i * 3]);
+      historyKey = '24h';
+      sparkDisplay = null;
+      const g = makeGrid(12);
+      drawSparkline(g, 0, 0);
+      return g.ch.map(r => r.join(''));
+    })()`);
+    const flat = grid.join('\n');
+    assert.ok(!/[▒▓]/.test(flat), `${width}px: no band glyphs when every bucket holds one point`);
+    assert.ok(!flat.includes('▒ range'), `${width}px: no band legend either`);
+    assert.ok(flat.includes('█'), `${width}px: solid water body`);
+    assert.ok(grid[0].includes('min 100  max 157'), `${width}px: caption: "${grid[0].trim()}"`);
+  }
+});
+
+// ---------- "is this unusual?" line ----------
+
+// a station's stats stand-in: `n` archived daily means 1..n, and a climatology
+// for the month under test
+const fakeStats = (n, clim = null, years = 26) => ({
+  allSorted: Array.from({ length: n }, (_, i) => i + 1),
+  clim: Array.from({ length: 12 }, (_, m) => (m === 7 ? clim : null)),
+  years: Array.from({ length: years }, (_, i) => 2000 + i),
+});
+
+test('unusualStats: percentile rank over the archived distribution, edges included', () => {
+  const app = loadApp();
+  const st = JSON.stringify(fakeStats(100));
+  const pct = cm => app.run(`unusualStats(${st}, ${cm}, 7)`).pct;
+  assert.equal(pct(0.5), 0, 'below every archived day → 0th percentile');
+  assert.equal(pct(1), 1, 'equal to the single lowest day');
+  assert.equal(pct(50), 50);
+  assert.equal(pct(100), 100, 'equal to the highest day → 100th percentile');
+  assert.equal(pct(9999), 100, 'above every archived day stays capped at 100');
+  assert.equal(app.run(`unusualStats(${st}, 91, 7)`).years, 26);
+  assert.equal(app.run(`unusualStats(${st}, 91, 7)`).cm, 91, 'the level is rounded, not reformatted');
+});
+
+test('unusualStats: null without an archive, without a reading, or below the noise floor', () => {
+  const app = loadApp();
+  assert.equal(app.run('unusualStats(null, 342, 7)'), null, 'no stats at all');
+  assert.equal(app.run(`unusualStats({ allSorted: [], clim: [], years: [] }, 342, 7)`), null, 'empty archive');
+  assert.equal(app.run(`unusualStats(${JSON.stringify(fakeStats(44))}, 20, 7)`), null,
+    'one day short of HIST_MIN_DAYS stays silent');
+  assert.ok(app.run(`unusualStats(${JSON.stringify(fakeStats(45))}, 20, 7)`), 'exactly HIST_MIN_DAYS speaks');
+  assert.equal(app.run(`unusualStats(${JSON.stringify(fakeStats(100))}, NaN, 7)`), null, 'no numeric reading');
+  // an archive that reaches back far enough but has no completed year for this
+  // month yet: rank still works, the climatology half is simply absent
+  const noClim = app.run(`unusualStats(${JSON.stringify(fakeStats(100))}, 50, 7)`);
+  assert.equal(noClim.climMean, null);
+  assert.equal(noClim.z, null);
+  assert.equal(app.run(`unusualText(${JSON.stringify(noClim)}, false)`), '50 cm · 50th pct of 26y');
+});
+
+test('unusualStats: σ distance, incl. the sd floor that keeps tiny samples sane', () => {
+  const app = loadApp();
+  const st = n => JSON.stringify(fakeStats(60, { mean: 268, sd: n, min: 1, max: 2, med: 1 }));
+  const u = app.run(`unusualStats(${st(50)}, 338, 7)`);
+  assert.equal(u.climMean, 268);
+  assert.equal(u.z.toFixed(2), '1.40', '(338 - 268) / 50');
+  // buildHistStats floors sd at 1 cm; a floored sd must still produce a finite z
+  const tiny = app.run(`unusualStats(${st(1)}, 271, 7)`);
+  assert.equal(tiny.z, 3, 'a 1 cm sd gives a large but finite σ distance');
+  assert.ok(Number.isFinite(app.run(`unusualStats(${st(1)}, 268, 7)`).z), 'zero deviation stays finite');
+  assert.equal(app.run(`unusualStats(${st(50)}, 218, 7)`).z.toFixed(1), '-1.0', 'below the mean goes negative');
+});
+
+test('unusualText: terminal one-liner, compact variant fits 44 columns', () => {
+  const app = loadApp();
+  const u = { cm: 342, pct: 91, years: 26, month: 7, climMean: 268, z: 1.42 };
+  assert.equal(app.run(`unusualText(${JSON.stringify(u)}, false)`),
+    '342 cm · 91st pct of 26y · AUG mean 268 (+1.4σ)');
+  const compact = app.run(`unusualText(${JSON.stringify(u)}, true)`);
+  assert.equal(compact, '91st pct of 26y · AUG ⌀268 +1.4σ');
+  assert.ok(compact.length <= 44, `compact line fits the 44-column grid (${compact.length})`);
+  // widest plausible numbers must still fit the compact grid
+  const wide = app.run(`unusualText(${JSON.stringify({ cm: 1234, pct: 100, years: 26, month: 11, climMean: -100, z: -12.34 })}, true)`);
+  assert.ok(wide.length <= 44, `worst case still fits (${wide.length}): "${wide}"`);
+  assert.equal(app.run('unusualText(null, false)'), '');
+  // ordinals: the 11/12/13 exception and the plain cases
+  const pctText = p => app.run(`unusualText(${JSON.stringify({ ...u, pct: p })}, true)`).split(' ')[0];
+  assert.deepEqual([0, 1, 2, 3, 4, 11, 12, 13, 21, 42, 100].map(pctText),
+    ['0th', '1st', '2nd', '3rd', '4th', '11th', '12th', '13th', '21st', '42nd', '100th']);
+});
+
+test('drawSparkline: the unusual line appears only with an archive, and costs one row', () => {
+  const mk = search => {
+    const app = loadApp({ now: JULY, search });
+    seedArchive(app);
+    app.run(`historyKey = 'all'; sparkDisplay = null;`);
+    return app;
+  };
+  // no gauge reading yet → the line (and its grid row) must not exist
+  const bare = mk('?station=BONN');
+  assert.equal(bare.run('unusualNow()'), null, 'no current measurement, no verdict');
+  assert.equal(bare.run(`(() => { const g = makeGrid(12); return drawSparkline(g, 0, 0); })()`),
+    bare.run('SPLASH_ROWS + SPARK_ROWS + 2'), 'grid height unchanged without the line');
+
+  const app = mk('?station=BONN');
+  app.run(`state.gauge = { currentMeasurement: { value: 342, timestamp: ${JULY} } }`);
+  const u = app.run('unusualNow()');
+  assert.ok(u, 'three seeded years are enough archive to judge against');
+  assert.equal(u.month, 6, 'JULY fixture → the July climatology');
+  assert.equal(app.run(`(() => { const g = makeGrid(12); return drawSparkline(g, 0, 0); })()`),
+    app.run('SPLASH_ROWS + SPARK_ROWS + 3'), 'the line takes exactly one extra row');
+  const { text, cls } = app.run(`(() => {
+    const g = makeGrid(12);
+    drawSparkline(g, 0, 0);
+    const r = SPLASH_ROWS + SPARK_ROWS + 2; // axis row + 1
+    return { text: g.ch[r].join('').trim(), cls: g.cl[r].join('') };
+  })()`);
+  assert.match(text, /^342 cm · \d+(st|nd|rd|th) pct of 3y · JUL mean \d+ \([+-][\d.]+σ\)$/,
+    `line reads as designed: "${text}"`);
+  // the seeded summer trough sits far below 342 cm → a wet anomaly wears the flood accent
+  assert.ok(u.z >= 1.5 && cls.includes('w2'), `far-out σ takes the flood accent (z=${u.z})`);
+
+  // a station WSV keeps no archive for renders exactly as before
+  const none = loadApp({ now: JULY, search: '?station=BONN' });
+  none.run(`state.archive = [[${JULY} - 36e5, 300], [${JULY}, 342]]; histCache = null;`);
+  none.run(`state.gauge = { currentMeasurement: { value: 342, timestamp: ${JULY} } }; state.repoArchive = 'none';`);
+  assert.equal(none.run('unusualNow()'), null, 'two local points are not a distribution');
+});
+
 test('histStats cache: switching stations never serves the old station\'s stats', () => {
   const mk = v => { const pts = []; for (let d = 0; d < 365; d++) { const ts = Date.UTC(2025, 0, 1) + d * 864e5; pts.push([ts + 6 * 36e5, v], [ts + 18 * 36e5, v]); } return pts; };
   const app = loadApp({ now: JULY, search: '?station=BONN&view=years' });

@@ -836,7 +836,16 @@ function screenSummary() {
     trend <= -TREND_FLAT ? `, falling ${Math.abs(trend).toFixed(1)} cm per hour` : ', steady';
   const km = state.info.km != null ? `, km ${state.info.km}` : '';
   const wtTxt = state.wt != null ? `, water ${state.wt.toFixed(1)} °C` : '';
-  return `${station} on ${state.info.water.shortname}${km}: water level ${Math.round(cur.value)} cm${trendTxt}${wtTxt}. State ${cur.stateMnwMhw || 'unknown'}.`;
+  // the sparkline's "is this unusual?" line is drawn into the grid, which the
+  // aria-label replaces — so it has to be spelled out here too, or it reaches
+  // sighted readers only
+  const u = unusualNow();
+  const unusualTxt = !u ? ''
+    : ` Against ${u.years} archived years this level ranks ${ordinal(u.pct)} percentile` +
+      (u.climMean == null ? '.'
+        : `; the ${MONTH_ABBR[u.month]} mean is ${u.climMean} cm, ` +
+          `${Math.abs(u.z).toFixed(1)} sigma ${u.z >= 0 ? 'above' : 'below'} it.`);
+  return `${station} on ${state.info.water.shortname}${km}: water level ${Math.round(cur.value)} cm${trendTxt}${wtTxt}. State ${cur.stateMnwMhw || 'unknown'}.${unusualTxt}`;
 }
 
 // while --help is shown, the screen holds a man page instead of the live grid,
@@ -2180,6 +2189,34 @@ const historyPreset = () => HISTORY_PRESETS.find(p => p.k === historyKey);
 // whenever there isn't enough data, so a new dataset snaps in instead of springing from junk
 let sparkDisplay = null, sparkVelocity = null, sparkLastT = null;
 
+// One min–max band per column, bucketed by index RANGE — not one sampled point
+// per column. The hosted archive merges in as two synthetic points per day (the
+// daily min at 06:00, the daily max at 18:00), so the default ALL window carries
+// ~19k points across ~72 columns and picking series[floor(x * step)] was a coin
+// flip between each day's low and its high. Buckets tile the window exactly, so
+// no point is dropped and the caption can describe the whole window. With fewer
+// points than columns (24H, 3D) every bucket holds at most one point and
+// lo === hi === the point the old code sampled — those windows render unchanged.
+function bucketSeries(series, cols) {
+  const step = series.length / cols;
+  const lo = new Array(cols), hi = new Array(cols);
+  for (let x = 0; x < cols; x++) {
+    const a = Math.floor(x * step), b = Math.floor((x + 1) * step);
+    if (b <= a) { lo[x] = hi[x] = series[Math.min(series.length - 1, a)]; continue; }
+    let mn = Infinity, mx = -Infinity;
+    for (let i = a; i < b; i++) {
+      const v = series[i];
+      if (v < mn) mn = v;
+      if (v > mx) mx = v;
+    }
+    lo[x] = mn; hi[x] = mx;
+  }
+  // window extremes, not the extremes of whatever the columns happened to hit
+  let min = Infinity, max = -Infinity;
+  for (const v of series) { if (v < min) min = v; if (v > max) max = v; }
+  return { lo, hi, min, max, step };
+}
+
 function drawSparkline(g, row, t) {
   const wd = historyPreset().d;
   const cutoff = wd ? Date.now() - wd * 864e5 : 0;
@@ -2192,9 +2229,9 @@ function drawSparkline(g, row, t) {
   }
   const spanDays = Math.max(1, Math.round((arch[arch.length - 1][0] - arch[0][0]) / 864e5));
   const chartW = COLS - 12;
-  const step = series.length / chartW;
-  const vals = Array.from({ length: chartW }, (_, x) => series[Math.min(series.length - 1, Math.floor(x * step))]);
-  const min = Math.min(...vals), max = Math.max(...vals), span = Math.max(max - min, 1);
+  const { lo, hi, min, max, step } = bucketSeries(series, chartW);
+  const span = Math.max(max - min, 1);
+  const banded = lo.some((v, x) => v < hi[x]); // true once a column merges >1 point
   // ALL says how much it really is: day count while short, years once it spans them
   const label = `HISTORY · ${wd ? historyPreset().label : spanDays > 730 ? (spanDays / 365.25).toFixed(1) + 'Y' : spanDays + 'D'}`;
   put(g, row, 0, label, 'd');
@@ -2218,26 +2255,38 @@ function drawSparkline(g, row, t) {
   // column instead of a flat snap, so history-range changes read as the level moving
   const dt = sparkLastT === null ? 0.12 : Math.min(0.2, t - sparkLastT);
   sparkLastT = t;
-  if (reduceMotion.matches || !sparkDisplay || sparkDisplay.length !== chartW) { sparkDisplay = vals.slice(); sparkVelocity = vals.map(() => 0); }
+  // the spring animates the band TOP per column — the silhouette the eye follows —
+  // and the band bottom rides one band height below it, so the hatched span never
+  // lags behind the surface it belongs to (and vanishes entirely when lo === hi)
+  if (reduceMotion.matches || !sparkDisplay || sparkDisplay.length !== chartW) { sparkDisplay = hi.slice(); sparkVelocity = hi.map(() => 0); }
   for (let x = 0; x < chartW; x++) {
     const springK = 45 + (x % 7) * 4, damping = 7 + (x % 5) * 0.6; // slight per-column variation → organic slosh
-    const accel = (vals[x] - sparkDisplay[x]) * springK - sparkVelocity[x] * damping;
+    const accel = (hi[x] - sparkDisplay[x]) * springK - sparkVelocity[x] * damping;
     sparkVelocity[x] += accel * dt;
     sparkDisplay[x] += sparkVelocity[x] * dt;
   }
 
   const partial = ' ▁▂▃▄▅▆▇';
   const splashGlyphs = '·˚°∘';
+  // a perfectly flat window still shows water: pin it to half height instead
+  // of normalizing every point to zero fill (which looked like "no data")
+  const fracOf = v => max === min ? 0.5 : (v - min) / span;
   for (let x = 0; x < chartW; x++) {
-    // a perfectly flat window still shows water: pin it to half height instead
-    // of normalizing every point to zero fill (which looked like "no data")
-    const frac = max === min ? 0.5 : (sparkDisplay[x] - min) / span;
-    const level = frac * SPARK_ROWS * 8;
+    const level = fracOf(sparkDisplay[x]) * SPARK_ROWS * 8;
+    const floorLevel = fracOf(sparkDisplay[x] - (hi[x] - lo[x])) * SPARK_ROWS * 8;
     for (let r = 0; r < SPARK_ROWS; r++) {
       const cellLevel = Math.max(0, Math.min(8, level - r * 8));
+      if (cellLevel < 1) continue;
+      const cellFloor = Math.max(0, Math.min(8, floorLevel - r * 8));
       const rr = row + SPLASH_ROWS + 1 + SPARK_ROWS - 1 - r;
-      if (cellLevel >= 8) put(g, rr, x, '█', 'w');
-      else if (cellLevel >= 1) put(g, rr, x, partial[Math.floor(cellLevel)], 'w');
+      // ink density carries the band — solid below the column's low, hatched
+      // through the span it swung across, the sub-cell ramp for the surface
+      // itself. A cell the low crosses takes an intermediate density rather than
+      // flipping at the halfway mark, which dithered █/▒ across neighbors whose
+      // lows straddled it. A one-point bucket has cellFloor === cellLevel === 8,
+      // so short windows stay solid exactly as before.
+      if (cellLevel < 8) put(g, rr, x, partial[Math.floor(cellLevel)], 'w');
+      else put(g, rr, x, cellFloor >= 6 ? '█' : cellFloor >= 2 ? '▓' : '▒', 'w');
     }
     // overshoot above the frame: the water briefly splashes over the top
     const overflow = level - SPARK_ROWS * 8;
@@ -2250,6 +2299,8 @@ function drawSparkline(g, row, t) {
     }
   }
   put(g, row + SPLASH_ROWS + 1, chartW + 1, `┐ now`, 'd');
+  // the hatched span needs naming, but only on windows where columns merge points
+  if (banded) put(g, row + SPLASH_ROWS + 2, chartW + 1, `│ ▒ range`, 'd');
   put(g, row + SPLASH_ROWS + SPARK_ROWS, chartW + 1, `┘ ${series.length} pts`, 'd');
 
   // time axis under the bars. Columns sample the archive by index, not by time
@@ -2275,7 +2326,16 @@ function drawSparkline(g, row, t) {
     lastEnd = lx + lbl.length;
     lastLbl = lbl;
   }
-  return row + SPLASH_ROWS + SPARK_ROWS + 2;
+  // one line of context under the axis: where this reading sits in the station's
+  // own record. Stations without an archive never reach it — see unusualNow()
+  const u = unusualNow();
+  if (!u) return row + SPLASH_ROWS + SPARK_ROWS + 2;
+  const uText = unusualText(u, isCompact());
+  put(g, axisRow + 1, 0, uText, 'd');
+  // far out of season wears the anomaly heatmap's accents: wet up, dry down
+  const sig = /[+-][\d.]+σ/.exec(uText);
+  if (sig && Math.abs(u.z) >= 1.5) put(g, axisRow + 1, sig.index, sig[0], u.z > 0 ? 'w2' : 's');
+  return row + SPLASH_ROWS + SPARK_ROWS + 3;
 }
 
 function drawProfile(g, row) {
@@ -2595,7 +2655,7 @@ function buildHistStats(pts, nowMs) {
   let lo = quantile(allSorted, 0.02), hi = quantile(allSorted, 0.98);
   if (lo != null && hi - lo < 4) { lo = allSorted[0]; hi = allSorted[allSorted.length - 1]; }
   return {
-    daily, byYear, years, curYear, clim, lo, hi,
+    daily, byYear, years, curYear, clim, lo, hi, allSorted,
     allMin: allSorted.length ? allSorted[0] : null,
     allMax: allSorted.length ? allSorted[allSorted.length - 1] : null,
     climYears: years.filter(y => y < curYear).length,
@@ -2655,6 +2715,56 @@ function stepHistYear(d) {
 
 const HIST_MIN_DAYS = 45; // below this the sections are noise — show a note instead
 const HIST_CLIM_H = 9, HIST_OVER_H = 10;
+
+// "is this unusual?" — the header only carries the WSV three-bucket state, while
+// the archive knows the whole distribution. Pure over a buildHistStats result plus
+// a level in cm: percentile rank among the archived daily means, how many years
+// those cover, and the current month's climatological mean with the σ-distance to
+// it. null whenever the archive is too thin to say anything honest — same
+// threshold the years view uses before it draws its sections.
+function unusualStats(st, cm, monthIdx) {
+  if (!st || !Number.isFinite(cm)) return null;
+  const sorted = st.allSorted || [];
+  if (sorted.length < HIST_MIN_DAYS) return null;
+  // percentile rank = share of archived days at or below this level; binary
+  // search for that upper bound so the line costs nothing at 8 fps
+  let a = 0, b = sorted.length;
+  while (a < b) { const m = (a + b) >> 1; if (sorted[m] <= cm) a = m + 1; else b = m; }
+  const c = st.clim[monthIdx];
+  return {
+    cm: Math.round(cm),
+    pct: Math.round((a / sorted.length) * 100),
+    years: st.years.length,
+    month: monthIdx,
+    // no completed year covering this month yet → no climatology to compare against
+    climMean: c ? Math.round(c.mean) : null,
+    z: c ? (cm - c.mean) / c.sd : null,
+  };
+}
+
+const ordinal = n => n + (n % 100 >= 11 && n % 100 <= 13 ? 'th' : ['th', 'st', 'nd', 'rd'][n % 10] || 'th');
+
+// terminal-style one-liner, e.g. "342 cm · 91st pct of 26y · AUG mean 268 (+1.4σ)".
+// Compact drops the level — the big digits two blocks up already say it — and the
+// spelled-out "mean", which is what makes the full line overflow 44 columns.
+function unusualText(u, compact) {
+  if (!u) return '';
+  const rank = `${ordinal(u.pct)} pct of ${u.years}y`;
+  if (u.climMean == null) return compact ? rank : `${u.cm} cm · ${rank}`;
+  const sig = `${u.z >= 0 ? '+' : ''}${u.z.toFixed(1)}σ`;
+  return compact
+    ? `${rank} · ${MONTH_ABBR[u.month]} ⌀${u.climMean} ${sig}`
+    : `${u.cm} cm · ${rank} · ${MONTH_ABBR[u.month]} mean ${u.climMean} (${sig})`;
+}
+
+// the live reading judged against this station's own archive, or null when there
+// is no archive (or no reading) to judge it by — the line is then simply absent
+// and the grid keeps exactly the height it had before
+function unusualNow() {
+  const cur = state.gauge && state.gauge.currentMeasurement;
+  if (!cur || !Number.isFinite(cur.value)) return null;
+  return unusualStats(histStats(), cur.value, new Date().getUTCMonth());
+}
 
 function histGridRows(st) {
   if (st.daily.length < HIST_MIN_DAYS) return 6;
@@ -5436,7 +5546,7 @@ function render(t) {
     return;
   }
   const g = makeGrid(HEADER_ROWS + CHART_ROWS + 1 + SPLASH_ROWS + SPARK_ROWS + 2 +
-    PROFILE_GAP + PROFILE_ROWS + PROFILE_FOOT);
+    (unusualNow() ? 1 : 0) + PROFILE_GAP + PROFILE_ROWS + PROFILE_FOOT);
   let row = drawHeader(g, 0, t);
   row = drawChart(g, row, t);
   row = drawSparkline(g, row, t);
