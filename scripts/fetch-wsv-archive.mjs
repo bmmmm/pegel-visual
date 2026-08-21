@@ -127,11 +127,24 @@ export function unzipJsonEntry(bytes) {
 
 export const daysInYear = y => ((y % 4 === 0 && y % 100 !== 0) || y % 400 === 0) ? 366 : 365;
 
+// The raw WSV series carries sensor sentinels next to real readings — measured
+// 2026-08-21 across the archive: 83 values from the 99999 / -32753 / 65250 /
+// 1300000 / 2568900 families, sitting beside real stages in the hundreds of cm.
+// Bucketed, a single one of them freezes a lie into the immutable bundle (a day
+// whose max is 99999). Bounds deliberately match plausibleCm in
+// scripts/build-river-totals.mjs — keep the two in sync, they describe the same
+// physical range (widest real stages are canal gauges around 5600 cm). The
+// filter is unit-agnostic on purpose: gauges reporting m+NN send tiny
+// magnitudes like -0.87, which these bounds leave untouched.
+export const PLAUSIBLE_MIN_CM = -2000;
+export const PLAUSIBLE_MAX_CM = 20000;
+
 export function condense(measurements) {
   const years = new Map(); // y -> {min:[], max:[]}
   for (const m of measurements) {
     const t = Date.parse(m.timestamp);
     if (!Number.isFinite(t) || m.value == null) continue;
+    if (!(m.value >= PLAUSIBLE_MIN_CM && m.value <= PLAUSIBLE_MAX_CM)) continue; // sentinel, not water
     const mez = t + 36e5;
     const y = new Date(mez).getUTCFullYear();
     const day = Math.floor((mez - Date.UTC(y, 0, 1)) / 864e5);
@@ -144,6 +157,47 @@ export function condense(measurements) {
     if (yr.min[day] == null || m.value < yr.min[day]) yr.min[day] = m.value;
     if (yr.max[day] == null || m.value > yr.max[day]) yr.max[day] = m.value;
   }
+  return years;
+}
+
+// ---------- request window planning (the Dec-31 midnight trap) ----------
+
+// The ZIP prepare endpoint reads `end` as MIDNIGHT of that day, so end=Y-12-31
+// hands back only Dec 31's 00:00 reading and flattens the year's last day to
+// min == max (measured 2026-08-21: ~2076 station-years, 601 of 622 stations for
+// 2025 alone). Every request therefore runs through Jan 1 of the FOLLOWING year,
+// which returns Dec 31 in full. The price is a 1-value sliver of that following
+// year, dropped again by dropSpillYears before anything is written.
+export const requestEnd = lastYear => `${lastYear + 1}-01-01`;
+
+// inverse of requestEnd: the last year a request window actually covers in full.
+// A Jan-1 end date belongs to the previous year (it is the midnight boundary,
+// not a day of data); any other date is a day inside its own year.
+export const lastYearOf = endDate => Number(endDate.slice(0, 4)) - (endDate.slice(5) === '01-01' ? 1 : 0);
+
+// chunk plan for the coastal-gauge fallback: ascending 3-year windows, each one
+// ending at Jan 1 of the next chunk's first year (so no chunk boundary flattens
+// its Dec 31). That the plan is ascending is load-bearing: every chunk carries a
+// 1-value sliver of the next chunk's first year, and the caller's
+// `years.set(yy, data)` lets the LATER chunk's full year overwrite that sliver.
+// The final chunk keeps the caller's own end date, so a mid-year window is never
+// widened into the future; its sliver is the spill year dropSpillYears removes.
+export function planChunks(startYear, endDate, chunkYears = 3) {
+  const lastYear = lastYearOf(endDate);
+  const plan = [];
+  for (let y = startYear; y <= lastYear; y += chunkYears) {
+    const last = Math.min(y + chunkYears - 1, lastYear);
+    plan.push({ startYear: y, lastYear: last, end: last === lastYear ? endDate : requestEnd(last) });
+  }
+  return plan;
+}
+
+// drop everything past the requested window — the Jan-1 end date always brings
+// back a 1-day sliver of the next year, and writeStation would happily write it
+// (a single non-null day is enough) into closed.json or merge it into
+// current.json as a year the run never meant to touch
+export function dropSpillYears(years, lastYear) {
+  for (const y of years.keys()) if (y > lastYear) years.delete(y);
   return years;
 }
 
@@ -178,24 +232,26 @@ async function fetchRange(uuid, startYear, endDate) {
 
 // full range in one request where possible; coastal gauges measure every
 // minute, whose 26-year JSON exceeds node's max string length — those fall
-// back to 3-year chunks (year files never straddle a chunk boundary)
+// back to 3-year chunks (planChunks: no year is ever split across chunks, and
+// each chunk reaches one day into the next so its Dec 31 stays a full day)
 async function fetchCondensed(uuid, startYear, endDate) {
+  const lastYear = lastYearOf(endDate);
   try {
     const measurements = await fetchRange(uuid, startYear, endDate);
-    return { years: condense(measurements), pts: measurements.length };
+    return { years: dropSpillYears(condense(measurements), lastYear), pts: measurements.length };
   } catch (e) {
     if (!/string longer|Invalid string length/i.test(e.message)) throw e;
-    const endYear = Number(endDate.slice(0, 4));
     const years = new Map();
     let pts = 0;
-    for (let y = startYear; y <= endYear; y += 3) {
-      const to = Math.min(y + 2, endYear);
+    for (const c of planChunks(startYear, endDate)) {
       await sleep(THROTTLE_MS);
-      const chunk = await fetchRange(uuid, y, to === endYear ? endDate : `${to}-12-31`);
+      const chunk = await fetchRange(uuid, c.startYear, c.end);
       pts += chunk.length;
+      // ascending plan: the sliver of the next chunk's first year that this
+      // chunk's Jan-1 end drags in is overwritten by that chunk's full year
       for (const [yy, data] of condense(chunk)) years.set(yy, data);
     }
-    return { years, pts };
+    return { years: dropSpillYears(years, lastYear), pts };
   }
 }
 
@@ -226,8 +282,12 @@ async function fetchCurrentViaRest(uuid) {
 // The client uses this to skip pointless fetches and to say so precisely.
 export function buildManifest(stations, out) {
   const manifest = { generated: new Date().toISOString(), stations: {} };
-  for (const s of stations) {
-    const dir = join(out, s.uuid);
+  // read before the rewrite below — for a station that has left the live list
+  // the old manifest is the only remaining record of its water
+  const previous = (readJson(join(out, 'manifest.json')) || {}).stations || {};
+
+  const entryFor = (uuid, n, w) => {
+    const dir = join(out, uuid);
     const years = [];
     let gaps = 0; // honesty metadata: missing days within the closed bundle
     for (const yr of readJson(join(dir, 'closed.json')) || []) {
@@ -235,7 +295,7 @@ export function buildManifest(stations, out) {
       for (let d = 0; d < yr.min.length; d++) if (yr.min[d] == null && yr.max[d] == null) gaps++;
     }
     if (existsSync(join(dir, 'current.json'))) years.push(CURRENT_YEAR);
-    const entry = { n: s.shortname, w: (s.water && s.water.shortname) || '' };
+    const entry = { n, w };
     if (years.length) {
       entry.from = Math.min(...years);
       entry.to = Math.max(...years);
@@ -249,8 +309,31 @@ export function buildManifest(stations, out) {
     // source a sibling adapter wrote (order-independent with the RWS refresh).
     const src = (readJson(join(dir, 'meta.json')) || {}).source;
     if (src) entry.source = src;
-    manifest.stations[s.uuid] = entry;
+    return entry;
+  };
+
+  for (const s of stations) {
+    manifest.stations[s.uuid] = entryFor(s.uuid, s.shortname, (s.water && s.water.shortname) || '');
   }
+
+  // a station can vanish from the live WSV list while its archived years stay on
+  // disk (found 2026-08-21: 003200ab-…, ILMENAU, 14 closed years) — iterating
+  // only the live list drops its manifest entry and makes that data unreachable
+  // for a client that navigates by manifest. Keep such orphans listed: name from
+  // meta.json, water from the manifest we are about to overwrite, from/to/gaps
+  // derived from the same data files as every other entry. Directories without
+  // data files are not resurrected.
+  let dirs = [];
+  try { dirs = readdirSync(out, { withFileTypes: true }).filter(d => d.isDirectory()).map(d => d.name); }
+  catch { dirs = []; }
+  for (const uuid of dirs) {
+    if (manifest.stations[uuid]) continue;
+    const dir = join(out, uuid);
+    if (!existsSync(join(dir, 'closed.json')) && !existsSync(join(dir, 'current.json'))) continue;
+    const name = (readJson(join(dir, 'meta.json')) || {}).name;
+    manifest.stations[uuid] = entryFor(uuid, name || previous[uuid]?.n || '', previous[uuid]?.w || '');
+  }
+
   writeFileSync(join(out, 'manifest.json'), JSON.stringify(manifest));
   return manifest;
 }
@@ -348,7 +431,11 @@ export function writeStation(dir, name, years, fetchedFrom, fetchedThrough, extr
 export async function freezeFromZip(dir, uuid, y, fetchYear = fetchCondensed) {
   const cur = readJson(join(dir, 'current.json'));
   if (!cur || cur.y !== y) return false; // already graduated or never accumulated
-  const { years } = await fetchYear(uuid, y, `${y}-12-31`);
+  // through Jan 1 of the next year so the frozen year's Dec 31 is a real span
+  // and not its 00:00 reading twice; the sliver year that comes back is ignored
+  // here by construction (only years.get(y) is read) and dropped by
+  // fetchCondensed anyway
+  const { years } = await fetchYear(uuid, y, requestEnd(y));
   const zy = years.get(y);
   if (!zy || !zy.min.some(v => v != null)) return false; // ZIP has nothing better
   const min = zy.min.slice(), max = zy.max.slice();
@@ -443,7 +530,9 @@ async function main() {
       }
       const { years, pts } = CURRENT_ONLY
         ? await fetchCurrentViaRest(s.uuid)
-        : await fetchCondensed(s.uuid, startYear, `${TO}-12-31`);
+        // requestEnd(TO), not `${TO}-12-31`: the endpoint's midnight `end` would
+        // hand back a single 00:00 reading for Dec 31 and flatten it to min==max
+        : await fetchCondensed(s.uuid, startYear, requestEnd(TO));
       if (CURRENT_ONLY) {
         // a REST refresh proves nothing about closed years, so it must not bump
         // meta.fetchedThrough — that would cancel the gap sweep for stations
