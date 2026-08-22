@@ -2814,3 +2814,46 @@ test('total chrome: breadcrumb in the history bar, home button offered', () => {
   const labels = app.el('history-bar').children.map(b => b.textContent);
   assert.deepEqual(labels.slice(-4), ['ALL', '2025', 'MAY', '12']);
 });
+
+// ---------- plate helpers (display redesign, stage 0) ----------
+
+test('harness guard: index.html holds exactly one bare script block', async () => {
+  const { readFileSync } = await import('node:fs');
+  const html = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
+  // the loader regex-extracts the first <script>…</script>; a renderer that
+  // ever emits the literal closing tag would silently truncate the suite's
+  // view of the app, and a second bare <script> would shadow half the code
+  assert.equal(html.split('<script>').length, 2, 'exactly one bare <script> tag');
+  assert.equal(html.split('</script').length, 2, 'exactly one closing script tag');
+});
+
+test('navHref: the data-st grammar maps to honest hrefs', () => {
+  const app = loadApp();
+  assert.equal(app.run(`navHref('BONN')`), '?station=BONN');
+  assert.equal(app.run(`navHref('river:ELDE MÜRITZ WASSERSTRASSE')`),
+    '?river=ELDE%20M%C3%9CRITZ%20WASSERSTRASSE');
+  assert.equal(app.run(`navHref('rising')`), '?rising');
+  assert.equal(app.run(`navHref('cmd:tall')`), null, 'in-view controls are buttons, not links');
+  assert.ok(app.run(`navAttrs('cmd:abs')`).includes('data-nav="cmd:abs"'));
+  assert.ok(!app.run(`navAttrs('cmd:abs')`).includes('href'), 'no href on a cmd target');
+  const a = app.run(`navAttrs('B<ONN"')`);
+  assert.ok(!a.includes('<'), 'hostile names never reach markup unescaped');
+});
+
+test('navTo: routes through the same switches as the grid layer', () => {
+  const app = loadApp();
+  app.run(`navTo('river:RHEIN')`);
+  assert.equal(app.run('mode'), 'river');
+  app.run(`navTo('rising')`);
+  assert.equal(app.run('mode'), 'rising');
+});
+
+test('plateDensity/bucketCols: scale with the measured width, clamped', () => {
+  const phone = loadApp({ width: 390 });
+  assert.equal(phone.run('plateDensity()'), 'narrow');
+  assert.equal(phone.run('bucketCols()'), 130);
+  const desk = loadApp({ width: 1200 });
+  assert.equal(desk.run('plateDensity()'), 'wide');
+  assert.equal(desk.run('bucketCols()'), 320, 'clamped: 1200/3 = 400 caps at 320');
+  assert.equal(desk.run('bucketCols(60)'), 40, 'floor at 40 buckets');
+});

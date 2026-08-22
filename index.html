@@ -32,13 +32,24 @@
     color-scheme: light dark;
     --paper: light-dark(#fbfbf9, #121417);
     --ink: light-dark(#141414, #e8e6e1);
-    /* dim decorates the grid; real UI text uses --mid, which clears WCAG AA */
-    --dim: light-dark(#8c8c8c, #767d82);
+    /* dim decorates; real UI text uses --mid. Both clear 4.5:1 on paper. */
+    --dim: light-dark(#737373, #7d848a);
     --mid: light-dark(#5c5c5c, #9aa0a4);
     --water: light-dark(#a8cede, #5b8aa3);      /* soft pastel light blue */
     --water-deep: light-dark(#6f9fb8, #9fd4ec); /* the surface accent must pop on dark paper */
     --bed: light-dark(#cabfa6, #7d7360);        /* faint sand */
     --sun: light-dark(#e0b24e, #e3bb63);        /* warm sun / heat accent */
+    /* plate palette — fill/line split. Pastels are FILLS: areas >= 24px, always
+       bounded by an ink hairline. Anything that carries meaning as a line, a
+       small mark, or text uses the -line sibling (>= 4.5:1 on paper). */
+    --dry: light-dark(#f0dcae, #4a3d1c);        /* drought bank / "dry" heat cell */
+    --water-line: light-dark(#2f6d8f, #9fd4ec);
+    --bed-line: light-dark(#7a6a45, #cabfa6);
+    --dry-line: light-dark(#8f6410, #e3bb63);
+    --rule: color-mix(in oklab, var(--ink) 22%, transparent);
+    /* prose wears sans; every number, unit, flag, URL and the prompt wear mono */
+    --font-text: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+    --font-data: ui-monospace, 'SF Mono', Monaco, 'Cascadia Mono', monospace;
   }
   ::selection { background: var(--water-deep); color: var(--paper); }
   :where(a, button):focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
@@ -61,7 +72,12 @@
     margin: 5vh auto 0;
     padding: 1.6em 1.8em;
     border: 2px solid var(--ink);
+    /* a definite width: container queries need one, and without it main would
+       collapse to shrink-to-fit the moment the character grid is gone */
+    width: min(76rem, 100% - 1.5rem);
     max-width: 100%; /* don't let a wide child (expanded archive) push past the viewport */
+    container-type: inline-size;
+    container-name: plate;
   }
   pre {
     margin: 0;
@@ -69,6 +85,27 @@
     white-space: pre;
   }
   #screen { view-transition-name: screen; }
+  /* while views migrate off the character grid: grid views center in the wide
+     plate; a migrated view flips #screen into .dom and takes the full width */
+  #screen:not(.dom) { width: fit-content; margin-inline: auto; }
+  #screen.dom {
+    white-space: normal;
+    font-family: var(--font-text);
+    line-height: 1.45;
+    font-size: 1rem;
+  }
+  /* visually hidden, still spoken: the plate's prose summary for screen readers */
+  .vh {
+    position: absolute;
+    width: 1px; height: 1px;
+    margin: -1px; padding: 0;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+  @media (pointer: coarse) {
+    #screen.dom a, #screen.dom button { min-block-size: 2.75rem; }
+  }
   #screen [data-st] {
     cursor: pointer;
     /* a quiet dotted underline says "click me" without shouting over the art */
@@ -1592,6 +1629,67 @@ function gridToHtml(g) {
     out.push(line);
   }
   return out.join('\n');
+}
+
+// ---------- plate helpers (the survey-plate renderers share these) ----------
+// Conventions, enforced by tests:
+//  - every *ViewModel() / render*() is a top-level `function` declaration, so
+//    the test harness reaches it by name through app.run()
+//  - never interpolate a raw value into markup — always ${esc(v)} or attr()
+//  - never emit the literal closing script tag from a renderer: the test
+//    loader regex-extracts this script block and would truncate there
+
+// UI strings routed through one flat table so a ?lang=de locale is one PR,
+// not a rewrite. Keys grow view by view as the plates land.
+const T = {
+  source: 'SOURCE',
+  sourceWsv: 'PEGELONLINE (WSV)',
+  refreshEvery: 'refreshes every 5 min',
+  link: 'LINK',
+  copy: 'copy',
+  copied: 'copied',
+  key: 'KEY',
+};
+
+function attr(name, v) { return ` ${name}="${esc(String(v))}"`; }
+
+function svgWrap(viewBox, body, attrs = '') {
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${viewBox}"${attrs}>${body}</svg>`;
+}
+
+// The click-target grammar shared with the grid's data-st layer: "cmd:…" are
+// in-view controls, "river:NAME" opens the whole-river profile, "rising" the
+// board, anything else is a station name. URL-addressable targets carry an
+// honest href so middle-click / open-in-new-tab work; cmd:… stay buttons.
+function navHref(target) {
+  if (target.startsWith('cmd:')) return null;
+  if (target.startsWith('river:')) return '?river=' + encodeURIComponent(target.slice(6));
+  if (target === 'rising') return '?rising';
+  return '?station=' + encodeURIComponent(target);
+}
+
+function navAttrs(target) {
+  const href = navHref(target);
+  return (href ? attr('href', href) : '') + attr('data-nav', target);
+}
+
+function navTo(target) { actOnGridTarget(target); }
+
+// Width, measured where it matters (the plate container). The test harness has
+// no layout, so the stub falls through to documentElement (loadApp's width).
+function plateWidth() {
+  const m = document.querySelector('main');
+  return (m && m.clientWidth) || document.documentElement.clientWidth || 1200;
+}
+
+// The only JS-visible width decision left once COLS dies: a handful of genuine
+// content choices (tick counts, label caps). Everything cosmetic is CSS.
+function plateDensity() { return plateWidth() < 544 ? 'narrow' : 'wide'; }
+
+// Data density for the history chart: ~1 bucket per 3 CSS px, clamped so a
+// watch-sized viewport still buckets and a wall of pixels doesn't overfetch.
+function bucketCols(px = plateWidth()) {
+  return Math.max(40, Math.min(320, Math.round(px / 3)));
 }
 
 // ---------- big digits (3x5) ----------
@@ -4869,6 +4967,16 @@ function actOnGridTarget(st) {
   else if (st === 'rising') switchRising(); // no station is named plain lowercase "rising"
   else switchStation(st, adsbInput.value);
 }
+// Plate targets are real links/buttons: one delegated handler dispatches them
+// through the same grammar as the grid's data-st layer. A modified click (new
+// tab, download, …) keeps its native meaning — the href is honest.
+screen.addEventListener('click', e => {
+  const el = e.target && e.target.closest ? e.target.closest('[data-nav]') : null;
+  if (!el) return;
+  if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button) return;
+  e.preventDefault();
+  navTo(el.dataset.nav);
+});
 let pressSt = null, pressX = 0, pressY = 0;
 screen.addEventListener('pointerdown', e => {
   const hit = document.elementFromPoint(e.clientX, e.clientY);
@@ -5559,6 +5667,26 @@ function setScreenHtml(html) {
   lastScreen = html;
   screen.innerHTML = html;
 }
+// Coexistence scaffolding while views migrate off the character grid: a plate
+// view flips #screen out of pre/mono mode (and drops fitFont's inline font
+// size), a grid view flips it back. Dies with the last draw* function.
+function setScreenPlate(html) {
+  if (screen.className !== 'dom') {
+    screen.className = 'dom';
+    screen.style.fontSize = '';
+    screen.setAttribute('role', 'presentation');
+    lastScreen = null;
+  }
+  setScreenHtml(html);
+}
+function setScreenGridMode() {
+  if (screen.className === 'dom') {
+    screen.className = '';
+    screen.setAttribute('role', 'img');
+    lastScreen = null;
+    fitFont();
+  }
+}
 
 function render(t) {
   if (state.help) {
@@ -5686,6 +5814,7 @@ function renderNow() {
 }
 
 function fitFont() {
+  if (screen.className === 'dom') return; // plate views size themselves in CSS
   // size the grid to the width actually available inside <main>, i.e. minus its
   // padding and border — otherwise the box overflows the viewport on narrow screens
   const cs = getComputedStyle(document.querySelector('main'));
