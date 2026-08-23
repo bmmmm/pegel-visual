@@ -34,3 +34,14 @@
   pinned around 485px regardless of `--window-size`, so for a true phone
   layout render the app inside a fixed-width `<iframe>` on a wrapper page
   (media queries then evaluate against the iframe).
+- **Driving the live browser: the tab has to be VISIBLE.** A tab that is
+  minimised, on another Space or fully covered by another window reports
+  `document.visibilityState === 'hidden'`, and Chrome then stops serving
+  `requestAnimationFrame` — since `scheduleRender()` rides on rAF, the page sits
+  on `loading…` with the data already in `state`, and `captureVisibleTab`
+  returns blank images. Both look exactly like app bugs. Check
+  `document.visibilityState` before believing either. (`renderNow()` from the
+  console rendering fine while `scheduleRender()` does nothing is the tell.)
+  A second trap: with browser zoom on, the extension's screenshot is a crop in
+  device pixels, so image coordinates are `css * devicePixelRatio` — click by
+  element `ref`, not by pixels read off the picture.

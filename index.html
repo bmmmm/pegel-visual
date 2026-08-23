@@ -1853,6 +1853,10 @@ async function loadData() {
     updateLocalBar();
     if (!state.neighbors.length) loadNeighbors(info).catch(() => {});
     if (isNewStation) {
+      // only a gauge that actually answered earns a quick-switch chip — a deep link
+      // to a town (?station=MAGDEBURG) or a typo must not pollute the recent row
+      pushRecent(forStation);
+      renderRecent();
       loadWeather();
       // the hosted WSV archive fills windows the live API cannot — including
       // the default ALL view on a first visit, so years appear right away.
@@ -3249,7 +3253,7 @@ function renderProfile(pr) {
     `<span class="km">km ${p.km}</span></a></li>`).join('');
   return `<section class="p-block"><h2 class="p-h2">${esc(T.neighbours)}</h2>` +
     `<p class="p-sub2">${esc(T.neighboursSub)}</p>${chart}` +
-    `<div class="pf-flow"><span>← ${esc(T.downstream)}</span><span>${esc(T.upstream)} →</span></div>` +
+    `<div class="pf-flow"><span>← ${esc(T.upstream)}</span><span>${esc(T.downstream)} →</span></div>` +
     `<ol class="pf-list">${rows}</ol></section>`;
 }
 
@@ -3457,7 +3461,7 @@ function renderRiver(vm) {
   return `<section class="plate river-plate">${vh}${head}${tabs}${trouble}` +
     `<section class="p-block"><h2 class="p-h2">${esc(T.riverProfile)}</h2>` +
     `<p class="p-sub2">${esc(T.riverElevAxis)}</p>${renderRiverChart(vm)}` +
-    `<div class="pf-flow"><span>← ${esc(T.downstream)}</span><span>${esc(T.upstream)} →</span></div>` +
+    `<div class="pf-flow"><span>← ${esc(T.upstream)}</span><span>${esc(T.downstream)} →</span></div>` +
     key + '</section></section>';
 }
 
@@ -5295,7 +5299,8 @@ function switchStation(name, adsb, push = true) {
   refreshTimer = setInterval(loadData, REFRESH_MS);
   if (adsbChanged) loadAircraft();
 
-  pushRecent(station);
+  // the chip row is rebuilt now (the station just left becomes a chip), but the
+  // station being entered only earns its own entry once loadData brings a reading
   renderRecent();
 }
 
@@ -5564,18 +5569,18 @@ function runCommand(raw) {
 // find "MAGDEBURG-STROMBRÜCKE" when someone types the town, not feed the typed
 // fragment to the API and serve an error. startsWith matches rank first.
 function findMatches(raw) {
-  const q = foldStrip(raw);
-  if (!q) return [];
+  const q = foldPair(raw);
+  if (!q[0]) return [];
   const starts = [], contains = [];
   for (const name of knownStations) {
-    const f = foldStrip(name);
-    if (f.startsWith(q)) starts.push({ name, river: false });
-    else if (f.includes(q)) contains.push({ name, river: false });
+    const r = foldRank(q, name);
+    if (r === 2) starts.push({ name, river: false });
+    else if (r === 1) contains.push({ name, river: false });
   }
   for (const name of knownWaters) {
-    const f = foldStrip(name);
-    if (f.startsWith(q)) starts.push({ name, river: true });
-    else if (f.includes(q)) contains.push({ name, river: true });
+    const r = foldRank(q, name);
+    if (r === 2) starts.push({ name, river: true });
+    else if (r === 1) contains.push({ name, river: true });
   }
   starts.sort((a, b) => a.name.localeCompare(b.name));
   contains.sort((a, b) => a.name.localeCompare(b.name));
@@ -5641,6 +5646,40 @@ function applyPrompt() {
   switchStation(v, adsbInput.value);
 }
 
+// A link is the app's share surface, so ?station=… must take the same resolution
+// path the prompt takes: an exact fold wins, a single substring match is adopted,
+// and an ambiguous town name (MAGDEBURG, HAMBURG, TRIER) opens the clickable
+// did-you-mean list instead of feeding the town to the API for a 404. A name
+// nothing resembles falls through — the error plate is the honest answer there.
+// `live` is set once the app is running (the station list arrived only after the
+// first fetch failed): the correction then has to go through switchStation
+// instead of assigning the global by hand. Returns true when it took the screen.
+function resolveDeepLink(live) {
+  if (mode === 'river' || state.suggest || !knownStations.size || knownStations.has(station)) return false;
+  const canonical = resolveStation(station);
+  let target = knownStations.has(canonical) ? canonical : null;
+  let matches = [];
+  if (!target) {
+    matches = findMatches(station);
+    if (matches.length === 1 && !matches[0].river) target = matches[0].name.toUpperCase();
+  }
+  if (target) {
+    if (live) { switchStation(target, adsbInput.value, 'replace'); return false; }
+    station = target;
+    applyStationChrome();
+    stationInput.value = station;
+    const q = new URLSearchParams(location.search);
+    q.set('station', station);
+    // 'replace', never push — Back must not land on the broken URL again
+    history.replaceState(null, '', '?' + q.toString());
+    return false;
+  }
+  // the suggest screen owns the whole plate, so only station mode may raise it
+  if (mode !== 'station' || !matches.length) return false;
+  showSuggest(station, matches);
+  return true;
+}
+
 // the dedicated river field: a known river (any case, ASCII umlauts) opens its
 // whole-river profile; anything else snaps back to the river currently in view
 function applyRiver() {
@@ -5654,17 +5693,17 @@ function applyRiver() {
 
 // ---------- live typeahead dropdown ----------
 
-// umlaut-folded, startsWith-ranked matches over one name set — the same folding
-// that resolveStation/resolveWater use, so "koln" finds KÖLN and "muritz" MÜRITZSEE
+// umlaut-folded, startsWith-ranked matches over one name set — both foldings, like
+// resolveStation/resolveWater, so "koln" AND "koeln" find KÖLN, "muritz" MÜRITZSEE
 const AC_MAX = 8;
 function matchNames(raw, names, metaFor) {
-  const q = foldStrip(raw);
-  if (!q) return [];
+  const q = foldPair(raw);
+  if (!q[0]) return [];
   const starts = [], contains = [];
   for (const name of names) {
-    const f = foldStrip(name);
-    if (f.startsWith(q)) starts.push(name);
-    else if (f.includes(q)) contains.push(name);
+    const r = foldRank(q, name);
+    if (r === 2) starts.push(name);
+    else if (r === 1) contains.push(name);
   }
   const byName = (a, b) => a.localeCompare(b);
   return [...starts.sort(byName), ...contains.sort(byName)].slice(0, AC_MAX)
@@ -5906,6 +5945,20 @@ const watersNorm = new Map();  // ASCII-folded river name -> UPPERCASE river nam
 const foldAe = s => s.toUpperCase().replace(/Ä/g, 'AE').replace(/Ö/g, 'OE').replace(/Ü/g, 'UE').replace(/ß/g, 'SS');
 const foldStrip = s => [...s.toUpperCase().normalize('NFD')].filter(c => { const n = c.charCodeAt(0); return n < 0x300 || n > 0x36f; }).join('');
 
+// The exact-name resolvers try BOTH foldings; substring search has to do the same,
+// and pairwise — folding query and name with foldStrip alone lets "KÖLN" become
+// "KOLN" while a typed "KOELN" stays itself, so the two never meet. Comparing
+// within each folding keeps both spellings reaching the same gauge.
+function foldPair(s) { return [foldAe(s), foldStrip(s)]; }
+
+// rank a name against an already-folded query: 2 = prefix, 1 = substring, 0 = miss
+function foldRank(q, name) {
+  const f = foldPair(name);
+  if (f.some((v, i) => v.startsWith(q[i]))) return 2;
+  if (f.some((v, i) => v.includes(q[i]))) return 1;
+  return 0;
+}
+
 // resolve user input to a real shortname, tolerating ASCII spellings of umlauts
 function resolveStation(raw) {
   const up = (raw || '').trim().toUpperCase();
@@ -5972,14 +6025,11 @@ async function loadStationList() {
     fillDatalist(list);
     riversCache = null; // the aggregate is keyed on the list size
     scheduleRender();   // the map and the finder are built from this list
-    // a first-ever visitor opening an ASCII-spelled link (?station=koeln) had no
-    // cached list to resolve against and 404ed; now that the names are known,
-    // self-correct the error screen to the canonical station. 'replace' like the
-    // boot canonicalization — Back must not land on the broken 404 URL again
-    if (state.error && mode === 'station') {
-      const fixed = resolveStation(station);
-      if (fixed !== station && knownStations.has(fixed)) switchStation(fixed, adsbInput.value, 'replace');
-    }
+    // a first-ever visitor opening an ASCII-spelled link (?station=koeln) or an
+    // ambiguous one (?station=MAGDEBURG) had no cached list to resolve against and
+    // 404ed; now that the names are known, run the error screen through the same
+    // resolution the boot does — canonical name, or the did-you-mean list
+    if (state.error && mode === 'station') resolveDeepLink(true);
   } catch { /* keep whatever cache we already showed */ }
 }
 
@@ -6334,19 +6384,6 @@ try {
   const wc = JSON.parse(localStorage.getItem(WATERS_CACHE));
   if (wc && Array.isArray(wc.list)) fillWaters(wc.list);
 } catch {}
-const canonical = resolveStation(station);
-if (mode !== 'river' && canonical !== station && knownStations.has(canonical)) {
-  station = canonical;
-  applyStationChrome();
-  stationInput.value = station;
-  const q = new URLSearchParams(location.search);
-  q.set('station', station);
-  history.replaceState(null, '', '?' + q.toString());
-}
-
-pushRecent(station);
-renderRecent();
-renderHistoryBar();
 
 // ---------- infobox (feature guide dialog) ----------
 
@@ -6667,6 +6704,13 @@ function scheduleRender() {
   renderQueued = true;
   requestAnimationFrame(() => { renderQueued = false; render(); });
 }
+
+// resolve the URL's station against the hydrated name cache before the first fetch
+// goes out — this sits below scheduleRender on purpose: raising the did-you-mean
+// screen needs the renderer, and renderQueued is only live from here down
+resolveDeepLink(false);
+renderRecent();
+renderHistoryBar();
 
 updateLocalBar();
 if (mode === 'rivers') {

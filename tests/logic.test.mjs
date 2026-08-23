@@ -308,6 +308,26 @@ test('findMatches / applyPrompt: place names resolve via substring search', () =
   assert.ok(html.includes('Did you mean'), 'and says what it is asking');
 });
 
+test('search folds umlauts both ways: KOELN and KOLN both find KÖLN', () => {
+  const app = loadApp();
+  app.run(`fillDatalist([
+    { n: 'KÖLN', w: 'RHEIN', km: 688 },
+    { n: 'MÜNSTER', w: 'DORTMUND-EMS-KANAL', km: 70 },
+    { n: 'BONN', w: 'RHEIN', km: 654.8 },
+  ])`);
+  app.run(`fillWaters(['RHEIN', 'MÜRITZSEE'])`);
+
+  const names = expr => app.run(`${expr}.map(m => m.name)`);
+  assert.deepEqual(names(`findMatches('KOELN')`), ['KÖLN'], 'the OE spelling the README promises');
+  assert.deepEqual(names(`findMatches('KOLN')`), ['KÖLN'], 'the stripped spelling still works');
+  assert.deepEqual(names(`findMatches('KÖLN')`), ['KÖLN'], 'and so does the real one');
+  assert.deepEqual(names(`findMatches('MUENSTER')`), ['MÜNSTER']);
+  assert.deepEqual(names(`findMatches('MUERITZ')`), ['MÜRITZSEE'], 'rivers fold too');
+  assert.deepEqual(names(`matchNames('OELN', knownStations, () => '')`), ['KÖLN'], 'substring, not only prefix');
+  // the finder dialog and the typeahead dropdown read the same matcher
+  assert.deepEqual(names(`finderMatches('KOELN')`), ['KÖLN']);
+});
+
 // ---------- river mode data ----------
 
 test('troubleKind: normalizes stateMnwMhw', () => {
@@ -379,13 +399,47 @@ test('profileViewModel: every neighbour keeps its full name and its own row', ()
     assert.ok(html.includes(p.name.replace(/&/g, '&amp;')), `"${p.name}" survives whole`);
     assert.ok(html.includes(p.elev.toFixed(2)), 'with its elevation');
   }
-  assert.ok(html.includes('downstream') && html.includes('upstream'), 'the flow direction is named');
+  // the label has to match the axis it labels: flowFrac puts upstream at x=0
+  assert.match(html, /\u2190 upstream[\s\S]*downstream \u2192/, 'upstream is named on the left, downstream on the right');
   const self = vm.pts.find(p => p.self);
   assert.ok(self, 'the current gauge marks itself');
   assert.ok(html.includes('data-nav="river:RHEIN"'), 'and leads on to its whole river');
   assert.ok(html.includes('data-nav="Niederbiel Schleuse Kanal OP"'), 'neighbours are one click away');
   // ordered upstream→downstream by the fitted flow direction, not by raw km
   assert.deepEqual(vm.pts.map(p => p.x), [...vm.pts.map(p => p.x)].sort((a, b) => a - b));
+});
+
+// The Rhine counts its km downstream, the Neckar counts them upstream. Whichever
+// way the numbers run, flowFrac puts the upstream gauge on the left — and the axis
+// label under the drawing has to name that same direction.
+test('profileViewModel: upstream stays on the left whichever way the km count runs', () => {
+  const cases = [
+    ['km rises downstream (Rhine)', 'BONN', [
+      { name: 'OBERWINTER', km: 638.19, lat: 50.6, lon: 7.2, elev: 47.45 },
+      { name: 'BONN', km: 654.8, lat: 50.7, lon: 7.1, elev: 43.66 },
+      { name: 'K\u00d6LN', km: 688, lat: 50.9, lon: 6.9, elev: 35.88 },
+    ]],
+    ['km rises upstream (Neckar)', 'HEIDELBERG', [
+      { name: 'MANNHEIM NECKAR', km: 3.1, lat: 49.5, lon: 8.5, elev: 86.34 },
+      { name: 'HEIDELBERG', km: 25.0, lat: 49.4, lon: 8.7, elev: 105.0 },
+      { name: 'PLOCHINGEN', km: 202.6, lat: 48.7, lon: 9.4, elev: 247.39 },
+    ]],
+  ];
+  for (const [label, self, neighbors] of cases) {
+    const app = loadApp({ now: NOON });
+    const { vm, html } = app.run(`(() => {
+      station = ${JSON.stringify(self)};
+      state.flowLowKm = null;
+      state.info = { water: { shortname: 'RHEIN' } };
+      state.neighbors = ${JSON.stringify(neighbors)};
+      const vm = profileViewModel();
+      return { vm, html: renderProfile(vm) };
+    })()`);
+    const leftmost = vm.pts.reduce((a, b) => (a.x <= b.x ? a : b));
+    const highest = vm.pts.reduce((a, b) => (a.elev >= b.elev ? a : b));
+    assert.equal(leftmost.name, highest.name, `${label}: the upstream gauge is drawn leftmost`);
+    assert.match(html, /\u2190 upstream[\s\S]*downstream \u2192/, `${label}: and the axis names it upstream`);
+  }
 });
 
 // ---------- drawRiver layout invariants (worst case: 30 stations, 24 troubled) ----------
@@ -918,6 +972,67 @@ test('first-visit ASCII ?station= link self-corrects once the station list arriv
   assert.equal(globalThis.__replaced, true, 'canonical URL replaces the broken one');
   assert.equal(globalThis.__pushed, undefined, 'Back must not land on the 404 URL again');
   delete globalThis.__replaced; delete globalThis.__pushed;
+});
+
+// a returning visitor's cached station names, so boot resolves without the network
+const WARM_STATIONS = {
+  'pegel.stations': JSON.stringify({
+    v: 2,
+    t: Date.now(),
+    list: [
+      { n: 'MAGDEBURG-BUCKAU', w: 'ELBE', km: 318 },
+      { n: 'MAGDEBURG-STROMBRÜCKE', w: 'ELBE', km: 326.6 },
+      { n: 'KÖLN', w: 'RHEIN', km: 688 },
+      { n: 'BONN', w: 'RHEIN', km: 654.8 },
+    ],
+  }),
+};
+
+test('deep link: an ambiguous ?station= opens the did-you-mean list, not a 404', () => {
+  const app = loadApp({ search: '?station=MAGDEBURG', storage: WARM_STATIONS });
+  const sg = app.run('state.suggest');
+  assert.ok(sg, 'the shared link takes the same resolution path the prompt takes');
+  assert.equal(sg.q, 'MAGDEBURG');
+  assert.deepEqual(sg.matches.map(m => m.name), ['MAGDEBURG-BUCKAU', 'MAGDEBURG-STROMBRÜCKE']);
+  assert.equal(app.run('station'), 'MAGDEBURG', 'no gauge is picked on the reader’s behalf');
+});
+
+test('deep link: only an ambiguous name gets the list — unknown, unique and folded stay as they were', () => {
+  const nope = loadApp({ search: '?station=XXXXNOPE', storage: WARM_STATIONS });
+  assert.equal(nope.run('state.suggest'), null, 'nothing resembles it — the error plate is the honest answer');
+  assert.equal(nope.run('station'), 'XXXXNOPE');
+
+  const one = loadApp({ search: '?station=BUCKAU', storage: WARM_STATIONS });
+  assert.equal(one.run('state.suggest'), null);
+  assert.equal(one.run('station'), 'MAGDEBURG-BUCKAU', 'a single substring match is adopted outright');
+
+  const ascii = loadApp({ search: '?station=KOELN', storage: WARM_STATIONS });
+  assert.equal(ascii.run('state.suggest'), null);
+  assert.equal(ascii.run('station'), 'KÖLN', 'the exact fold still wins before any search');
+
+  const river = loadApp({ search: '?river=RHEIN&station=MAGDEBURG', storage: WARM_STATIONS });
+  assert.equal(river.run('state.suggest'), null, 'river mode owns the plate — no suggest screen over it');
+});
+
+test('recent chips: only a gauge that actually answered is remembered', async () => {
+  const dead = loadApp({ search: '?station=MAGDEBURG', storage: WARM_STATIONS });
+  assert.equal(dead.localStorage['pegel.recent'], undefined, 'a deep link that never loaded leaves no chip');
+  dead.run(`switchStation('XXXXNOPE', '')`);
+  assert.equal(dead.localStorage['pegel.recent'], undefined, 'nor does switching to a name that fails');
+
+  const app = loadApp({ search: '?station=BONN', storage: WARM_STATIONS });
+  app.run(`fetch = url => {
+    const body =
+      url.includes('/stations/BONN.json') ? { shortname: 'BONN', water: { shortname: 'RHEIN' }, km: 654.8, timeseries: [{ shortname: 'W' }] } :
+      url.includes('/stations/BONN/W.json') ? { currentMeasurement: { timestamp: new Date().toISOString(), value: 250 } } :
+      url.includes('measurements.json') ? [] : null;
+    return body === null
+      ? Promise.reject(new Error('offline (test stub)'))
+      : Promise.resolve({ ok: true, json: () => Promise.resolve(body) });
+  }`);
+  await app.run('loadData()');
+  assert.ok(app.localStorage['pegel.recent'], 'a reading arrived — now it earns its chip');
+  assert.deepEqual(JSON.parse(app.localStorage['pegel.recent']), ['BONN']);
 });
 
 test('archive script: migrateStation names the malformed year file instead of a bare SyntaxError', async () => {

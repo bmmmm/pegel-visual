@@ -6,6 +6,7 @@
 //   const app = loadApp();                         // defaults: 1200px wide, real clock
 //   app.run('parseCommand("--station BONN")');     // evaluate inside the app scope
 //   const app2 = loadApp({ width: 390, now: Date.UTC(2026, 0, 15, 12) });
+//   const app3 = loadApp({ storage: { 'pegel.recent': '["BONN"]' } });  // warm localStorage
 import { readFileSync } from 'node:fs';
 
 const html = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
@@ -55,7 +56,7 @@ function makeEl(tag = 'div') {
   return el;
 }
 
-export function loadApp({ width = 1200, search = '', now = null } = {}) {
+export function loadApp({ width = 1200, search = '', now = null, storage = null } = {}) {
   const els = new Map();
   const elById = id => {
     if (!els.has(id)) els.set(id, makeEl(id));
@@ -84,6 +85,9 @@ export function loadApp({ width = 1200, search = '', now = null } = {}) {
   })) {
     Object.defineProperty(localStorageStub, name, { value: fn, writable: true, enumerable: false, configurable: true });
   }
+  // seeded BEFORE the script runs, so boot-time code (the station-name cache, the
+  // recent chips) sees a returning visitor's storage rather than a blank one
+  if (storage) for (const [k, v] of Object.entries(storage)) localStorageStub[k] = String(v);
 
   // an injectable clock: new Date() and Date.now() pin to `now`, everything
   // else (parse, UTC, explicit timestamps) stays real — makes isNight/moonPhase/
