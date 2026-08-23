@@ -687,6 +687,194 @@
   .bh { stroke: color-mix(in oklab, var(--ink) 55%, transparent); }
   .bh-f { fill: color-mix(in oklab, var(--ink) 55%, transparent); }
   .defs-only { position: absolute; width: 0; height: 0; }
+  /* ---- station head: the hero reading, the facts, the km sign ---- */
+  .station-head {
+    display: flex;
+    align-items: flex-end;
+    gap: 1.4em 2.2em;
+    flex-wrap: wrap;
+  }
+  .hero { display: flex; align-items: baseline; gap: 0.3ch; flex-wrap: wrap; }
+  .hero-n {
+    font-family: var(--font-data);
+    font-size: clamp(3.4rem, 15cqi, 6rem);
+    font-weight: 700;
+    line-height: 0.9;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -0.02em;
+  }
+  .hero-u { font-family: var(--font-data); font-size: 1.2rem; color: var(--mid); }
+  .hero-note { flex-basis: 100%; font-size: 0.72em; color: var(--mid); }
+  .facts { display: flex; gap: 1.6em; flex-wrap: wrap; margin: 0; }
+  .facts dt {
+    font-size: 0.68em;
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+    color: var(--dim);
+  }
+  .facts dd {
+    margin: 0.1em 0 0;
+    font-family: var(--font-data);
+    font-size: 1.05em;
+    font-variant-numeric: tabular-nums;
+  }
+  .facts dd[title] { cursor: help; border-bottom: 1px dotted var(--dim); }
+  /* the roadside Rheinkilometer board, as a real enamel sign */
+  .km-sign {
+    margin-left: auto;
+    border: 2px solid var(--ink);
+    padding: 0.3em 0.9ch 0.2em;
+    text-align: center;
+    font-family: var(--font-data);
+    line-height: 1.1;
+  }
+  .km-n { display: block; font-size: 1.5rem; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .km-u { display: block; font-size: 0.66em; color: var(--mid); }
+  .p-block { margin-top: 1.8em; }
+  /* ---- the living river scene ---- */
+  .scene-wrap {
+    display: grid;
+    grid-template-columns: 1fr 9.5rem;
+    border: 1px solid var(--rule);
+  }
+  .scene-plot { aspect-ratio: 320 / 190; min-width: 0; }
+  .scene { display: block; width: 100%; height: 100%; }
+  .gutter { position: relative; border-left: 1px solid var(--rule); background: var(--paper); }
+  .gut-off, .gut-lines { list-style: none; margin: 0; padding: 0; }
+  .gut-lines { position: absolute; inset: 0; }
+  .gutter li {
+    font-family: var(--font-data);
+    font-size: 0.68rem;
+    line-height: 1.2;
+    white-space: nowrap;
+    padding: 0 0 0 0.6ch;
+    color: var(--mid);
+  }
+  .gutter .gut-lines li { position: absolute; transform: translateY(-50%); }
+  .gutter b { font-weight: 700; color: var(--ink); }
+  .gutter .cm { font-variant-numeric: tabular-nums; }
+  .gutter .yr { color: var(--dim); }
+  .gutter .now b, .gutter .now .cm { color: var(--water-line); }
+  .gutter .off { padding-block: 0.25em; }
+  .gutter .off.bottom { position: absolute; bottom: 0; }
+  .scene-cap .rcv { margin-left: 1.2ch; }
+  .scene-cap .rcv::before { content: '· '; color: var(--dim); }
+  .scene-cap .rcv.off { color: var(--dry-line); }
+  .scene-cap {
+    margin: 0.5em 0 0;
+    font-size: 0.8em;
+    color: var(--mid);
+    font-variant-caps: all-small-caps;
+    letter-spacing: 0.04em;
+  }
+  /* scene marks */
+  .scene .water { fill: var(--water); }
+  .scene .band { fill: color-mix(in oklab, var(--water-line) 12%, transparent); }
+  .scene .dry-bank { fill: color-mix(in oklab, var(--dry) 70%, transparent); }
+  .scene .bed { fill: var(--bed); stroke: var(--bed-line); stroke-width: 0.8; }
+  .scene .surface { stroke: var(--water-line); stroke-width: 2.2; }
+  .scene .mark { stroke: var(--ink); stroke-width: 1; opacity: 0.55; }
+  .scene .mark.mean { stroke-dasharray: 6 4; }
+  .scene .mark.record { stroke-dasharray: 1.5 4; }
+  .scene .w-far, .scene .w-near { fill: none; stroke: var(--water-line); }
+  .scene .w-far { stroke-width: 1; opacity: 0.4; }
+  .scene .w-near { stroke-width: 1.6; opacity: 0.75; }
+  .scene .ice rect { fill: color-mix(in oklab, var(--paper) 70%, var(--water)); stroke: var(--water-line); stroke-width: 0.7; }
+  .scene .ice .floe { fill: var(--paper); }
+  .scene .star { fill: var(--ink); opacity: 0.5; }
+  .scene .moon path { fill: color-mix(in oklab, var(--sun) 55%, var(--paper)); stroke: var(--ink); stroke-width: 0.9; }
+  .scene .sun circle { fill: color-mix(in oklab, var(--sun) 70%, var(--paper)); stroke: var(--dry-line); stroke-width: 1.1; }
+  .scene .sun line { stroke: var(--dry-line); stroke-width: 1.3; stroke-linecap: round; }
+  .scene .cloud path { fill: var(--paper); stroke: var(--ink); stroke-width: 1; opacity: 0.75; }
+  .scene .rain line { stroke: var(--water-line); stroke-width: 1; opacity: 0.6; }
+  .scene .snow circle { fill: var(--ink); opacity: 0.35; }
+  .scene .boat path { fill: var(--paper); stroke: var(--ink); stroke-width: 1.4; stroke-linejoin: round; }
+  .scene .boat .mast { fill: var(--paper); }
+  .scene .plane path { fill: none; stroke: var(--ink); stroke-width: 1.3; stroke-linejoin: round; }
+  .scene .craft-lbl { font-family: var(--font-data); font-size: 7px; fill: var(--mid); }
+  /* ---- history chart ---- */
+  .hist-wrap { display: grid; grid-template-columns: 5.5ch 1fr; align-items: stretch; }
+  .hist { height: 6.5rem; border-bottom: 1px solid var(--ink); }
+  .h-scale {
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    font-family: var(--font-data);
+    font-size: 0.66rem;
+    color: var(--mid);
+    text-align: right;
+    padding-right: 0.6ch;
+    border-bottom: 1px solid var(--ink);
+  }
+  .h-axis {
+    position: relative;
+    height: 1.3em;
+    margin-left: 5.5ch;
+    font-family: var(--font-data);
+    font-size: 0.66rem;
+    color: var(--mid);
+  }
+  .h-axis span { position: absolute; transform: translateX(-50%); top: 0.2em; white-space: nowrap; }
+  .h-axis span:first-child { transform: none; }
+  .h-axis span:last-child { transform: translateX(-100%); }
+  .h-band { fill: color-mix(in oklab, var(--water-line) 22%, transparent); }
+  .h-fill { fill: color-mix(in oklab, var(--water) 55%, transparent); }
+  .h-line { fill: none; stroke: var(--water-line); stroke-width: 1.6; vector-effect: non-scaling-stroke; }
+  .href-line { stroke: var(--ink); stroke-width: 1; stroke-dasharray: 5 4; opacity: 0.5; vector-effect: non-scaling-stroke; }
+  .p-key .warn { color: var(--dry-line); }
+  /* ---- readout: the spelled-out sentence, then the terse line ---- */
+  .readout .say { margin: 0; font-size: 1.02em; max-width: 62ch; text-wrap: pretty; }
+  .readout .say b { font-weight: 600; font-family: var(--font-data); }
+  .readout .terse {
+    margin: 0.45em 0 0;
+    font-family: var(--font-data);
+    font-size: 0.78em;
+    color: var(--mid);
+  }
+  /* ---- neighbours ---- */
+  .profile { height: 4.5rem; }
+  .profile .pf-line { fill: none; stroke: var(--water-line); stroke-width: 1.4; stroke-dasharray: 3 3; }
+  .profile .pf-dot { fill: var(--paper); stroke: var(--ink); stroke-width: 1.6; }
+  .profile .pf-dot.self { fill: var(--ink); }
+  .profile a:hover .pf-dot { fill: var(--water-line); }
+  .pf-flow {
+    display: flex;
+    justify-content: space-between;
+    font-size: 0.7em;
+    color: var(--dim);
+    font-variant-caps: all-small-caps;
+    letter-spacing: 0.05em;
+  }
+  .pf-list { list-style: none; margin: 0.6em 0 0; padding: 0; font-family: var(--font-data); font-size: 0.85em; }
+  .pf-list a {
+    display: flex;
+    gap: 1ch;
+    align-items: baseline;
+    padding: 0.25em 0.2ch;
+    color: var(--ink);
+    text-decoration: none;
+    border-bottom: 1px solid var(--rule);
+  }
+  .pf-list .self a { font-weight: 700; }
+  .pf-list a:hover { background: var(--ink); color: var(--paper); }
+  .pf-list .elev { margin-left: auto; font-variant-numeric: tabular-nums; }
+  .pf-list .km { color: var(--mid); min-width: 9ch; text-align: right; }
+  .pf-list a:hover .km { color: var(--paper); }
+  /* ---- motion: transform/opacity only, and never under reduced motion ---- */
+  @media (prefers-reduced-motion: no-preference) {
+    .scene .waves { animation: drift var(--dur, 7s) linear infinite; }
+    .scene .star { animation: twinkle 4s ease-in-out infinite; animation-delay: var(--d, 0s); }
+    .scene .rain line { animation: fall 0.7s linear infinite; animation-delay: var(--d, 0s); }
+    .scene .snow circle { animation: flake 6s linear infinite; animation-delay: var(--d, 0s); }
+    .scene .boat:not(.stuck):not(.aground) { animation: bob var(--bob, 3.4s) ease-in-out infinite; }
+    .scene .ice .floe { animation: floe 40s linear infinite; }
+  }
+  @keyframes drift { to { transform: translateX(-320px); } }
+  @keyframes twinkle { 0%, 100% { opacity: 0.2; } 50% { opacity: 0.75; } }
+  @keyframes fall { from { transform: translateY(0); opacity: 0.7; } to { transform: translateY(190px); opacity: 0; } }
+  @keyframes flake { from { transform: translateY(0); } to { transform: translateY(190px); } }
+  @keyframes bob { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-2.5px); } }
+  @keyframes floe { to { transform: translateX(60px); } }
   /* ---- rivers map ---- */
   .chart.map { max-height: 74vh; margin-inline: auto; }
   .map .mout { fill: color-mix(in oklab, var(--water) 22%, transparent); stroke: var(--ink); stroke-width: 1.2; stroke-linejoin: round; }
@@ -1060,15 +1248,6 @@ const APP_COMMIT = '__COMMIT__';
 let COLS = 84;
 const COMPACT_COLS = 44;
 const isCompact = () => COLS < 60;
-const HEADER_ROWS = 10;
-const CHART_ROWS = 15;
-const SPARK_ROWS = 4;
-const SPLASH_ROWS = 2; // headroom above the sparkline for the overshoot splash
-const PROFILE_PLOT_H = 4;     // marker rows in the elevation plot
-const PROFILE_LABEL_ROWS = 5; // 3 neighbor stations, blank-separated so they breathe
-const PROFILE_ROWS = 1 + PROFILE_PLOT_H + PROFILE_LABEL_ROWS; // caption + plot + labels
-const PROFILE_GAP = 2;  // blank rows between the sparkline block and the profile
-const PROFILE_FOOT = 1; // the ≋ downstream → marker row under the profile
 const REFRESH_MS = 5 * 60 * 1000;
 // Trend window. Gauges report whole centimetres, so an hourly delta on a big
 // river is mostly quantisation noise — the Rhein moves centimetres per day, and
@@ -1081,6 +1260,8 @@ const TREND_FLAT = 0.5; // strictly below this |cm/h| reads as steady, not risin
 // into a deep-linked ?total&y=…&m=… runs applyTotalChrome (and its month name) before
 // that section's consts would otherwise exist
 const MONTH_ABBR = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
+const MONTH_NAME = ['January', 'February', 'March', 'April', 'May', 'June',
+  'July', 'August', 'September', 'October', 'November', 'December'];
 
 const screen = document.getElementById('screen');
 const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)');
@@ -2151,6 +2332,26 @@ const T = {
   riversTitle: 'ALL WATERS',
   riversSub: 'every water PEGELONLINE serves, placed at the centre of its own gauges',
   riversPick: 'Pick a water to walk it gauge by gauge, or open the A–Z index for the full list.',
+  now: 'NOW',
+  aboveZero: 'above this gauge’s own zero mark',
+  sceneTitle: 'THE RIVER RIGHT NOW',
+  history: 'HISTORY',
+  historyThin: 'Not enough readings yet for this window — the local archive grows with every visit.',
+  histDaily: 'the reading over time',
+  histBand: 'min–max inside one pixel column',
+  neighbours: 'NEIGHBOURS',
+  neighboursSub: 'water surface elevation between the gauges up- and downstream, in metres above sea level (m NHN)',
+  neighboursAria: 'elevation profile of the neighbouring gauges',
+  downstream: 'downstream',
+  upstream: 'upstream',
+  profileLoading: 'locating the neighbouring gauges…',
+  profileNone: 'no neighbouring gauge on this water publishes a gauge zero',
+  trendNote: 'averaged over the last 6 hours — gauges report whole centimetres, so an hourly slope is mostly rounding noise',
+  stateNote: 'where this reading sits between mean low and mean high water',
+  keyNow: 'the water right now',
+  keyMeans: 'long-term mean low / mean / high water (MNW · MW · MHW)',
+  keyRecords: 'the highest and lowest ever recorded here (HHW · NNW)',
+  keyBand: 'the normal range — inside it, the river is behaving',
 };
 
 // the plate foot's per-view provenance line
@@ -2298,7 +2499,9 @@ function putKmSign(g, row, col, km) {
 // ---------- sections ----------
 
 function charValue(name) {
-  const cv = (state.gauge.characteristicValues || []).find(v => v.shortname === name);
+  // the history chart asks for these before the gauge has landed (and the test
+  // harness never lets it land at all), so a missing gauge is "no mark", not a throw
+  const cv = ((state.gauge && state.gauge.characteristicValues) || []).find(v => v.shortname === name);
   return cv ? cv.value : null;
 }
 
@@ -2416,416 +2619,6 @@ function trendPerHour() {
 const fmtTrend = t => Math.abs(t) < 0.05 ? '0.0' : (t > 0 ? '+' : '') + t.toFixed(1);
 const trendArrow = t => t === null ? '▬' : t >= TREND_FLAT ? '▲' : t <= -TREND_FLAT ? '▼' : '▬';
 
-function drawHeader(g, row, t) {
-  const info = state.info, cur = state.gauge.currentMeasurement;
-  const compact = isCompact();
-  // compact: shorter brand, km-only meta (the km sign is skipped too — no room)
-  const brand = compact ? `PEGEL://${station}` : `PEGELONLINE://${station}`;
-  const title = `─── ${brand} `;
-  const meta = compact
-    ? (info.km != null ? ` KM ${info.km} ───` : ` ───`)
-    : (info.km != null ? ` ${info.water.shortname} · KM ${info.km} ───` : ` ${info.water.shortname} ───`);
-  put(g, row, 0, title.padEnd(Math.max(title.length, COLS - meta.length), '─') + meta, 'd');
-  put(g, row, 4, brand, 'b');
-
-  const x = putBig(g, row + 2, 2, String(Math.round(cur.value)), 'b');
-  put(g, row + 6, x + 1, 'cm', 'd');
-
-  const trend = trendPerHour();
-  // an em dash where the number goes: too little history is "unknown", not "steady"
-  const trendTxt = trend === null ? '▬ — cm/h' : `${trendArrow(trend)} ${fmtTrend(trend)} cm/h`;
-  put(g, row + 2, x + 6, trendTxt, trend !== null && trend >= TREND_FLAT ? 'b' : '');
-  put(g, row + 4, x + 6, `state: [${(cur.stateMnwMhw || 'unknown').toUpperCase()}]`, 'd');
-  put(g, row + 6, x + 6, new Date(cur.timestamp).toISOString().replace('T', ' ').slice(0, 16) + ' UTC', 'd');
-  if (state.adsbOk !== null) {
-    const status = state.adsbOk ? `adsb: ${state.aircraft.length} aircraft` : 'adsb: receiver offline';
-    put(g, row + 7, 2, status, 'd');
-  }
-  const wtQ = [];
-  if (state.wt != null) wtQ.push(`WT ${state.wt.toFixed(1)}°C`);
-  if (state.q != null) wtQ.push(`Q ${Math.round(state.q)} m³/s`);
-  if (wtQ.length) put(g, row + 8, 2, wtQ.join(' · ').slice(0, 58), 'd');
-  if (state.aisOk !== null) {
-    const aisStatus = state.aisOk ? `ais: ${state.ships.length} ship${state.ships.length === 1 ? '' : 's'}` : 'ais: receiver offline';
-    put(g, row + 9, 2, aisStatus, 'd');
-  }
-  if (compact) return row + HEADER_ROWS; // no room for the km sign; km is in the title
-  if (info.km != null) {
-    const w = 4 * String(Math.round(info.km)).length + 1;
-    putKmSign(g, row + 1, COLS - w - 1, info.km);
-  } else {
-    const col = COLS - 12;
-    put(g, row + 2, col, '┌─────┐', 'd');
-    put(g, row + 3, col, '│ :-( │', 'b');
-    put(g, row + 4, col, '└─────┘', 'd');
-    put(g, row + 5, col, 'no river km', 'd');
-  }
-  return row + HEADER_ROWS;
-}
-
-// German river km run either way: Rhein and Elbe count downstream from the source,
-// Neckar, Mosel and Main upstream from the mouth — so "higher km" is no direction.
-// Elevation is: it always falls downstream. The sign of cov(km, elev) picks the flow
-// direction on any water, and every view then draws it left to right.
-//
-// Feed this the widest sample there is (see loadNeighbors): over a few adjacent
-// gauges the drop can vanish into the datum noise, and the fit then reads the river
-// as flowing uphill.
-function downstreamIsLowKm(pts) {
-  const kMean = pts.reduce((a, p) => a + p.km, 0) / pts.length;
-  const eMean = pts.reduce((a, p) => a + p.elev, 0) / pts.length;
-  return pts.reduce((a, p) => a + (p.km - kMean) * (p.elev - eMean), 0) >= 0;
-}
-
-// the flow direction for the station views: whole-river when known, otherwise the
-// neighbors are all we have
-const flowLowKm = n => state.flowLowKm ?? downstreamIsLowKm(n);
-
-// fraction along the scene, 0 = upstream (left) … 1 = downstream (right)
-const flowFrac = (km, kmMin, kmSpan, lowKmDown) => {
-  const f = (km - kmMin) / kmSpan;
-  return lowKmDown ? 1 - f : f;
-};
-
-const FLOW_MARK = '≋ downstream →';
-
-function drawChart(g, row, t) {
-  const value = state.gauge.currentMeasurement.value;
-  const mhw = charValue('MHW'), mw = charValue('MW'), mnw = charValue('MNW');
-  const drought = mnw != null && value < mnw; // below mean low water
-  const flood = mhw != null && value > mhw;   // above mean high water
-  const night = isNight();
-  const icy = state.wt != null && state.wt <= 0.5; // freezing river: ice wins over drought
-
-  // real weather at the station, from open-meteo — pure garnish, null/missing fields
-  // simply mean no effect. suppressed by ice (frozen surface can't wave or rain on),
-  // except snow, which is allowed to fall over the ice pack
-  const weather = state.weather;
-  const windy = !icy && weather && weather.wind_speed_10m != null && weather.wind_speed_10m >= 25;
-  const wSnow = weather && weather.snowfall != null && weather.snowfall > 0;
-  const wRain = !icy && weather && weather.precipitation != null && weather.precipitation > 0 && !wSnow;
-  const wClouds = !icy && weather && weather.cloud_cover != null && weather.cloud_cover >= 60;
-  const wOvercastNight = !icy && weather && weather.cloud_cover != null && weather.cloud_cover >= 85;
-
-  // in a flood, leave sky headroom above the swollen river for clouds and rain —
-  // the plain scale would pin the surface to the chart ceiling
-  const topCm = flood ? value * 1.45 :
-    Math.max((mhw || mw * 1.5 || value * 1.5 || 100) * 1.06, value * 1.15);
-  const chartW = COLS - 12;
-  const rowOf = cm => row + Math.round((CHART_ROWS - 1) * (1 - cm / topCm));
-  const surface = Math.min(rowOf(value), row + CHART_ROWS - 3);
-  const bedTop = row + CHART_ROWS - 3;
-
-  // riverbed: seeded bumpy profile, 1-3 rows tall
-  const seed = [...station].reduce((a, c) => a + c.charCodeAt(0), 0);
-  for (let x = 0; x < chartW; x++) {
-    const h = Math.min(3, Math.max(1, Math.round(2 + Math.sin(x * 0.31 + seed) * 0.9 + Math.sin(x * 0.11 + seed * 2) * 0.7)));
-    for (let r = 0; r < h; r++) put(g, row + CHART_ROWS - 1 - r, x, r === h - 1 ? '▓' : '█', 'bed');
-  }
-
-  // water body with drifting current particles — under ice the current slows way down.
-  // Subtracting the time term carries the particles downstream, i.e. to the right
-  const driftT = icy ? t / 4 : t;
-  for (let r = surface + 1; r < row + CHART_ROWS; r++) {
-    for (let x = 0; x < chartW; x++) {
-      if (g.ch[r][x] !== ' ') continue;
-      const drift = (((x - Math.floor(driftT * 5) + r * 37) % 29) + 29) % 29;
-      put(g, r, x, drift === 0 ? '·' : '░', drift === 0 ? 'w2' : 'w');
-    }
-  }
-
-  // surface: animated waves, or — frozen — static pack ice with slowly drifting floes
-  if (icy) {
-    const iceChars = '▓▒░▒▓═';
-    for (let x = 0; x < chartW; x++) {
-      const i = (x * 7 + seed) % iceChars.length; // seeded by column, no t: it's frozen still
-      put(g, surface, x, iceChars[i], (x + seed) % 2 ? 'w2' : 'd');
-    }
-    for (let f = 0; f < 3; f++) {
-      const floe = '▄'.repeat(2 + (f % 2));
-      const x = (Math.floor(chartW * (0.15 + f * 0.32)) + Math.floor(t * 0.3)) % chartW;
-      put(g, surface, x, floe, 'd');
-    }
-  } else {
-    const waves = '~≈~~∼≈~∼';
-    const waveT = windy ? t * 14 : t * 6; // wind speeds up the animated surface
-    for (let x = 0; x < chartW; x++) {
-      if (windy && x % 9 === 0) { put(g, surface, x, '^', 'w2'); continue; } // whitecap
-      const i = ((x - Math.floor(waveT)) % waves.length + waves.length) % waves.length;
-      put(g, surface, x, waves[i], 'w2');
-    }
-  }
-
-  // The label gutter right of the chart is narrow, so an optional suffix (the record
-  // year) is only appended when it actually fits instead of being clipped mid-word.
-  const gutter = COLS - chartW - 1;
-  const fitLabel = (base, extra) => base + (extra && base.length + extra.length <= gutter ? extra : '');
-
-  // Marker placement. The scale is pinned to MHW, so at low water the surface, MNW
-  // and NNW all round onto the same row. The old code dropped whichever marker lost
-  // that race, hiding both low-water marks exactly when a river runs low enough to
-  // care — but nudging a clash to the nearest free row is no good either, since it
-  // can print NNW below a level it actually sits above. Instead every mark is placed
-  // in value order and kept strictly monotonic around the water line, so a mark above
-  // the current level always renders above it and the ranking can never invert.
-  const bottomRow = row + CHART_ROWS - 1;
-  const marks = [];
-  const addMark = (key, cm, step, extra) => {
-    if (cm == null || cm > topCm) return;
-    marks.push({ key, cm, step, text: fitLabel(`┤ ${key} ${cm}`, extra) });
-  };
-  for (const [label, cm] of [['MHW', mhw], ['MW', mw], ['MNW', mnw]]) addMark(label, cm, 2);
-
-  // all-time records: HHW almost always sits above the chart's top scale (unlike the
-  // flood headroom, the scale isn't rescaled for it) and NNW at or below the riverbed
-  // row — in those cases the margin gets an arrow instead of a line in the chart.
-  const hhw = charRecord('HHW'), nnw = charRecord('NNW');
-  const hhwYear = hhw && !isCompact() && hhw.year ? ` (${hhw.year})` : '';
-  const nnwYear = nnw && !isCompact() && nnw.year ? ` (${nnw.year})` : '';
-  let topLimit = row;
-  if (hhw && hhw.value > topCm) {
-    if (g.ch[row][chartW + 1] === ' ') put(g, row, chartW + 1, fitLabel(`↑ HHW ${hhw.value}`, hhwYear), 'd');
-    topLimit = row + 1; // the arrow owns that row now; no line marker may land on it
-  } else if (hhw) addMark('HHW', hhw.value, 4, hhwYear);
-  if (nnw && rowOf(nnw.value) < bottomRow) addMark('NNW', nnw.value, 4, nnwYear);
-
-  // above the water line: ascending by value, each step at least one row higher than
-  // the last. Below it: descending, each at least one row lower. Marks pushed past
-  // the chart edge fall out here and are reported by the margin arrow instead.
-  let prev = surface;
-  for (const m of marks.filter(m => m.cm >= value).sort((a, b) => a.cm - b.cm)) {
-    m.row = Math.min(rowOf(m.cm), prev - 1);
-    prev = m.row;
-  }
-  prev = surface;
-  for (const m of marks.filter(m => m.cm < value).sort((a, b) => b.cm - a.cm)) {
-    m.row = Math.max(rowOf(m.cm), prev + 1);
-    prev = m.row;
-  }
-
-  for (const m of marks) {
-    if (m.row < topLimit || m.row > bottomRow) continue;
-    const glyph = m.step === 2 ? '╌' : '·';
-    for (let x = 0; x < chartW; x += m.step) if (g.ch[m.row][x] === ' ' || g.ch[m.row][x] === '░') put(g, m.row, x, glyph, 'd');
-    put(g, m.row, chartW + 1, m.text, 'd');
-    m.drawn = true;
-  }
-  if (nnw && !marks.some(m => m.key === 'NNW' && m.drawn)) {
-    if (g.ch[bottomRow][chartW + 1] === ' ') put(g, bottomRow, chartW + 1, fitLabel(`↓ NNW ${nnw.value}`, nnwYear), 'd');
-  }
-
-  // keep the whole label inside COLS — a separate [ICE] tag after the value
-  // gets clipped at the grid edge for 2-digit levels
-  const wLabel = `◄ W ${value}${icy ? ' ICE' : ''}`;
-  put(g, surface, chartW + 1, wLabel, flood ? 's' : 'b');
-
-  // the river axis between the outermost neighbor stations: aircraft in the sky
-  // and AIS ships on the waterline both project onto it
-  const n = state.neighbors;
-  let axis = null;
-  if (n.length >= 2) {
-    const lowKmDown = flowLowKm(n);
-    const L = lowKmDown ? n[n.length - 1] : n[0]; // left = upstream end
-    const R = lowKmDown ? n[0] : n[n.length - 1]; // right = downstream end
-    const kx = Math.cos((L.lat * Math.PI) / 180);
-    const ax = (R.lon - L.lon) * kx, ay = R.lat - L.lat;
-    axis = { L, kx, ax, ay, len2: ax * ax + ay * ay };
-  }
-  if (state.adsbOk !== null && axis) {
-    const { L, kx, ax, ay, len2 } = axis;
-    for (const a of state.aircraft) {
-      const px = (a.lon - L.lon) * kx, py = a.lat - L.lat;
-      const frac = (px * ax + py * ay) / len2;
-      if (frac < 0 || frac > 1) continue;
-      const lateralKm = (Math.abs(px * ay - py * ax) / Math.sqrt(len2)) * 111;
-      if (lateralKm > 50) continue;
-      const alt = a.alt_baro === 'ground' ? 0 : (a.alt_baro || 0);
-      const skyTop = row + 1, skyBottom = surface - 3;
-      if (skyBottom <= skyTop) continue;
-      const y = skyBottom - Math.round((Math.min(alt, 42000) / 42000) * (skyBottom - skyTop));
-      const x = Math.round(frac * (chartW - 1));
-      const tr = ((a.track ?? 0) * Math.PI) / 180;
-      const movingRight = Math.sin(tr) * ax + Math.cos(tr) * ay > 0;
-      const callsign = (a.flight || '').trim() || a.hex || '';
-      const level = alt >= 5000 ? 'FL' + Math.round(alt / 100) : alt + 'ft';
-      if (movingRight) {
-        put(g, y, x, '+>', 'b');
-        put(g, y, x + 3, `${callsign} ${level}`, 'd');
-      } else {
-        put(g, y, Math.max(0, x - 1), '<+', 'b');
-        put(g, y, x + 2, `${callsign} ${level}`, 'd');
-      }
-    }
-  }
-
-  // real river traffic from the user's own AIS receiver, drawn on the waterline.
-  // The lateral cutoff is much tighter than the aircraft's 50 km: ships are ON
-  // the river, ~2 km keeps moored harbor traffic on other arms out of the scene
-  let shipsShown = 0;
-  if (state.aisOk !== null && axis) {
-    const { L, kx, ax, ay, len2 } = axis;
-    for (const s of state.ships) {
-      const px = (s.lon - L.lon) * kx, py = s.lat - L.lat;
-      const frac = (px * ax + py * ay) / len2;
-      if (frac < 0 || frac > 1) continue;
-      const lateralKm = (Math.abs(px * ay - py * ax) / Math.sqrt(len2)) * 111;
-      if (lateralKm > 2) continue;
-      const course = s.cog ?? s.heading ?? 0; // cog missing on some class-B reports
-      const tr = (course * Math.PI) / 180;
-      const movingRight = Math.sin(tr) * ax + Math.cos(tr) * ay > 0;
-      const x = Math.round(frac * (chartW - 1));
-      const hull = movingRight ? '\\__/▸' : '◂\\__/';
-      const hx = Math.max(0, Math.min(chartW - hull.length, x - 2));
-      put(g, surface, hx, hull, 'b');
-      const label = [(s.shipname || '').trim() || String(s.mmsi || ''),
-        s.speed != null ? Math.round(s.speed) + 'kn' : ''].filter(Boolean).join(' ');
-      const lx = Math.max(0, Math.min(chartW - label.length, x - (label.length >> 1)));
-      // the label goes just above the hull, only into free sky (plus a breathing
-      // cell each side) — overlapping ships drop their label instead of colliding
-      if (label && surface - 1 > row &&
-          g.ch[surface - 1].slice(Math.max(0, lx - 1), Math.min(chartW, lx + label.length + 1)).every(c => c === ' ')) {
-        put(g, surface - 1, lx, label, 'd');
-      }
-      shipsShown++;
-    }
-  }
-
-  // drought: level below mean-low-water — sun blazes, heat shimmers, the bank
-  // dries out and cracks, and the little ship sits stranded and sad. Ice and drought
-  // can't meaningfully co-occur — a frozen river wins and skips the drought scene.
-  if (drought && !icy) {
-    if (!night) { // at night the heat lets up: no sun, no shimmer, just cracks
-      put(g, row,     2, '\\ | /', 's');
-      put(g, row + 1, 1, '─( O )─', 's');
-      put(g, row + 2, 2, '/ | \\', 's');
-      for (let x = 1; x < chartW; x += 4) {
-        const hr = surface - 2 - (Math.floor(t * 2 + x * 0.5) % 3);
-        if (hr > row + 3) put(g, hr, x, ((x + Math.floor(t * 4)) % 2) ? '∼' : '~', 's');
-      }
-    }
-    const mwRow = mw != null ? rowOf(mw) : row + 3;
-    for (let r = Math.max(row + 4, mwRow); r < surface; r++)
-      for (let x = 0; x < chartW; x++)
-        if (g.ch[r][x] === ' ' && (x * 3 + r * 7) % 4 === 0)
-          put(g, r, x, (x + r * 2) % 9 === 0 ? '╌' : '░', 'bed');
-    const bx = Math.floor(chartW / 2) - 1;
-    put(g, bedTop - 1, bx + 1, ':(', 'b');
-    put(g, bedTop, bx, '\\__/', 'b');
-  } else if (surface > row + 2 && !shipsShown) {
-    // little ship, bobbing downstream (left to right, like every view);
-    // in a flood — or windy weather — it pitches harder on the swell; frozen in
-    // place mid-river when icy. While real AIS ships are in view the decorative
-    // boat yields the river to them and returns once they've passed
-    const shipX = icy ? Math.floor(chartW * 0.6) : 4 + Math.floor((t * 1.3) % (chartW - 14));
-    const bob = icy ? 0 : (Math.sin(t * (flood || windy ? 3.2 : 1.6)) > 0.4 ? -1 : 0);
-    // sail on the starboard side of the mast, so the boat faces the way it travels —
-    // mirrored from the old left-facing glyph when the scene turned downstream-right
-    put(g, surface - 2 + bob, shipX + 2, '|\\', 'b');
-    put(g, surface - 1 + bob, shipX, '__|_\\_', 'b');
-    put(g, surface + bob, shipX, '\\____/', 'b');
-  }
-
-  // sky, painted last and only into empty cells so it never covers aircraft,
-  // markers or the ship
-  const putSky = (r, c, s, cls) => {
-    for (let i = 0; i < s.length; i++) {
-      const x = c + i;
-      if (s[i] !== ' ' && r >= row && x >= 0 && x < chartW && g.ch[r][x] === ' ') {
-        g.ch[r][x] = s[i]; g.cl[r][x] = cls;
-      }
-    }
-  };
-  if (flood) {
-    // storm: clouds drift downstream, rain falls into the swollen river
-    const drift = Math.floor(t * 1.5);
-    for (const [cx0, cy] of [[8, row], [Math.floor(chartW * 0.55), row + 1]]) {
-      const cx = (cx0 + drift) % chartW;
-      putSky(cy, cx + 1, '.-~~~-.', 'd');
-      putSky(cy + 1, cx, '(_______)', 'd');
-    }
-    for (let x = 0; x < chartW; x++) {
-      if ((x * 13) % 4 === 0) continue; // leave some dry streaks
-      for (let r = row + 2; r < surface; r++) {
-        if ((((r - Math.floor(t * 8)) % 5) + 5) % 5 === (x * 7) % 5) putSky(r, x, '/', 'w2');
-      }
-    }
-  } else {
-    if (night && !wOvercastNight) {
-      // night: a cratered moon and slowly twinkling stars; the moon slides down
-      // to the first sky slot free of marker lines so it never gets sliced up.
-      // heavy real-world cloud cover overcasts the sky: no moon, no stars
-      let moonRow = row;
-      for (let r = row; r <= Math.min(row + 3, surface - 3); r++) {
-        if (g.ch.slice(r, r + 3).every(line => line.slice(2, 7).every(c => c === ' '))) { moonRow = r; break; }
-      }
-      drawMoonGlyph(putSky, moonRow, 2);
-      const starGlyphs = ['·', '+', '·', '˙'];
-      for (let x = 0; x < chartW; x++) {
-        for (let r = row; r < surface - 1; r++) {
-          const h = ((x + 1) * 2654435761 ^ (r + 1) * 40503) >>> 0;
-          if (h % 43) continue;
-          const phase = (Math.floor(t / 2) + (h >>> 8)) % 4;
-          putSky(r, x, starGlyphs[phase], phase === 1 ? 'b' : 'd');
-        }
-      }
-    }
-
-    // real weather at the station, from open-meteo: clouds first so precipitation
-    // appears to fall from them, then rain or snow (never both)
-    if (wClouds) {
-      const drift = Math.floor(t * 1.5);
-      for (const [cx0, cy] of [[8, row], [Math.floor(chartW * 0.55), row + 1]]) {
-        const cx = (cx0 + drift) % chartW;
-        putSky(cy, cx + 1, '.-~~~-.', 'd');
-        putSky(cy + 1, cx, '(_______)', 'd');
-      }
-    }
-    if (wSnow) {
-      // slow, sparse flakes — falls even over a frozen river
-      for (let x = 0; x < chartW; x++) {
-        if (x % 3 !== 0) continue;
-        for (let r = row + 2; r < surface; r++) {
-          if ((((r - Math.floor(t * 2)) % 5) + 5) % 5 === (x * 7) % 5) {
-            const flake = (x + r) % 2 === 0 ? '*' : '·';
-            putSky(r, x, flake, flake === '*' ? 'd' : 'w2');
-          }
-        }
-      }
-    } else if (wRain) {
-      // light rain thins to every 3rd column, moderate+ reuses the flood rain's
-      // dry-streak pattern
-      const light = weather.precipitation < 0.5;
-      for (let x = 0; x < chartW; x++) {
-        if (light ? x % 3 !== 0 : (x * 13) % 4 === 0) continue;
-        for (let r = row + 2; r < surface; r++) {
-          if ((((r - Math.floor(t * 8)) % 5) + 5) % 5 === (x * 7) % 5) putSky(r, x, '/', 'w2');
-        }
-      }
-    }
-
-    const trend = trendPerHour();
-    if (!icy && !wRain && trend !== null && trend >= 2 && surface > row + 4) {
-      // harbinger: the level is rising fast — a lone rain cloud drifts in
-      // upstream (left), drizzling, before any flood is on the chart. suppressed
-      // on ice (no drizzle onto a frozen river) and when real weather rain is
-      // already active (no double drizzle). Column 12 keeps it clear of the moon
-      // and the drought sun, which both live in the leftmost columns
-      const cx = 12 + Math.round(Math.sin(t * 0.4) * 2);
-      let cloudRow = row; // like the moon: dodge marker lines if possible
-      for (let r = row; r <= Math.min(row + 3, surface - 5); r++) {
-        if (g.ch.slice(r, r + 2).every(line => line.slice(cx, cx + 9).every(c => c === ' '))) { cloudRow = r; break; }
-      }
-      putSky(cloudRow,     cx + 1, '.-~~-.', 'd');
-      putSky(cloudRow + 1, cx, '(______)', 'd');
-      for (let i = 0; i < 8; i++) {
-        const dr = cloudRow + 2 + ((i * 3 + Math.floor(t * 6)) % 3);
-        if (dr < surface && (i * 5) % 3) putSky(dr, cx + 1 + i, "'", 'w2');
-      }
-    }
-  }
-  return row + CHART_ROWS + 1;
-}
-
 // ---------- history range (adjustable sparkline window) ----------
 
 const HISTORY_KEY = 'pegel.history';
@@ -2882,179 +2675,562 @@ function bucketSeries(series, cols) {
   return { lo, hi, min, max, step };
 }
 
-function drawSparkline(g, row, t) {
-  const wd = historyPreset().d;
+// Feed this the widest sample there is (see loadNeighbors): over a few adjacent
+// gauges the drop can vanish into the datum noise, and the fit then reads the river
+// as flowing uphill.
+function downstreamIsLowKm(pts) {
+  const kMean = pts.reduce((a, p) => a + p.km, 0) / pts.length;
+  const eMean = pts.reduce((a, p) => a + p.elev, 0) / pts.length;
+  return pts.reduce((a, p) => a + (p.km - kMean) * (p.elev - eMean), 0) >= 0;
+}
+
+// the flow direction for the station views: whole-river when known, otherwise the
+// neighbors are all we have
+const flowLowKm = n => state.flowLowKm ?? downstreamIsLowKm(n);
+
+// fraction along the scene, 0 = upstream (left) … 1 = downstream (right)
+const flowFrac = (km, kmMin, kmSpan, lowKmDown) => {
+  const f = (km - kmMin) / kmSpan;
+  return lowKmDown ? 1 - f : f;
+};
+
+const FLOW_MARK = '≋ downstream →';
+
+// ---------- station live view: the survey plate ----------
+
+// Pure: everything the scene draws, in fractions of the chart box (0 = top,
+// 1 = bed line). No characters, no columns — the drawing is SVG, so a mark
+// sits exactly where its value is instead of rounding onto a text row.
+function sceneModel() {
+  const value = state.gauge.currentMeasurement.value;
+  const mhw = charValue('MHW'), mw = charValue('MW'), mnw = charValue('MNW');
+  const hhw = charRecord('HHW'), nnw = charRecord('NNW');
+  const w = state.weather;
+  const icy = state.wt != null && state.wt <= 0.5; // a frozen river wins over drought
+  const flags = {
+    drought: mnw != null && value < mnw,
+    flood: mhw != null && value > mhw,
+    night: isNight(),
+    icy,
+    windy: !icy && !!w && w.wind_speed_10m != null && w.wind_speed_10m >= 25,
+    snow: !!w && w.snowfall != null && w.snowfall > 0,
+    rain: false,
+    clouds: !icy && !!w && w.cloud_cover != null && w.cloud_cover >= 60,
+    overcastNight: !icy && !!w && w.cloud_cover != null && w.cloud_cover >= 85,
+  };
+  flags.rain = !icy && !!w && w.precipitation != null && w.precipitation > 0 && !flags.snow;
+
+  // in a flood, keep sky headroom above the swollen river instead of pinning
+  // the surface to the ceiling
+  const topCm = flags.flood ? value * 1.45
+    : Math.max((mhw || mw * 1.5 || value * 1.5 || 100) * 1.06, value * 1.15);
+  // the water box: 0..BED_FRAC is water and sky, below that is riverbed
+  const BED = 0.86;
+  const fracOf = cm => Math.max(0, Math.min(1, 1 - cm / topCm)) * BED;
+  const surface = fracOf(value);
+
+  // Marks in value order, kept strictly monotonic around the water line: a mark
+  // above the current level always renders above it, so the ranking can never
+  // invert even when two values round together at low water.
+  const marks = [];
+  const add = (key, cm, year, kind) => {
+    if (cm == null || cm > topCm) return;
+    marks.push({ key, cm, year: year ?? null, kind, frac: fracOf(cm) });
+  };
+  for (const [k, cm] of [['MHW', mhw], ['MW', mw], ['MNW', mnw]]) add(k, cm, null, 'mean');
+  const above = [], below = [];
+  if (hhw && hhw.value > topCm) above.push({ key: 'HHW', cm: hhw.value, year: hhw.year, kind: 'record' });
+  else if (hhw) add('HHW', hhw.value, hhw.year, 'record');
+  if (nnw) {
+    if (nnw.value < 0 || fracOf(nnw.value) >= BED - 0.005) below.push({ key: 'NNW', cm: nnw.value, year: nnw.year, kind: 'record' });
+    else add('NNW', nnw.value, nnw.year, 'record');
+  }
+  const MIN_GAP = 0.055; // keeps two labels from sitting on top of each other
+  let prev = surface;
+  for (const m of marks.filter(m => m.cm >= value).sort((a, b) => a.cm - b.cm)) {
+    m.frac = Math.min(m.frac, prev - MIN_GAP);
+    prev = m.frac;
+  }
+  prev = surface;
+  for (const m of marks.filter(m => m.cm < value).sort((a, b) => b.cm - a.cm)) {
+    m.frac = Math.max(m.frac, prev + MIN_GAP);
+    prev = m.frac;
+  }
+  // anything pushed out of the box is reported as a margin arrow instead
+  const inBox = marks.filter(m => m.frac > 0.01 && m.frac < BED - 0.01);
+  for (const m of marks) if (!inBox.includes(m)) (m.cm >= value ? above : below).push(m);
+
+  // the normal range: the single most useful new mark — is the river behaving?
+  const band = mnw != null && mhw != null && mhw > mnw
+    ? { top: fracOf(mhw), bottom: fracOf(mnw), lo: mnw, hi: mhw }
+    : null;
+
+  return {
+    value, topCm, bed: BED, surface, band,
+    marks: inBox.sort((a, b) => a.frac - b.frac),
+    above, below,
+    flags,
+    moon: flags.night && !flags.overcastNight ? moonPhase() : null,
+    caption: sceneCaption(flags),
+    craft: sceneCraft(surface),
+    receivers: sceneReceivers(),
+  };
+}
+
+// only shown to people who configured a receiver: "offline" is the whole point
+// of the line, so it must not vanish with the old header
+function sceneReceivers() {
+  const out = [];
+  if (state.adsbOk !== null) {
+    out.push({ kind: 'adsb', ok: state.adsbOk,
+      text: state.adsbOk ? `${state.aircraft.length} ${plural(state.aircraft.length, 'aircraft', 'aircraft')} overhead` : 'ADS-B receiver offline' });
+  }
+  if (state.aisOk !== null) {
+    out.push({ kind: 'ais', ok: state.aisOk,
+      text: state.aisOk ? `${state.ships.length} ${plural(state.ships.length, 'ship')} on the water` : 'AIS receiver offline' });
+  }
+  return out;
+}
+
+// the scene, said in words — the charm becomes information, and the SVG's
+// <desc> and the visible caption come from the same string
+function sceneCaption(f) {
+  const parts = [];
+  parts.push(f.night ? 'night' : 'day');
+  if (f.icy) parts.push('frozen over');
+  if (f.flood) parts.push('above mean high water');
+  else if (f.drought) parts.push('below mean low water');
+  if (f.overcastNight) parts.push('overcast');
+  else if (f.clouds) parts.push('cloudy');
+  if (f.snow) parts.push('snowing');
+  else if (f.rain) parts.push('raining');
+  if (f.windy) parts.push('windy');
+  if (state.wt != null) parts.push(`${state.wt.toFixed(1)} °C`);
+  return parts.join(' · ');
+}
+
+// aircraft and ships projected onto the river axis between the outermost
+// neighbours — unchanged maths, now in fractions instead of columns
+function sceneCraft(surface) {
+  const n = state.neighbors;
+  const out = { aircraft: [], ships: [] };
+  if (n.length < 2) return out;
+  const lowKmDown = flowLowKm(n);
+  const L = lowKmDown ? n[n.length - 1] : n[0];
+  const R = lowKmDown ? n[0] : n[n.length - 1];
+  const kx = Math.cos((L.lat * Math.PI) / 180);
+  const ax = (R.lon - L.lon) * kx, ay = R.lat - L.lat;
+  const len2 = ax * ax + ay * ay;
+  if (!len2) return out;
+  const project = (lon, lat) => {
+    const px = (lon - L.lon) * kx, py = lat - L.lat;
+    return { frac: (px * ax + py * ay) / len2,
+      lateralKm: (Math.abs(px * ay - py * ax) / Math.sqrt(len2)) * 111 };
+  };
+  const heads = (course) => {
+    const tr = (course * Math.PI) / 180;
+    return Math.sin(tr) * ax + Math.cos(tr) * ay > 0;
+  };
+  if (state.adsbOk !== null) {
+    for (const a of state.aircraft) {
+      const { frac, lateralKm } = project(a.lon, a.lat);
+      if (frac < 0 || frac > 1 || lateralKm > 50) continue;
+      const alt = a.alt_baro === 'ground' ? 0 : (a.alt_baro || 0);
+      out.aircraft.push({
+        x: frac, y: Math.max(0.04, (1 - Math.min(alt, 42000) / 42000) * (surface - 0.14)),
+        right: heads(a.track ?? 0),
+        label: ((a.flight || '').trim() || a.hex || '') +
+          ' ' + (alt >= 5000 ? 'FL' + Math.round(alt / 100) : alt + 'ft'),
+      });
+    }
+  }
+  if (state.aisOk !== null) {
+    for (const s of state.ships) {
+      const { frac, lateralKm } = project(s.lon, s.lat);
+      // much tighter than the aircraft cutoff: ships are ON the river
+      if (frac < 0 || frac > 1 || lateralKm > 2) continue;
+      out.ships.push({
+        x: frac,
+        right: heads(s.cog ?? s.heading ?? 0),
+        label: [(s.shipname || '').trim() || String(s.mmsi || ''),
+          s.speed != null ? Math.round(s.speed) + 'kn' : ''].filter(Boolean).join(' '),
+      });
+    }
+  }
+  return out;
+}
+
+const SCENE_W = 320, SCENE_H = 190;
+
+function renderScene(vm) {
+  const s = vm.scene, f = s.flags;
+  const Y = fr => (fr * SCENE_H).toFixed(1);
+  const surfY = +Y(s.surface), bedY = +Y(s.bed);
+  const p = [];
+
+  // sky first, so everything else paints over it
+  if (f.night && !f.overcastNight) {
+    for (let i = 0; i < 26; i++) {
+      const h = ((i + 1) * 2654435761) >>> 0;
+      const x = (h % 1000) / 1000 * SCENE_W, y = ((h >>> 10) % 1000) / 1000 * Math.max(10, surfY - 12);
+      p.push(`<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="0.9" class="star"${attr('style', `--d:${(i % 5) * 0.7}s`)}/>`);
+    }
+    if (s.moon != null) p.push(renderMoon(28, 26, 11, s.moon));
+  } else if (f.drought && !f.night && !f.icy) {
+    p.push(`<g class="sun"><circle cx="30" cy="28" r="9"/>` +
+      Array.from({ length: 8 }, (_, i) => {
+        const a = i * Math.PI / 4;
+        return `<line x1="${(30 + Math.cos(a) * 12).toFixed(1)}" y1="${(28 + Math.sin(a) * 12).toFixed(1)}" x2="${(30 + Math.cos(a) * 16).toFixed(1)}" y2="${(28 + Math.sin(a) * 16).toFixed(1)}"/>`;
+      }).join('') + '</g>');
+  }
+  if (f.clouds || f.flood) {
+    for (const [cx, cy, sc] of [[70, 22, 1], [210, 34, 0.78]]) {
+      p.push(`<g class="cloud"${attr('transform', `translate(${cx} ${cy}) scale(${sc})`)}>` +
+        '<path d="M-26 8 a9 9 0 0 1 2-17 a13 13 0 0 1 24-5 a10 10 0 0 1 14 12 a8 8 0 0 1-6 10 Z"/></g>');
+    }
+  }
+  if (f.rain || f.flood) {
+    p.push('<g class="rain">' + Array.from({ length: 22 }, (_, i) => {
+      const x = 8 + i * 14.2;
+      return `<line x1="${x.toFixed(1)}" y1="0" x2="${(x - 3).toFixed(1)}" y2="9"${attr('style', `--d:${(i % 7) * 0.11}s`)}/>`;
+    }).join('') + '</g>');
+  }
+  if (f.snow) {
+    p.push('<g class="snow">' + Array.from({ length: 16 }, (_, i) => {
+      const x = 12 + i * 19.4;
+      return `<circle cx="${x.toFixed(1)}" cy="0" r="1.4"${attr('style', `--d:${(i % 8) * 0.55}s`)}/>`;
+    }).join('') + '</g>');
+  }
+
+  // riverbed, then the water body
+  const seed = [...station].reduce((a, c) => a + c.charCodeAt(0), 0);
+  const bedPts = Array.from({ length: 17 }, (_, i) => {
+    const x = i * (SCENE_W / 16);
+    const y = bedY + 4 + Math.sin(i * 0.9 + seed) * 2.6 + Math.sin(i * 0.35 + seed * 2) * 1.9;
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  }).join(' ');
+  p.push(`<polygon class="bed" points="0,${SCENE_H} ${bedPts} ${SCENE_W},${SCENE_H}"/>`);
+  p.push(`<rect class="water" x="0" y="${surfY.toFixed(1)}" width="${SCENE_W}" height="${(SCENE_H - surfY).toFixed(1)}"/>`);
+  if (f.drought) {
+    // the dry bank the water has left behind
+    p.push(`<rect class="dry-bank" x="0" y="${Y(s.band ? s.band.bottom : s.surface - 0.12)}" width="${SCENE_W}" height="${Math.max(0, surfY - +Y(s.band ? s.band.bottom : s.surface - 0.12)).toFixed(1)}"/>`);
+  }
+
+  // the normal range band — the one mark that answers "is this high or low?"
+  if (s.band) {
+    const t = +Y(s.band.top), b = +Y(s.band.bottom);
+    p.push(`<rect class="band" x="0" y="${t.toFixed(1)}" width="${SCENE_W}" height="${Math.max(0.5, b - t).toFixed(1)}"/>`);
+  }
+
+  // the surface: one strong line, tiled twice so CSS can drift it seamlessly
+  const wave = (y) => {
+    const seg = [];
+    for (let x = 0; x <= SCENE_W * 2; x += 20) seg.push(`${x === 0 ? 'M' : 'Q'}${x} ${y} ${x + 10} ${y}`);
+    let d = `M0 ${y}`;
+    for (let x = 0; x < SCENE_W * 2; x += 20) d += ` q5 -2.6 10 0 t10 0`;
+    return d;
+  };
+  if (f.icy) {
+    p.push(`<g class="ice"><rect x="0" y="${(surfY - 2.5).toFixed(1)}" width="${SCENE_W}" height="5"/>` +
+      Array.from({ length: 7 }, (_, i) =>
+        `<rect class="floe" x="${(i * 47 + (seed % 20)).toFixed(1)}" y="${(surfY - 4).toFixed(1)}" width="${18 + (i % 3) * 7}" height="8" rx="1.5"/>`).join('') +
+      '</g>');
+  } else {
+    p.push(`<g class="waves"${attr('style', `--dur:${f.windy ? 3 : 7}s`)}>` +
+      `<path class="w-far" d="${wave(surfY - 1.5)}"/><path class="w-near" d="${wave(surfY)}"/></g>`);
+  }
+  p.push(`<line class="surface" x1="0" y1="${surfY.toFixed(1)}" x2="${SCENE_W}" y2="${surfY.toFixed(1)}"/>`);
+
+  // reference marks: dashed rules that stop short of the label gutter
+  for (const m of s.marks) {
+    p.push(`<line class="mark ${m.kind}" x1="0" y1="${Y(m.frac)}" x2="${SCENE_W}" y2="${Y(m.frac)}"/>`);
+  }
+
+  // the boat, and any real traffic that displaces it
+  const ships = s.craft.ships;
+  if (ships.length) {
+    for (const sh of ships) {
+      const x = 14 + sh.x * (SCENE_W - 28);
+      p.push(`<g class="boat"${attr('transform', `translate(${x.toFixed(1)} ${surfY.toFixed(1)})${sh.right ? '' : ' scale(-1 1)'}`)}>` +
+        '<path d="M-11 0 l3 5 h16 l3 -5 Z"/></g>');
+      if (sh.label) {
+        p.push(`<text class="craft-lbl" x="${x.toFixed(1)}" y="${(surfY - 7).toFixed(1)}" text-anchor="middle">${esc(sh.label)}</text>`);
+      }
+    }
+  } else if (surfY > 26) {
+    const cls = 'boat' + (f.icy ? ' stuck' : '') + (f.drought ? ' aground' : '');
+    p.push(`<g class="${cls}"${attr('style', `--bob:${f.flood || f.windy ? 1.6 : 3.4}s`)}>` +
+      `<g transform="translate(0 ${(f.drought ? bedY - 2 : surfY).toFixed(1)})">` +
+      '<path d="M-11 0 l3 5 h16 l3 -5 Z"/><path class="mast" d="M0 0 V-11 l7 4 l-7 3"/></g></g>');
+  }
+  for (const a of s.craft.aircraft) {
+    const x = 10 + a.x * (SCENE_W - 20), y = a.y * SCENE_H;
+    p.push(`<g class="plane"${attr('transform', `translate(${x.toFixed(1)} ${y.toFixed(1)})${a.right ? '' : ' scale(-1 1)'}`)}>` +
+      '<path d="M-5 0 h8 l3 -3 v6 l-3 -3 M-1 -3 v6"/></g>');
+    p.push(`<text class="craft-lbl" x="${(x + (a.right ? 9 : -9)).toFixed(1)}" y="${(y + 2.5).toFixed(1)}"${attr('text-anchor', a.right ? 'start' : 'end')}>${esc(a.label)}</text>`);
+  }
+
+  return svgWrap(`0 0 ${SCENE_W} ${SCENE_H}`,
+    `<title>${esc(station)} right now</title><desc>${esc(vm.summary)}</desc>` + p.join(''),
+    ' class="scene" preserveAspectRatio="none" role="img"');
+}
+
+// a real terminator path, driven by the same moonPhase() the favicon uses —
+// a genuine upgrade on the character glyph
+function renderMoon(cx, cy, r, phase) {
+  const lit = phase <= 0.5 ? 1 - phase * 4 : (phase - 0.5) * 4 - 1; // +1 full … -1 new
+  const sweep = phase <= 0.5 ? 1 : 0;
+  const rx = Math.abs(lit) * r;
+  const inner = lit >= 0
+    ? `A${rx.toFixed(1)} ${r} 0 0 ${sweep ? 0 : 1} ${cx} ${cy + r}`
+    : `A${rx.toFixed(1)} ${r} 0 0 ${sweep ? 1 : 0} ${cx} ${cy + r}`;
+  return `<g class="moon"><path d="M${cx} ${cy - r} A${r} ${r} 0 0 ${sweep} ${cx} ${cy + r} ${inner} Z"/></g>`;
+}
+
+// the marker labels live in an HTML gutter beside the drawing, positioned by
+// the same fraction the dashed rule uses — real text at a real font size, so
+// nothing scales into illegibility on a wide screen
+function renderSceneGutter(vm) {
+  const s = vm.scene;
+  const row = (frac, key, cm, year, cls) =>
+    `<li class="${cls}"${attr('style', `top:${(frac * 100).toFixed(2)}%`)}>` +
+    `<b>${esc(key)}</b> <span class="cm">${Math.round(cm)}</span>` +
+    (year ? ` <span class="yr">${year}</span>` : '') + '</li>';
+  const items = [];
+  for (const m of s.above) items.push(`<li class="off top"><b>↑ ${esc(m.key)}</b> <span class="cm">${Math.round(m.cm)}</span>${m.year ? ` <span class="yr">${m.year}</span>` : ''}</li>`);
+  const inner = s.marks.map(m => row(m.frac, m.key, m.cm, m.year, 'mk ' + m.kind));
+  inner.push(row(s.surface, T.now, s.value, null, 'now'));
+  items.push(`<ul class="gut-lines">${inner.join('')}</ul>`);
+  for (const m of s.below) items.push(`<li class="off bottom"><b>↓ ${esc(m.key)}</b> <span class="cm">${Math.round(m.cm)}</span>${m.year ? ` <span class="yr">${m.year}</span>` : ''}</li>`);
+  return `<div class="gutter"><ul class="gut-off">${items.join('')}</ul></div>`;
+}
+
+// ---------- history chart ----------
+
+const HIST_W = 320, HIST_H = 96;
+
+// pure: the window, its buckets, its ticks and the one insight sentence
+function historyViewModel() {
+  const preset = historyPreset();
+  const wd = preset.d;
   const cutoff = wd ? Date.now() - wd * 864e5 : 0;
   const arch = wd ? state.archive.filter(p => p[0] >= cutoff) : state.archive;
   const series = arch.map(p => p[1]);
-  if (series.length < 2) {
-    put(g, row, 0, `HISTORY · ${historyPreset().label}: not enough data yet`, 'd');
-    sparkDisplay = null;
-    return row + 2;
-  }
+  if (series.length < 2) return { empty: true, label: preset.label };
   const spanDays = Math.max(1, Math.round((arch[arch.length - 1][0] - arch[0][0]) / 864e5));
-  const chartW = COLS - 12;
-  const { lo, hi, min, max, step } = bucketSeries(series, chartW);
-  const span = Math.max(max - min, 1);
-  const banded = lo.some((v, x) => v < hi[x]); // true once a column merges >1 point
-  // ALL says how much it really is: day count while short, years once it spans them
-  const label = `HISTORY · ${wd ? historyPreset().label : spanDays > 730 ? (spanDays / 365.25).toFixed(1) + 'Y' : spanDays + 'D'}`;
-  put(g, row, 0, label, 'd');
-  const minmax = `min ${min}  max ${max}`;
-  put(g, row, label.length + 3, minmax, 'd');
-  // multi-year windows show WSV archive data: warn that it is unvalidated raw
-  // data, or — when the local archive is still short of the window — say so
-  // and point at the import path instead of silently showing a shorter span
-  const noteCol = label.length + 3 + minmax.length + 2;
+  const cols = bucketCols();
+  const b = bucketSeries(series, cols);
+  const banded = b.lo.some((v, x) => v < b.hi[x]);
   const coveredDays = (Date.now() - arch[0][0]) / 864e5;
+  let note = null;
   if (wd && coveredDays < wd * 0.8 && state.repoArchive === 'none') {
-    // the manifest says WSV keeps no pre-30-day archive for this station at all
-    put(g, row, noteCol, isCompact() ? '· no WSV archive' : '· WSV has no multi-year archive for this station', 'd');
+    note = { kind: 'none', text: 'WSV keeps no multi-year archive for this gauge' };
   } else if (wd && coveredDays < wd * 0.8) {
-    put(g, row, noteCol, isCompact() ? `· ${Math.round(coveredDays)}D only` : `· covers ${Math.round(coveredDays)}D — import the WSV archive ↓`, 's');
-  } else if ((wd || spanDays) > API_MAX_DAYS) { // ALL warns too once the archive spans years
-    put(g, row, noteCol, isCompact() ? '· RAW' : `· unvalidated raw data (${archiveSource()})`, 's');
+    note = { kind: 'short', text: `covers ${Math.round(coveredDays)} days so far — import the WSV archive below` };
+  } else if ((wd || spanDays) > API_MAX_DAYS) {
+    note = { kind: 'raw', text: `unvalidated raw data (${archiveSource()})` };
   }
-
-  // water sloshes past the new level, wobbles, then settles — a damped spring per
-  // column instead of a flat snap, so history-range changes read as the level moving
-  const dt = sparkLastT === null ? 0.12 : Math.min(0.2, t - sparkLastT);
-  sparkLastT = t;
-  // the spring animates the band TOP per column — the silhouette the eye follows —
-  // and the band bottom rides one band height below it, so the hatched span never
-  // lags behind the surface it belongs to (and vanishes entirely when lo === hi)
-  if (reduceMotion.matches || !sparkDisplay || sparkDisplay.length !== chartW) { sparkDisplay = hi.slice(); sparkVelocity = hi.map(() => 0); }
-  for (let x = 0; x < chartW; x++) {
-    const springK = 45 + (x % 7) * 4, damping = 7 + (x % 5) * 0.6; // slight per-column variation → organic slosh
-    const accel = (hi[x] - sparkDisplay[x]) * springK - sparkVelocity[x] * damping;
-    sparkVelocity[x] += accel * dt;
-    sparkDisplay[x] += sparkVelocity[x] * dt;
-  }
-
-  const partial = ' ▁▂▃▄▅▆▇';
-  const splashGlyphs = '·˚°∘';
-  // a perfectly flat window still shows water: pin it to half height instead
-  // of normalizing every point to zero fill (which looked like "no data")
-  const fracOf = v => max === min ? 0.5 : (v - min) / span;
-  for (let x = 0; x < chartW; x++) {
-    const level = fracOf(sparkDisplay[x]) * SPARK_ROWS * 8;
-    const floorLevel = fracOf(sparkDisplay[x] - (hi[x] - lo[x])) * SPARK_ROWS * 8;
-    for (let r = 0; r < SPARK_ROWS; r++) {
-      const cellLevel = Math.max(0, Math.min(8, level - r * 8));
-      if (cellLevel < 1) continue;
-      const cellFloor = Math.max(0, Math.min(8, floorLevel - r * 8));
-      const rr = row + SPLASH_ROWS + 1 + SPARK_ROWS - 1 - r;
-      // ink density carries the band — solid below the column's low, hatched
-      // through the span it swung across, the sub-cell ramp for the surface
-      // itself. A cell the low crosses takes an intermediate density rather than
-      // flipping at the halfway mark, which dithered █/▒ across neighbors whose
-      // lows straddled it. A one-point bucket has cellFloor === cellLevel === 8,
-      // so short windows stay solid exactly as before.
-      if (cellLevel < 8) put(g, rr, x, partial[Math.floor(cellLevel)], 'w');
-      else put(g, rr, x, cellFloor >= 6 ? '█' : cellFloor >= 2 ? '▓' : '▒', 'w');
-    }
-    // overshoot above the frame: the water briefly splashes over the top
-    const overflow = level - SPARK_ROWS * 8;
-    if (overflow > 0) {
-      for (let s = 0; s < SPLASH_ROWS; s++) {
-        const cellLevel = overflow - s * 8;
-        if (cellLevel < 1) continue;
-        put(g, row + SPLASH_ROWS - s, x, splashGlyphs[Math.min(splashGlyphs.length - 1, Math.floor(cellLevel / 2))], 'w2');
-      }
-    }
-  }
-  put(g, row + SPLASH_ROWS + 1, chartW + 1, `┐ now`, 'd');
-  // the hatched span needs naming, but only on windows where columns merge points
-  if (banded) put(g, row + SPLASH_ROWS + 2, chartW + 1, `│ ▒ range`, 'd');
-  put(g, row + SPLASH_ROWS + SPARK_ROWS, chartW + 1, `┘ ${series.length} pts`, 'd');
-
-  // time axis under the bars. Columns sample the archive by index, not by time
-  // (gaps compress), so each tick is labeled with its column's real timestamp
-  const axisRow = row + SPLASH_ROWS + SPARK_ROWS + 1;
-  const fmtTick = ts => {
+  // ticks read their own column's real timestamp: columns sample by index, so
+  // gaps compress and a linear time axis would lie
+  const nTicks = plateDensity() === 'narrow' ? 3 : 6;
+  const fmt = ts => {
     const iso = new Date(ts).toISOString();
-    if (spanDays <= 2) return iso.slice(11, 16);  // HH:MM
-    if (spanDays <= 120) return iso.slice(5, 10); // MM-DD
-    if (spanDays <= 1200) return iso.slice(0, 7); // YYYY-MM
-    return iso.slice(0, 4);                       // YYYY
+    if (spanDays <= 2) return iso.slice(11, 16);
+    if (spanDays <= 120) return iso.slice(5, 10);
+    if (spanDays <= 1200) return iso.slice(0, 7);
+    return iso.slice(0, 4);
   };
-  const nTicks = isCompact() ? 3 : 5;
-  let lastEnd = -2, lastLbl = '';
-  for (let t = 0; t < nTicks; t++) {
-    const x = Math.round((t * (chartW - 1)) / (nTicks - 1));
-    const ts = arch[Math.min(arch.length - 1, Math.floor(x * step))][0];
-    const lbl = fmtTick(ts);
-    if (lbl === lastLbl) continue; // e.g. two coarse-format ticks in the same year
-    const lx = Math.max(0, Math.min(chartW - lbl.length, x - (lbl.length >> 1)));
-    if (lx <= lastEnd + 1) continue; // keep a blank cell between neighboring ticks
-    put(g, axisRow, lx, lbl, 'd');
-    lastEnd = lx + lbl.length;
-    lastLbl = lbl;
+  const ticks = [];
+  let lastLbl = '';
+  for (let i = 0; i < nTicks; i++) {
+    const x = Math.round((i * (cols - 1)) / (nTicks - 1));
+    const ts = arch[Math.min(arch.length - 1, Math.floor(x * b.step))][0];
+    const text = fmt(ts);
+    if (text === lastLbl) continue;
+    lastLbl = text;
+    ticks.push({ frac: cols > 1 ? x / (cols - 1) : 0, text });
   }
-  // one line of context under the axis: where this reading sits in the station's
-  // own record. Stations without an archive never reach it — see unusualNow()
-  const u = unusualNow();
-  if (!u) return row + SPLASH_ROWS + SPARK_ROWS + 2;
-  const uText = unusualText(u, isCompact());
-  put(g, axisRow + 1, 0, uText, 'd');
-  // far out of season wears the anomaly heatmap's accents: wet up, dry down
-  const sig = /[+-][\d.]+σ/.exec(uText);
-  if (sig && Math.abs(u.z) >= 1.5) put(g, axisRow + 1, sig.index, sig[0], u.z > 0 ? 'w2' : 's');
-  return row + SPLASH_ROWS + SPARK_ROWS + 3;
+  return {
+    empty: false,
+    label: wd ? preset.label : spanDays > 730 ? (spanDays / 365.25).toFixed(1) + 'Y' : spanDays + 'D',
+    windowDays: wd, spanDays, points: series.length,
+    series: b, banded, ticks, note,
+    marks: historyRefMarks(b.min, b.max),
+    insight: unusualNow(),
+  };
 }
 
-function drawProfile(g, row) {
+// the same MNW/MW/MHW the scene draws, as horizontal rules on the history
+// chart — the range chips and the scene finally speak the same language
+function historyRefMarks(min, max) {
+  const out = [];
+  for (const key of ['MHW', 'MW', 'MNW']) {
+    const cm = charValue(key);
+    if (cm == null || cm < min || cm > max) continue;
+    out.push({ key, cm });
+  }
+  return out;
+}
+
+function renderHistory(h) {
+  if (h.empty) {
+    return `<section class="p-block"><h2 class="p-h2">${esc(T.history)} · ${esc(h.label)}</h2>` +
+      `<p class="p-dim">${esc(T.historyThin)}</p></section>`;
+  }
+  const { lo, hi, min, max } = h.series;
+  const n = lo.length;
+  const span = Math.max(max - min, 1);
+  const X = i => (n > 1 ? (i / (n - 1)) * HIST_W : 0);
+  const Y = v => max === min ? HIST_H / 2 : (1 - (v - min) / span) * HIST_H;
+  const top = [], bottom = [];
+  for (let i = 0; i < n; i++) { top.push(`${X(i).toFixed(1)},${Y(hi[i]).toFixed(1)}`); }
+  for (let i = n - 1; i >= 0; i--) { bottom.push(`${X(i).toFixed(1)},${Y(lo[i]).toFixed(1)}`); }
+  const parts = [];
+  for (const m of h.marks) {
+    parts.push(`<line class="href-line" x1="0" y1="${Y(m.cm).toFixed(1)}" x2="${HIST_W}" y2="${Y(m.cm).toFixed(1)}"/>`);
+  }
+  // the band is the honest shape: every point in the window, not a subsample
+  if (h.banded) parts.push(`<polygon class="h-band" points="${top.join(' ')} ${bottom.join(' ')}"/>`);
+  parts.push(`<polygon class="h-fill" points="0,${HIST_H} ${top.join(' ')} ${HIST_W},${HIST_H}"/>`);
+  parts.push(`<polyline class="h-line" points="${top.join(' ')}"/>`);
+  const chart = svgWrap(`0 0 ${HIST_W} ${HIST_H}`, parts.join(''),
+    ' class="chart hist" preserveAspectRatio="none" role="img"' +
+    attr('aria-label', `${h.label} history, ${min} to ${max} centimetres over ${h.points} readings`));
+  const axis = `<div class="h-axis">` +
+    h.ticks.map(t => `<span${attr('style', `left:${(t.frac * 100).toFixed(2)}%`)}>${esc(t.text)}</span>`).join('') +
+    '</div>';
+  const scale = `<div class="h-scale"><span class="hi">${max} cm</span><span class="lo">${min} cm</span></div>`;
+  const refs = h.marks.map(m => `<b>${esc(m.key)}</b> ${m.cm}`).join(' · ');
+  const key = `<dl class="p-key"><dt>${esc(T.key)}</dt>` +
+    `<dd><span class="lg"><svg class="sw" viewBox="0 0 12 12" aria-hidden="true"><polyline class="h-line" points="0,9 4,4 8,6 12,2"/></svg>` +
+    `<span class="lgn">${esc(T.histDaily)}</span></span></dd>` +
+    (h.banded ? `<dd><span class="lg"><svg class="sw" viewBox="0 0 12 12" aria-hidden="true"><polygon class="h-band" points="0,3 12,1 12,8 0,10"/></svg><span class="lgn">${esc(T.histBand)}</span></span></dd>` : '') +
+    (refs ? `<dd><span class="lg"><svg class="sw" viewBox="0 0 12 12" aria-hidden="true"><line class="href-line" x1="0" y1="6" x2="12" y2="6"/></svg><span class="lgn">${refs}</span></span></dd>` : '') +
+    `<dd>${h.points} readings${h.note ? '' : ''}</dd>` +
+    (h.note ? `<dd class="warn">${esc(h.note.text)}</dd>` : '') + '</dl>';
+  return `<section class="p-block"><h2 class="p-h2">${esc(T.history)} · ${esc(h.label)}</h2>` +
+    `<div class="hist-wrap">${scale}${chart}</div>${axis}${key}</section>`;
+}
+
+// ---------- neighbours ----------
+
+function profileViewModel() {
   const n = state.neighbors;
-  put(g, row, 0, isCompact() ? 'ELEVATION m NHN' : 'WATER SURFACE ELEVATION · m NHN', 'd');
   if (n.length < 2) {
-    put(g, row + 1, 0, n.length === 0 ? 'locating neighbor stations…' : 'no neighbor stations with gauge zero on this water', 'd');
-    return row + 3;
+    return { empty: true, text: n.length === 0 ? T.profileLoading : T.profileNone };
   }
   const kmMin = n[0].km, kmSpan = Math.max(n[n.length - 1].km - kmMin, 0.1);
   const elevs = n.map(p => p.elev);
   const eMin = Math.min(...elevs), eSpan = Math.max(Math.max(...elevs) - eMin, 0.1);
-  const plotW = COLS - 26;
   const lowKmDown = flowLowKm(n);
   const pts = n.map(p => ({
-    x: 2 + Math.round(flowFrac(p.km, kmMin, kmSpan, lowKmDown) * plotW),
-    y: row + 1 + Math.round((1 - (p.elev - eMin) / eSpan) * (PROFILE_PLOT_H - 1)),
-    p,
-  }));
-  for (let i = 0; i < pts.length - 1; i++) {
-    const a = pts[i], b = pts[i + 1];
-    const steps = Math.max(Math.abs(b.x - a.x), 1), dir = Math.sign(b.x - a.x) || 1;
-    for (let s = 1; s < steps; s++) {
-      put(g, Math.round(a.y + ((b.y - a.y) * s) / steps), a.x + dir * s, '·', 'w');
-    }
-  }
-  for (const { x, y, p } of pts) {
-    const self = p.name === station;
-    put(g, y, x, '◉', self ? 'b' : '');
-    if (!self) linkCells(g, y, x, 1, p.name); // neighbors are one click away
-  }
+    name: p.name, km: p.km, elev: p.elev,
+    self: p.name === station,
+    x: flowFrac(p.km, kmMin, kmSpan, lowKmDown),
+    y: 1 - (p.elev - eMin) / eSpan,
+  })).sort((a, b) => a.x - b.x);
+  return { empty: false, pts };
+}
 
-  // Labels get their own rows under the plot rather than floating by their marker:
-  // a name plus elevation runs to 37 columns, and a 4-row plot forces three of them
-  // to share rows, so floating labels overwrote each other on 3 profiles in 4 at 44
-  // columns (and 1 in 6 at 84). One row each makes that impossible instead of merely
-  // unlikely. Order follows the flow — top = upstream — and each row is indented to
-  // its own marker, so the link back to the plot survives. Every other row stays
-  // blank: stacked adjacent, three long underlined runs read as a wall of text.
-  const byFlow = [...pts].sort((a, b) => a.x - b.x);
-  byFlow.forEach(({ x, p }, i) => {
-    const self = p.name === station;
-    const elev = p.elev.toFixed(2), km = `km ${p.km}`;
-    const budget = COLS - elev.length - km.length - 4; // 4 = the two separators
-    const name = p.name.length > budget ? p.name.slice(0, budget - 1) + '…' : p.name;
-    const label = `${name} ${elev} · ${km}`;
-    const lx = Math.min(Math.max(0, x - 2), COLS - label.length);
-    const lrow = row + 1 + PROFILE_PLOT_H + i * 2;
-    put(g, lrow, lx, label, self ? 'b' : 'd');
-    // the current station's own label leads onward: to its whole-river profile
-    linkCells(g, lrow, lx, label.length, self ? 'river:' + state.info.water.shortname : p.name);
-  });
-  put(g, row + PROFILE_ROWS, 0, FLOW_MARK, 'd');
-  return row + PROFILE_ROWS + PROFILE_FOOT;
+function renderProfile(pr) {
+  if (pr.empty) {
+    return `<section class="p-block"><h2 class="p-h2">${esc(T.neighbours)}</h2>` +
+      `<p class="p-dim">${esc(pr.text)}</p></section>`;
+  }
+  const W = 320, H = 70, pad = 10;
+  const px = p => pad + p.x * (W - 2 * pad), py = p => 8 + p.y * (H - 20);
+  const line = `<polyline class="pf-line" points="${pr.pts.map(p => `${px(p).toFixed(1)},${py(p).toFixed(1)}`).join(' ')}"/>`;
+  const dots = pr.pts.map(p =>
+    `<a${navAttrs(p.self ? 'river:' + state.info.water.shortname : p.name)}>` +
+    `<title>${esc(p.name)}: ${p.elev.toFixed(2)} m NHN, km ${p.km}</title>` +
+    `<circle class="pf-dot${p.self ? ' self' : ''}" cx="${px(p).toFixed(1)}" cy="${py(p).toFixed(1)}" r="${p.self ? 4 : 3}"/>` +
+    `<rect class="hit" x="${(px(p) - 12).toFixed(1)}" y="${(py(p) - 12).toFixed(1)}" width="24" height="24"/></a>`).join('');
+  const chart = svgWrap(`0 0 ${W} ${H}`, line + dots,
+    ' class="chart profile" role="group"' + attr('aria-label', T.neighboursAria));
+  const rows = pr.pts.map(p =>
+    `<li class="${p.self ? 'self' : ''}"><a${navAttrs(p.self ? 'river:' + state.info.water.shortname : p.name)}>` +
+    `<span class="name">${esc(p.name)}</span><span class="elev">${p.elev.toFixed(2)} m</span>` +
+    `<span class="km">km ${p.km}</span></a></li>`).join('');
+  return `<section class="p-block"><h2 class="p-h2">${esc(T.neighbours)}</h2>` +
+    `<p class="p-sub2">${esc(T.neighboursSub)}</p>${chart}` +
+    `<div class="pf-flow"><span>← ${esc(T.downstream)}</span><span>${esc(T.upstream)} →</span></div>` +
+    `<ol class="pf-list">${rows}</ol></section>`;
+}
+
+// ---------- the station plate ----------
+
+function stationViewModel() {
+  const cur = state.gauge.currentMeasurement;
+  const trend = trendPerHour();
+  return {
+    kind: 'station',
+    station,
+    water: (state.info.water && state.info.water.shortname) || '',
+    km: state.info.km,
+    value: Math.round(cur.value),
+    stateName: cur.stateMnwMhw || null,
+    ts: cur.timestamp,
+    trend,
+    wt: state.wt,
+    q: state.q,
+    scene: sceneModel(),
+    history: historyViewModel(),
+    profile: profileViewModel(),
+    summary: screenSummary(),
+    source: `${T.sourceWsv} · reading ${new Date(cur.timestamp).toISOString().replace('T', ' ').slice(0, 16)} UTC · ${T.refreshEvery}`,
+  };
+}
+
+// "342 cm is higher than 91 % of all days recorded here since 1999. For an
+// August day that is 74 cm above the usual 268 cm." — the terse mono line the
+// old grid printed stays underneath it, for the people who read that fluently.
+function insightSentence(u, value) {
+  if (!u) return null;
+  const parts = [`<b>${value} cm</b> — higher than <b>${u.pct} %</b> of all days recorded here since <b>${u.fromYear ?? u.years}</b>.`];
+  if (u.climMean != null) {
+    const d = Math.round(value - u.climMean);
+    const dir = d >= 0 ? 'above' : 'below';
+    parts.push(`For ${MONTH_NAME[u.month]} that is <b>${Math.abs(d)} cm</b> ${dir} the usual <b>${u.climMean} cm</b>` +
+      (Math.abs(u.z) >= 1 ? ` — ${u.z > 0 ? 'clearly wet' : 'clearly dry'} for the season.` : '.'));
+  }
+  return parts.join(' ');
+}
+
+function renderStation(vm) {
+  const vh = `<p class="vh">${esc(vm.summary)}</p>`;
+  const trendTxt = vm.trend === null ? '—'
+    : `${trendArrow(vm.trend)} ${fmtTrend(vm.trend)} cm/h`;
+  const facts = [
+    ['trend', trendTxt, T.trendNote],
+    ['state', vm.stateName ? vm.stateName.toUpperCase() : 'unknown', T.stateNote],
+  ];
+  if (vm.wt != null) facts.push(['water', `${vm.wt.toFixed(1)} °C`, '']);
+  if (vm.q != null) facts.push(['flow', `${Math.round(vm.q)} m³/s`, '']);
+  const head = `<header class="p-head station-head">` +
+    `<div class="hero"><span class="hero-n">${vm.value}</span><span class="hero-u">cm</span>` +
+    `<span class="hero-note">${esc(T.aboveZero)}</span></div>` +
+    `<dl class="facts">` + facts.map(([k, v, note]) =>
+      `<div><dt>${esc(k)}</dt><dd${note ? attr('title', note) : ''}>${esc(v)}</dd></div>`).join('') +
+    '</dl>' +
+    (vm.km != null ? `<div class="km-sign"><span class="km-n">${esc(fmtKm(vm.km))}</span><span class="km-u">km</span></div>` : '') +
+    '</header>';
+  const scene = `<section class="p-block"><h2 class="p-h2">${esc(T.sceneTitle)}</h2>` +
+    `<div class="scene-wrap"><div class="scene-plot">${renderScene(vm)}</div>${renderSceneGutter(vm)}</div>` +
+    `<p class="scene-cap">${esc(vm.scene.caption)}` +
+    vm.scene.receivers.map(r => `<span class="rcv ${r.ok ? 'on' : 'off'}">${esc(r.text)}</span>`).join('') +
+    '</p>' +
+    `<dl class="p-key"><dt>${esc(T.key)}</dt>` +
+    `<dd><span class="lg"><svg class="sw" viewBox="0 0 12 12" aria-hidden="true"><line class="surface" x1="0" y1="6" x2="12" y2="6"/></svg><span class="lgn">${esc(T.keyNow)}</span></span></dd>` +
+    `<dd><span class="lg"><svg class="sw" viewBox="0 0 12 12" aria-hidden="true"><line class="mark mean" x1="0" y1="6" x2="12" y2="6"/></svg><span class="lgn">${esc(T.keyMeans)}</span></span></dd>` +
+    `<dd><span class="lg"><svg class="sw" viewBox="0 0 12 12" aria-hidden="true"><line class="mark record" x1="0" y1="6" x2="12" y2="6"/></svg><span class="lgn">${esc(T.keyRecords)}</span></span></dd>` +
+    (vm.scene.band ? `<dd><span class="lg"><svg class="sw" viewBox="0 0 12 12" aria-hidden="true"><rect class="band" x="0" y="2" width="12" height="8"/></svg><span class="lgn">${esc(T.keyBand)}</span></span></dd>` : '') +
+    '</dl></section>';
+  const u = vm.history.empty ? null : vm.history.insight;
+  const readout = u
+    ? `<section class="p-block readout"><p class="say">${insightSentence(u, vm.value)}</p>` +
+      `<p class="terse">${esc(unusualText(u, false))}</p></section>`
+    : '';
+  return `<section class="plate">${vh}${head}${scene}${renderHistory(vm.history)}${readout}${renderProfile(vm.profile)}</section>`;
 }
 
 // ---------- river profile renderer ----------
@@ -3400,6 +3576,9 @@ function unusualStats(st, cm, monthIdx) {
     cm: Math.round(cm),
     pct: Math.round((a / sorted.length) * 100),
     years: st.years.length,
+    // the first archived year, so the plate can say "since 1999" instead of
+    // asking the reader to subtract 26 from this year themselves
+    fromYear: st.years.length ? st.years[0] : null,
     month: monthIdx,
     // no completed year covering this month yet → no climatology to compare against
     climMean: c ? Math.round(c.mean) : null,
@@ -6481,14 +6660,9 @@ function render(t) {
     if (!fitted) { fitted = true; fitFont(); }
     return;
   }
-  const g = makeGrid(HEADER_ROWS + CHART_ROWS + 1 + SPLASH_ROWS + SPARK_ROWS + 2 +
-    (unusualNow() ? 1 : 0) + PROFILE_GAP + PROFILE_ROWS + PROFILE_FOOT);
-  let row = drawHeader(g, 0, t);
-  row = drawChart(g, row, t);
-  row = drawSparkline(g, row, t);
-  drawProfile(g, row + PROFILE_GAP);
-  setScreenGridHtml(gridToHtml(g));
-  if (!fitted) { fitted = true; fitFont(); } // refit once the real grid exists
+  const vm = stationViewModel();
+  setScreenPlate(renderStation(vm));
+  setSourceLine(vm.source);
 }
 let fitted = false;
 

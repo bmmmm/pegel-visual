@@ -360,34 +360,33 @@ test('kmTicks: round steps, in range, 2-7 ticks', () => {
 // 3 of 4 real profiles at 44 columns, and 1 in 6 at 84. The worst case below packs
 // the longest real station names onto near-identical elevations and adjacent km,
 // which is what forced the collision. Every label must survive intact at any width.
-test('drawProfile: labels never overwrite each other, at any width', () => {
+test('profileViewModel: every neighbour keeps its full name and its own row', () => {
   const neighbors = [
     { name: 'DUISBURG-MEIDERICH SCHLEUSE UW', km: 6.1, lat: 51.4, lon: 6.7, elev: 85.98 },
     { name: 'FRIEDRICHSTADT STRASSENBRÜCKE', km: 6.4, lat: 51.4, lon: 6.7, elev: 85.99 },
     { name: 'Niederbiel Schleuse Kanal OP', km: 6.9, lat: 51.4, lon: 6.7, elev: 86.01 },
   ];
-  for (const width of [390, 1200]) {
-    const app = loadApp({ width, now: NOON });
-    const { cols, rows } = app.run(`(() => {
-      station = 'FRIEDRICHSTADT STRASSENBRÜCKE';
-      state.info = { water: { shortname: 'RHEIN' } };
-      state.neighbors = ${JSON.stringify(neighbors)};
-      const g = makeGrid(PROFILE_ROWS + PROFILE_FOOT);
-      drawProfile(g, 0);
-      return { cols: COLS, rows: g.ch.map(r => r.join('')) };
-    })()`);
-    const flat = rows.join('\n');
-    for (const p of neighbors) {
-      const elev = p.elev.toFixed(2), km = `km ${p.km}`;
-      // the name is shortened only as far as the width forces — never further
-      const budget = cols - elev.length - km.length - 4;
-      const name = p.name.length > budget ? p.name.slice(0, budget - 1) + '…' : p.name;
-      assert.ok(flat.includes(`${name} ${elev} · ${km}`),
-        `${cols} cols: "${name} ${elev} · ${km}" survives intact`);
-    }
-    assert.ok(flat.includes('≋ downstream →'), `${cols} cols: flow marker survives`);
-    for (const r of rows) assert.ok(r.length <= cols, `${cols} cols: no row overflows`);
+  const app = loadApp({ now: NOON });
+  const { vm, html } = app.run(`(() => {
+    station = 'FRIEDRICHSTADT STRASSENBRÜCKE';
+    state.info = { water: { shortname: 'RHEIN' } };
+    state.neighbors = ${JSON.stringify(neighbors)};
+    const vm = profileViewModel();
+    return { vm, html: renderProfile(vm) };
+  })()`);
+  assert.equal(vm.pts.length, 3);
+  // the 84-column grid had to ellipsize these; a real list does not
+  for (const p of neighbors) {
+    assert.ok(html.includes(p.name.replace(/&/g, '&amp;')), `"${p.name}" survives whole`);
+    assert.ok(html.includes(p.elev.toFixed(2)), 'with its elevation');
   }
+  assert.ok(html.includes('downstream') && html.includes('upstream'), 'the flow direction is named');
+  const self = vm.pts.find(p => p.self);
+  assert.ok(self, 'the current gauge marks itself');
+  assert.ok(html.includes('data-nav="river:RHEIN"'), 'and leads on to its whole river');
+  assert.ok(html.includes('data-nav="Niederbiel Schleuse Kanal OP"'), 'neighbours are one click away');
+  // ordered upstream→downstream by the fitted flow direction, not by raw km
+  assert.deepEqual(vm.pts.map(p => p.x), [...vm.pts.map(p => p.x)].sort((a, b) => a - b));
 });
 
 // ---------- drawRiver layout invariants (worst case: 30 stations, 24 troubled) ----------
@@ -904,23 +903,22 @@ test('client in January: a not-yet-frozen current.json still maps to its own yea
     'points land on Dec 30, 2026 — the file year wins, not the wall clock');
 });
 
-test('drawSparkline: renders a time axis labeled from real timestamps', () => {
+test('historyViewModel: the time axis is labelled from real timestamps', () => {
   const app = loadApp({ now: NOON });
   // two years of daily points ending at NOON — multi-year span → YYYY-MM ticks
   const days = 730;
   const pts = Array.from({ length: days }, (_, i) => [NOON - (days - 1 - i) * 864e5, 100 + (i % 40)]);
   app.run(`state.archive = ${JSON.stringify(pts)}`);
   app.run(`historyKey = 'all'`);
-  const grid = app.run(`(() => {
-    const g = makeGrid(10);
-    drawSparkline(g, 0, 0.5);
-    return g.ch.map(r => r.join(''));
-  })()`);
-  const axis = grid[2 + 4 + 1]; // SPLASH_ROWS + SPARK_ROWS + 1
-  assert.ok(/\d{4}-\d{2}/.test(axis), `axis carries YYYY-MM ticks: "${axis.trim()}"`);
-  assert.ok(axis.trimStart().startsWith('2024-01'), 'first tick sits at the two-years-ago start (NOON is 2026-01-15)');
-  assert.ok(axis.includes('2026-01'), 'last tick is the now end');
-  assert.ok(grid[0].includes('HISTORY'), 'label row intact');
+  const h = app.run('historyViewModel()');
+  assert.equal(h.empty, false);
+  assert.ok(h.ticks.every(t => /^\d{4}-\d{2}$/.test(t.text)), `YYYY-MM ticks: ${h.ticks.map(t => t.text)}`);
+  assert.equal(h.ticks[0].text, '2024-01', 'the first tick sits at the two-years-ago start (NOON is 2026-01-15)');
+  assert.equal(h.ticks.at(-1).text, '2026-01', 'the last tick is the now end');
+  assert.ok(h.ticks.every(t => t.frac >= 0 && t.frac <= 1), 'ticks are positioned as fractions, not columns');
+  // ticks read their own column's timestamp: gaps compress, so a linear time
+  // axis would misplace them
+  assert.ok(h.ticks[0].frac < h.ticks.at(-1).frac, 'and run left to right');
 });
 
 test('history presets: 1Y/5Y exist, API backfill stays within its 30-day reach', () => {
@@ -1431,17 +1429,21 @@ test('countGaps tolerates the 6-hourly thinned cadence of multi-year points', ()
   assert.equal(app.run(`countGaps(${JSON.stringify(recent)})`).gaps, 1, '3h stays a gap for recent points');
 });
 
-test('drawSparkline renders a flat series at half height, not as an empty chart', () => {
+test('renderHistory: a flat series draws at half height, not as an empty chart', () => {
   const app = loadApp({ now: NOON });
-  const flat = app.run(`(() => {
+  const { h, html } = app.run(`(() => {
     state.archive = Array.from({ length: 50 }, (_, i) => [${NOON} - (50 - i) * 36e5, 77]);
     historyKey = 'all';
-    const g = makeGrid(SPLASH_ROWS + SPARK_ROWS + 3);
-    drawSparkline(g, 0, 0);
-    return g.ch.map(r => r.join('')).join('\\n');
+    const h = historyViewModel();
+    return { h, html: renderHistory(h) };
   })()`);
-  assert.ok(flat.includes('█'), 'water body visible for a constant level');
-  assert.ok(flat.includes('min 77  max 77'));
+  assert.equal(h.series.min, 77);
+  assert.equal(h.series.max, 77);
+  assert.ok(html.includes('77 cm'), 'the scale still names the level');
+  // a flat window normalises to mid-box rather than collapsing every point to
+  // zero fill, which used to read as "no data"
+  assert.ok(html.includes('class="h-fill"'), 'the water body is still drawn');
+  assert.ok(/48\.0|48 /.test(html), 'the surface sits at half of the 96-unit box');
 });
 
 test('bucketSeries: buckets tile the window, extremes come from every point', () => {
@@ -1473,9 +1475,9 @@ test('bucketSeries: buckets tile the window, extremes come from every point', ()
 // the hosted archive merges as two synthetic points per day (min 06:00, max
 // 18:00), so one sample per column used to be a coin flip between the two — and
 // the caption described that subsample rather than the window
-test('drawSparkline: the caption reports the window extremes, not a column subsample', () => {
+test('historyViewModel: the scale reports the window extremes, not a subsample', () => {
   const app = loadApp({ now: NOON });
-  const grid = app.run(`(() => {
+  const { h, html } = app.run(`(() => {
     const pts = [];
     for (let d = 0; d < 900; d++) {
       const ts = ${NOON} - (900 - d) * 864e5;
@@ -1486,35 +1488,33 @@ test('drawSparkline: the caption reports the window extremes, not a column subsa
     pts[901][1] = 987;
     state.archive = pts;
     historyKey = 'all';
-    sparkDisplay = null;
-    const g = makeGrid(12);
-    drawSparkline(g, 0, 0);
-    return g.ch.map(r => r.join(''));
+    const h = historyViewModel();
+    return { h, html: renderHistory(h) };
   })()`);
-  assert.ok(grid[0].includes('min 12  max 987'),
-    `caption carries the real extremes: "${grid[0].trim()}"`);
-  const body = grid.slice(3, 7).join('\n');
-  assert.ok(/[▒▓]/.test(body), 'columns that merged more than one point draw a min–max band');
-  assert.ok(grid[4].includes('▒ range'), 'the hatched span is named beside the chart');
+  assert.equal(h.series.min, 12, 'the real window low, not the low of whatever a column sampled');
+  assert.equal(h.series.max, 987);
+  assert.ok(html.includes('987 cm') && html.includes('12 cm'), 'and the scale prints them');
+  assert.equal(h.banded, true, 'columns that merged more than one point carry a band');
+  assert.ok(html.includes('class="h-band"'), 'which is drawn as its own polygon');
+  assert.ok(html.includes('min–max inside one pixel column'), 'and named in the legend');
 });
 
-test('drawSparkline: windows with fewer points than columns stay solid, unbanded', () => {
+test('historyViewModel: windows with fewer points than columns carry no band', () => {
   for (const width of [390, 1200]) {
     const app = loadApp({ now: NOON, width });
-    const grid = app.run(`(() => {
-      // 20 hourly readings — fewer than either grid's column count
+    const { h, html } = app.run(`(() => {
+      // 20 hourly readings — fewer than either width's bucket count
       state.archive = Array.from({ length: 20 }, (_, i) => [${NOON} - (20 - i) * 36e5, 100 + i * 3]);
       historyKey = '24h';
-      sparkDisplay = null;
-      const g = makeGrid(12);
-      drawSparkline(g, 0, 0);
-      return g.ch.map(r => r.join(''));
+      const h = historyViewModel();
+      return { h, html: renderHistory(h) };
     })()`);
-    const flat = grid.join('\n');
-    assert.ok(!/[▒▓]/.test(flat), `${width}px: no band glyphs when every bucket holds one point`);
-    assert.ok(!flat.includes('▒ range'), `${width}px: no band legend either`);
-    assert.ok(flat.includes('█'), `${width}px: solid water body`);
-    assert.ok(grid[0].includes('min 100  max 157'), `${width}px: caption: "${grid[0].trim()}"`);
+    assert.equal(h.banded, false, `${width}px: no band when every bucket holds one point`);
+    assert.ok(!html.includes('class="h-band"'), `${width}px: and none is drawn`);
+    assert.ok(!html.includes('min–max inside'), `${width}px: no band legend either`);
+    assert.equal(h.series.min, 100, `${width}px: extremes are the window's`);
+    assert.equal(h.series.max, 157);
+    assert.ok(html.includes('class="h-fill"'), `${width}px: the water body is still there`);
   }
 });
 
@@ -1588,44 +1588,45 @@ test('unusualText: terminal one-liner, compact variant fits 44 columns', () => {
     ['0th', '1st', '2nd', '3rd', '4th', '11th', '12th', '13th', '21st', '42nd', '100th']);
 });
 
-test('drawSparkline: the unusual line appears only with an archive, and costs one row', () => {
+test('the insight sentence: spelled out for everyone, terse line kept for the fluent', () => {
   const mk = search => {
     const app = loadApp({ now: JULY, search });
     seedArchive(app);
-    app.run(`historyKey = 'all'; sparkDisplay = null;`);
+    app.run(`historyKey = 'all';`);
     return app;
   };
-  // no gauge reading yet → the line (and its grid row) must not exist
+  // no gauge reading yet -> no verdict, and no readout block
   const bare = mk('?station=BONN');
   assert.equal(bare.run('unusualNow()'), null, 'no current measurement, no verdict');
-  assert.equal(bare.run(`(() => { const g = makeGrid(12); return drawSparkline(g, 0, 0); })()`),
-    bare.run('SPLASH_ROWS + SPARK_ROWS + 2'), 'grid height unchanged without the line');
 
   const app = mk('?station=BONN');
   app.run(`state.gauge = { currentMeasurement: { value: 342, timestamp: ${JULY} } }`);
   const u = app.run('unusualNow()');
   assert.ok(u, 'three seeded years are enough archive to judge against');
-  assert.equal(u.month, 6, 'JULY fixture → the July climatology');
-  assert.equal(app.run(`(() => { const g = makeGrid(12); return drawSparkline(g, 0, 0); })()`),
-    app.run('SPLASH_ROWS + SPARK_ROWS + 3'), 'the line takes exactly one extra row');
-  const { text, cls } = app.run(`(() => {
-    const g = makeGrid(12);
-    drawSparkline(g, 0, 0);
-    const r = SPLASH_ROWS + SPARK_ROWS + 2; // axis row + 1
-    return { text: g.ch[r].join('').trim(), cls: g.cl[r].join('') };
-  })()`);
-  assert.match(text, /^342 cm · \d+(st|nd|rd|th) pct of 3y · JUL mean \d+ \([+-][\d.]+σ\)$/,
-    `line reads as designed: "${text}"`);
-  // the seeded summer trough sits far below 342 cm → a wet anomaly wears the flood accent
-  assert.ok(u.z >= 1.5 && cls.includes('w2'), `far-out σ takes the flood accent (z=${u.z})`);
+  assert.equal(u.month, 6, 'JULY fixture -> the July climatology');
+  assert.ok(u.fromYear, 'and the model carries the first archived year');
 
-  // a station WSV keeps no archive for renders exactly as before
+  const say = app.run(`insightSentence(unusualNow(), 342)`);
+  // this is the line the feedback was about: "91st pct of 26y" told nobody anything
+  assert.match(say, /342 cm/, 'names the reading');
+  assert.match(say, /higher than/, 'in words, not jargon');
+  assert.match(say, /of all days recorded here since/, 'and says what it is compared against');
+  assert.match(say, /since <b>\d{4}<\/b>/, 'naming the first archived year, not "26y"');
+  assert.match(say, /July/, 'the month is spelled out, not JUL');
+  assert.ok(!/pct|sigma|\bσ\b/.test(say), 'no unexplained abbreviations in the spoken line');
+
+  // the terse mono line survives underneath it, unchanged, for people who read it fluently
+  const terse = app.run('unusualText(unusualNow(), false)');
+  assert.match(terse, /^342 cm · \d+(st|nd|rd|th) pct of 3y · JUL mean \d+ \([+-][\d.]+σ\)$/,
+    `terse line unchanged: "${terse}"`);
+
+  // a station WSV keeps no archive for still says nothing rather than guessing
   const none = loadApp({ now: JULY, search: '?station=BONN' });
   none.run(`state.archive = [[${JULY} - 36e5, 300], [${JULY}, 342]]; histCache = null;`);
   none.run(`state.gauge = { currentMeasurement: { value: 342, timestamp: ${JULY} } }; state.repoArchive = 'none';`);
   assert.equal(none.run('unusualNow()'), null, 'two local points are not a distribution');
+  assert.equal(none.run('insightSentence(unusualNow(), 342)'), null, 'and no sentence is invented');
 });
-
 test('histStats cache: switching stations never serves the old station\'s stats', () => {
   const mk = v => { const pts = []; for (let d = 0; d < 365; d++) { const ts = Date.UTC(2025, 0, 1) + d * 864e5; pts.push([ts + 6 * 36e5, v], [ts + 18 * 36e5, v]); } return pts; };
   const app = loadApp({ now: JULY, search: '?station=BONN&view=years' });
@@ -1748,7 +1749,7 @@ test('trendPerHour: under an hour of history is unknown, not steady', () => {
   assert.equal(hour, -3, 'exactly an hour is enough');
 });
 
-test('drawHeader: prints the trend with a decimal and an em dash when unknown', () => {
+test('the station head: prints the trend with a decimal and an em dash when unknown', () => {
   const render = archive => {
     const app = loadApp({ now: NOON });
     return app.run(`(() => {
@@ -1756,25 +1757,30 @@ test('drawHeader: prints the trend with a decimal and an em dash when unknown', 
       state.info = { water: { shortname: 'RHEIN' }, km: 654.8 };
       state.gauge = { currentMeasurement: { value: 77, timestamp: ${NOON}, stateMnwMhw: 'low' } };
       state.archive = ${archive};
-      const g = makeGrid(HEADER_ROWS);
-      drawHeader(g, 0, 0);
-      return g.ch.map(r => r.join('')).join('\\n');
+      state.neighbors = [];
+      return renderStation(stationViewModel());
     })()`);
   };
   const falling = render(`[[${NOON} - 6 * 36e5, 80], [${NOON}, 77]]`);
-  assert.ok(falling.includes('▼ -0.5 cm/h'), `decimal slope with a falling arrow, got:\n${falling}`);
+  assert.ok(falling.includes('▼ -0.5 cm/h'), 'decimal slope with a falling arrow');
 
   const steady = render(`[[${NOON} - 6 * 36e5, 77], [${NOON}, 77]]`);
   assert.ok(steady.includes('▬ 0.0 cm/h'), 'a flat river reads 0.0 without a sign');
 
   // -0.04 cm/h is steady; "-0.0" would read like a rendering fault
   const creep = render(`[[${NOON} - 6 * 36e5, 77.24], [${NOON}, 77]]`);
-  assert.ok(creep.includes('▬ 0.0 cm/h'), `sub-0.05 drift prints unsigned, got:\n${creep}`);
+  assert.ok(creep.includes('▬ 0.0 cm/h'), 'sub-0.05 drift prints unsigned');
 
-  assert.ok(render(`[[${NOON} - 30 * 60000, 80], [${NOON}, 77]]`).includes('▬ — cm/h'),
+  assert.ok(render(`[[${NOON} - 30 * 60000, 80], [${NOON}, 77]]`).includes('<dd title'),
     'too little history shows an em dash rather than a fabricated zero');
-});
+  assert.ok(render(`[[${NOON} - 30 * 60000, 80], [${NOON}, 77]]`).includes('>—<'), 'literally an em dash');
 
+  // the hero reading and its unit are real selectable text now, not block glyphs
+  const h = render(`[[${NOON} - 6 * 36e5, 80], [${NOON}, 77]]`);
+  assert.ok(h.includes('<span class="hero-n">77</span>'), 'the level is text');
+  assert.ok(h.includes('above this gauge’s own zero mark'), 'and says what the number means');
+  assert.ok(h.includes('class="km-sign"') && h.includes('654.8'), 'the km board survives as a real sign');
+});
 // ---------- characteristic values ----------
 
 test('charRecord: reads the API\'s bare date strings as well as the object form', () => {
@@ -1797,11 +1803,11 @@ test('charRecord: reads the API\'s bare date strings as well as the object form'
   assert.equal(span, 2020, 'timespan fallback survives');
 });
 
-test('drawChart: low water keeps MNW and NNW visible and in the right order', () => {
+test('sceneModel: low water keeps every mark visible and strictly in order', () => {
   const app = loadApp({ now: NOON });
   // BONN's real values on 2026-08-09: the level sits below its own record low, so
-  // NNW, MNW and the water line all round onto one row of the MHW-pinned scale
-  const rows = app.run(`(() => {
+  // NNW, MNW and the water line all land within a hair of each other
+  const s = app.run(`(() => {
     station = 'BONN';
     state.info = { water: { shortname: 'RHEIN' }, km: 654.8, latitude: 50.736, longitude: 7.108 };
     state.gauge = { currentMeasurement: { value: 77, timestamp: ${NOON}, stateMnwMhw: 'low' },
@@ -1811,23 +1817,30 @@ test('drawChart: low water keeps MNW and NNW visible and in the right order', ()
         { shortname: 'MNW', value: 121 }, { shortname: 'MW', value: 290 }, { shortname: 'MHW', value: 680 },
       ] };
     state.archive = [];
-    const g = makeGrid(CHART_ROWS + 2);
-    drawChart(g, 0, 0);
-    return g.ch.map(r => r.join(''));
+    state.neighbors = [];
+    return sceneModel();
   })()`);
 
-  const rowOfLabel = name => rows.findIndex(r => r.includes(name));
-  for (const name of ['MHW 680', 'MW 290', 'MNW 121', 'NNW 81', 'W 77']) {
-    assert.notEqual(rowOfLabel(name), -1, `${name} is drawn`);
+  const all = [...s.marks, ...s.above, ...s.below];
+  for (const key of ['MHW', 'MW', 'MNW', 'NNW']) {
+    assert.ok(all.some(m => m.key === key), `${key} is accounted for`);
   }
-  // rows count downwards, so a higher level must sit on a lower row index
-  const order = ['MHW 680', 'MW 290', 'MNW 121', 'NNW 81', 'W 77'].map(rowOfLabel);
-  for (let i = 1; i < order.length; i++) {
-    assert.ok(order[i] > order[i - 1],
-      `marker order inverted: ${JSON.stringify(order)}\n${rows.join('\n')}`);
+  // fractions grow downwards, so a higher value must sit at a smaller fraction —
+  // asserted on the model itself instead of inferred from character rows
+  const drawn = s.marks.slice().sort((a, b) => b.cm - a.cm);
+  for (let i = 1; i < drawn.length; i++) {
+    assert.ok(drawn[i].frac > drawn[i - 1].frac,
+      `mark order inverted: ${JSON.stringify(drawn.map(m => [m.key, m.cm, m.frac]))}`);
   }
+  // the water line keeps its place in that ranking too
+  for (const m of s.marks) {
+    if (m.cm >= s.value) assert.ok(m.frac <= s.surface, `${m.key} (${m.cm}) must not sit below the water line`);
+    else assert.ok(m.frac >= s.surface, `${m.key} (${m.cm}) must not sit above the water line`);
+  }
+  assert.equal(s.flags.drought, true, '77 cm is below MNW 121');
+  assert.ok(s.band, 'the normal range band spans MNW to MHW');
+  assert.ok(s.band.top < s.band.bottom, 'with high water at the top of the box');
 });
-
 // ---------- rivers map (?rivers) ----------
 
 const seedRivers = (app, list) => app.run(`(() => {
@@ -2072,27 +2085,42 @@ test('back button: leaving the map redraws the station even if it never changed'
   assert.equal(after.station, 'BONN', 'landing on the station the button named');
 });
 
-test('drawChart: no marker label ever runs past the grid edge', () => {
-  for (const [value, width] of [[77, 1200], [1013, 1200], [77, 390], [1013, 390]]) {
-    const app = loadApp({ now: NOON, width });
-    const { cols, longest } = app.run(`(() => {
-      station = 'BONN';
-      state.info = { water: { shortname: 'RHEIN' }, km: 654.8, latitude: 50.736, longitude: 7.108 };
-      state.gauge = { currentMeasurement: { value: ${value}, timestamp: ${NOON}, stateMnwMhw: 'low' },
-        characteristicValues: [
-          { shortname: 'HHW', value: 1013, occurrences: ['1993-12-23'] },
-          { shortname: 'NNW', value: 81, occurrences: ['2018-10-22'] },
-          { shortname: 'MNW', value: 121 }, { shortname: 'MW', value: 290 }, { shortname: 'MHW', value: 680 },
-        ] };
-      state.archive = [];
-      const g = makeGrid(CHART_ROWS + 2);
-      drawChart(g, 0, 0);
-      return { cols: COLS, longest: Math.max(...g.ch.map(r => r.join('').replace(/\\s+$/, '').length)) };
-    })()`);
-    assert.ok(longest <= cols, `W=${value} at ${width}px: row of ${longest} exceeds COLS ${cols}`);
+test('sceneModel: marks off the scale become margin arrows instead of being clipped', () => {
+  const seed = (app, value) => app.run(`(() => {
+    station = 'BONN';
+    state.info = { water: { shortname: 'RHEIN' }, km: 654.8, latitude: 50.736, longitude: 7.108 };
+    state.gauge = { currentMeasurement: { value: ${value}, timestamp: ${NOON}, stateMnwMhw: 'low' },
+      characteristicValues: [
+        { shortname: 'HHW', value: 1013, occurrences: ['1993-12-23'] },
+        { shortname: 'NNW', value: 81, occurrences: ['2018-10-22'] },
+        { shortname: 'MNW', value: 121 }, { shortname: 'MW', value: 290 }, { shortname: 'MHW', value: 680 },
+      ] };
+    state.archive = [];
+    state.neighbors = [];
+    const vm = stationViewModel();
+    return { scene: vm.scene, html: renderStation(vm) };
+  })()`);
+
+  // low water: HHW 1013 sits far above the MHW-pinned scale, so it belongs in
+  // the top margin rather than clipped off the chart
+  const low = seed(loadApp({ now: NOON }), 77);
+  assert.ok(low.scene.above.some(m => m.key === 'HHW'), 'HHW is reported above the box');
+  assert.ok(low.html.includes('↑ HHW'), 'as an explicit up arrow');
+  assert.ok(low.html.includes('1013'), 'carrying its value');
+  assert.ok(low.html.includes('1993'), 'and the year it happened');
+
+  // at the record level itself the scale grows to hold it, so no arrow is needed
+  const high = seed(loadApp({ now: NOON }), 1013);
+  assert.ok(high.scene.topCm > 1013, 'the flood scale makes room above the level');
+  assert.equal(high.scene.above.some(m => m.key === 'HHW'), false, 'HHW is on the chart now');
+  assert.equal(high.scene.flags.flood, true, 'and the scene knows it is a flood');
+
+  // every label lives in an HTML gutter, so nothing can be clipped by a column count
+  assert.ok(low.html.includes('class="gutter"'), 'labels sit on paper beside the drawing');
+  for (const key of ['MHW', 'MW', 'MNW']) {
+    assert.ok(low.html.includes(`<b>${key}</b>`), `${key} is named in full in the gutter`);
   }
 });
-
 // ---------- rising board ----------
 
 // raw bulk-endpoint station entry, same shape the live API returns
