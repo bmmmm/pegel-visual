@@ -649,22 +649,24 @@ test('loadRepoArchive: an available entry carries its source through to state', 
   assert.equal(app.run('state.archiveSource'), 'Rijkswaterstaat', 'source flows from the manifest entry');
 });
 
-test('drawHistYears: attributes the hosted archive to its manifest source', () => {
+test('yearsViewModel: attributes the hosted archive to its manifest source', () => {
   for (const [source, label] of [[null, 'WSV'], ['Rijkswaterstaat', 'Rijkswaterstaat']]) {
     const app = loadApp({ now: NOON });
-    const rows = app.run(`(() => {
+    const { vm, html } = app.run(`(() => {
       station = 'LOBITH';
       state.info = { uuid: 'u', water: { shortname: 'RHEIN' } };
       state.repoArchive = 'available';
       state.archiveSource = ${JSON.stringify(source)};
-      state.archive = []; // too little history → the "fetching the … archive" line
-      const g = makeGrid(24);
-      drawHistYears(g);
-      return g.ch.map(r => r.join(''));
+      state.archive = []; // too little history -> the "fetching the ..." line
+      const vm = yearsViewModel();
+      return { vm, html: renderYears(vm) };
     })()`);
-    assert.ok(rows.join('\n').includes(`fetching the ${label} archive`), `${label} attribution shown in the years view`);
+    assert.equal(vm.thin, true);
+    assert.ok(vm.reason.includes(`fetching the ${label} archive`), `${label} attribution shown`);
+    assert.ok(html.includes(label), 'and it reaches the plate');
   }
 });
+
 
 // ---------- Rijkswaterstaat adapter (scripts/fetch-rws-archive.mjs) ----------
 
@@ -1169,68 +1171,86 @@ test('buildHistStats: climatology comes from past years only, leap days index cl
   assert.equal(st.nov, 0, 'the current year has no data after mid-July');
 });
 
-test('heatAbs / heatAnom: ramp binning, diverging direction classes', () => {
+test('heatBinAbs / heatBinAnom: lightness bins, direction as its own channel', () => {
   const app = loadApp();
-  assert.equal(app.run(`heatAbs(0, 0, 100)`), '░');
-  assert.equal(app.run(`heatAbs(99, 0, 100)`), '█');
-  assert.equal(app.run(`heatAbs(-50, 0, 100)`), '░', 'below-range clamps');
-  assert.equal(app.run(`heatAbs(500, 0, 100)`), '█', 'above-range clamps');
-  assert.deepEqual(app.run(`heatAnom(0.1)`), { ch: '·', cls: 'd' }, 'near-normal is the neutral midpoint');
-  assert.deepEqual(app.run(`heatAnom(3)`), { ch: '█', cls: 'w2' }, 'very wet: densest glyph, flood accent');
-  assert.deepEqual(app.run(`heatAnom(-3)`), { ch: '█', cls: 's' }, 'very dry: densest glyph, drought accent');
-  assert.equal(app.run(`heatAnom(1)`).ch, '▒');
+  // the ramp stays a LIGHTNESS ramp (one hue, dark = more), which is safe by
+  // construction; the CSS turns the bin into a colour-mix step
+  assert.equal(app.run(`heatBinAbs(0, 0, 100)`), 0);
+  assert.equal(app.run(`heatBinAbs(99, 0, 100)`), 3);
+  assert.equal(app.run(`heatBinAbs(-50, 0, 100)`), 0, 'below-range clamps');
+  assert.equal(app.run(`heatBinAbs(500, 0, 100)`), 3, 'above-range clamps');
+  // anomaly keeps magnitude in the bin and puts direction in its OWN field, so
+  // the renderer can hatch it rather than relying on hue
+  assert.deepEqual(app.run(`heatBinAnom(0.1)`), { bin: -1, dir: 0 }, 'near-normal is the neutral midpoint');
+  assert.deepEqual(app.run(`heatBinAnom(3)`), { bin: 3, dir: 1 }, 'very wet: densest bin, wet direction');
+  assert.deepEqual(app.run(`heatBinAnom(-3)`), { bin: 3, dir: -1 }, 'very dry: densest bin, dry direction');
+  assert.equal(app.run(`heatBinAnom(1).bin`), 1);
+  assert.equal(app.run(`heatBinAnom(1).dir`), 1);
 });
 
-test('drawHistYears: all three sections render inside the grid, at both widths', () => {
-  for (const width of [390, 1200]) {
-    const app = loadApp({ width, now: JULY });
-    seedArchive(app);
-    const { rows, cols, html } = app.run(`(() => {
-      const g = makeGrid(histGridRows(histStats()));
-      drawHistYears(g);
-      return { rows: g.ch.map(r => r.join('')), cols: COLS, html: gridToHtml(g) };
-    })()`);
-    const flat = rows.join('\n');
-    for (const y of ['2024', '2025', '2026']) assert.ok(flat.includes(y), `${cols} cols: year row ${y}`);
-    assert.ok(flat.includes('[ABS]') && flat.includes('[ANOM]'), `${cols} cols: mode toggles`);
-    assert.ok(flat.includes('low → high'), `${cols} cols: heat-ramp legend present (default ABS mode)`);
-    assert.ok(html.includes('data-st="cmd:live"'), `${cols} cols: back target`);
-    assert.ok(html.includes('data-st="cmd:hy:2024"'), `${cols} cols: year rows are pickable`);
-    // the overlay's month axis is the last drawn row — if it shows, nothing was clipped
-    const axisRe = cols === 84 ? /JAN.*FEB.*DEC/ : /J.+F.+M.+A.+M.+J.+J.+A.+S.+O.+N.+D/;
-    assert.ok(rows.some(r => axisRe.test(r)), `${cols} cols: axes drawn`);
-    assert.ok(rows[rows.length - 2].trim().length > 0, `${cols} cols: axis row inside the grid`);
-    for (const r of rows) assert.ok(r.length <= cols, `${cols} cols: no row overflows`);
-    assert.ok(flat.includes('█'), `${cols} cols: the selected year draws as a bold line`);
+
+test('renderYears: heatmap, monthly range and the year overlay all render', () => {
+  const app = loadApp({ now: JULY });
+  seedArchive(app);
+  const { vm, html } = app.run(`(() => {
+    const vm = yearsViewModel();
+    return { vm, html: renderYears(vm) };
+  })()`);
+  assert.equal(vm.thin, false);
+  for (const y of [2024, 2025, 2026]) {
+    assert.ok(vm.rows.some(r => r.y === y), `year row ${y}`);
+    assert.ok(html.includes(`>${y}<`), `${y} is printed`);
   }
+  // a real table: rows and columns are announced, cells carry their own label
+  assert.ok(html.includes('<table class="heat">'), 'the heatmap is a real table');
+  assert.ok(html.includes('<th scope="row">') && html.includes('<th scope="col">'), 'with real headers');
+  assert.ok(html.includes('aria-label="July 2026'), 'and every cell says what it is');
+  assert.ok(html.includes('data-nav="cmd:hy:2024"'), 'year rows stay pickable');
+  assert.ok(html.includes('data-nav="cmd:hm:2026:6"'), 'month cells too');
+  assert.ok(html.includes('data-nav="cmd:live"'), 'back target');
+  // all three sections
+  assert.ok(html.includes('MONTHLY HEAT'), 'section 1');
+  assert.ok(html.includes('LONG-TERM MONTHLY RANGE'), 'section 2');
+  assert.ok(html.includes('EVERY YEAR BY DAY OF YEAR'), 'section 3');
+  assert.ok(html.includes('class="ov-sel"'), 'the picked year is drawn bold in the overlay');
 });
 
-test('drawHistYears: anomaly mode shades wet months blue and dry months warm', () => {
+
+test('renderYears: anomaly mode marks direction with a hatch, not just a hue', () => {
   const app = loadApp({ now: JULY });
   // 2026: January +150 (wet), May/June -150 (dry) against the 2024/25 baseline
   seedArchive(app, `y === 2026 && m === 0 ? 150 : y === 2026 && (m === 4 || m === 5) ? -150 : 0`);
-  const cls = app.run(`(() => {
+  const { vm, html } = app.run(`(() => {
     histMode = 'anom';
-    const g = makeGrid(histGridRows(histStats()));
-    drawHistYears(g);
+    const vm = yearsViewModel();
+    const html = renderYears(vm);
     histMode = 'abs';
-    const row2026 = 4 + 2; // heatTop + index of 2026
-    return { jan: g.cl[row2026].slice(5, 9), jun: g.cl[row2026].slice(5 + 5 * 5, 5 + 5 * 5 + 4) };
+    return { vm, html };
   })()`);
-  assert.ok(cls.jan.every(c => c === 'w2'), 'january cells wear the wet accent');
-  assert.ok(cls.jun.every(c => c === 's'), 'june cells wear the dry accent');
+  const row = vm.rows.find(r => r.y === 2026);
+  assert.equal(row.cells[0].dir, 1, 'january reads wet');
+  assert.equal(row.cells[5].dir, -1, 'june reads dry');
+  // direction is a CLASS the CSS hatches, so it survives greyscale and CVD
+  assert.ok(html.includes(' wet"'), 'wet cells carry the wet class');
+  assert.ok(html.includes(' dry"'), 'dry cells carry the dry class');
+  assert.ok(html.includes('−2 σ') && html.includes('+2 σ'), 'the diverging legend labels its zero');
+  assert.ok(html.includes('standard deviation'), 'and glosses sigma instead of assuming it');
 });
 
-test('drawHistYears: too little data says so instead of drawing noise', () => {
+
+test('yearsViewModel: too little data says so instead of drawing noise', () => {
   const app = loadApp({ now: JULY });
   app.run(`state.archive = [[${JULY} - 864e5, 100], [${JULY}, 110]]; histCache = null; state.repoArchive = 'none'`);
-  const flat = app.run(`(() => {
-    const g = makeGrid(histGridRows(histStats()));
-    drawHistYears(g);
-    return g.ch.map(r => r.join('')).join('\\n');
+  const { vm, html } = app.run(`(() => {
+    const vm = yearsViewModel();
+    return { vm, html: renderYears(vm) };
   })()`);
-  assert.ok(flat.includes('no multi-year archive'), 'the none-manifest case is named');
+  assert.equal(vm.thin, true);
+  assert.ok(vm.reason.includes('no multi-year archive'), 'the none-manifest case is named');
+  assert.ok(html.includes('no multi-year archive'));
+  assert.ok(html.includes('grows with every visit'), 'and points at what does help');
 });
+
 
 // ---------- wave view (river station × day heatmap) ----------
 
@@ -1248,36 +1268,39 @@ test('foldYearsIntoWindow: maps archive days into the window across a year bound
   assert.deepEqual(vals, [105, 125, 205, null, 225, null], 'daily mid = (min+max)/2, gaps stay null');
 });
 
-test('drawWave: rows render per-station scaled, labeled and inside the grid', () => {
-  for (const width of [390, 1200]) {
-    const app = loadApp({ width, now: JULY });
-    const { rows, cols, html } = app.run(`(() => {
-      const nDays = WAVE_FETCH_DAYS;
-      const day0 = epochDay(Date.now()) - (nDays - 1);
-      const mk = (name, kind, base) => ({ name, km: 0, kind,
-        vals: Array.from({ length: nDays }, (_, i) => base + (i % 20)) });
-      const w = { river: 'TESTFLUSS', day0, nDays, shown: 3, total: 5, rows: [
-        mk('OBEN', 'normal', 100), mk('MITTE', 'high', 500),
-        { name: 'FLAT', km: 0, kind: 'low', vals: Array(nDays).fill(42) },
-      ]};
-      const g = makeGrid(waveGridRows(w));
-      drawWave(g, w);
-      return { rows: g.ch.map(r => r.join('')), cols: COLS, html: gridToHtml(g) };
-    })()`);
-    const flat = rows.join('\n');
-    assert.ok(flat.includes('OBEN') && flat.includes('MITTE'), `${cols} cols: station names`);
-    assert.ok(flat.includes('3 of 5'), `${cols} cols: sampling is disclosed`);
-    assert.ok(flat.includes('low') && flat.includes('scaled per station'),
-      `${cols} cols: ramp legend + per-station-scaling caveat present`);
-    assert.ok(flat.includes('≋ downstream ↓'), `${cols} cols: flow marker`);
-    assert.ok(html.includes('data-st="OBEN"'), `${cols} cols: rows are click targets`);
-    assert.ok(html.includes('data-st="cmd:live"'), `${cols} cols: back target`);
-    // compact wraps the info line onto an extra row, pushing the station rows down by one
-    const flatRow = rows[cols === 44 ? 6 : 5];
-    assert.ok(/▒+\s*$/.test(flatRow) && !flatRow.includes('█'), `${cols} cols: a flat station renders mid-shade, not noise`);
-    for (const r of rows) assert.ok(r.length <= cols, `${cols} cols: no row overflows`);
-  }
+test('waveViewModel: rows are scaled per gauge, labelled and disclosed', () => {
+  const app = loadApp({ now: JULY });
+  const { vm, html } = app.run(`(() => {
+    const nDays = WAVE_FETCH_DAYS;
+    const day0 = epochDay(Date.now()) - (nDays - 1);
+    const mk = (name, kind, base) => ({ name, km: 0, kind,
+      vals: Array.from({ length: nDays }, (_, i) => base + (i % 20)) });
+    const w = { river: 'TESTFLUSS', day0, nDays, shown: 3, total: 5, rows: [
+      mk('OBEN', 'normal', 100), mk('MITTE', 'high', 500),
+      { name: 'FLAT', km: 0, kind: 'low', vals: Array(nDays).fill(42) },
+    ]};
+    const vm = waveViewModel(w);
+    return { vm, html: renderWave(vm) };
+  })()`);
+  assert.deepEqual(vm.rows.map(r => r.name), ['OBEN', 'MITTE', 'FLAT']);
+  assert.ok(html.includes('OBEN') && html.includes('MITTE'), 'station names');
+  assert.ok(html.includes('3 of 5 gauges sampled'), 'the sampling is disclosed');
+  // the caveat that used to be a clipped fragment is now a full sentence
+  assert.ok(html.includes('scaled to its OWN gauge'), 'per-gauge scaling explained');
+  assert.ok(html.includes('compare shape, not absolute level'), 'and why it matters');
+  assert.ok(html.includes('data-nav="OBEN"'), 'rows are click targets');
+  assert.ok(html.includes('data-nav="cmd:live"'), 'back target');
+  // a dead-flat gauge takes a mid bin rather than reading as noise or as a peak
+  const flat = vm.rows.find(r => r.name === 'FLAT');
+  assert.ok(flat.cells.every(c => c.bin === 1), 'a flat gauge sits mid-ramp');
+  const oben = vm.rows.find(r => r.name === 'OBEN');
+  assert.ok(oben.cells.some(c => c.bin === 0) && oben.cells.some(c => c.bin === 3),
+    'a varying gauge uses its own full range');
+  assert.ok(html.includes('<table class="heat wave">'), 'a real table');
+  assert.ok(html.includes('no reading') || vm.rows.every(r => r.cells.every(c => c.v != null)),
+    'gaps are named rather than blank');
 });
+
 
 // ---------- sub-view switching ----------
 
@@ -1318,22 +1341,24 @@ test('cropWaveWindow: cuts leading days until half the rows have data', () => {
   assert.equal(app.run(`cropWaveWindow([{ vals: [null, null] }], 2)`), 0, 'never-covered window stays uncut');
 });
 
-test('drawWave: a short window right-aligns against now', () => {
+test('waveViewModel: a short window keeps every day it has', () => {
   const app = loadApp({ now: JULY });
-  const rows = app.run(`(() => {
+  const vm = app.run(`(() => {
     const nDays = 20;
     const day0 = epochDay(Date.now()) - (nDays - 1);
     const w = { river: 'X', day0, nDays, shown: 1, total: 1, rows: [
       { name: 'OBEN', km: 0, kind: 'normal', vals: Array.from({ length: nDays }, (_, i) => i) },
     ]};
-    const g = makeGrid(waveGridRows(w));
-    drawWave(g, w);
-    return g.ch.map(r => r.join(''));
+    return waveViewModel(w);
   })()`);
-  const dataRow = rows[3];
-  assert.ok(/█\s*$/.test(dataRow), 'the newest day sits at the right edge');
-  assert.equal(dataRow.trimEnd().length, 84, 'right-aligned to the last column');
+  // the character grid had to right-align a short window against the last
+  // column; a table just carries all 20 days
+  assert.equal(vm.days, 20);
+  assert.equal(vm.rows[0].cells.length, 20);
+  assert.equal(vm.rows[0].cells.at(-1).bin, 3, 'the newest day is the highest of its own range');
+  assert.equal(vm.rows[0].cells[0].bin, 0);
 });
+
 
 test('history bar: view chips per mode — PROFILE/WAVE on rivers, ABS/ANOM in years', () => {
   const labels = app => app.el('history-bar').children.map(b => b.textContent);
@@ -1369,14 +1394,13 @@ test('setScreenText/Html: the screen only swaps when content changed', () => {
   assert.equal(changed, 'NEW PAGE', 'changed content still repaints');
 });
 
-test('year paging + month readout: chips step and clamp, cells print numbers', () => {
+test('year paging + month readout: chips step and clamp, cells report numbers', () => {
   const app = loadApp({ width: 1200, now: JULY });
   seedArchive(app);
-  // ◂ steps back through archived years and clamps at the oldest
+  // the year pager steps back through archived years and clamps at the oldest
   assert.equal(app.run(`(stepHistYear(-1), histSelYear(histStats()))`), 2025);
   assert.equal(app.run(`(stepHistYear(-1), stepHistYear(-1), stepHistYear(-1), histSelYear(histStats()))`), 2024, 'clamped at the oldest year');
   assert.equal(app.run(`(stepHistYear(1), histSelYear(histStats()))`), 2025);
-  // the bar carries ◂ / year / ▸ chips while the years view is open
   const labels = app.run(`(viewMode = 'years', renderHistoryBar(), 0)`) === 0
     ? app.el('history-bar').children.map(b => b.textContent) : [];
   assert.ok(labels.includes('◂') && labels.includes('▸') && labels.includes('2025'), 'year pager chips present');
@@ -1384,17 +1408,23 @@ test('year paging + month readout: chips step and clamp, cells print numbers', (
   app.run(`runGridCmd('hm:2024:3')`);
   assert.deepEqual(app.run('histFocus'), { y: 2024, m: 3 });
   assert.equal(app.run('histSelYear(histStats())'), 2024);
-  const { flat, html } = app.run(`(() => {
-    const g = makeGrid(histGridRows(histStats()));
-    drawHistYears(g);
-    return { flat: g.ch.map(r => r.join('')).join('\\n'), html: gridToHtml(g) };
+  const { vm, html } = app.run(`(() => {
+    const vm = yearsViewModel();
+    return { vm, html: renderYears(vm) };
   })()`);
-  assert.ok(/▸ 2024 APR · ⌀ \d+ cm · min \d+ · max \d+ · vs mean \d+ \([+-]?\d+\.\d(σ)\)/u.test(flat), 'readout prints mean, min-max and sigma');
-  assert.ok(html.includes('data-st="cmd:hm:2025:0"'), 'month cells are pick targets');
+  assert.equal(vm.readout.empty, false);
+  assert.equal(vm.readout.y, 2024);
+  assert.equal(vm.readout.m, 3);
+  // the readout is a sentence now, not a glyph-prefixed one-liner
+  assert.match(vm.readout.say, /^April 2024 averaged \d+ cm, ranging \d+–\d+ cm\./, vm.readout.say);
+  assert.match(vm.readout.say, /σ (above|below) the long-term April mean of \d+ cm/, 'and names what it is measured against');
+  assert.ok(html.includes(vm.readout.say.slice(0, 20)), 'and it reaches the plate');
+  assert.ok(html.includes('data-nav="cmd:hm:2025:0"'), 'month cells are pick targets');
   // paging the year drags the readout month along
   app.run(`stepHistYear(1)`);
   assert.deepEqual(app.run('histFocus'), { y: 2025, m: 3 });
 });
+
 
 // ---------- regression tests for the QA-sweep findings ----------
 
@@ -1637,20 +1667,19 @@ test('histStats cache: switching stations never serves the old station\'s stats'
   assert.equal(app.run(`histStats().byYear.get(2025)[0]`), 500, 'identical archive shape must not collide in the cache');
 });
 
-test('years view: no backwards MONTHLY RANGE title without a completed year', () => {
+test('years view: no backwards range title without a completed year', () => {
   const app = loadApp({ now: JULY });
-  const flat = app.run(`(() => {
+  const html = app.run(`(() => {
     const pts = [];
     for (let d = 0; d < 60; d++) { const ts = Date.UTC(2026, 0, 1) + d * 864e5; pts.push([ts + 6 * 36e5, 200]); }
     state.archive = pts; histCache = null;
-    const g = makeGrid(histGridRows(histStats()));
-    drawHistYears(g);
-    return g.ch.map(r => r.join('')).join('\\n');
+    return renderYears(yearsViewModel());
   })()`);
-  assert.ok(!flat.includes('2026–2025'), 'no end-before-start range');
-  assert.ok(flat.includes('MONTHLY RANGE'), 'section title survives');
-  assert.ok(flat.includes('needs at least one completed year'));
+  assert.ok(!html.includes('2026–2025'), 'no end-before-start range');
+  assert.ok(html.includes('LONG-TERM MONTHLY RANGE'), 'section title survives');
+  assert.ok(html.includes('at least one completed year'));
 });
+
 
 test('putHeadRule: long river names ellipsize instead of being overwritten by the tag', () => {
   const app = loadApp({ width: 390, now: NOON });
@@ -1694,20 +1723,25 @@ test('wave cache: the 5-min river poll refreshes the state badges on cached rows
   assert.equal(app.run('waveData.rows[0].kind'), 'high', 'badge follows the live state without a refetch');
 });
 
-test('year overlay: MHW and MNW sharing a row combine their label', () => {
+test('year overlay: reference levels are drawn and named on their own rules', () => {
   const app = loadApp({ now: JULY });
   seedArchive(app);
-  const flat = app.run(`(() => {
+  const { vm, html } = app.run(`(() => {
     state.gauge = { currentMeasurement: { value: 200 }, characteristicValues: [
       { shortname: 'MHW', value: 212 }, { shortname: 'MNW', value: 210 },
     ]};
-    const g = makeGrid(histGridRows(histStats()));
-    drawHistYears(g);
+    const vm = yearsViewModel();
+    const html = renderYears(vm);
     state.gauge = null;
-    return g.ch.map(r => r.join('')).join('\\n');
+    return { vm, html };
   })()`);
-  assert.ok(flat.includes('┤ MHW+MNW'), 'both levels named on the shared row');
+  // the character grid had to merge two labels that landed on one row
+  // ("MHW+MNW"); a continuous scale gives each its own rule and label
+  assert.deepEqual(vm.overlay.marks.map(m => m.k), ['MHW', 'MNW']);
+  assert.ok(html.includes('>MHW</text>') && html.includes('>MNW</text>'), 'both are named separately');
+  assert.equal((html.match(/class="href-line"/g) || []).length >= 2, true, 'each gets its own rule');
 });
+
 
 // ---------- trend ----------
 

@@ -875,6 +875,91 @@
   @keyframes flake { from { transform: translateY(0); } to { transform: translateY(190px); } }
   @keyframes bob { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-2.5px); } }
   @keyframes floe { to { transform: translateX(60px); } }
+  /* ---- heat tables (years + wave): density is the magnitude channel,
+     hatch the direction channel — both survive greyscale and colour blindness ---- */
+  .heat { border-collapse: collapse; width: 100%; margin-top: 0.8em; font-family: var(--font-data); }
+  .heat th, .heat td { padding: 0; }
+  .heat thead th {
+    font-size: 0.62rem;
+    font-weight: 400;
+    color: var(--dim);
+    padding-bottom: 0.25em;
+  }
+  .heat thead th abbr { text-decoration: none; }
+  .heat tbody th[scope="row"] {
+    font-size: 0.7rem;
+    font-weight: 400;
+    text-align: right;
+    padding-right: 0.8ch;
+    color: var(--mid);
+    white-space: nowrap;
+  }
+  .heat tbody th a { color: inherit; text-decoration: none; }
+  .heat tr.sel th[scope="row"] { color: var(--ink); font-weight: 700; }
+  .heat td { border: 1px solid var(--paper); height: 1.05rem; }
+  .heat td a, .heat td button {
+    display: block;
+    width: 100%;
+    height: 100%;
+    min-height: 1.05rem;
+    padding: 0;
+    border: none;
+    background: none;
+    cursor: pointer;
+  }
+  .heat td:focus-within { outline: 2px solid var(--ink); outline-offset: -2px; }
+  .heat .ymean { font-size: 0.66rem; color: var(--mid); text-align: right; padding-left: 0.8ch; }
+  /* the lightness ramp, one hue */
+  .b0 { background: color-mix(in oklab, var(--water-line) 16%, var(--paper)); }
+  .b1 { background: color-mix(in oklab, var(--water-line) 38%, var(--paper)); }
+  .b2 { background: color-mix(in oklab, var(--water-line) 64%, var(--paper)); }
+  .b3 { background: color-mix(in oklab, var(--water-line) 92%, var(--paper)); }
+  .nd { background: var(--paper); }
+  .z { background: color-mix(in oklab, var(--ink) 7%, var(--paper)); }
+  /* anomaly: dry takes the warm hue AND a 45-degree hatch, wet the cool hue and
+     the mirrored hatch, so direction never rides on colour alone */
+  .dry.b0 { background: color-mix(in oklab, var(--dry-line) 16%, var(--paper)); }
+  .dry.b1 { background: color-mix(in oklab, var(--dry-line) 38%, var(--paper)); }
+  .dry.b2 { background: color-mix(in oklab, var(--dry-line) 64%, var(--paper)); }
+  .dry.b3 { background: color-mix(in oklab, var(--dry-line) 92%, var(--paper)); }
+  .dry { background-image: repeating-linear-gradient(45deg, transparent 0 2px, color-mix(in oklab, var(--ink) 30%, transparent) 2px 3px); }
+  .wet { background-image: repeating-linear-gradient(-45deg, transparent 0 2px, color-mix(in oklab, var(--ink) 30%, transparent) 2px 3px); }
+  .hsw {
+    display: inline-block;
+    width: 0.85rem;
+    height: 0.85rem;
+    border: 1px solid color-mix(in oklab, var(--ink) 35%, transparent);
+    vertical-align: -0.15em;
+  }
+  .p-key .diverge .hsw + .hsw { margin-left: 1px; }
+  .p-key .scalebar { display: flex; justify-content: space-between; width: 8rem; font-size: 0.9em; }
+  /* the wave table scrolls sideways rather than shrinking the cells away */
+  .wave-wrap { overflow-x: auto; }
+  .wave-months {
+    position: relative;
+    height: 1.1em;
+    margin-left: 11ch;
+    font-family: var(--font-data);
+    font-size: 0.62rem;
+    color: var(--dim);
+  }
+  .wave-months span { position: absolute; transform: translateX(-50%); }
+  .heat.wave { min-width: 34rem; }
+  .heat.wave td { height: 0.85rem; }
+  .heat.wave th[scope="row"] { max-width: 11ch; overflow: hidden; text-overflow: ellipsis; }
+  .heat.wave th a { display: flex; gap: 0.6ch; }
+  .heat.wave .wg { color: var(--mid); }
+  .heat.wave .k-low .wg { color: var(--dry-line); }
+  .heat.wave .k-high .wg { color: var(--water-line); }
+  /* ---- climatology + overlay charts ---- */
+  .clim, .overlay { height: 8rem; }
+  .cl-bar { stroke: color-mix(in oklab, var(--water-line) 45%, transparent); stroke-width: 5; stroke-linecap: round; }
+  .cl-med { stroke: var(--ink); stroke-width: 1.6; }
+  .cl-dot { fill: var(--ink); }
+  .cl-dot.above { fill: var(--water-line); }
+  .cl-dot.below { fill: var(--dry-line); }
+  .ov-year { fill: none; stroke: color-mix(in oklab, var(--ink) 18%, transparent); stroke-width: 0.8; }
+  .ov-sel { fill: none; stroke: var(--water-line); stroke-width: 1.8; }
   /* ---- rivers map ---- */
   .chart.map { max-height: 74vh; margin-inline: auto; }
   .map .mout { fill: color-mix(in oklab, var(--water) 22%, transparent); stroke: var(--ink); stroke-width: 1.2; stroke-linejoin: round; }
@@ -1536,7 +1621,9 @@ function screenSummary() {
     return `${station} multi-year statistics: ${st.years.length} years of daily data, heatmap by month, monthly range and year overlay.`;
   }
   const cur = state.gauge && state.gauge.currentMeasurement;
-  if (!cur) return 'Connecting to PEGELONLINE…';
+  // info and the gauge land together in loadData, but this now sits on every
+  // plate's render path — half a state must degrade, not blank the whole view
+  if (!cur || !state.info) return 'Connecting to PEGELONLINE…';
   const trend = trendPerHour();
   const trendTxt = trend === null ? '' :
     trend >= TREND_FLAT ? `, rising ${trend.toFixed(1)} cm per hour` :
@@ -2352,6 +2439,25 @@ const T = {
   keyMeans: 'long-term mean low / mean / high water (MNW · MW · MHW)',
   keyRecords: 'the highest and lowest ever recorded here (HHW · NNW)',
   keyBand: 'the normal range — inside it, the river is behaving',
+  noData: 'no reading',
+  yearsTitle: 'YEARS',
+  yearsSub: 'every month of every archived year, compared',
+  yearsHeat: 'MONTHLY HEAT',
+  yearsHeatCap: 'monthly mean water level by year',
+  yearsHint: 'Pick a month cell for its hard numbers.',
+  yearsNoArchive: 'WSV keeps no multi-year archive for this gauge',
+  yearsGrows: 'The local archive also grows with every visit.',
+  yearsRange: 'LONG-TERM MONTHLY RANGE',
+  yearsRangeThin: 'Needs at least one completed year — the archive reaches back decades:',
+  yearsRangeAria: 'long-term monthly minimum, maximum and median against the current year',
+  yearsOverlay: 'EVERY YEAR BY DAY OF YEAR',
+  overlayPick: 'Pick a year in the heatmap to bring it to the front.',
+  sigmaNote: 'σ is the standard deviation: ±1 σ covers roughly two years in three.',
+  waveTitle: 'WAVE',
+  waveSub: 'one row per gauge, top is upstream · one column per day — a flood wave shows up as a diagonal ridge rolling down the screen',
+  waveRamp: 'low → high',
+  waveScaled: 'Each row is scaled to its OWN gauge’s range over this window, so rows compare shape, not absolute level.',
+  timeRight: 'time',
 };
 
 // the plate foot's per-view provenance line
@@ -3513,20 +3619,8 @@ function histStats() {
 }
 
 // sequential: ink density = magnitude (one "hue", light → dark — CVD-proof)
-const HEAT_RAMP = '░▒▓█';
-function heatAbs(v, lo, hi) {
-  const f = (v - lo) / Math.max(hi - lo, 1);
-  return HEAT_RAMP[Math.max(0, Math.min(3, Math.floor(f * 4)))];
-}
-// diverging: density = magnitude, hue = direction — wet reuses the flood accent
-// (w2), dry the drought accent (s), matching what those colors already mean in
-// the live scene. '·' is the neutral midpoint, blank = no data.
-function heatAnom(z) {
-  const a = Math.abs(z);
-  if (a < 0.33) return { ch: '·', cls: 'd' };
-  const i = a < 0.8 ? 0 : a < 1.5 ? 1 : a < 2.5 ? 2 : 3;
-  return { ch: HEAT_RAMP[i], cls: z > 0 ? 'w2' : 's' };
-}
+// (the character heat ramps lived here — replaced by heatBinAbs/heatBinAnom,
+// which return bins the CSS turns into a lightness ramp plus a hatch)
 
 let histMode = 'abs';  // 'abs' | 'anom' — heatmap toggle (D lives inside A)
 let histYear = null;   // overlay year picked by clicking a heatmap row; null = current
@@ -3610,15 +3704,6 @@ function unusualNow() {
   return unusualStats(histStats(), cur.value, new Date().getUTCMonth());
 }
 
-function histGridRows(st) {
-  if (st.daily.length < HIST_MIN_DAYS) return 6;
-  // header+blank · title+monthhdr+years+readout · blank+title+plot+axis (clim) · same (overlay)
-  // compact has no room for the heat-ramp legend beside the ABS/ANOM toggle, so it
-  // wraps onto its own extra row instead of being dropped (see drawHistYears)
-  return 2 + (2 + st.years.length + 1) + (2 + HIST_CLIM_H + 1) + (2 + HIST_OVER_H + 1) + 1 + (isCompact() ? 1 : 0);
-}
-
-// a right-aligned [tag] in a dim header rule; returns nothing, marks the cells
 function putHeaderTag(g, row, text, cmd) {
   const col = COLS - text.length - 4;
   put(g, row, col, text, 'b');
@@ -3636,213 +3721,242 @@ function putHeadRule(g, head, brand, tag, cmd) {
   putHeaderTag(g, 0, tag, cmd);
 }
 
-function drawHistYears(g) {
+// ---------- years view: the survey plate ----------
+
+// The heat bins stay a LIGHTNESS ramp (density = magnitude), which is safe by
+// construction. Direction in anomaly mode adds a hatch as its second channel,
+// so meaning never rides on hue alone once the glyphs are gone.
+const HEAT_BINS = 4;
+function heatBinAbs(v, lo, hi) {
+  const f = (v - lo) / Math.max(hi - lo, 1);
+  return Math.max(0, Math.min(HEAT_BINS - 1, Math.floor(f * HEAT_BINS)));
+}
+function heatBinAnom(z) {
+  const a = Math.abs(z);
+  if (a < 0.33) return { bin: -1, dir: 0 };
+  return { bin: a < 0.8 ? 0 : a < 1.5 ? 1 : a < 2.5 ? 2 : 3, dir: z > 0 ? 1 : -1 };
+}
+
+function yearsViewModel() {
   const st = histStats();
-  const compact = isCompact();
-  const brand = `PEGEL://${station}`;
-  putHeadRule(g, `─── ${brand} · YEARS `, brand, '[← LIVE]', 'cmd:live');
-
+  const vm = { kind: 'years', station, mode: histMode, summary: screenSummary(),
+    source: `${archiveSource()} daily archive · unvalidated raw data`, thin: false };
   if (st.daily.length < HIST_MIN_DAYS) {
-    put(g, 2, 2, state.repoArchive === 'none'
-      ? 'WSV keeps no multi-year archive for this station'
-      : `not enough history yet — fetching the ${archiveSource()} archive …`, 'd');
-    put(g, 4, 2, 'the local archive also grows with every visit', 'd');
-    return;
+    vm.thin = true;
+    vm.reason = state.repoArchive === 'none'
+      ? T.yearsNoArchive
+      : `not enough history yet — fetching the ${archiveSource()} archive…`;
+    return vm;
   }
-
   const selYear = histSelYear(st);
-
-  // — heatmap: rows = years, columns = months split into week-ish cells —
-  const cellsPM = compact ? 2 : 4;
-  const yearW = 5, monthW = cellsPM + 1;
-  let r = 2;
-  put(g, r, 0, compact ? 'HEAT' : 'MONTHLY HEAT · cell ≈ ' + (cellsPM === 4 ? 'week' : 'half month'), 'd');
-  // mode toggles read like radio chips; the active one is bold
-  let tx = compact ? 6 : 34;
-  put(g, r, tx, '[ABS]', histMode === 'abs' ? 'b' : 'd');
-  linkCells(g, r, tx, 5, 'cmd:abs');
-  put(g, r, tx + 6, '[ANOM]', histMode === 'anom' ? 'b' : 'd');
-  linkCells(g, r, tx + 6, 6, 'cmd:anom');
-  if (!compact) {
-    if (histMode === 'abs') {
-      put(g, r, tx + 15, HEAT_RAMP + ' low → high');
-    } else {
-      put(g, r, tx + 15, '█▓▒░', 's');
-      put(g, r, tx + 20, 'dry · wet', 'd');
-      put(g, r, tx + 30, '░▒▓█', 'w2');
-      put(g, r, tx + 36, 'vs month mean', 'd');
-    }
-  }
-  r++;
-  // compact has no columns to spare beside the ABS/ANOM toggle (col 21 onward would
-  // overflow 44), so the same legend reflows onto its own row instead of vanishing —
-  // histGridRows() reserves the row this consumes
-  if (compact) {
-    if (histMode === 'abs') {
-      put(g, r, 0, HEAT_RAMP + ' low → high');
-    } else {
-      put(g, r, 0, '█▓▒░', 's');
-      put(g, r, 5, 'dry · wet', 'd');
-      put(g, r, 15, '░▒▓█', 'w2');
-      put(g, r, 21, 'vs month mean', 'd');
-    }
-    r++;
-  }
-  for (let m = 0; m < 12; m++) {
-    put(g, r, yearW + m * monthW, compact ? 'JFMAMJJASOND'[m] : MONTH_ABBR[m].slice(0, 3), 'd');
-  }
-  r++;
-  const heatTop = r;
-  st.years.forEach((y, i) => {
-    const row = heatTop + i;
-    const sel = y === selYear;
-    put(g, row, 0, String(y), sel ? 'b' : 'd');
-    if (sel) put(g, row, 4, '▸', 'b');
-    linkCells(g, row, 0, 4, 'cmd:hy:' + y);
+  vm.selYear = selYear;
+  vm.years = st.years;
+  vm.climYears = st.climYears;
+  vm.lo = st.lo; vm.hi = st.hi;
+  vm.rows = st.years.map(y => {
     const arr = st.byYear.get(y);
+    const cells = [];
     for (let m = 0; m < 12; m++) {
-      const d0 = monthDoy(y, m), d1 = monthDoy(y, m + 1);
-      // every month group is a pick target: its numbers land in the readout row
-      linkCells(g, row, yearW + m * monthW, cellsPM, `cmd:hm:${y}:${m}`);
-      for (let c = 0; c < cellsPM; c++) {
-        const a = d0 + Math.floor((d1 - d0) * c / cellsPM);
-        const b = d0 + Math.floor((d1 - d0) * (c + 1) / cellsPM);
-        const v = cellMean(arr, a, b);
-        if (v == null) continue; // blank = no data
-        const col = yearW + m * monthW + c;
-        if (histMode === 'abs') {
-          put(g, row, col, heatAbs(v, st.lo, st.hi));
-        } else {
-          const cm = st.clim[m];
-          if (!cm) continue;
-          const gl = heatAnom((v - cm.mean) / cm.sd);
-          put(g, row, col, gl.ch, gl.cls);
-        }
-      }
-    }
-    if (!compact) {
-      const vals = arr.filter(v => v != null);
-      if (vals.length) put(g, row, yearW + 12 * monthW + 1, '⌀ ' + Math.round(mean(vals)), 'd');
-    }
-  });
-
-  // — readout: the hard numbers for the picked heatmap month —
-  const ro = heatTop + st.years.length;
-  if (histFocus && st.byYear.has(histFocus.y)) {
-    const { y, m } = histFocus;
-    const arr = st.byYear.get(y);
-    const days = [];
-    for (let d = monthDoy(y, m); d < monthDoy(y, m + 1); d++) if (arr[d] != null) days.push(arr[d]);
-    if (!days.length) {
-      put(g, ro, 0, `▸ ${y} ${MONTH_ABBR[m]} · no data`, 'd');
-    } else {
-      const mu = mean(days), mn = Math.min(...days), mx = Math.max(...days);
+      const v = cellMean(arr, monthDoy(y, m), monthDoy(y, m + 1));
+      if (v == null) { cells.push({ m, v: null, bin: -1, dir: 0, label: `${MONTH_NAME[m]} ${y}: no data` }); continue; }
       const c = st.clim[m];
-      const z = c ? (mu - c.mean) / c.sd : null;
-      const zTxt = z == null ? '' : ` · vs mean ${Math.round(c.mean)} (${z >= 0 ? '+' : ''}${z.toFixed(1)}σ)`;
-      const line = compact
-        ? `▸ ${y} ${MONTH_ABBR[m]} ⌀${Math.round(mu)} ${Math.round(mn)}–${Math.round(mx)}`
-        : `▸ ${y} ${MONTH_ABBR[m]} · ⌀ ${Math.round(mu)} cm · min ${Math.round(mn)} · max ${Math.round(mx)}${zTxt}`;
-      put(g, ro, 0, line);
-      put(g, ro, 0, '▸', 'b');
+      const z = c ? (v - c.mean) / c.sd : null;
+      const heat = histMode === 'anom'
+        ? (z == null ? { bin: -1, dir: 0 } : heatBinAnom(z))
+        : { bin: heatBinAbs(v, st.lo, st.hi), dir: 0 };
+      cells.push({
+        m, v: Math.round(v), z, bin: heat.bin, dir: heat.dir,
+        label: `${MONTH_NAME[m]} ${y}: ${Math.round(v)} cm` +
+          (z != null ? `, ${Math.abs(z).toFixed(1)} sigma ${z >= 0 ? 'above' : 'below'} the long-term ${MONTH_NAME[m]} mean` : ''),
+      });
     }
-  } else {
-    put(g, ro, 0, compact ? 'tap a month cell for numbers' : 'click a month cell for its numbers · ◂ ▸ chips page the bold year', 'd');
-  }
-  r = ro + 2;
+    const vals = (arr || []).filter(v => v != null);
+    return { y, sel: y === selYear, cells, mean: vals.length ? Math.round(mean(vals)) : null };
+  });
+  vm.readout = yearsReadout(st);
+  vm.clim = st.clim.map((c, m) => c ? { m, min: Math.round(c.min), max: Math.round(c.max), med: Math.round(c.med) } : null);
+  // the day-of-year overlay: every year as a faint cloud, the picked one bold
+  vm.overlay = {
+    min: st.allMin, max: st.allMax,
+    years: st.years.map(y => ({ y, sel: y === selYear, days: st.byYear.get(y) })),
+    marks: ['MHW', 'MNW'].map(k => ({ k, cm: charValue(k) }))
+      .filter(m => m.cm != null && m.cm >= st.allMin && m.cm <= st.allMax),
+  };
+  const curArr = st.byYear.get(st.curYear);
+  vm.curYear = st.curYear;
+  vm.curMonthly = Array.from({ length: 12 }, (_, m) =>
+    curArr ? cellMean(curArr, monthDoy(st.curYear, m), monthDoy(st.curYear, m + 1)) : null)
+    .map(v => v == null ? null : Math.round(v));
+  return vm;
+}
 
-  // — monthly range: long-term min–max band + median vs the current year —
-  // without a completed year there is no range to name — a fresh station would
-  // otherwise title itself "MONTHLY RANGE 2026–2025"
-  const climTitle = !st.climYears ? 'MONTHLY RANGE' : compact
-    ? `RANGE vs ${st.curYear}`
-    : `MONTHLY RANGE ${st.years[0]}–${st.curYear - 1} · │ min–max · ┼ median · ● ${st.curYear}`;
-  put(g, r, 0, climTitle, 'd');
-  r++;
-  const climTop = r;
-  if (!st.climYears) {
-    put(g, climTop + 1, 2, `needs at least one completed year — the ${archiveSource()} archive reaches back decades`, 'd');
-  } else {
-    const curArr = st.byYear.get(st.curYear);
-    const curMonthly = Array.from({ length: 12 }, (_, m) =>
-      curArr ? cellMean(curArr, monthDoy(st.curYear, m), monthDoy(st.curYear, m + 1)) : null);
-    let vmin = Infinity, vmax = -Infinity;
-    st.clim.forEach(c => { if (c) { vmin = Math.min(vmin, c.min); vmax = Math.max(vmax, c.max); } });
-    curMonthly.forEach(v => { if (v != null) { vmin = Math.min(vmin, v); vmax = Math.max(vmax, v); } });
-    const span = Math.max(vmax - vmin, 1);
-    const yOf = v => climTop + Math.round((1 - (v - vmin) / span) * (HIST_CLIM_H - 1));
-    const left = 6, cstep = compact ? 3 : 6;
-    put(g, climTop, 0, String(Math.round(vmax)).padStart(4), 'd');
-    put(g, climTop + HIST_CLIM_H - 1, 0, String(Math.round(vmin)).padStart(4), 'd');
-    for (let m = 0; m < 12; m++) {
-      const c = st.clim[m], x = left + m * cstep;
-      if (c) {
-        for (let rr = yOf(c.max); rr <= yOf(c.min); rr++) put(g, rr, x, '│', 'd');
-        put(g, yOf(c.med), x, '┼');
-      }
-      const v = curMonthly[m];
-      if (v != null) {
-        // outside the whole historic band → the dot wears the drought/flood accent
-        const cls = c && v > c.max ? 'w2' : c && v < c.min ? 's' : 'b';
-        put(g, yOf(v), x, '●', cls);
-      }
-      put(g, climTop + HIST_CLIM_H, x, compact ? 'JFMAMJJASOND'[m] : MONTH_ABBR[m].slice(0, 3).padEnd(3), 'd');
-    }
-  }
-  r = climTop + HIST_CLIM_H + 2;
+// the picked month's hard numbers — the years view already invented this
+// pattern (a fixed readout line beats a floating tooltip on touch), so every
+// plate now uses it
+function yearsReadout(st) {
+  if (!histFocus || !st.byYear.has(histFocus.y)) return { empty: true, hint: T.yearsHint };
+  const { y, m } = histFocus;
+  const arr = st.byYear.get(y);
+  const days = [];
+  for (let d = monthDoy(y, m); d < monthDoy(y, m + 1); d++) if (arr[d] != null) days.push(arr[d]);
+  if (!days.length) return { empty: true, hint: `${MONTH_NAME[m]} ${y} — no data` };
+  const mu = mean(days), mn = Math.min(...days), mx = Math.max(...days);
+  const c = st.clim[m];
+  const z = c ? (mu - c.mean) / c.sd : null;
+  return {
+    empty: false, y, m,
+    mean: Math.round(mu), min: Math.round(mn), max: Math.round(mx),
+    climMean: c ? Math.round(c.mean) : null, z,
+    say: `${MONTH_NAME[m]} ${y} averaged ${Math.round(mu)} cm, ranging ${Math.round(mn)}–${Math.round(mx)} cm.` +
+      (z != null ? ` That is ${Math.abs(z).toFixed(1)} σ ${z >= 0 ? 'above' : 'below'} the long-term ${MONTH_NAME[m]} mean of ${Math.round(c.mean)} cm.` : ''),
+  };
+}
 
-  // — year overlay: every year as a faint day-of-year cloud, one year bold —
-  put(g, r, 0, compact
-    ? `${selYear} vs all`
-    : `YEAR OVERLAY · █ ${selYear} · · all years — click a heatmap year to swap`, 'd');
-  r++;
-  const overTop = r;
-  const plotW = COLS - 10;
-  const ovMin = st.allMin, ovSpan = Math.max(st.allMax - st.allMin, 1);
-  const yOfOv = v => overTop + Math.max(0, Math.min(HIST_OVER_H - 1,
-    Math.round((1 - (v - ovMin) / ovSpan) * (HIST_OVER_H - 1))));
-  const colOf = doy => Math.min(plotW - 1, Math.floor(doy / 366 * plotW));
-  for (const y of st.years) {
-    if (y === selYear) continue;
-    const arr = st.byYear.get(y);
+function heatCellClass(c, mode) {
+  if (c.bin < 0) return c.v == null ? 'nd' : 'z';
+  return `b${c.bin}` + (mode === 'anom' ? (c.dir > 0 ? ' wet' : ' dry') : '');
+}
+
+function renderYearsHeat(vm) {
+  const head = MONTH_ABBR.map((m, i) =>
+    `<th scope="col"><abbr${attr('title', MONTH_NAME[i])}>${esc(m[0])}</abbr></th>`).join('');
+  const rows = vm.rows.map(r =>
+    `<tr class="${r.sel ? 'sel' : ''}">` +
+    `<th scope="row">${navOpen('cmd:hy:' + r.y)}${r.y}${navClose('cmd:hy:' + r.y)}</th>` +
+    r.cells.map(c =>
+      `<td class="${heatCellClass(c, vm.mode)}">` +
+      navOpen(`cmd:hm:${r.y}:${c.m}`, '', attr('aria-label', c.label) + attr('title', c.label)) +
+      navClose(`cmd:hm:${r.y}:${c.m}`) + '</td>').join('') +
+    `<td class="ymean">${r.mean == null ? '' : r.mean}</td></tr>`).join('');
+  return `<table class="heat"><caption class="vh">${esc(T.yearsHeatCap)}</caption>` +
+    `<thead><tr><th></th>${head}<th class="ymean">⌀</th></tr></thead><tbody>${rows}</tbody></table>`;
+}
+
+function renderYearsLegend(vm) {
+  const sw = cls => `<span class="hsw ${cls}"></span>`;
+  if (vm.mode === 'abs') {
+    return `<dl class="p-key"><dt>${esc(T.key)}</dt>` +
+      `<dd><span class="lg">${[0, 1, 2, 3].map(b => sw('b' + b)).join('')}` +
+      `<span class="lgn">${vm.lo} cm → ${vm.hi} cm — darker is higher water</span></span></dd>` +
+      `<dd><span class="lg">${sw('nd')}<span class="lgn">${esc(T.noData)}</span></span></dd>` +
+      `<dd>${esc(T.yearsHint)}</dd></dl>`;
+  }
+  return `<dl class="p-key"><dt>${esc(T.key)}</dt>` +
+    `<dd><span class="lg diverge">` +
+    [3, 2, 1, 0].map(b => sw('b' + b + ' dry')).join('') + sw('z') +
+    [0, 1, 2, 3].map(b => sw('b' + b + ' wet')).join('') +
+    '</span></dd>' +
+    `<dd class="scalebar"><span>−2 σ</span><span>0</span><span>+2 σ</span></dd>` +
+    `<dd>← drier than usual · normal · wetter than usual →</dd>` +
+    `<dd>${esc(T.sigmaNote)}</dd>` +
+    `<dd>Dry months are hatched one way and wet months the other, so direction survives greyscale and colour blindness.</dd></dl>`;
+}
+
+const CLIM_W = 320, CLIM_H = 110;
+
+function renderYearsClim(vm) {
+  if (!vm.climYears) {
+    return `<section class="p-block"><h2 class="p-h2">${esc(T.yearsRange)}</h2>` +
+      `<p class="p-dim">${esc(T.yearsRangeThin)} ${esc(archiveSource())}</p></section>`;
+  }
+  let vmin = Infinity, vmax = -Infinity;
+  for (const c of vm.clim) if (c) { vmin = Math.min(vmin, c.min); vmax = Math.max(vmax, c.max); }
+  for (const v of vm.curMonthly) if (v != null) { vmin = Math.min(vmin, v); vmax = Math.max(vmax, v); }
+  const span = Math.max(vmax - vmin, 1);
+  const X = m => 16 + (m + 0.5) * ((CLIM_W - 24) / 12);
+  const Y = v => 6 + (1 - (v - vmin) / span) * (CLIM_H - 26);
+  const parts = [];
+  for (const c of vm.clim) {
+    if (!c) continue;
+    parts.push(`<line class="cl-bar" x1="${X(c.m).toFixed(1)}" y1="${Y(c.max).toFixed(1)}" x2="${X(c.m).toFixed(1)}" y2="${Y(c.min).toFixed(1)}"/>`);
+    parts.push(`<line class="cl-med" x1="${(X(c.m) - 4).toFixed(1)}" y1="${Y(c.med).toFixed(1)}" x2="${(X(c.m) + 4).toFixed(1)}" y2="${Y(c.med).toFixed(1)}"/>`);
+  }
+  vm.curMonthly.forEach((v, m) => {
+    if (v == null) return;
+    const c = vm.clim[m];
+    const cls = c && v > c.max ? 'above' : c && v < c.min ? 'below' : '';
+    parts.push(`<circle class="cl-dot ${cls}" cx="${X(m).toFixed(1)}" cy="${Y(v).toFixed(1)}" r="3"/>`);
+  });
+  MONTH_ABBR.forEach((mn, m) => {
+    parts.push(`<text class="axl" x="${X(m).toFixed(1)}" y="${CLIM_H - 4}" text-anchor="middle">${esc(mn[0])}</text>`);
+  });
+  parts.push(`<text class="axl" x="13" y="10" text-anchor="end">${Math.round(vmax)}</text>`);
+  parts.push(`<text class="axl" x="13" y="${(CLIM_H - 20).toFixed(0)}" text-anchor="end">${Math.round(vmin)}</text>`);
+  const chart = svgWrap(`0 0 ${CLIM_W} ${CLIM_H}`, parts.join(''),
+    ' class="chart clim" role="img"' + attr('aria-label', T.yearsRangeAria));
+  const key = `<dl class="p-key"><dt>${esc(T.key)}</dt>` +
+    `<dd><span class="lg"><svg class="sw" viewBox="0 0 12 12" aria-hidden="true"><line class="cl-bar" x1="6" y1="1" x2="6" y2="11"/></svg><span class="lgn">${vm.years[0]}–${vm.curYear - 1} min–max for that month</span></span></dd>` +
+    `<dd><span class="lg"><svg class="sw" viewBox="0 0 12 12" aria-hidden="true"><line class="cl-med" x1="2" y1="6" x2="10" y2="6"/></svg><span class="lgn">its median</span></span></dd>` +
+    `<dd><span class="lg"><svg class="sw" viewBox="0 0 12 12" aria-hidden="true"><circle class="cl-dot" cx="6" cy="6" r="3"/></svg><span class="lgn">${vm.curYear}</span></span></dd></dl>`;
+  return `<section class="p-block"><h2 class="p-h2">${esc(T.yearsRange)}</h2>${chart}${key}</section>`;
+}
+
+
+const OVER_W = 320, OVER_H = 120;
+
+// every archived year as a faint day-of-year trace, the picked one drawn bold —
+// "is this year unusual?" answered by shape rather than by a number
+function renderYearsOverlay(vm) {
+  const o = vm.overlay;
+  const span = Math.max(o.max - o.min, 1);
+  const X = d => 16 + (d / 366) * (OVER_W - 24);
+  const Y = v => 6 + (1 - (v - o.min) / span) * (OVER_H - 26);
+  const trace = (days, cls) => {
+    const segs = [];
+    let run = [];
     for (let d = 0; d < 366; d++) {
-      if (arr[d] == null) continue;
-      const row = yOfOv(arr[d]), col = colOf(d);
-      if (g.ch[row][col] === ' ') put(g, row, col, '·', 'd');
+      const v = days && days[d];
+      if (v == null) { if (run.length > 1) segs.push(run.join(' ')); run = []; continue; }
+      run.push(`${X(d).toFixed(1)},${Y(v).toFixed(1)}`);
     }
+    if (run.length > 1) segs.push(run.join(' '));
+    return segs.map(pts => `<polyline class="${cls}" points="${pts}"/>`).join('');
+  };
+  const parts = [];
+  for (const m of o.marks) {
+    parts.push(`<line class="href-line" x1="16" y1="${Y(m.cm).toFixed(1)}" x2="${OVER_W - 8}" y2="${Y(m.cm).toFixed(1)}"/>`);
+    parts.push(`<text class="axl" x="${OVER_W - 6}" y="${(Y(m.cm) + 3).toFixed(1)}">${esc(m.k)}</text>`);
   }
-  put(g, overTop, plotW + 1, `┤ ${Math.round(ovMin + ovSpan)}`, 'd');
-  put(g, overTop + HIST_OVER_H - 1, plotW + 1, `┤ ${Math.round(ovMin)}`, 'd');
-  // characteristic levels as dashed context lines, like the live chart — their
-  // labels yield to the min/max labels above when they land on the same row
-  if (state.gauge) {
-    const lineLabels = new Map(); // row -> names; MHW and MNW can share a row on a squeezed scale
-    for (const name of ['MHW', 'MNW']) {
-      const cm = charValue(name);
-      if (cm == null || cm < ovMin || cm > ovMin + ovSpan) continue;
-      const row = yOfOv(cm);
-      for (let x = 0; x < plotW; x += 2) if (g.ch[row][x] === ' ') put(g, row, x, '╌', 'd');
-      lineLabels.set(row, [...(lineLabels.get(row) || []), name]);
-    }
-    for (const [row, names] of lineLabels) {
-      if (g.ch[row][plotW + 1] === ' ') put(g, row, plotW + 1, `┤ ${names.join('+')}`, 'd');
-    }
+  let sel = null;
+  for (const y of o.years) {
+    if (y.sel) { sel = y; continue; }
+    parts.push(trace(y.days, 'ov-year'));
   }
-  const selArr = st.byYear.get(selYear);
-  const acc = Array(plotW).fill(0), cnt = Array(plotW).fill(0);
-  selArr.forEach((v, d) => { if (v != null) { const c = colOf(d); acc[c] += v; cnt[c]++; } });
-  let prevY = null;
-  for (let c = 0; c < plotW; c++) {
-    if (!cnt[c]) { prevY = null; continue; }
-    const y = yOfOv(acc[c] / cnt[c]);
-    const [a, b] = prevY == null ? [y, y] : [Math.min(prevY, y), Math.max(prevY, y)];
-    for (let rr = a; rr <= b; rr++) put(g, rr, c, '█', 'b');
-    prevY = y;
+  if (sel) parts.push(trace(sel.days, 'ov-sel'));
+  MONTH_ABBR.forEach((mn, m) => {
+    parts.push(`<text class="axl" x="${X(monthDoy(2001, m)).toFixed(1)}" y="${OVER_H - 4}" text-anchor="middle">${esc(mn[0])}</text>`);
+  });
+  parts.push(`<text class="axl" x="13" y="10" text-anchor="end">${Math.round(o.max)}</text>`);
+  parts.push(`<text class="axl" x="13" y="${(OVER_H - 20).toFixed(0)}" text-anchor="end">${Math.round(o.min)}</text>`);
+  const chart = svgWrap(`0 0 ${OVER_W} ${OVER_H}`, parts.join(''),
+    ' class="chart overlay" role="img"' + attr('aria-label', `every archived year by day of year, ${vm.selYear} highlighted`));
+  const key = `<dl class="p-key"><dt>${esc(T.key)}</dt>` +
+    `<dd><span class="lg"><svg class="sw" viewBox="0 0 12 12" aria-hidden="true"><polyline class="ov-sel" points="0,9 4,3 8,7 12,2"/></svg><span class="lgn">${vm.selYear}</span></span></dd>` +
+    `<dd><span class="lg"><svg class="sw" viewBox="0 0 12 12" aria-hidden="true"><polyline class="ov-year" points="0,7 4,5 8,9 12,4"/></svg><span class="lgn">every other archived year</span></span></dd>` +
+    `<dd>${esc(T.overlayPick)}</dd></dl>`;
+  return `<section class="p-block"><h2 class="p-h2">${esc(T.yearsOverlay)}</h2>${chart}${key}</section>`;
+}
+
+function renderYears(vm) {
+  const vh = `<p class="vh">${esc(vm.summary)}</p>`;
+  const head = `<header class="p-head"><h1>${esc(vm.station)} · ${esc(T.yearsTitle)}</h1>` +
+    `<p class="p-sub">${vm.thin ? '' : `${vm.years.length} ${esc(plural(vm.years.length, 'year'))} of daily readings — ${esc(T.yearsSub)}`}</p></header>`;
+  const back = `<nav class="p-tabs" aria-label="view">` +
+    navOpen('cmd:live') + '← live' + navClose('cmd:live') + '</nav>';
+  if (vm.thin) {
+    return `<section class="plate">${vh}${head}${back}<div class="p-empty"><p>${esc(vm.reason)}</p>` +
+      `<p class="p-dim">${esc(T.yearsGrows)}</p></div></section>`;
   }
-  const axisRow = overTop + HIST_OVER_H;
-  for (let m = 0; m < 12; m++) {
-    put(g, axisRow, colOf(monthDoy(2001, m)), compact ? 'JFMAMJJASOND'[m] : MONTH_ABBR[m].slice(0, 3), 'd');
-  }
+  const modes = `<nav class="p-tabs" aria-label="heat mode">` +
+    navOpen('cmd:abs', vm.mode === 'abs' ? 'on' : '') + 'absolute' + navClose('cmd:abs') +
+    navOpen('cmd:anom', vm.mode === 'anom' ? 'on' : '') + 'anomaly' + navClose('cmd:anom') + '</nav>';
+  const readout = vm.readout.empty
+    ? `<p class="p-dim p-readout">${esc(vm.readout.hint)}</p>`
+    : `<section class="p-block readout"><p class="say">${esc(vm.readout.say)}</p></section>`;
+  return `<section class="plate">${vh}${head}${back}` +
+    `<section class="p-block"><h2 class="p-h2">${esc(T.yearsHeat)}</h2>${modes}` +
+    renderYearsHeat(vm) + renderYearsLegend(vm) + '</section>' +
+    readout + renderYearsClim(vm) + renderYearsOverlay(vm) + '</section>';
 }
 
 // ---------- river wave view (station × day heatmap — the wave rolls downstream) ----------
@@ -3959,60 +4073,65 @@ async function loadWave() {
 
 // compact wraps the info line onto a second row instead of dropping the ramp
 // legend, the per-station-scaling caveat and the coverage note (see drawWave)
-function waveGridRows(w) { return 4 + w.rows.length + (isCompact() ? 1 : 0); }
+// ---------- wave view: the survey plate ----------
 
-function drawWave(g, w) {
-  const compact = isCompact();
-  const nameW = compact ? 8 : 12;
-  const left = nameW + 3; // state glyph + gap + name + gap
-  const nShow = COLS - left;
-  // a window shorter than the grid is right-aligned: the present hugs now
-  const nEff = Math.min(nShow, w.nDays);
-  const start = w.nDays - nEff;
-  const colAt = i => left + (nShow - nEff) + i;
+function waveViewModel(w) {
+  const days = Math.min(w.nDays, plateDensity() === 'narrow' ? 60 : 120);
+  const start = w.nDays - days;
   const dayAt = i => (w.day0 + start + i) * DAY_MS;
-
-  const brand = `PEGEL://${w.river}`;
-  putHeadRule(g, `─── ${brand} · WAVE `, brand, '[← PROFILE]', 'cmd:live');
-  const range = `${isoDay(dayAt(0))} → ${isoDay(dayAt(nEff - 1))}`;
-  const note = w.shown < w.total ? ` · ${w.shown} of ${w.total} stations` : '';
-  // compact has no room for the ramp legend, the per-station-scaling caveat and the
-  // coverage note beside the date range on one row — wrap them onto a second row
-  // instead of dropping them (waveGridRows() reserves the row this consumes)
-  const monthRow = compact ? 3 : 2;
-  if (compact) {
-    put(g, 1, 0, range + note, 'd');
-    put(g, 2, 0, `${HEAT_RAMP} low → high, scaled per station`, 'd');
-  } else {
-    put(g, 1, 0, `${HEAT_RAMP} low → high, scaled per station · ${range}${note}`, 'd');
-  }
-
-  // month names along the top, anchored at each 1st of the month
-  for (let i = 0; i < nEff; i++) {
-    const dt = new Date(dayAt(i));
-    if (dt.getUTCDate() === 1) {
-      const lbl = compact ? MONTH_ABBR[dt.getUTCMonth()].slice(0, 1) : MONTH_ABBR[dt.getUTCMonth()].slice(0, 3);
-      if (colAt(i) + lbl.length <= COLS) put(g, monthRow, colAt(i), lbl, 'd');
-    }
-  }
-
-  w.rows.forEach((row, i) => {
-    const r = monthRow + 1 + i;
-    put(g, r, 0, RIVER_GLYPH[row.kind], RIVER_CLS[row.kind]);
-    const name = row.name.slice(0, nameW);
-    put(g, r, 2, name, row.kind === 'normal' ? 'd' : RIVER_CLS[row.kind]);
-    linkCells(g, r, 0, left - 1, row.name);
+  const rows = w.rows.map(row => {
     const vals = row.vals.slice(start);
     // Number.isFinite, not != null: one NaN would poison Math.min/max and
     // flatten the whole row's scaling
     const present = vals.filter(v => Number.isFinite(v));
     const lo = Math.min(...present), hi = Math.max(...present);
-    for (let x = 0; x < nEff; x++) {
-      if (!Number.isFinite(vals[x])) continue; // blank = no data that day
-      put(g, r, colAt(x), hi > lo ? heatAbs(vals[x], lo, hi) : '▒');
-    }
+    return {
+      name: row.name, kind: row.kind,
+      cells: vals.map((v, i) => Number.isFinite(v)
+        ? { bin: hi > lo ? heatBinAbs(v, lo, hi) : 1, v: Math.round(v),
+            label: `${row.name}, ${isoDay(dayAt(i))}: ${Math.round(v)} cm` }
+        : { bin: -1, v: null, label: `${row.name}, ${isoDay(dayAt(i))}: no reading` }),
+    };
   });
-  put(g, monthRow + 1 + w.rows.length, 0, '≋ downstream ↓ · time →', 'd');
+  const months = [];
+  for (let i = 0; i < days; i++) {
+    const dt = new Date(dayAt(i));
+    if (dt.getUTCDate() === 1) months.push({ i, label: MONTH_ABBR[dt.getUTCMonth()] });
+  }
+  return {
+    kind: 'wave', river: w.river, days, rows, months,
+    from: isoDay(dayAt(0)), to: isoDay(dayAt(days - 1)),
+    shown: w.shown, total: w.total,
+    summary: screenSummary(),
+    source: `${archiveSource()} daily archive + the live API for the newest days`,
+  };
+}
+
+function renderWave(vm) {
+  const vh = `<p class="vh">${esc(vm.summary)}</p>`;
+  const head = `<header class="p-head"><h1>${esc(vm.river)} · ${esc(T.waveTitle)}</h1>` +
+    `<p class="p-sub">${esc(T.waveSub)}</p></header>`;
+  const tabs = `<nav class="p-tabs" aria-label="view">` +
+    navOpen('cmd:live') + 'profile' + navClose('cmd:live') +
+    navOpen('cmd:wave', 'on') + 'wave' + navClose('cmd:wave') + '</nav>';
+  const cols = vm.months.map(m =>
+    `<span${attr('style', `left:${(m.i / Math.max(1, vm.days - 1) * 100).toFixed(2)}%`)}>${esc(m.label)}</span>`).join('');
+  const rows = vm.rows.map(r =>
+    `<tr><th scope="row" class="k-${r.kind}">` +
+    `<a${navAttrs(r.name)}><span class="wg" aria-hidden="true">${esc(RIVER_GLYPH[r.kind])}</span>${esc(r.name)}</a></th>` +
+    r.cells.map(c => `<td class="${c.bin < 0 ? 'nd' : 'b' + c.bin}"${attr('title', c.label)}><span class="vh">${esc(c.label)}</span></td>`).join('') +
+    '</tr>').join('');
+  const key = `<dl class="p-key"><dt>${esc(T.key)}</dt>` +
+    `<dd><span class="lg">${[0, 1, 2, 3].map(b => `<span class="hsw b${b}"></span>`).join('')}` +
+    `<span class="lgn">${esc(T.waveRamp)}</span></span></dd>` +
+    `<dd><span class="lg"><span class="hsw nd"></span><span class="lgn">${esc(T.noData)}</span></span></dd>` +
+    `<dd>${esc(T.waveScaled)}</dd>` +
+    `<dd>${esc(vm.from)} → ${esc(vm.to)}${vm.shown < vm.total ? ` · ${vm.shown} of ${vm.total} gauges sampled` : ''}</dd></dl>`;
+  return `<section class="plate">${vh}${head}${tabs}` +
+    `<div class="wave-months">${cols}</div>` +
+    `<div class="wave-wrap"><table class="heat wave"><caption class="vh">${esc(T.waveTitle)}</caption><tbody>${rows}</tbody></table></div>` +
+    `<div class="pf-flow"><span>↓ ${esc(T.downstream)}</span><span>${esc(T.timeRight)} →</span></div>` +
+    key + '</section>';
 }
 
 // ---------- rivers overview (?rivers — the whole network as a locator map) ----------
@@ -6630,10 +6749,9 @@ function render(t) {
         setScreenText(`sounding ${state.river} day by day ${'·'.repeat(1 + Math.floor(t * 2) % 3)}`);
         return;
       }
-      const g = makeGrid(waveGridRows(waveData));
-      drawWave(g, waveData);
-      setScreenGridHtml(gridToHtml(g));
-      if (!fitted) { fitted = true; fitFont(); }
+      const vm = waveViewModel(waveData);
+      setScreenPlate(renderWave(vm));
+      setSourceLine(vm.source);
       return;
     }
     const g = makeGrid(riverGridRows(state.riverStations));
@@ -6654,10 +6772,9 @@ function render(t) {
     return;
   }
   if (viewMode === 'years') {
-    const g = makeGrid(histGridRows(histStats()));
-    drawHistYears(g);
-    setScreenGridHtml(gridToHtml(g));
-    if (!fitted) { fitted = true; fitFont(); }
+    const vm = yearsViewModel();
+    setScreenPlate(renderYears(vm));
+    setSourceLine(vm.source);
     return;
   }
   const vm = stationViewModel();
