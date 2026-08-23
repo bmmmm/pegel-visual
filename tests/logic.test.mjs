@@ -1694,8 +1694,10 @@ test('year overlay: reference levels are drawn and named on their own rules', ()
   // the character grid had to merge two labels that landed on one row
   // ("MHW+MNW"); a continuous scale gives each its own rule and label
   assert.deepEqual(vm.overlay.marks.map(m => m.k), ['MHW', 'MNW']);
-  assert.ok(html.includes('>MHW</text>') && html.includes('>MNW</text>'), 'both are named separately');
+  // each level gets its own rule, and both are named in the key — the axis text
+  // itself stays out of the SVG so it cannot scale with the viewBox
   assert.equal((html.match(/class="href-line"/g) || []).length >= 2, true, 'each gets its own rule');
+  assert.ok(html.includes('MHW 212') && html.includes('MNW 210'), 'both named with their values');
 });
 
 

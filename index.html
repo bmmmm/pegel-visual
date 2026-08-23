@@ -822,7 +822,7 @@
     color: var(--mid);
   }
   /* ---- neighbours ---- */
-  .profile { height: 4.5rem; }
+  .profile { width: 100%; height: 5rem; }
   .profile .pf-line { fill: none; stroke: var(--water-line); stroke-width: 1.4; stroke-dasharray: 3 3; }
   .profile .pf-dot { fill: var(--paper); stroke: var(--ink); stroke-width: 1.6; }
   .profile .pf-dot.self { fill: var(--ink); }
@@ -942,6 +942,30 @@
   .heat.wave .k-low .wg { color: var(--dry-line); }
   .heat.wave .k-high .wg { color: var(--water-line); }
   /* ---- climatology + overlay charts ---- */
+  /* geometry stretches, labels do not: the SVG fills its box and the axis text
+     lives in HTML beside and beneath it at a fixed size */
+  .plot-wrap { display: grid; grid-template-columns: 5.5ch 1fr; align-items: stretch; }
+  .plot-wrap .chart { width: 100%; height: 100%; }
+  .v-scale {
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    font-family: var(--font-data);
+    font-size: 0.66rem;
+    color: var(--mid);
+    text-align: right;
+    padding-right: 0.6ch;
+    padding-block: 0.1em 1.4em;
+  }
+  .x-axis {
+    position: relative;
+    height: 1.3em;
+    margin-left: 5.5ch;
+    font-family: var(--font-data);
+    font-size: 0.66rem;
+    color: var(--mid);
+  }
+  .x-axis span { position: absolute; transform: translateX(-50%); top: 0.2em; white-space: nowrap; }
   .clim, .overlay { height: 8rem; }
   .cl-bar { stroke: color-mix(in oklab, var(--water-line) 45%, transparent); stroke-width: 5; stroke-linecap: round; }
   .cl-med { stroke: var(--ink); stroke-width: 1.6; }
@@ -999,7 +1023,7 @@
   .river .rv-dot.k-low { fill: var(--dry-line); stroke: var(--dry-line); }
   .river .rv-dot.k-high { fill: var(--water-line); stroke: var(--water-line); }
   .river a:hover .rv-dot { stroke: var(--ink); stroke-width: 2.4; }
-  .river { height: 10rem; }
+  .river { height: 11rem; }
   .trouble li {
     grid-template-columns: 2.4ch 1.6ch minmax(11ch, 1fr) 7ch minmax(14ch, auto) max-content;
     grid-template-areas: "rank dir name now rate badge";
@@ -3218,7 +3242,7 @@ function renderProfile(pr) {
     `<circle class="pf-dot${p.self ? ' self' : ''}" cx="${px(p).toFixed(1)}" cy="${py(p).toFixed(1)}" r="${p.self ? 4 : 3}"/>` +
     `<rect class="hit" x="${(px(p) - 12).toFixed(1)}" y="${(py(p) - 12).toFixed(1)}" width="24" height="24"/></a>`).join('');
   const chart = svgWrap(`0 0 ${W} ${H}`, line + dots,
-    ' class="chart profile" role="group"' + attr('aria-label', T.neighboursAria));
+    ' class="chart profile" preserveAspectRatio="none" role="group"' + attr('aria-label', T.neighboursAria));
   const rows = pr.pts.map(p =>
     `<li class="${p.self ? 'self' : ''}"><a${navAttrs(p.self ? 'river:' + state.info.water.shortname : p.name)}>` +
     `<span class="name">${esc(p.name)}</span><span class="elev">${p.elev.toFixed(2)} m</span>` +
@@ -3383,7 +3407,6 @@ function renderRiverChart(vm) {
   parts.push(`<line class="ax" x1="${padL}" y1="${RIVER_H - padB}" x2="${RIVER_W - padR}" y2="${RIVER_H - padB}"/>`);
   for (const t of vm.ticks) {
     parts.push(`<line class="grid-v" x1="${X(t.x).toFixed(1)}" y1="${padT}" x2="${X(t.x).toFixed(1)}" y2="${RIVER_H - padB}"/>`);
-    parts.push(`<text class="axl" x="${X(t.x).toFixed(1)}" y="${RIVER_H - padB + 11}" text-anchor="middle">${esc(t.label)}</text>`);
   }
   if (vm.pts.length > 1) {
     parts.push(`<polyline class="rv-line" points="${vm.pts.map(p => `${X(p.x).toFixed(1)},${Y(p.y).toFixed(1)}`).join(' ')}"/>`);
@@ -3395,10 +3418,14 @@ function renderRiverChart(vm) {
       `<circle class="rv-dot k-${p.kind}" cx="${X(p.x).toFixed(1)}" cy="${Y(p.y).toFixed(1)}" r="${p.kind === 'normal' ? 2.6 : 4}"/>` +
       `<rect class="hit" x="${(X(p.x) - 11).toFixed(1)}" y="${(Y(p.y) - 11).toFixed(1)}" width="22" height="22"/></a>`);
   }
-  parts.push(`<text class="axl" x="${padL - 4}" y="${padT + 4}" text-anchor="end">${Math.round(vm.eMax)}</text>`);
-  parts.push(`<text class="axl" x="${padL - 4}" y="${(RIVER_H - padB).toFixed(0)}" text-anchor="end">${Math.round(vm.eMin)}</text>`);
-  return svgWrap(`0 0 ${RIVER_W} ${RIVER_H}`, parts.join(''),
-    ' class="chart river" role="group"' + attr('aria-label', vm.summary));
+  // Axis labels live in HTML, never in the SVG: a viewBox stretched from 390 px
+  // to 1280 px scales its text with it, and 8 px becomes 26 px.
+  const svg = svgWrap(`0 0 ${RIVER_W} ${RIVER_H}`, parts.join(''),
+    ' class="chart river" preserveAspectRatio="none" role="group"' + attr('aria-label', vm.summary));
+  const yAxis = `<div class="v-scale"><span>${Math.round(vm.eMax)}</span><span>${Math.round(vm.eMin)}</span></div>`;
+  const xAxis = '<div class="x-axis">' + vm.ticks.map(t =>
+    `<span${attr('style', `left:${(padL / RIVER_W + t.x * (RIVER_W - padL - padR) / RIVER_W) * 100}%`)}>${esc(t.label)}</span>`).join('') + '</div>';
+  return `<div class="plot-wrap">${yAxis}${svg}</div>${xAxis}`;
 }
 
 function renderRiver(vm) {
@@ -3794,13 +3821,12 @@ function renderYearsClim(vm) {
     const cls = c && v > c.max ? 'above' : c && v < c.min ? 'below' : '';
     parts.push(`<circle class="cl-dot ${cls}" cx="${X(m).toFixed(1)}" cy="${Y(v).toFixed(1)}" r="3"/>`);
   });
-  MONTH_ABBR.forEach((mn, m) => {
-    parts.push(`<text class="axl" x="${X(m).toFixed(1)}" y="${CLIM_H - 4}" text-anchor="middle">${esc(mn[0])}</text>`);
-  });
-  parts.push(`<text class="axl" x="13" y="10" text-anchor="end">${Math.round(vmax)}</text>`);
-  parts.push(`<text class="axl" x="13" y="${(CLIM_H - 20).toFixed(0)}" text-anchor="end">${Math.round(vmin)}</text>`);
-  const chart = svgWrap(`0 0 ${CLIM_W} ${CLIM_H}`, parts.join(''),
-    ' class="chart clim" role="img"' + attr('aria-label', T.yearsRangeAria));
+  const svg = svgWrap(`0 0 ${CLIM_W} ${CLIM_H}`, parts.join(''),
+    ' class="chart clim" preserveAspectRatio="none" role="img"' + attr('aria-label', T.yearsRangeAria));
+  const chart = `<div class="plot-wrap">` +
+    `<div class="v-scale"><span>${Math.round(vmax)}</span><span>${Math.round(vmin)}</span></div>${svg}</div>` +
+    '<div class="x-axis months">' + MONTH_ABBR.map((mn, m) =>
+      `<span${attr('style', `left:${(X(m) / CLIM_W * 100).toFixed(2)}%`)}>${esc(mn[0])}</span>`).join('') + '</div>';
   const key = `<dl class="p-key"><dt>${esc(T.key)}</dt>` +
     `<dd><span class="lg"><svg class="sw" viewBox="0 0 12 12" aria-hidden="true"><line class="cl-bar" x1="6" y1="1" x2="6" y2="11"/></svg><span class="lgn">${vm.years[0]}–${vm.curYear - 1} min–max for that month</span></span></dd>` +
     `<dd><span class="lg"><svg class="sw" viewBox="0 0 12 12" aria-hidden="true"><line class="cl-med" x1="2" y1="6" x2="10" y2="6"/></svg><span class="lgn">its median</span></span></dd>` +
@@ -3832,7 +3858,7 @@ function renderYearsOverlay(vm) {
   const parts = [];
   for (const m of o.marks) {
     parts.push(`<line class="href-line" x1="16" y1="${Y(m.cm).toFixed(1)}" x2="${OVER_W - 8}" y2="${Y(m.cm).toFixed(1)}"/>`);
-    parts.push(`<text class="axl" x="${OVER_W - 6}" y="${(Y(m.cm) + 3).toFixed(1)}">${esc(m.k)}</text>`);
+
   }
   let sel = null;
   for (const y of o.years) {
@@ -3840,16 +3866,20 @@ function renderYearsOverlay(vm) {
     parts.push(trace(y.days, 'ov-year'));
   }
   if (sel) parts.push(trace(sel.days, 'ov-sel'));
-  MONTH_ABBR.forEach((mn, m) => {
-    parts.push(`<text class="axl" x="${X(monthDoy(2001, m)).toFixed(1)}" y="${OVER_H - 4}" text-anchor="middle">${esc(mn[0])}</text>`);
-  });
-  parts.push(`<text class="axl" x="13" y="10" text-anchor="end">${Math.round(o.max)}</text>`);
-  parts.push(`<text class="axl" x="13" y="${(OVER_H - 20).toFixed(0)}" text-anchor="end">${Math.round(o.min)}</text>`);
-  const chart = svgWrap(`0 0 ${OVER_W} ${OVER_H}`, parts.join(''),
-    ' class="chart overlay" role="img"' + attr('aria-label', `every archived year by day of year, ${vm.selYear} highlighted`));
+  const svg = svgWrap(`0 0 ${OVER_W} ${OVER_H}`, parts.join(''),
+    ' class="chart overlay" preserveAspectRatio="none" role="img"' +
+    attr('aria-label', `every archived year by day of year, ${vm.selYear} highlighted`));
+  const chart = `<div class="plot-wrap">` +
+    `<div class="v-scale"><span>${Math.round(o.max)}</span><span>${Math.round(o.min)}</span></div>${svg}</div>` +
+    '<div class="x-axis months">' + MONTH_ABBR.map((mn, m) =>
+      `<span${attr('style', `left:${(X(monthDoy(2001, m)) / OVER_W * 100).toFixed(2)}%`)}>${esc(mn[0])}</span>`).join('') + '</div>';
   const key = `<dl class="p-key"><dt>${esc(T.key)}</dt>` +
     `<dd><span class="lg"><svg class="sw" viewBox="0 0 12 12" aria-hidden="true"><polyline class="ov-sel" points="0,9 4,3 8,7 12,2"/></svg><span class="lgn">${vm.selYear}</span></span></dd>` +
     `<dd><span class="lg"><svg class="sw" viewBox="0 0 12 12" aria-hidden="true"><polyline class="ov-year" points="0,7 4,5 8,9 12,4"/></svg><span class="lgn">every other archived year</span></span></dd>` +
+    (o.marks.length
+      ? `<dd><span class="lg"><svg class="sw" viewBox="0 0 12 12" aria-hidden="true"><line class="href-line" x1="0" y1="6" x2="12" y2="6"/></svg>` +
+        `<span class="lgn">${o.marks.map(m => `${esc(m.k)} ${Math.round(m.cm)}`).join(' · ')}</span></span></dd>`
+      : '') +
     `<dd>${esc(T.overlayPick)}</dd></dl>`;
   return `<section class="p-block"><h2 class="p-h2">${esc(T.yearsOverlay)}</h2>${chart}${key}</section>`;
 }
