@@ -2213,48 +2213,92 @@ test('risingBadge: HIGH/LOW override the ETA, spanless stations get none', () =>
   assert.equal(badge({ mnw: 100, mhw: 400, v: 399, kind: 'normal', cmPerDay: 0.001 }), null, 'an ETA beyond 99 days is noise, not a forecast');
 });
 
-test('drawRising: grid is sized for what it draws, rows link to their stations', () => {
-  for (const width of [1200, 390]) {
-    const app = loadApp({ now: NOON, width });
-    const iso = new Date(NOON - 864e5).toISOString();
-    const values = Object.fromEntries(Array.from({ length: 30 }, (_, i) => [`s${i}`, 100]));
-    const shard = shardWith(2026, 1, 31, 13, iso, values);
-    // 25 risers (overflow past the top 20), 4 fallers, 1 steady
-    const raw = Array.from({ length: 30 }, (_, i) => {
-      const v = i < 25 ? 110 + i : i < 29 ? 90 - i : 100;
-      return bulk(`s${i}`, `ST${String(i).padStart(2, '0')}`, 'RIVER', v, SPAN);
-    });
-    const r = app.run(`(() => {
-      const d = risingOverview(parseBulkStations(${JSON.stringify(raw)}), ${JSON.stringify(shard)}, ${NOON});
-      const g = makeGrid(risingGridRows(d));
-      drawRising(g, d);
-      const rows = g.ch.map(r => r.join('').replace(/\\s+$/, ''));
-      return { d, rows, gridRows: g.rows, cols: COLS,
-        links: [...new Set(g.ln.flat().filter(Boolean))],
-        lastUsed: rows.reduce((a, r, i) => r ? i : a, 0) };
-    })()`);
-    assert.equal(r.d.risers.length, 20, 'capped at the top 20');
-    assert.equal(r.d.counts.rising, 25);
-    assert.equal(r.lastUsed, r.gridRows - 1, `at ${width}px the grid ends exactly at its last drawn row`);
-    assert.ok(r.rows.some(x => x.includes('… 5 more rising')), 'overflow names what it hides');
-    assert.ok(r.rows.every(x => x.length <= r.cols), `no row exceeds COLS at ${width}px`);
-    assert.ok(r.links.includes('ST24') && r.links.includes('ST26'),
-      'the fastest riser and a faller row are click targets (ST00 rose slowest — overflowed)');
-    assert.ok(r.links.every(l => /^ST\d\d$/.test(l)), 'targets are plain station names');
-  }
+// the plate renderers read state.rising (data + the shard the sparklines use),
+// so every rising view-model test goes through the same seam the app does
+function risingPlate(app, raw, shard, nowTs, lookback = 1) {
+  return app.run(`(() => {
+    mode = 'rising';
+    const d = risingOverview(parseBulkStations(${JSON.stringify(raw)}), ${JSON.stringify(shard)}, ${nowTs}, ${lookback});
+    state.rising = { data: d, snapshot: ${JSON.stringify(shard)}, error: null };
+    const vm = risingViewModel();
+    return { vm, html: renderRising(vm) };
+  })()`);
+}
+
+test('risingViewModel: ranks, caps at the top 20, counts the overflow', () => {
+  const app = loadApp({ now: NOON });
+  const iso = new Date(NOON - 864e5).toISOString();
+  const values = Object.fromEntries(Array.from({ length: 30 }, (_, i) => [`s${i}`, 100]));
+  const shard = shardWith(2026, 1, 31, 13, iso, values);
+  // 25 risers (overflow past the top 20), 4 fallers, 1 steady
+  const raw = Array.from({ length: 30 }, (_, i) => {
+    const v = i < 25 ? 110 + i : i < 29 ? 90 - i : 100;
+    return bulk(`s${i}`, `ST${String(i).padStart(2, '0')}`, 'RIVER', v, SPAN);
+  });
+  const { vm } = risingPlate(app, raw, shard, NOON);
+  assert.equal(vm.risers.length, 20, 'capped at the top 20');
+  assert.equal(vm.counts.rising, 25);
+  assert.equal(vm.moreRising, 5, 'the overflow is counted, not silently dropped');
+  assert.equal(vm.risers[0].rank, 1);
+  assert.equal(vm.risers[0].n, 'ST24', 'the fastest riser leads');
+  assert.ok(vm.risers.every(r => r.dir === 'up'), 'risers are marked as rising');
+  assert.ok(vm.fallers.every(r => r.dir === 'down'));
+  // risers and fallers share one bar scale, so a steeper fall visibly outweighs
+  // a gentler rise instead of both maxing out their own half of the board
+  assert.equal(vm.fallers[0].pct, 100, 'the biggest absolute mover sets the scale');
+  assert.equal(vm.risers[0].pct, 89, '+34 cm/d against the -38 cm/d leader');
+  assert.ok([...vm.risers, ...vm.fallers].every(r => r.pct >= 0 && r.pct <= 100), 'bar widths stay in range');
 });
 
-test('drawRising: without a baseline the board says so and shows live counts', () => {
+test('renderRising: every row is a link carrying its rate, no COLS in sight', () => {
+  const app = loadApp({ now: NOON });
+  const iso = new Date(NOON - 864e5).toISOString();
+  const shard = shardWith(2026, 1, 31, 13, iso, { a: 100, b: 100 });
+  const raw = [bulk('a', 'UP', 'RHEIN', 150, SPAN), bulk('b', 'DOWN', 'MAIN', 60, SPAN)];
+  const { html } = risingPlate(app, raw, shard, NOON);
+  assert.ok(html.includes('href="?station=UP"'), 'the gauge is an honest link');
+  assert.ok(html.includes('data-nav="UP"'), 'and dispatches through the nav grammar');
+  assert.ok(html.includes('href="?river=RHEIN"'), 'the river column links to its profile');
+  assert.ok(html.includes('<ol class="board">'), 'a ranked list is a real ordered list');
+  assert.match(html, /\+50\.0 cm\/d/, 'the rate is spelled out with its unit');
+  assert.ok(html.includes('150 cm'), 'the absolute level rides along — new next to the ASCII board');
+  assert.ok(html.includes('class="p-key"'), 'the legend is in the plate, not in a modal');
+  assert.ok(html.includes('tidal gauges are excluded'), 'the caveat survives the redesign');
+});
+
+test('renderRising: a hostile gauge name never reaches markup unescaped', () => {
+  const app = loadApp({ now: NOON });
+  const iso = new Date(NOON - 864e5).toISOString();
+  const shard = shardWith(2026, 1, 31, 13, iso, { a: 100 });
+  const raw = [bulk('a', '"><img src=x onerror=1>', 'R<X', 150, SPAN)];
+  const { html } = risingPlate(app, raw, shard, NOON);
+  assert.ok(!html.includes('<img'), 'no injected element');
+  assert.ok(!html.includes('R<X'), 'the river name is escaped too');
+  assert.ok(html.includes('&lt;img'), 'it renders as visible text instead');
+});
+
+test('sparkPath: normalises per row, skips gaps, needs two points', () => {
+  const app = loadApp();
+  assert.equal(app.run('sparkPath([100])'), '', 'a single point is no shape');
+  assert.equal(app.run('sparkPath([null, null])'), '', 'gaps alone are no shape');
+  const p = app.run('sparkPath([100, 200], 60, 14)');
+  assert.match(p, /^M/, 'starts with a move');
+  assert.equal(p.split('L').length, 2, 'two points, one line segment');
+  // the low value sits at the bottom of the box, the high at the top
+  const ys = p.match(/[\d.]+ ([\d.]+)/g).map(s => parseFloat(s.split(' ')[1]));
+  assert.ok(ys[0] > ys[1], 'a rising series draws upward (SVG y grows downward)');
+  const gapped = app.run('sparkPath([100, null, 200])');
+  assert.equal(gapped.split(/[ML]/).length - 1, 2, 'the null slot is skipped, not drawn as zero');
+});
+
+test('risingViewModel: without a baseline it carries the live counts and the reason', () => {
   const app = loadApp({ now: NOON });
   const raw = [bulk('a', 'A', 'X', 500, SPAN, 'high'), bulk('b', 'B', 'X', 90, SPAN, 'low'), bulk('c', 'C', 'X', 250, [['MThw', 300]])];
-  const rows = app.run(`(() => {
-    const d = risingOverview(parseBulkStations(${JSON.stringify(raw)}), null, ${NOON});
-    const g = makeGrid(risingGridRows(d));
-    drawRising(g, d);
-    return g.ch.map(r => r.join('').replace(/\\s+$/, ''));
-  })()`);
-  assert.ok(rows.some(x => x.includes('no baseline yet')), 'names the missing piece');
-  assert.ok(rows.some(x => x.includes('1 high') && x.includes('1 low') && x.includes('1 tidal')), 'live counts still render');
+  const { vm, html } = risingPlate(app, raw, null, NOON);
+  assert.equal(vm.noBaseline, true);
+  assert.match(vm.reason, /no baseline yet/, 'names the missing piece');
+  assert.deepEqual({ high: vm.live.high, low: vm.live.low, tidal: vm.live.tidal }, { high: 1, low: 1, tidal: 1 });
+  assert.ok(html.includes('1 high') && html.includes('1 low') && html.includes('1 tidal'), 'live counts still render');
 });
 
 test('rising board: ?rising boots into it and --rising switches into it', () => {
@@ -2407,41 +2451,28 @@ test('risingOverview: the 7-day view normalises over the real span and skips wee
   assert.equal(d7.lookbackDays, 7);
 });
 
-test('drawRising: the 7-day view labels the span it really measured, and fits both widths', () => {
+test('risingViewModel: the 7-day view carries the span it really measured', () => {
   const shard = shardOf(2026, 1, 31, { ...JAN_DAYS, 7: null }, { a: { 8: 105, 13: 160 } });
   const raw = [bulk('a', 'WEEK', 'RHEIN', 170, SPAN)];
-  for (const width of [1200, 390]) {
-    const app = loadApp({ now: NOON, width });
-    const r = app.run(`(() => {
-      const d = risingOverview(parseBulkStations(${JSON.stringify(raw)}), ${JSON.stringify(shard)}, ${NOON}, 7);
-      const g = makeGrid(risingGridRows(d));
-      drawRising(g, d);
-      const rows = g.ch.map(r => r.join('').replace(/\\s+$/, ''));
-      return { d, rows, cols: COLS, gridRows: g.rows, lastUsed: rows.reduce((a, r, i) => r ? i : a, 0) };
-    })()`);
-    assert.equal(r.d.elapsedDays.toFixed(1), '6.0', 'the missed Jan 8 leaves a six-day span');
-    assert.ok(r.rows.some(x => x.includes('Δ6.0d')), `at ${width}px the header states the real span, not the nominal seven`);
-    assert.ok(r.rows.some(x => x.includes(width === 1200 ? '(+65 cm)' : '(+65)')),
-      `at ${width}px the row carries the centimetres of the whole span next to the rate`);
-    assert.ok(r.rows.some(x => x.includes('+10.8')), '65 cm over 6.02 days');
-    assert.ok(r.rows.every(x => x.length <= r.cols), `no row exceeds COLS at ${width}px`);
-    assert.equal(r.lastUsed, r.gridRows - 1, 'the grid still ends exactly at its last drawn row');
-  }
+  const app = loadApp({ now: NOON });
+  const { vm, html } = risingPlate(app, raw, shard, NOON, 7);
+  assert.equal(vm.elapsedDays.toFixed(1), '6.0', 'the missed Jan 8 leaves a six-day span');
+  assert.ok(html.includes('Δ6.0 d back'), 'the header states the real span, not the nominal seven');
+  assert.equal(vm.risers[0].deltaCm, 65, 'the row carries the centimetres of the whole span');
+  assert.ok(html.includes('(+65 cm)'), 'and prints them next to the rate');
+  assert.ok(html.includes('+10.8 cm/d'), '65 cm over 6.02 days');
+  assert.ok(vm.risers[0].spark.length > 1, 'the row gets its 7-day shape from the same shard');
 });
 
-test('drawRising: without a week-old baseline the 7-day view names what is missing', () => {
+test('risingViewModel: without a week-old baseline the empty state names the week', () => {
   const app = loadApp({ now: NOON });
   const shard = shardOf(2026, 1, 31, { 11: capture(2026, 1, 12) }, { a: { 11: 100 } });
   const raw = [bulk('a', 'A', 'X', 500, SPAN, 'high'), bulk('b', 'B', 'X', 90, SPAN, 'low')];
-  const rows = app.run(`(() => {
-    const d = risingOverview(parseBulkStations(${JSON.stringify(raw)}), ${JSON.stringify(shard)}, ${NOON}, 7);
-    const g = makeGrid(risingGridRows(d));
-    drawRising(g, d);
-    return g.ch.map(r => r.join('').replace(/\\s+$/, ''));
-  })()`);
-  assert.ok(rows.some(x => x.includes('no baseline a week back yet')), 'the empty state is about the week, not the day');
-  assert.ok(rows.some(x => x.includes('1D view')), 'and points at the view that does work');
-  assert.ok(rows.some(x => x.includes('1 high') && x.includes('1 low')), 'live counts still render');
+  const { vm, html } = risingPlate(app, raw, shard, NOON, 7);
+  assert.equal(vm.noBaseline, true);
+  assert.match(vm.reason, /a week back/, 'the empty state is about the week, not the day');
+  assert.ok(html.includes('1-day view'), 'and points at the view that does work');
+  assert.ok(html.includes('1 high') && html.includes('1 low'), 'live counts still render');
 });
 
 test('loadRising: the 7-day baseline crosses into the previous month\'s shard', async () => {

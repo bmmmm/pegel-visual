@@ -560,6 +560,118 @@
     color: var(--mid);
   }
   #finder-modes a { color: var(--ink); }
+  /* ---- plate components: every migrated view is a survey sheet ---- */
+  .p-head h1 {
+    font-family: var(--font-data);
+    font-size: 1.25em;
+    letter-spacing: 0.04em;
+    margin: 0;
+  }
+  .p-sub { margin: 0.2em 0 0; color: var(--mid); font-size: 0.85em; }
+  .p-sub2 { margin: 0.8em 0 0.5em; color: var(--mid); font-size: 0.8em; font-family: var(--font-data); }
+  .p-h2 {
+    font-size: 0.8em;
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+    margin: 1.3em 0 0.4em;
+    border-bottom: 1px solid var(--rule);
+    padding-bottom: 0.25em;
+  }
+  .p-counts { margin: 0.9em 0 0; font-family: var(--font-data); font-size: 0.95em; }
+  .p-counts .up { color: var(--water-line); }
+  .p-counts .down { color: var(--dry-line); }
+  .p-dim { color: var(--mid); }
+  .p-more { font-size: 0.8em; margin: 0.4em 0 0; }
+  .p-empty { margin: 1.4em 0; line-height: 1.65; }
+  .p-empty p { margin: 0 0 0.5em; }
+  .p-key {
+    margin: 1.4em 0 0;
+    padding-top: 0.7em;
+    border-top: 1px solid var(--rule);
+    font-size: 0.78em;
+    color: var(--mid);
+    font-family: var(--font-text);
+  }
+  .p-key dt {
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    font-size: 0.9em;
+    color: var(--dim);
+    float: left;
+    margin-right: 1.4ch;
+  }
+  .p-key dd { margin: 0 0 0.3em; }
+  .p-key b { color: var(--ink); font-weight: 600; font-family: var(--font-data); }
+  /* ---- ranked board rows (rising; the pattern later boards reuse) ---- */
+  .board {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    font-family: var(--font-data);
+    font-variant-numeric: tabular-nums;
+    font-size: 0.9em;
+  }
+  .board li {
+    display: grid;
+    grid-template-columns: 2.4ch 1.6ch minmax(11ch, 1.3fr) minmax(8ch, 1fr) 7ch 13ch minmax(64px, 0.8fr) max-content;
+    grid-template-areas: "rank dir name river now rate spark badge";
+    gap: 0 1ch;
+    align-items: baseline;
+    padding: 0.24em 0.4ch;
+    border-bottom: 1px solid var(--rule);
+  }
+  .board .b-rank { grid-area: rank; color: var(--dim); text-align: right; }
+  .board .b-dir { grid-area: dir; }
+  .board li.up .b-dir { color: var(--water-line); }
+  .board li.down .b-dir { color: var(--dry-line); }
+  .board li.up { --bar: color-mix(in oklab, var(--water) 45%, transparent); }
+  .board li.down { --bar: color-mix(in oklab, var(--dry) 60%, transparent); }
+  .board .b-name {
+    grid-area: name;
+    color: var(--ink);
+    font-weight: 600;
+    text-decoration: none;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+  }
+  .board .b-name:hover { text-decoration: underline; }
+  .board .b-river {
+    grid-area: river;
+    color: var(--mid);
+    text-decoration: none;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+  }
+  .board .b-river:hover { color: var(--ink); text-decoration: underline; }
+  .board .b-now { grid-area: now; text-align: right; color: var(--mid); }
+  .board .b-rate {
+    grid-area: rate;
+    text-align: right;
+    padding-right: 0.6ch;
+    /* the magnitude bar lives behind the number — pastel fill, no second axis */
+    background: linear-gradient(to right, var(--bar, transparent) calc(var(--pct, 0) * 1%), transparent calc(var(--pct, 0) * 1%));
+  }
+  .board .b-span { color: var(--mid); font-size: 0.85em; }
+  .board .b-spark { grid-area: spark; width: 60px; height: 14px; align-self: center; }
+  .board .b-spark path { fill: none; stroke: var(--water-line); stroke-width: 1.5; }
+  .board li.down .b-spark path { stroke: var(--dry-line); }
+  .board .b-badge { grid-area: badge; font-size: 0.85em; color: var(--mid); white-space: nowrap; }
+  .board .b-badge.eta { cursor: help; border-bottom: 1px dotted var(--dim); }
+  @container plate (max-width: 34rem) {
+    .board li {
+      grid-template-columns: 2.4ch 1.6ch 1fr max-content;
+      grid-template-areas:
+        "rank dir name rate"
+        ". . river now"
+        ". . spark badge";
+      row-gap: 0.15em;
+    }
+    .board .b-now { text-align: left; }
+  }
   @media (max-width: 640px) {
     main { margin-top: 2vh; padding: 1em 0.7em; }
     footer { margin: 1em 0.7em 2em; }
@@ -1075,7 +1187,7 @@ function screenSummary() {
         : 'Rising board: no baseline yet — the daily snapshot needs another day.';
     }
     const top = d.risers.slice(0, 3).map(r => `${r.n} +${r.cmPerDay.toFixed(1)}`).join(', ');
-    return `Rising board over the last ${d.elapsedDays.toFixed(1)} days: ${d.counts.rising} gauges rising, ${d.counts.falling} falling, ` +
+    return `Rising board over the last ${d.elapsedDays.toFixed(1)} days: ${d.counts.rising} ${plural(d.counts.rising, 'gauge')} rising, ${d.counts.falling} falling, ` +
       `${d.counts.steady} steady, in cm per day; ${d.counts.tidal} tidal gauges excluded.` +
       (top ? ` Fastest: ${top}.` : '');
   }
@@ -1886,9 +1998,23 @@ const T = {
   gauges: 'gauges',
   loadingStations: 'fetching the station list…',
   noMatch: 'no gauge or river matches',
+  risingTitle: "WHO'S RISING",
+  risingSub: 'every gauge ranked by how fast it moved, in centimetres per day',
+  risingNoDay: 'no baseline yet — the daily snapshot needs another day',
+  risingNoWeek: 'no baseline a week back yet — the daily snapshot needs more days',
+  etaNote: 'a straight-line guess at today’s rate — not a forecast',
 };
 
+// the plate foot's per-view provenance line
+function setSourceLine(text) {
+  const el = document.getElementById('source-line');
+  if (el.textContent !== text) el.textContent = text;
+}
+
 function attr(name, v) { return ` ${name}="${esc(String(v))}"`; }
+
+// spoken text reaches people, so "1 gauges" is a real defect, not a nit
+function plural(n, word, many) { return n === 1 ? word : (many || word + 's'); }
 
 function svgWrap(viewBox, body, attrs = '') {
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${viewBox}"${attrs}>${body}</svg>`;
@@ -3905,87 +4031,8 @@ function risingOverview(nowStations, snapshot, nowTs, lookbackDays = 1) {
   return { noBaseline: false, risers, fallers, counts, baselineTs, elapsedDays, lookbackDays };
 }
 
-// compact drops the threshold name from the ETA badge: "→MHW ~18d" -> "→18d"
-const risingBadgeText = badge => isCompact() ? badge.text.replace(/→M[NH]W ~/, '→') : badge.text;
-
-// over a multi-day lookback the rate alone hides the size of the move, so the
-// row carries the total centimetres of the span next to the cm/day it averages
-function risingRow(rank, r, withSpan = false) {
-  const rk = String(rank).padStart(2);
-  const glyph = r.cmPerDay > 0 ? RIVER_GLYPH.high : RIVER_GLYPH.low;
-  const val = (r.cmPerDay > 0 ? '+' : '') + r.cmPerDay.toFixed(1);
-  const sum = withSpan && r.deltaCm != null ? (r.deltaCm > 0 ? '+' : '') + Math.round(r.deltaCm) : '';
-  if (isCompact()) {
-    const badge = r.badge ? ' ' + risingBadgeText(r.badge) : '';
-    return `${rk}${glyph} ${r.n.slice(0, 12).padEnd(12)} ${val.padStart(6)}${sum ? ` (${sum})` : ''}${badge}`;
-  }
-  const badge = r.badge ? ` · ${risingBadgeText(r.badge)}` : '';
-  return `${rk}${glyph} ${r.n.slice(0, 16).padEnd(16)} ${r.w.slice(0, 12).padEnd(12)} ${(val + ' cm/d').padStart(11)}` +
-    `${sum ? ` (${sum} cm)` : ''}${badge}`;
-}
-
-function risingGridRows(d) {
-  if (d.noBaseline) return 7;
-  let rows = 2 + 1 + 1 + d.risers.length; // title + baseline line + blank + RISING header + rows
-  if (d.counts.rising > d.risers.length) rows += 1; // "… n more" overflow
-  if (d.fallers.length) rows += 1 + 1 + d.fallers.length; // blank + FALLING header + rows
-  return rows + 2; // blank + footer counts
-}
-
-function drawRising(g, d) {
-  const title = '─── PEGELONLINE://RISING ';
-  put(g, 0, 0, title.padEnd(COLS, '─'), 'd');
-  put(g, 0, 4, 'PEGELONLINE://RISING', 'b');
-  if (d.noBaseline) {
-    put(g, 2, 0, d.lookbackDays > 1
-      ? 'no baseline a week back yet — the daily snapshot needs more days'
-      : 'no baseline yet — the daily snapshot needs another day', '');
-    put(g, 4, 0, isCompact()
-      ? `now: ${d.live.high}▲ high ${d.live.low}▼ low`
-      : `right now: ${d.live.high} high · ${d.live.low} low · ${d.live.normal} normal · ${d.live.tidal} tidal`, 'd');
-    put(g, 6, 0, d.lookbackDays > 1 ? 'the 1D view works with a single day of snapshots' : 'come back tomorrow for cm per day', 'd');
-    return;
-  }
-  // the span is stated, never rounded to the nominal lookback: a missed cron day
-  // makes the "7-day" baseline 6 or 8 days old, and the rate says so
-  const hrs = d.elapsedDays * 24;
-  put(g, 1, 0, d.lookbackDays > 1
-    ? (isCompact()
-      ? `vs Δ${d.elapsedDays.toFixed(1)}d ago · cm/d (span)`
-      : `every gauge vs its snapshot Δ${d.elapsedDays.toFixed(1)}d ago — cm per day, span total in brackets`)
-    : (isCompact()
-      ? `vs snapshot ${hrs.toFixed(0)}h ago`
-      : `every gauge vs its snapshot from ${hrs.toFixed(1)}h ago — sorted by cm per day`), 'd');
-
-  let row = 3;
-  const list = (header, entries) => {
-    put(g, row++, 0, header, 'b');
-    entries.forEach((r, i) => {
-      const line = risingRow(i + 1, r, d.lookbackDays > 1);
-      put(g, row, 0, line);
-      put(g, row, 2, line[2], r.cmPerDay > 0 ? RIVER_CLS.high : RIVER_CLS.low);
-      if (r.badge) {
-        const bt = risingBadgeText(r.badge);
-        put(g, row, line.length - bt.length, bt, r.badge.cls);
-      }
-      linkCells(g, row, 0, line.length, r.n);
-      row++;
-    });
-  };
-  list('RISING', d.risers);
-  if (d.counts.rising > d.risers.length) {
-    put(g, row++, 0, `… ${d.counts.rising - d.risers.length} more rising`, 'd');
-  }
-  if (d.fallers.length) {
-    row++;
-    list('FALLING', d.fallers);
-  }
-  row++;
-  const c = d.counts;
-  put(g, row, 0, isCompact()
-    ? `▲${c.rising} ▼${c.falling} ▬${c.steady} ~${c.tidal} tidal`
-    : `▲ ${c.rising} rising · ▼ ${c.falling} falling · ▬ ${c.steady} steady · ${c.tidal} tidal excluded (the tide beats any day diff)`, 'd');
-}
+// (the character-grid renderer for this board lived here — replaced by
+// risingViewModel/renderRising below, the first survey-plate view)
 
 // a shard grows by one slot a day at most — remember every month fetched this
 // session instead of refetching on every board entry or lookback flip
@@ -4028,7 +4075,9 @@ async function loadRising() {
     const nowTs = Date.now();
     const snapshot = await loadRisingSnapshot(nowTs, want);
     if (mode !== 'rising' || risingDays !== want) return;
-    state.rising = { data: risingOverview(parseBulkStations(raw), snapshot, nowTs, want), error: null };
+    // the shard rides along: the board's per-row 7-day sparklines read straight
+    // from the day slots that produced the diff — no second fetch
+    state.rising = { data: risingOverview(parseBulkStations(raw), snapshot, nowTs, want), snapshot, error: null };
   } catch (e) {
     if (mode !== 'rising' || risingDays !== want) return;
     state.rising = { data: null, error: `the rising board failed: ${e.message}` };
@@ -4051,6 +4100,127 @@ function risingSetDays(n, push = true) {
   dirty = true;
   setScreenAria();
   if (mode === 'rising') loadRising();
+}
+
+// the last up-to-8 day slots for one gauge out of the snapshot shard, live
+// value appended — the board rows' "last 7 days" shape at a glance
+function risingSparkValues(snapshot, uuid, liveV, nowTs) {
+  if (!snapshot || !snapshot.stations || !snapshot.stations[uuid]) return [];
+  const idx = newestUsableDayIndex(snapshot, nowTs);
+  if (idx < 0) return [];
+  const v = snapshot.stations[uuid].v || [];
+  const vals = [];
+  for (let i = Math.max(0, idx - 6); i <= idx; i++) vals.push(v[i] ?? null);
+  vals.push(liveV);
+  return vals;
+}
+
+// an SVG path over up-to-n values, nulls skipped, normalised to the row's own
+// min–max — rows compare shape, not absolute level
+function sparkPath(values, w = 60, h = 14, pad = 1.5) {
+  const pts = values.map((v, i) => [i, v]).filter(p => p[1] != null);
+  if (pts.length < 2) return '';
+  let min = Infinity, max = -Infinity;
+  for (const [, v] of pts) { if (v < min) min = v; if (v > max) max = v; }
+  const span = max - min || 1;
+  const x = i => pad + i * ((w - 2 * pad) / (values.length - 1));
+  const y = v => h - pad - ((v - min) / span) * (h - 2 * pad);
+  return pts.map(([i, v], k) => `${k ? 'L' : 'M'}${x(i).toFixed(1)} ${y(v).toFixed(1)}`).join('');
+}
+
+// pure: the ranked board, render-ready — rows carry everything the plate
+// prints, the summary doubles as the screen-reader overview
+function risingViewModel() {
+  const r = state.rising;
+  const d = r.data;
+  const vm = {
+    kind: 'rising',
+    lookbackDays: d.lookbackDays,
+    noBaseline: !!d.noBaseline,
+    counts: d.counts,
+    summary: screenSummary(),
+    source: `${T.sourceWsv} live · daily snapshot by this site's pipeline`,
+  };
+  if (d.noBaseline) {
+    vm.live = d.live;
+    vm.reason = d.lookbackDays > 1 ? T.risingNoWeek : T.risingNoDay;
+    return vm;
+  }
+  vm.elapsedDays = d.elapsedDays;
+  vm.baselineTs = d.baselineTs;
+  const maxRate = Math.max(...d.risers.map(x => x.cmPerDay), ...d.fallers.map(x => -x.cmPerDay), 1);
+  const nowTs = Date.now();
+  const row = (x, i, dir) => ({
+    rank: i + 1,
+    dir,
+    n: x.n,
+    w: x.w,
+    v: Math.round(x.v),
+    cmPerDay: x.cmPerDay,
+    deltaCm: d.lookbackDays > 1 && x.deltaCm != null ? Math.round(x.deltaCm) : null,
+    badge: x.badge,
+    pct: Math.round(Math.abs(x.cmPerDay) / maxRate * 100),
+    spark: risingSparkValues(r.snapshot, x.uuid, x.v, nowTs),
+  });
+  vm.risers = d.risers.map((x, i) => row(x, i, 'up'));
+  vm.fallers = d.fallers.map((x, i) => row(x, i, 'down'));
+  vm.moreRising = Math.max(0, d.counts.rising - d.risers.length);
+  vm.moreFalling = Math.max(0, d.counts.falling - d.fallers.length);
+  return vm;
+}
+
+function renderRisingRow(x) {
+  const rate = (x.cmPerDay > 0 ? '+' : '') + x.cmPerDay.toFixed(1);
+  const span = x.deltaCm != null ? ` <span class="b-span">(${x.deltaCm > 0 ? '+' : ''}${x.deltaCm} cm)</span>` : '';
+  const path = sparkPath(x.spark);
+  const spark = path
+    ? `<svg class="b-spark" viewBox="0 0 60 14" role="img"${attr('aria-label', `last ${x.spark.length - 1} days`)}><path d="${path}"/></svg>`
+    : '<span class="b-spark"></span>';
+  const badge = x.badge
+    ? `<span class="b-badge${x.badge.text.includes('~') ? ' eta' : ''}"${x.badge.text.includes('~') ? attr('title', T.etaNote) : ''}>${esc(x.badge.text)}</span>`
+    : '<span class="b-badge"></span>';
+  return `<li class="${x.dir}"${attr('style', `--pct:${x.pct}`)}>` +
+    `<span class="b-rank">${x.rank}</span>` +
+    `<span class="b-dir" aria-hidden="true">${x.dir === 'up' ? '▲' : '▼'}</span>` +
+    `<a class="b-name"${navAttrs(x.n)}>${esc(x.n)}</a>` +
+    (x.w ? `<a class="b-river"${navAttrs('river:' + x.w)}>${esc(x.w)}</a>` : '<span class="b-river"></span>') +
+    `<span class="b-now">${x.v} cm</span>` +
+    `<span class="b-rate">${rate} cm/d${span}</span>` +
+    spark + badge + '</li>';
+}
+
+function renderRising(vm) {
+  const head = `<header class="p-head"><h1>${esc(T.risingTitle)}</h1>` +
+    `<p class="p-sub">${esc(T.risingSub)}</p></header>`;
+  const vh = `<p class="vh">${esc(vm.summary)}</p>`;
+  if (vm.noBaseline) {
+    return `<section class="plate">${vh}${head}` +
+      `<div class="p-empty"><p>${esc(vm.reason)}</p>` +
+      `<p class="p-dim">right now: ${vm.live.high} high · ${vm.live.low} low · ${vm.live.normal} normal · ${vm.live.tidal} tidal</p>` +
+      `<p class="p-dim">${esc(vm.lookbackDays > 1 ? 'the 1-day view works with a single day of snapshots' : 'come back tomorrow for cm per day')}</p></div></section>`;
+  }
+  const c = vm.counts;
+  const counts = `<p class="p-counts">` +
+    `<span class="up">▲ ${c.rising} rising</span> · ` +
+    `<span>▬ ${c.steady} steady</span> · ` +
+    `<span class="down">▼ ${c.falling} falling</span> · ` +
+    `<span class="p-dim">~ ${c.tidal} tidal excluded</span></p>`;
+  const base = vm.lookbackDays > 1
+    ? `vs the snapshot Δ${vm.elapsedDays.toFixed(1)} d back — cm per day over the span it really measured, span total in brackets`
+    : `vs the snapshot from ${(vm.elapsedDays * 24).toFixed(1)} h ago — sorted by cm per day`;
+  const board = (title, rows, more) => rows.length
+    ? `<h2 class="p-h2">${esc(title)}</h2><ol class="board">${rows.map(renderRisingRow).join('')}</ol>` +
+      (more ? `<p class="p-dim p-more">… ${more} more ${title.toLowerCase()}</p>` : '')
+    : '';
+  const key = `<dl class="p-key"><dt>${esc(T.key)}</dt>` +
+    `<dd><b>Δ/day</b> — change since the daily snapshot, normalised to the real elapsed time</dd>` +
+    `<dd><b>▲</b> rising ≥ ${RISING_FLAT} cm/d · <b>▬</b> steady · <b>▼</b> falling ≤ −${RISING_FLAT} cm/d</dd>` +
+    `<dd><b>→MHW ~4d</b> — ${esc(T.etaNote)}</dd>` +
+    `<dd>${c.tidal} tidal gauges are excluded: a day apart the tide has moved ~50 minutes, so their day diff would measure the tide, not the river</dd></dl>`;
+  return `<section class="plate">${vh}${head}${counts}<p class="p-sub2">${esc(base)}</p>` +
+    board('RISING', vm.risers, vm.moreRising) +
+    board('FALLING', vm.fallers, vm.moreFalling) +
+    key + '</section>';
 }
 
 // ---------- total overview (?total: every river's summed readings, stacked) ----------
@@ -6083,17 +6253,18 @@ function render(t) {
   }
   if (mode === 'rising') {
     if (state.rising && state.rising.error) {
+      setScreenGridMode();
       setScreenText(`${wreckFrame(t)}\n\nERROR\n\n${state.rising.error}`);
       return;
     }
     if (!state.rising) {
+      setScreenGridMode();
       setScreenText(`diffing every gauge against yesterday ${'·'.repeat(1 + Math.floor(t * 2) % 3)}`);
       return;
     }
-    const g = makeGrid(risingGridRows(state.rising.data));
-    drawRising(g, state.rising.data);
-    setScreenHtml(gridToHtml(g));
-    if (!fitted) { fitted = true; fitFont(); }
+    const vm = risingViewModel();
+    setScreenPlate(renderRising(vm));
+    setSourceLine(vm.source);
     return;
   }
   if (mode === 'total') {
