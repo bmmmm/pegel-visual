@@ -2953,3 +2953,45 @@ test('renderCrumbs: All waters ▸ water ▸ gauge, with honest hrefs', () => {
   })()`);
   assert.ok(rhtml.includes('rising board'), 'boards name themselves');
 });
+
+// ---------- keyboard layer (display redesign, stage 8) ----------
+
+test('KEYMAP: the help sheet is rendered from the same list the handler uses', () => {
+  const app = loadApp({ search: '?station=BONN' });
+  const map = app.run('KEYMAP');
+  assert.ok(map.length >= 6, 'a real map, not a token gesture');
+  for (const [k, what] of map) {
+    assert.equal(typeof k, 'string');
+    assert.ok(what.length > 3, `${k} explains itself`);
+  }
+  // the sheet is filled from KEYMAP, so it cannot drift from the bindings
+  const sheet = app.el('keymap').innerHTML;
+  for (const [k] of map) assert.ok(sheet.includes(k.trim()), `${k.trim()} reaches the help sheet`);
+});
+
+test('stepNeighbour: [ and ] walk the river without leaving the keyboard', () => {
+  const app = loadApp({ search: '?station=BONN', now: NOON });
+  // the Rhine: km counts downstream, so elevation falls as km rises
+  const seed = at => app.run(`(() => {
+    station = ${JSON.stringify(at)};
+    state.flowLowKm = false;
+    state.neighbors = [
+      { name: 'KÖLN', km: 688, lat: 50.9, lon: 6.9, elev: 45.3 },
+      { name: 'BONN', km: 654.8, lat: 50.7, lon: 7.1, elev: 51.8 },
+      { name: 'OBERWINTER', km: 637, lat: 50.6, lon: 7.2, elev: 55.1 },
+    ];
+  })()`);
+
+  seed('BONN');
+  app.run('stepNeighbour(1)');
+  assert.equal(app.run('station'), 'OBERWINTER', '] goes one gauge upstream');
+
+  seed('BONN');
+  app.run('stepNeighbour(-1)');
+  assert.equal(app.run('station'), 'KÖLN', '[ goes one gauge downstream');
+
+  // at the end of the list it stays put rather than wrapping into a surprise
+  seed('KÖLN');
+  app.run('stepNeighbour(-1)');
+  assert.equal(app.run('station'), 'KÖLN', 'the end of the list is a stop, not a wrap');
+});

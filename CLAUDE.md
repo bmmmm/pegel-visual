@@ -3,3 +3,34 @@
 - **Tests:** `node --test` — `tests/extract.mjs` evaluiert das Inline-Script aus `index.html` gegen Browser-Stubs (kein jsdom, kein Netz): `loadApp({search, now, width})`, dann `app.run('<expr>')` im App-Scope.
 - **Node-Scripts mit Netzwerk laufen am Sandbox-Proxy vorbei:** undici/`fetch` kennt `HTTP_PROXY` nicht → `ENOTFOUND www.pegelonline.wsv.de`, obwohl `curl` denselben Host erreicht. Das ist die Sandbox, nicht DNS und nicht die App — ein Bypass pro Call statt Debugging (betrifft `scripts/fetch-wsv-archive.mjs` und Ad-hoc-Node gegen die WSV-APIs).
 - **`archive`-Branch = GitHub-only Orphan-Datenbranch.** Pushes dorthin triggern nie einen Workflow (kein `.github/` im gepushten Commit) — Deploys brauchen den expliziten `gh workflow run pages.yml --ref main`; das Reseed-Runbook steht im Header von `scripts/fetch-wsv-archive.mjs`.
+
+## Display layer: the survey plate
+
+- **No character grid.** Every view is a *plate* rendered as HTML + inline SVG:
+  a title block, the drawing, a legend for every mark it uses, and a foot
+  naming source and reading age. If a section cannot name itself in its own
+  legend, it does not ship.
+- **Conventions the test harness depends on:** every `*ViewModel()` and
+  `render*()` is a **top-level `function` declaration** (a `const` arrow inside
+  a block is unreachable from `app.run`), and no renderer may ever emit the
+  literal closing `script` tag — `tests/logic.test.mjs` guards both.
+- **Never interpolate a raw value into markup** — always `${esc(v)}`, or
+  `attr()` for attributes. A hostile-station-name test covers the renderers.
+- **Palette is split fill/line:** pastels (`--water`, `--bed`, `--dry`) are
+  FILLS for areas ≥24px, always bounded by an ink hairline. Anything carrying
+  meaning as a line, a small mark or text uses the `-line` sibling, which is
+  measured ≥4.5:1 on paper. Never give a mark only a fill token.
+- **Meaning never rides on hue alone** — bands carry a hatch, states carry a
+  glyph, directions carry both. The heat ramp stays a lightness ramp.
+- **Sizing:** container queries and SVG `viewBox`es, never a column count.
+  `aspect-ratio` plus `min-height` on the same box derives a WIDTH from the
+  height and overflows its track — use one or the other.
+- **No render loop.** The page repaints only when data changes or the reader
+  acts: every loader must end in `scheduleRender()`. A loader that forgets it
+  simply never appears (this bit `loadStationList` during the migration).
+  All motion is CSS on `transform`/`opacity`, off under reduced motion.
+- **Verify in a real browser**, not only via tests: headless Chrome works —
+  `--headless=new --screenshot --window-size=W,H`. Its layout viewport is
+  pinned around 485px regardless of `--window-size`, so for a true phone
+  layout render the app inside a fixed-width `<iframe>` on a wrapper page
+  (media queries then evaluate against the iframe).

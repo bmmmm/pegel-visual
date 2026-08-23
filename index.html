@@ -349,6 +349,7 @@
   #infobox dt { font-weight: 700; text-transform: uppercase; margin-top: 1.1em; }
   #infobox dd { margin: 0.25em 0 0; color: var(--mid); }
   #infobox dd b { color: var(--ink); font-weight: 400; }
+  #keymap b { font-family: var(--font-data); font-weight: 700; }
   #reportbox-intro { color: var(--mid); margin: 0.8em 0 0; line-height: 1.5; }
   #reportbox label {
     display: block;
@@ -1323,8 +1324,10 @@
       <b>--station</b>, <b>--river</b>, <b>--rivers</b>, <b>--rising</b>,
       <b>--total</b>, <b>--adsb</b>, <b>--ais</b>, <b>--history 24h…all</b>,
       <b>--view</b>, <b>--export</b>, <b>--clear</b>, <b>--info</b>,
-      <b>--help</b>. Press <b>/</b> to focus it from anywhere; <b>Esc</b>
+      <b>--help</b>. Press <b>/</b> to open the finder from anywhere; <b>Esc</b>
       dismisses help.</dd>
+    <dt>keyboard</dt>
+    <dd id="keymap"></dd>
     <dt>extras</dt>
     <dd>Aircraft overhead from your own ADS-B receiver (<b>--adsb URL</b>) and real
       river traffic on the waterline from your own AIS receiver (<b>--ais URL</b>,
@@ -5780,19 +5783,66 @@ screen.addEventListener('pointerup', e => {
   if (Math.hypot(e.clientX - pressX, e.clientY - pressY) > 8) return; // drag/scroll, not a click
   actOnGridTarget(st);
 });
-// terminal idiom: '/' focuses the station prompt from anywhere on the page; esc
-// dismisses the --help screen when it's showing
+// The keyboard layer. Every binding is echoed in the ? sheet and in the
+// matching control's title, so it is discoverable without reading a manual.
+// Nothing here fires while a field or a dialog has focus.
+const KEYMAP = [
+  ['/', 'focus the search prompt'],
+  ['?', 'this list'],
+  ['Esc', 'close a dialog · zoom out of ?total · leave a sub-view'],
+  ['1…0', 'history range, 24H through ALL'],
+  ['[  ]', 'the next gauge downstream / upstream on this river'],
+  ['g', 'the gauge · m the map · r who\u2019s rising · t the totals'],
+  ['a', 'absolute / anomaly heat · w profile / wave · d sum / change'],
+  ['. ', 'copy this view\u2019s link'],
+];
+
+// [ and ] walk the river: the neighbour list is already on screen, so this is
+// two keys instead of two clicks and a scroll
+function stepNeighbour(dir) {
+  const n = state.neighbors;
+  if (mode !== 'station' || n.length < 2) return;
+  const lowKmDown = flowLowKm(n);
+  const ordered = [...n].sort((a, b) => (lowKmDown ? 1 : -1) * (a.km - b.km));
+  const i = ordered.findIndex(p => p.name === station);
+  const next = ordered[i + dir];
+  if (next) switchStation(next.name, adsbInput.value);
+}
+
+function inField() {
+  const el = document.activeElement;
+  return !!el && (/^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName) || el.isContentEditable);
+}
+
 document.addEventListener('keydown', e => {
-  if (e.key === '/' && !e.metaKey && !e.ctrlKey && !e.altKey && !infobox.open &&
-      !/^(INPUT|TEXTAREA)$/.test(document.activeElement.tagName)) {
-    e.preventDefault();
-    stationInput.focus();
-    stationInput.select();
-  } else if (e.key === 'Escape' && (state.help || state.suggest)) {
-    e.preventDefault();
-    dismissHelp();
-    dismissSuggest();
+  if (e.metaKey || e.ctrlKey || e.altKey) return;
+  if (e.key === 'Escape') {
+    if (state.help || state.suggest) { e.preventDefault(); dismissHelp(); dismissSuggest(); return; }
+    if (finder.open || infobox.open || reportbox.open) return; // the dialogs close themselves
+    if (mode === 'total' && (totalYear != null || totalDay != null)) { e.preventDefault(); totalZoomOut(); return; }
+    if (viewMode !== 'live') { e.preventDefault(); setView('live'); return; }
+    return;
   }
+  if (inField() || finder.open || infobox.open || reportbox.open) return;
+  const k = e.key;
+  if (k === '/') { e.preventDefault(); finderShow(); return; }
+  if (k === '?') { e.preventDefault(); infobox.showModal(); return; }
+  if (k >= '1' && k <= '9') {
+    const p = HISTORY_PRESETS[+k - 1];
+    if (p && mode === 'station') { e.preventDefault(); setHistory(p.k); }
+    return;
+  }
+  if (k === '0' && mode === 'station') { e.preventDefault(); setHistory('all'); return; }
+  if (k === '[') { e.preventDefault(); stepNeighbour(-1); return; }
+  if (k === ']') { e.preventDefault(); stepNeighbour(1); return; }
+  if (k === 'g') { e.preventDefault(); switchStation(station, adsbInput.value); return; }
+  if (k === 'm') { e.preventDefault(); switchRivers(); return; }
+  if (k === 'r') { e.preventDefault(); switchRising(); return; }
+  if (k === 't') { e.preventDefault(); switchTotal(); return; }
+  if (k === 'a' && viewMode === 'years') { e.preventDefault(); runGridCmd(histMode === 'abs' ? 'anom' : 'abs'); return; }
+  if (k === 'w' && mode === 'river') { e.preventDefault(); setView(viewMode === 'wave' ? 'live' : 'wave'); return; }
+  if (k === 'd' && mode === 'total') { e.preventDefault(); totalSetDiff(!totalDiff); return; }
+  if (k === '.') { e.preventDefault(); permaCopy.click(); return; }
 });
 window.addEventListener('popstate', () => {
   const p = new URLSearchParams(location.search);
@@ -6278,6 +6328,9 @@ for (const id of ['info-link', 'appbar-info']) {
   });
 }
 document.getElementById('infobox-close').addEventListener('click', () => infobox.close());
+// rendered from KEYMAP so the help sheet can never drift from the handler
+document.getElementById('keymap').innerHTML = KEYMAP
+  .map(([k, what]) => `<b>${esc(k.trim())}</b> ${esc(what)}`).join(' · ');
 
 // the plate foot's [copy] — the permalink as one click, native share stays in the footer
 // the error plate's "report this" is rendered fresh each time, so it is wired
