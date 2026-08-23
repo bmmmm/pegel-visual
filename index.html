@@ -64,10 +64,12 @@
     display: flex;
     flex-direction: column;
     align-items: center;
-    font-family: ui-monospace, 'SF Mono', Monaco, monospace;
+    /* prose wears sans; the grid, the prompt and every data surface wear mono */
+    font-family: var(--font-text);
     background: var(--paper);
     color: var(--ink);
   }
+  pre, form, #ac, #localbar, #recent, #history-bar, #plate-foot { font-family: var(--font-data); }
   main {
     margin: 5vh auto 0;
     padding: 1.6em 1.8em;
@@ -397,26 +399,208 @@
     cursor: pointer;
   }
   #reportbox-actions button:hover { background: var(--ink); color: var(--paper); }
+  /* ---- app bar: the plate's head row — wordmark, view nav, finder, info ---- */
+  #appbar {
+    display: flex;
+    align-items: baseline;
+    gap: 0.6em 1.2em;
+    flex-wrap: wrap;
+    margin: -1.6em -1.8em 1.2em; /* pulled to the plate frame; mirrors main's padding */
+    padding: 0.7em 1.2em;
+    border-bottom: 2px solid var(--ink);
+    font-size: 0.9em;
+  }
+  #brand {
+    font-family: var(--font-data);
+    font-weight: 700;
+    color: var(--ink);
+    text-decoration: none;
+  }
+  #mode-nav { display: flex; gap: 0.2em 1.1em; flex-wrap: wrap; }
+  #mode-nav a {
+    color: var(--mid);
+    text-decoration: none;
+    padding: 0.1em 0;
+    border-bottom: 2px solid transparent;
+  }
+  #mode-nav a:hover { color: var(--ink); }
+  #mode-nav a.on { color: var(--ink); border-bottom-color: var(--ink); }
+  #home-btn { font-family: var(--font-data); }
+  #appbar-tools { margin-left: auto; display: flex; gap: 1em; align-items: baseline; }
+  #finder-btn {
+    font: inherit;
+    font-family: var(--font-data);
+    color: var(--ink);
+    background: none;
+    border: 1px solid var(--ink);
+    padding: 0.15em 0.8ch;
+    cursor: pointer;
+  }
+  #finder-btn:hover { background: var(--ink); color: var(--paper); }
+  #appbar-info { color: var(--mid); text-decoration: none; }
+  #appbar-info:hover { color: var(--ink); }
+  /* ---- breadcrumbs: where am I, one level per hop ---- */
+  #crumbs {
+    font-family: var(--font-data);
+    font-size: 0.8em;
+    color: var(--mid);
+    margin-bottom: 0.9em;
+  }
+  #crumbs:empty { display: none; }
+  #crumbs a { color: var(--mid); }
+  #crumbs a:hover { color: var(--ink); }
+  #crumbs [aria-current] { color: var(--ink); font-weight: 700; }
+  /* ---- plate foot: provenance + permalink, the sheet's FUSS ---- */
+  #plate-foot {
+    margin-top: 1.2em;
+    padding-top: 0.8em;
+    border-top: 2px solid var(--ink);
+    font-size: 0.75em;
+    color: var(--mid);
+  }
+  #plate-foot p { margin: 0; }
+  #plate-foot p + p { margin-top: 0.35em; }
+  #plate-foot .lbl {
+    font-family: var(--font-text);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    font-size: 0.9em;
+    display: inline-block;
+    min-width: 9ch;
+  }
+  #plate-foot a { color: var(--ink); overflow-wrap: anywhere; }
+  #perma-copy {
+    font: inherit;
+    color: var(--ink);
+    background: none;
+    border: 1px solid var(--ink);
+    padding: 0 0.6ch;
+    margin-left: 0.6ch;
+    cursor: pointer;
+  }
+  #perma-copy:hover { background: var(--ink); color: var(--paper); }
+  /* ---- finder: search + recent + browse-by-water, the missing index ---- */
+  #finder {
+    color: var(--ink);
+    background: var(--paper);
+    border: 2px solid var(--ink);
+    padding: 0;
+    width: min(52ch, calc(100vw - 2em));
+    max-height: min(34em, calc(100vh - 4em));
+    font-size: 0.95em;
+  }
+  #finder::backdrop {
+    background: color-mix(in oklab, var(--paper) 55%, transparent);
+    backdrop-filter: blur(1.5px);
+  }
+  #finder-head {
+    display: flex;
+    gap: 0.8em;
+    padding: 0.8em 1em;
+    border-bottom: 2px solid var(--ink);
+  }
+  #finder-input {
+    flex: 1;
+    font: inherit;
+    font-family: var(--font-data);
+    text-transform: uppercase;
+    color: var(--ink);
+    background: transparent;
+    border: none;
+    border-bottom: 2px solid var(--ink);
+    padding: 0.1em 0.2ch;
+    outline: none;
+  }
+  #finder-input::placeholder { text-transform: none; }
+  #finder-close {
+    font: inherit;
+    color: var(--ink);
+    background: none;
+    border: 1px solid var(--ink);
+    padding: 0 0.6ch;
+    cursor: pointer;
+  }
+  #finder-close:hover { background: var(--ink); color: var(--paper); }
+  #finder-list { padding: 0.5em 0; overflow-y: auto; }
+  #finder-list .sect {
+    font-size: 0.72em;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--dim);
+    padding: 0.7em 1.2em 0.2em;
+  }
+  #finder-list a, #finder-list button {
+    display: flex;
+    width: 100%;
+    box-sizing: border-box;
+    gap: 1.5ch;
+    align-items: baseline;
+    font: inherit;
+    font-family: var(--font-data);
+    text-align: left;
+    color: var(--ink);
+    background: none;
+    border: none;
+    text-decoration: none;
+    padding: 0.3em 1.2em;
+    cursor: pointer;
+  }
+  #finder-list .meta { margin-left: auto; color: var(--mid); font-size: 0.85em; }
+  #finder-list a:hover, #finder-list button:hover, #finder-list .sel {
+    background: var(--ink);
+    color: var(--paper);
+  }
+  #finder-list a:hover .meta, #finder-list button:hover .meta, #finder-list .sel .meta { color: var(--paper); }
+  #finder-list .sub a { padding-left: 2.6em; }
+  #finder-list .empty { color: var(--mid); padding: 0.5em 1.2em; }
+  #finder-modes {
+    border-top: 1px solid var(--rule);
+    padding: 0.7em 1.2em;
+    font-size: 0.85em;
+    color: var(--mid);
+  }
+  #finder-modes a { color: var(--ink); }
   @media (max-width: 640px) {
     main { margin-top: 2vh; padding: 1em 0.7em; }
     footer { margin: 1em 0.7em 2em; }
     form .cont { padding-left: 0; } /* the indent costs more than the alignment is worth here */
     #recent button, #history-bar button { padding: 0.2em 0.7ch; } /* a little more tap area */
     #infobox, #reportbox { padding: 1em 0.9em; max-width: calc(100vw - 1.6em); }
+    #appbar { margin: -1em -0.7em 1em; padding: 0.6em 0.7em; }
+    /* the finder becomes a full sheet: rows are the tap targets, the keyboard
+       gets the input pinned at the top */
+    #finder {
+      width: 100vw;
+      height: 100dvh;
+      max-height: none;
+      margin: 0;
+      border: none;
+    }
+    #finder-list a, #finder-list button { padding-block: 0.55em; }
   }
 </style>
 </head>
 <body>
 <main>
+  <header id="appbar">
+    <a id="brand" href=".">PEGEL://</a>
+    <nav id="mode-nav" aria-label="views">
+      <a id="home-btn" href="?station=BONN" data-nav="BONN">BONN</a>
+      <a id="rivers-btn" href="?rivers" data-nav="rivers" title="--rivers · all waters on a map">map</a>
+      <a id="rising-btn" href="?rising" data-nav="rising" title="--rising · who's rising right now">rising</a>
+      <a id="total-btn" href="?total" data-nav="total" title="--total · all rivers, summed">totals</a>
+    </nav>
+    <div id="appbar-tools">
+      <button id="finder-btn" type="button" aria-haspopup="dialog" title="find a gauge or river">⌕ find</button>
+      <a id="appbar-info" href="#" title="--info · what am I looking at?">ⓘ</a>
+    </div>
+  </header>
+  <nav id="crumbs" aria-label="you are here"></nav>
   <pre id="screen" role="img" aria-label="loading water level data">loading…</pre>
   <form id="prompt" autocomplete="off">
     <div class="cmd">&gt; pegel <span class="flag">--station</span> <input id="station-input" name="station" spellcheck="false" placeholder="station" autocomplete="off" role="combobox" aria-expanded="false" aria-controls="ac" aria-autocomplete="list" aria-label="station name"> --refresh 300s
     </div>
     <div class="cmd cont"><span class="flag">--river</span> <input id="river-input" name="river" spellcheck="false" placeholder="whole river" autocomplete="off" role="combobox" aria-expanded="false" aria-controls="ac" aria-autocomplete="list" aria-label="river name">
-      <button id="rivers-btn" type="button" class="flag-btn">--rivers</button> <span class="hint">all waters on a map</span>
-      <button id="rising-btn" type="button" class="flag-btn">--rising</button> <span class="hint">who's rising right now</span>
-      <button id="total-btn" type="button" class="flag-btn">--total</button> <span class="hint">all rivers, summed</span>
-      <button id="home-btn" type="button" class="flag-btn" hidden></button>
     </div>
     <div class="cmd cont">--adsb
       <input id="adsb-input" name="adsb" spellcheck="false" placeholder="receiver url (optional)"
@@ -443,6 +627,10 @@
     </div>
     <input id="import-file" type="file" accept="application/json,application/zip,.json,.zip" hidden>
     <div id="local-detail" hidden></div>
+  </div>
+  <div id="plate-foot">
+    <p id="plate-source"><span class="lbl">source</span> <span id="source-line">PEGELONLINE (WSV) · refreshes every 5 min</span></p>
+    <p id="footer-perma"><span id="footer-perma-label" class="lbl">station link:</span> <a id="station-link" href="?station=BONN">?station=BONN</a> <button id="perma-copy" type="button">copy</button></p>
   </div>
 </main>
 <dialog id="infobox" closedby="any" aria-labelledby="infobox-title">
@@ -588,6 +776,20 @@
     <button id="report-copy" type="button">copy to clipboard</button>
   </div>
 </dialog>
+<dialog id="finder" closedby="any" aria-label="find a gauge or river">
+  <div id="finder-head">
+    <input id="finder-input" type="search" spellcheck="false" autocomplete="off"
+      placeholder="type a gauge or river…" aria-label="search gauges and rivers"
+      role="combobox" aria-expanded="true" aria-controls="finder-list" aria-autocomplete="list">
+    <button id="finder-close" type="button" aria-label="close">×</button>
+  </div>
+  <div id="finder-list" role="listbox" aria-label="matches"></div>
+  <nav id="finder-modes" aria-label="global views">
+    <a href="?rivers" data-nav="rivers">all waters map</a>
+    · <a href="?rising" data-nav="rising">who's rising</a>
+    · <a href="?total" data-nav="total">all rivers summed</a>
+  </nav>
+</dialog>
 <footer>
   <nav id="footer-nav" aria-label="site">
     <a href="#" id="info-link">info</a>
@@ -596,7 +798,6 @@
     · <a href="https://github.com/bmmmm/pegel-visual" rel="noopener">source</a>
     · <a href="https://ko-fi.com/bmabma" rel="noopener">support on ko-fi</a>
   </nav>
-  <p id="footer-perma"><span id="footer-perma-label">station link:</span> <a id="station-link" href="?station=BONN">?station=BONN</a></p>
   <p id="footer-credits">
     <span>data: <a href="https://www.pegelonline.wsv.de" rel="noopener">PEGELONLINE</a> &copy; WSV, refreshed every 5 min</span>
     <span>⛅ weather: <a href="https://open-meteo.com" rel="noopener">open-meteo</a></span>
@@ -772,26 +973,50 @@ function applyModeChrome() {
   // only the map has nothing to put in the bar: the rising board fills it with
   // its 1D/7D lookback chips, river mode with the view chips, total with the zoom crumbs
   document.getElementById('history-bar').hidden = mode === 'rivers';
-  // The way back. Neither the map nor the river profile shows the station you came
-  // from, so without this the only exit is remembering a name and typing it. The
-  // label names the target rather than saying "home", which would be one more thing
-  // to guess at.
+  // The app bar's station item doubles as the way back: neither the map nor the
+  // boards show the gauge you came from, so away from it the item reads "← BONN".
+  // It always names its target — never a generic "home".
   const home = document.getElementById('home-btn');
-  home.hidden = perStation;
-  if (!perStation) {
-    home.textContent = `← ${station}`;
-    home.title = `back to the ${station} gauge`;
-  }
-  // the three global-view buttons double as a mode tab strip — mark whichever one
-  // is active, same .on convention as the history-bar chips (renderHistoryBar's chip())
+  home.hidden = false;
+  home.textContent = perStation ? station : `← ${station}`;
+  home.title = perStation ? `--station ${station}` : `back to the ${station} gauge`;
+  home.href = '?station=' + encodeURIComponent(station);
+  home.dataset.nav = station;
+  home.className = perStation ? 'on' : '';
+  home.setAttribute('aria-current', perStation ? 'page' : 'false');
+  // the global views in the same nav — mark whichever one is active
   for (const [id, m] of [['rivers-btn', 'rivers'], ['rising-btn', 'rising'], ['total-btn', 'total']]) {
     const btn = document.getElementById(id);
     const on = mode === m;
-    btn.className = 'flag-btn' + (on ? ' on' : '');
+    btn.className = on ? 'on' : '';
     // 'false' (not removal) is a valid aria-current value and the implicit default,
     // so this never needs a matching removeAttribute on the inactive two
     btn.setAttribute('aria-current', on ? 'page' : 'false');
   }
+  renderCrumbs();
+}
+
+// the breadcrumb trail above the plate: All waters ▸ RHEIN ▸ BONN — answers
+// "where am I and what else exists" in zero clicks. The water arrives with the
+// station data, so this re-renders (memoized) whenever the aria summary does.
+let lastCrumbs = null;
+function renderCrumbs() {
+  const water = mode === 'river' ? state.river
+    : mode === 'station' ? (state.info && state.info.water && state.info.water.shortname) || '' : '';
+  const here = t => `<span aria-current="page">${esc(t)}</span>`;
+  const parts = [];
+  if (mode === 'rivers') parts.push(here(T.allWaters));
+  else {
+    parts.push(`<a href="?rivers" data-nav="rivers">${esc(T.allWaters)}</a>`);
+    if (water) parts.push(mode === 'river' ? here(water) : `<a${navAttrs('river:' + water)}>${esc(water)}</a>`);
+    if (mode === 'station') parts.push(here(station));
+    else if (mode === 'rising') parts.push(here(T.risingBoard));
+    else if (mode === 'total') parts.push(here(T.totalBoard));
+  }
+  const html = parts.join(' ▸ ');
+  if (html === lastCrumbs) return;
+  lastCrumbs = html;
+  document.getElementById('crumbs').innerHTML = html;
 }
 
 if (mode === 'rivers') applyRiversChrome();
@@ -907,6 +1132,9 @@ function setScreenAria() {
     state.help ? 'command help' :
     state.suggest ? `${state.suggest.matches.length} station suggestions for ${state.suggest.q}` :
     screenSummary());
+  // the crumb trail needs the station's water, which arrives with the same
+  // data updates that refresh the aria summary — piggyback (it memoizes)
+  renderCrumbs();
 }
 
 function applyLiveChrome() {
@@ -1649,6 +1877,15 @@ const T = {
   copy: 'copy',
   copied: 'copied',
   key: 'KEY',
+  allWaters: 'All waters',
+  risingBoard: 'rising board',
+  totalBoard: 'all rivers summed',
+  wholeRiver: 'whole river',
+  recent: 'recent',
+  browseByWater: 'browse by water',
+  gauges: 'gauges',
+  loadingStations: 'fetching the station list…',
+  noMatch: 'no gauge or river matches',
 };
 
 function attr(name, v) { return ` ${name}="${esc(String(v))}"`; }
@@ -1665,6 +1902,8 @@ function navHref(target) {
   if (target.startsWith('cmd:')) return null;
   if (target.startsWith('river:')) return '?river=' + encodeURIComponent(target.slice(6));
   if (target === 'rising') return '?rising';
+  if (target === 'rivers') return '?rivers';
+  if (target === 'total') return '?total';
   return '?station=' + encodeURIComponent(target);
 }
 
@@ -4961,21 +5200,27 @@ document.getElementById('prompt').addEventListener('submit', e => {
 // scroll or drag, not a click.
 function actOnGridTarget(st) {
   // river:NAME opens the whole-river profile (self labels, suggest rows);
-  // cmd:… are in-grid controls (view switches, heatmap toggles)
+  // cmd:… are in-grid controls (view switches, heatmap toggles); the bare
+  // mode words are reserved — no station is named plain lowercase
   if (st.startsWith('cmd:')) runGridCmd(st.slice(4));
   else if (st.startsWith('river:')) switchRiver(st.slice(6));
-  else if (st === 'rising') switchRising(); // no station is named plain lowercase "rising"
+  else if (st === 'rising') switchRising();
+  else if (st === 'rivers') switchRivers();
+  else if (st === 'total') switchTotal();
   else switchStation(st, adsbInput.value);
 }
-// Plate targets are real links/buttons: one delegated handler dispatches them
-// through the same grammar as the grid's data-st layer. A modified click (new
-// tab, download, …) keeps its native meaning — the href is honest.
-screen.addEventListener('click', e => {
+// Plate targets are real links/buttons: one delegated handler (app bar, crumbs,
+// finder rows and in-plate marks alike) dispatches them through the same
+// grammar as the grid's data-st layer. A modified click (new tab, download, …)
+// keeps its native meaning — the href is honest.
+document.addEventListener('click', e => {
   const el = e.target && e.target.closest ? e.target.closest('[data-nav]') : null;
   if (!el) return;
   if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button) return;
   e.preventDefault();
   navTo(el.dataset.nav);
+  const dlg = el.closest('dialog');
+  if (dlg && dlg.open) dlg.close(); // picking a finder row lands you there
 });
 let pressSt = null, pressX = 0, pressY = 0;
 screen.addEventListener('pointerdown', e => {
@@ -5135,10 +5380,8 @@ async function loadWaterList() {
 }
 
 stationInput.addEventListener('focus', loadStationList, { once: true });
-document.getElementById('rivers-btn').addEventListener('click', () => switchRivers());
-document.getElementById('rising-btn').addEventListener('click', () => switchRising());
-document.getElementById('total-btn').addEventListener('click', () => switchTotal());
-document.getElementById('home-btn').addEventListener('click', () => switchStation(station, adsbInput.value));
+// the app-bar nav and finder rows dispatch through the delegated [data-nav]
+// handler — no per-button listeners needed
 // preload shortly after first paint — requestIdleCallback never fires under the
 // 120 ms render loop, so it would starve indefinitely
 setTimeout(loadStationList, 600);
@@ -5178,6 +5421,121 @@ function renderRecent() {
     nav.append(b);
   }
 }
+
+// ---------- finder (search + recent + browse by water — the missing index) ----------
+
+const finder = document.getElementById('finder');
+const finderInput = document.getElementById('finder-input');
+const finderList = document.getElementById('finder-list');
+let finderWater = null; // the one expanded water in the browse tree
+let finderIndex = -1;   // keyboard selection across the rendered rows
+
+// every gauge grouped under its water, biggest waters first, stations by km —
+// the browsable index the ranked typeahead alone could never offer
+function watersIndex() {
+  const by = new Map();
+  for (const [name, md] of stationMeta) {
+    const w = md.w || '';
+    if (!by.has(w)) by.set(w, []);
+    by.get(w).push({ n: name, km: md.km });
+  }
+  for (const list of by.values()) {
+    list.sort((a, b) => (a.km ?? 1e9) - (b.km ?? 1e9) || a.n.localeCompare(b.n));
+  }
+  return [...by.entries()].map(([w, stations]) => ({ w, stations }))
+    .sort((a, b) => (a.w === '') - (b.w === '') ||
+      b.stations.length - a.stations.length || a.w.localeCompare(b.w));
+}
+
+// one ranked list across gauges and waters — gauges first, waters marked
+function finderMatches(q) {
+  const st = matchNames(q, knownStations, stationLabel);
+  const wa = matchNames(q, knownWaters, () => T.wholeRiver)
+    .map(m => ({ ...m, water: true }));
+  return [...st, ...wa].slice(0, 12);
+}
+
+function finderRowHtml(target, label, meta) {
+  return `<a${navAttrs(target)} role="option">` +
+    `<span class="name">${esc(label)}</span>` +
+    (meta ? `<span class="meta">${esc(meta)}</span>` : '') + '</a>';
+}
+
+function finderRender() {
+  const q = finderInput.value.trim();
+  finderIndex = -1;
+  if (!knownStations.size) {
+    finderList.innerHTML = `<div class="empty">${esc(T.loadingStations)}</div>`;
+    return;
+  }
+  if (q) {
+    const rows = finderMatches(q).map(m =>
+      finderRowHtml(m.water ? 'river:' + m.name : m.name, m.name, m.meta));
+    finderList.innerHTML = rows.join('') || `<div class="empty">${esc(T.noMatch)} "${esc(q)}"</div>`;
+    return;
+  }
+  const parts = [];
+  const recent = loadRecent().slice(0, 5);
+  if (recent.length) {
+    parts.push(`<div class="sect">${esc(T.recent)}</div>`);
+    for (const n of recent) parts.push(finderRowHtml(n, n, stationLabel(n)));
+  }
+  parts.push(`<div class="sect">${esc(T.browseByWater)}</div>`);
+  for (const { w, stations } of watersIndex()) {
+    if (!w) continue;
+    const open = w === finderWater;
+    parts.push(`<button type="button" data-water="${esc(w)}" aria-expanded="${open}">` +
+      `<span class="name">${open ? '▾' : '▸'} ${esc(w)}</span>` +
+      `<span class="meta">${stations.length} ${esc(T.gauges)}</span></button>`);
+    if (open) {
+      parts.push('<div class="sub">');
+      parts.push(finderRowHtml('river:' + w, '→ ' + T.wholeRiver, ''));
+      for (const s of stations) {
+        parts.push(finderRowHtml(s.n, s.n, s.km != null ? 'km ' + Math.round(s.km) : ''));
+      }
+      parts.push('</div>');
+    }
+  }
+  finderList.innerHTML = parts.join('');
+}
+
+function finderShow() {
+  finderWater = mode === 'station' && state.info && state.info.water
+    ? state.info.water.shortname.toUpperCase()
+    : mode === 'river' ? state.river : null;
+  finderInput.value = '';
+  finderRender();
+  finder.showModal();
+  finderInput.focus();
+  if (!knownStations.size) loadStationList().then(() => { if (finder.open) finderRender(); });
+}
+
+document.getElementById('finder-btn').addEventListener('click', finderShow);
+document.getElementById('finder-close').addEventListener('click', () => finder.close());
+finderInput.addEventListener('input', finderRender);
+finderList.addEventListener('click', e => {
+  const btn = e.target && e.target.closest ? e.target.closest('button[data-water]') : null;
+  if (!btn) return; // [data-nav] rows are handled by the delegated document handler
+  finderWater = finderWater === btn.dataset.water ? null : btn.dataset.water;
+  finderRender();
+});
+// arrows walk the rendered rows, Enter follows the selected one
+finderInput.addEventListener('keydown', e => {
+  if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp' && e.key !== 'Enter') return;
+  const rows = [...finderList.querySelectorAll('a[data-nav], button[data-water]')];
+  if (!rows.length) return;
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    if (finderIndex >= 0 && rows[finderIndex]) rows[finderIndex].click();
+    else if (rows[0].dataset.nav) { navTo(rows[0].dataset.nav); finder.close(); }
+    return;
+  }
+  e.preventDefault();
+  const d = e.key === 'ArrowDown' ? 1 : -1;
+  finderIndex = (finderIndex + d + rows.length) % rows.length;
+  rows.forEach((r, i) => r.classList.toggle('sel', i === finderIndex));
+  rows[finderIndex].scrollIntoView({ block: 'nearest' });
+});
 
 // ---------- history range chips ----------
 
@@ -5378,11 +5736,23 @@ renderHistoryBar();
 // ---------- infobox (feature guide dialog) ----------
 
 const infobox = document.getElementById('infobox');
-document.getElementById('info-link').addEventListener('click', e => {
-  e.preventDefault();
-  infobox.showModal();
-});
+for (const id of ['info-link', 'appbar-info']) {
+  document.getElementById(id).addEventListener('click', e => {
+    e.preventDefault();
+    infobox.showModal();
+  });
+}
 document.getElementById('infobox-close').addEventListener('click', () => infobox.close());
+
+// the plate foot's [copy] — the permalink as one click, native share stays in the footer
+const permaCopy = document.getElementById('perma-copy');
+permaCopy.addEventListener('click', async () => {
+  try {
+    await navigator.clipboard.writeText(location.origin + location.pathname + currentModeQuery());
+    permaCopy.textContent = T.copied;
+    setTimeout(() => { permaCopy.textContent = T.copy; }, 1500);
+  } catch { /* clipboard denied — the link is still selectable text */ }
+});
 
 // share whatever the current mode is showing: native share sheet where
 // available, else clipboard — ?total&y=…, ?rising, ?rivers and ?river= each

@@ -1991,33 +1991,34 @@ test('currentModeQuery: the share link follows whatever mode is actually on scre
   assert.equal(app.run('currentModeQuery()'), '?rising', 'and into ?rising');
 });
 
-test('applyModeChrome: marks the active global-view button, footer label matches the mode', () => {
+test('applyModeChrome: marks the active nav item, footer label matches the mode', () => {
   const rivers = loadApp({ search: '?rivers' });
-  assert.equal(rivers.el('rivers-btn').className, 'flag-btn on', 'the active button gets .on');
+  assert.equal(rivers.el('rivers-btn').className, 'on', 'the active item gets .on');
   assert.equal(rivers.el('rivers-btn').getAttribute('aria-current'), 'page');
-  assert.equal(rivers.el('rising-btn').className, 'flag-btn', 'the other two stay plain');
+  assert.equal(rivers.el('rising-btn').className, '', 'the other two stay plain');
   assert.equal(rivers.el('rising-btn').getAttribute('aria-current'), 'false');
-  assert.equal(rivers.el('total-btn').className, 'flag-btn');
+  assert.equal(rivers.el('total-btn').className, '');
   assert.equal(rivers.el('footer-perma-label').textContent, 'rivers link:');
 
   const rising = loadApp({ search: '?rising' });
-  assert.equal(rising.el('rising-btn').className, 'flag-btn on');
+  assert.equal(rising.el('rising-btn').className, 'on');
   assert.equal(rising.el('footer-perma-label').textContent, 'rising link:');
 
   const total = loadApp({ search: '?total' });
-  assert.equal(total.el('total-btn').className, 'flag-btn on');
+  assert.equal(total.el('total-btn').className, 'on');
   assert.equal(total.el('footer-perma-label').textContent, 'total link:');
 
-  // station mode: none of the three global-view buttons is "the current mode".
+  // station mode: the station item is current, the three global views are not.
   // Station-mode boot never calls applyModeChrome() itself (the static markup's
   // default class is already correct there), so call it explicitly, same as the
   // "back button" test above does for the same reason.
   const station = loadApp({ search: '?station=BONN' });
   station.run('applyModeChrome()');
   for (const id of ['rivers-btn', 'rising-btn', 'total-btn']) {
-    assert.equal(station.el(id).className, 'flag-btn', `${id} unmarked in station mode`);
+    assert.equal(station.el(id).className, '', `${id} unmarked in station mode`);
     assert.equal(station.el(id).getAttribute('aria-current'), 'false');
   }
+  assert.equal(station.el('home-btn').getAttribute('aria-current'), 'page');
   assert.equal(station.el('footer-perma-label').textContent, 'station link:');
 
   const river = loadApp({ search: '?river=RHEIN' });
@@ -2048,7 +2049,7 @@ test('boot: a deep link straight into a ?total month/day zoom titles the tab wit
   assert.equal(loadApp({ search: '?total&y=2024&d=2024-05-12' }).document.title, 'PEGEL://TOTAL · MAY 2024 · 12');
 });
 
-test('back button: offered in river and map mode, naming the station it returns to', () => {
+test('station nav item: names the way back in river and map mode', () => {
   // Neither view shows the station you came from, so without this the only way
   // back is remembering a name and typing it.
   for (const [search, where] of [['?rivers', 'the map'], ['?river=RHEIN', 'the river profile']]) {
@@ -2057,19 +2058,25 @@ test('back button: offered in river and map mode, naming the station it returns 
       station = 'KÖLN';
       applyModeChrome();
       const b = document.getElementById('home-btn');
-      return { hidden: b.hidden, text: b.textContent, title: b.title };
+      return { hidden: b.hidden, text: b.textContent, title: b.title, nav: b.dataset.nav, href: b.href };
     })()`);
     assert.equal(btn.hidden, false, `shown on ${where}`);
     assert.equal(btn.text, '← KÖLN', `${where}: names its target, not a generic "home"`);
     assert.match(btn.title, /KÖLN/, `${where}: title names the target too`);
+    assert.equal(btn.nav, 'KÖLN', `${where}: dispatches through the nav grammar`);
+    assert.equal(btn.href, '?station=K%C3%96LN', `${where}: the href is honest`);
   }
 
-  // and stays out of the way where it would be a no-op
+  // on the gauge itself it is the current page, named plainly
   const station = loadApp({ search: '?station=BONN' });
-  assert.equal(station.run(`(() => {
+  const self = station.run(`(() => {
     applyModeChrome();
-    return document.getElementById('home-btn').hidden;
-  })()`), true, 'hidden in station mode');
+    const b = document.getElementById('home-btn');
+    return { hidden: b.hidden, text: b.textContent, current: b.getAttribute('aria-current') };
+  })()`);
+  assert.equal(self.hidden, false, 'always present in the nav');
+  assert.equal(self.text, 'BONN');
+  assert.equal(self.current, 'page');
 });
 
 test('back button: leaving the map redraws the station even if it never changed', () => {
@@ -2856,4 +2863,63 @@ test('plateDensity/bucketCols: scale with the measured width, clamped', () => {
   assert.equal(desk.run('plateDensity()'), 'wide');
   assert.equal(desk.run('bucketCols()'), 320, 'clamped: 1200/3 = 400 caps at 320');
   assert.equal(desk.run('bucketCols(60)'), 40, 'floor at 40 buckets');
+});
+
+// ---------- shell (display redesign, stage 1) ----------
+
+test('navHref: the global views are URL targets too', () => {
+  const app = loadApp();
+  assert.equal(app.run(`navHref('rivers')`), '?rivers');
+  assert.equal(app.run(`navHref('total')`), '?total');
+  app.run(`navTo('total')`);
+  assert.equal(app.run('mode'), 'total');
+  app.run(`navTo('rivers')`);
+  assert.equal(app.run('mode'), 'rivers');
+});
+
+test('watersIndex: groups gauges under their water, biggest first, by km', () => {
+  const app = loadApp();
+  app.run(`fillDatalist([
+    { n: 'EMMERICH', w: 'RHEIN', km: 851.9 },
+    { n: 'BONN', w: 'RHEIN', km: 654.8 },
+    { n: 'KÖLN', w: 'RHEIN', km: 688 },
+    { n: 'HANN.MÜNDEN', w: 'WESER', km: 0.9 },
+    { n: 'NIRGENDWO', w: '', km: null },
+  ])`);
+  const idx = app.run('watersIndex()');
+  assert.equal(idx[0].w, 'RHEIN', 'most gauges first');
+  assert.deepEqual(idx[0].stations.map(s => s.n), ['BONN', 'KÖLN', 'EMMERICH'], 'stations ordered by km');
+  assert.equal(idx[1].w, 'WESER');
+  assert.equal(idx[2].w, '', 'waterless gauges collect under the blank key (skipped by the tree)');
+});
+
+test('finderMatches: one ranked list, gauges before waters, waters marked', () => {
+  const app = loadApp();
+  app.run(`fillDatalist([{ n: 'WESEL', w: 'RHEIN', km: 814 }])`);
+  app.run(`fillWaters(['WESER', 'WERRA'])`);
+  const m = app.run(`finderMatches('WES')`);
+  assert.equal(m[0].name, 'WESEL');
+  assert.equal(m[0].water, undefined);
+  assert.ok(m.some(x => x.name === 'WESER' && x.water === true), 'the river is offered as a river');
+});
+
+test('renderCrumbs: All waters ▸ water ▸ gauge, with honest hrefs', () => {
+  const app = loadApp({ search: '?station=BONN' });
+  const html = app.run(`(() => {
+    state.info = { water: { shortname: 'RHEIN' } };
+    lastCrumbs = null;
+    renderCrumbs();
+    return document.getElementById('crumbs').innerHTML;
+  })()`);
+  assert.ok(html.includes('data-nav="rivers"'), 'All waters is a link to the map');
+  assert.ok(html.includes('href="?river=RHEIN"'), 'the water is a link to its profile');
+  assert.ok(html.includes('aria-current="page">BONN'), 'the gauge is the current page');
+
+  const rising = loadApp({ search: '?rising' });
+  const rhtml = rising.run(`(() => {
+    lastCrumbs = null;
+    renderCrumbs();
+    return document.getElementById('crumbs').innerHTML;
+  })()`);
+  assert.ok(rhtml.includes('rising board'), 'boards name themselves');
 });
