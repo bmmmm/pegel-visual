@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>PEGEL://BONN</title>
-<meta name="description" content="Live ASCII water level terminal for German rivers, powered by PEGELONLINE (WSV).">
+<meta name="description" content="A live survey plate for German river water levels — ink-and-pastel charts, every legend on the sheet. Powered by PEGELONLINE (WSV).">
 <link rel="canonical" href="https://bmmmm.github.io/pegel-visual/">
 <link rel="preconnect" href="https://www.pegelonline.wsv.de">
 <link rel="preconnect" href="https://api.open-meteo.com">
@@ -16,16 +16,16 @@
 <meta name="theme-color" content="#121417" media="(prefers-color-scheme: dark)">
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="PEGEL://">
-<meta property="og:title" content="PEGEL:// — live ASCII river gauges">
-<meta property="og:description" content="A cute ASCII terminal for live German river water levels, powered by PEGELONLINE (WSV).">
+<meta property="og:title" content="PEGEL:// — live river gauges, drawn as survey plates">
+<meta property="og:description" content="Every German river gauge as an ink-and-pastel survey sheet: the level, its normal range, decades of history, and a legend that explains itself. Powered by PEGELONLINE (WSV).">
 <meta property="og:url" content="https://bmmmm.github.io/pegel-visual/">
 <meta property="og:image" content="https://bmmmm.github.io/pegel-visual/og.png">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
 <meta property="og:image:alt" content="The PEGEL:// water-drop buddy beside the wordmark, over a pastel wave.">
 <meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="PEGEL:// — live ASCII river gauges">
-<meta name="twitter:description" content="A cute ASCII terminal for live German river water levels.">
+<meta name="twitter:title" content="PEGEL:// — live river gauges, drawn as survey plates">
+<meta name="twitter:description" content="Every German river gauge as an ink-and-pastel survey sheet, legend included.">
 <meta name="twitter:image" content="https://bmmmm.github.io/pegel-visual/og.png">
 <style>
   :root {
@@ -81,21 +81,16 @@
     container-type: inline-size;
     container-name: plate;
   }
-  pre {
+  #screen { line-height: 1.45; }
+  .manpage {
     margin: 0;
-    line-height: 1.2;
-    white-space: pre;
+    font-family: var(--font-data);
+    font-size: 0.82em;
+    line-height: 1.35;
+    white-space: pre-wrap;
+    overflow-x: auto;
   }
   #screen { view-transition-name: screen; }
-  /* while views migrate off the character grid: grid views center in the wide
-     plate; a migrated view flips #screen into .dom and takes the full width */
-  #screen:not(.dom) { width: fit-content; margin-inline: auto; }
-  #screen.dom {
-    white-space: normal;
-    font-family: var(--font-text);
-    line-height: 1.45;
-    font-size: 1rem;
-  }
   /* visually hidden, still spoken: the plate's prose summary for screen readers */
   .vh {
     position: absolute;
@@ -106,23 +101,9 @@
     white-space: nowrap;
   }
   @media (pointer: coarse) {
-    #screen.dom a, #screen.dom button { min-block-size: 2.75rem; }
+    #screen a, #screen button { min-block-size: 2.75rem; }
   }
-  #screen [data-st] {
-    cursor: pointer;
-    /* a quiet dotted underline says "click me" without shouting over the art */
-    text-decoration: underline dotted;
-    text-decoration-color: color-mix(in oklab, currentColor 40%, transparent);
-    text-underline-offset: 0.2em;
-  }
-  #screen [data-st]:hover { text-decoration: underline solid; text-decoration-color: currentColor; }
   ::view-transition-old(screen), ::view-transition-new(screen) { animation-duration: 0.35s; }
-  .d { color: var(--dim); }
-  .b { color: var(--ink); font-weight: 700; }
-  .w { color: var(--water); }
-  .w2 { color: var(--water-deep); }
-  .bed { color: var(--bed); }
-  .s { color: var(--sun); }
   form {
     margin-top: 1.4em;
     padding-top: 1em;
@@ -960,6 +941,70 @@
   .cl-dot.below { fill: var(--dry-line); }
   .ov-year { fill: none; stroke: color-mix(in oklab, var(--ink) 18%, transparent); stroke-width: 0.8; }
   .ov-sel { fill: none; stroke: var(--water-line); stroke-width: 1.8; }
+  /* ---- the buddy: every empty, loading and error state ---- */
+  .state-plate { display: flex; align-items: center; justify-content: center; min-height: 14rem; }
+  .state { display: flex; gap: 1.4em; align-items: flex-start; max-width: 46ch; }
+  .buddy { width: 4.5rem; height: 4.5rem; flex: none; }
+  .buddy .face { fill: var(--paper); stroke: var(--ink); }
+  .buddy .bw { fill: var(--water); }
+  .buddy .bw-line { fill: none; stroke: var(--water-line); stroke-width: 2.4; }
+  .buddy .ink { fill: var(--ink); }
+  .buddy .ink-s { fill: none; stroke: var(--ink); stroke-width: 3; stroke-linecap: round; }
+  .buddy .glint { fill: var(--paper); }
+  .buddy .mouth { fill: none; stroke: var(--ink); stroke-width: 3; stroke-linecap: round; }
+  .state-title { margin: 0; font-size: 1.15em; font-weight: 600; }
+  .state-body { margin: 0.4em 0 0; color: var(--mid); }
+  .state-actions { margin: 0.9em 0 0; display: flex; gap: 1em; font-size: 0.9em; }
+  .state-actions a, .state-actions button {
+    font: inherit;
+    font-family: var(--font-data);
+    color: var(--ink);
+    background: none;
+    border: 1px solid var(--ink);
+    padding: 0.2em 0.9ch;
+    text-decoration: none;
+    cursor: pointer;
+  }
+  .state-actions a:hover, .state-actions button:hover { background: var(--ink); color: var(--paper); }
+  .suggest { list-style: none; margin: 0.9em 0 0; padding: 0; font-family: var(--font-data); font-size: 0.9em; }
+  .suggest a {
+    display: flex;
+    gap: 1.5ch;
+    align-items: baseline;
+    padding: 0.3em 0.4ch;
+    color: var(--ink);
+    text-decoration: none;
+    border-bottom: 1px solid var(--rule);
+  }
+  .suggest a:hover { background: var(--ink); color: var(--paper); }
+  .suggest .meta { margin-left: auto; color: var(--mid); font-size: 0.9em; }
+  .suggest a:hover .meta { color: var(--paper); }
+  @media (prefers-reduced-motion: no-preference) {
+    .buddy.happy .bw, .buddy.happy .bw-line { animation: slosh 2.6s ease-in-out infinite; }
+  }
+  @keyframes slosh { 0%, 100% { transform: translateY(1px); } 50% { transform: translateY(-2px); } }
+  /* ---- whole-river profile ---- */
+  .river .rv-line { fill: none; stroke: var(--water-line); stroke-width: 1.4; }
+  .river .grid-v { stroke: var(--rule); stroke-width: 1; stroke-dasharray: 2 4; }
+  .river .rv-dot { fill: var(--paper); stroke: var(--ink); stroke-width: 1.4; }
+  .river .rv-dot.k-low { fill: var(--dry-line); stroke: var(--dry-line); }
+  .river .rv-dot.k-high { fill: var(--water-line); stroke: var(--water-line); }
+  .river a:hover .rv-dot { stroke: var(--ink); stroke-width: 2.4; }
+  .river { height: 10rem; }
+  .trouble li {
+    grid-template-columns: 2.4ch 1.6ch minmax(11ch, 1fr) 7ch minmax(14ch, auto) max-content;
+    grid-template-areas: "rank dir name now rate badge";
+  }
+  .trouble .b-rate { background: none; color: var(--mid); }
+  @container plate (max-width: 34rem) {
+    .trouble li {
+      grid-template-columns: 2.4ch 1.6ch 1fr max-content;
+      grid-template-areas:
+        "rank dir name now"
+        ". . rate badge";
+      row-gap: 0.1em;
+    }
+  }
   /* ---- rivers map ---- */
   .chart.map { max-height: 74vh; margin-inline: auto; }
   .map .mout { fill: color-mix(in oklab, var(--water) 22%, transparent); stroke: var(--ink); stroke-width: 1.2; stroke-linejoin: round; }
@@ -1114,7 +1159,7 @@
     </div>
   </header>
   <nav id="crumbs" aria-label="you are here"></nav>
-  <pre id="screen" role="img" aria-label="loading water level data">loading…</pre>
+  <div id="screen">loading…</div>
   <form id="prompt" autocomplete="off">
     <div class="cmd">&gt; pegel <span class="flag">--station</span> <input id="station-input" name="station" spellcheck="false" placeholder="station" autocomplete="off" role="combobox" aria-expanded="false" aria-controls="ac" aria-autocomplete="list" aria-label="station name"> --refresh 300s
     </div>
@@ -1272,9 +1317,9 @@
       river traffic on the waterline from your own AIS receiver (<b>--ais URL</b>,
       AIS-catcher) — both URLs stay in your browser. The tab title and favicon
       carry the live level, dark mode follows your system, narrow screens switch
-      to a 44-column compact grid, and the page installs as an app from the
-      browser menu. Should a station ever sink into an error, a sea monster
-      handles it.</dd>
+      the layout reflows for the screen it is on, and the page installs as an
+      app from the browser menu. Should a gauge ever fall silent, the water-drop
+      buddy says so.</dd>
   </dl>
 </dialog>
 <dialog id="reportbox" closedby="any" aria-labelledby="reportbox-title">
@@ -1328,11 +1373,6 @@ const API = 'https://www.pegelonline.wsv.de/webservices/rest-api/v2';
 // sed-replaced with the deployed commit sha by .github/workflows/pages.yml;
 // stays 'dev' locally and whenever the placeholder wasn't replaced
 const APP_COMMIT = '__COMMIT__';
-// the grid is 84 columns wide on desktop; on screens where that would shrink the
-// font below ~8px it switches to a 44-column compact layout instead (see fitFont)
-let COLS = 84;
-const COMPACT_COLS = 44;
-const isCompact = () => COLS < 60;
 const REFRESH_MS = 5 * 60 * 1000;
 // Trend window. Gauges report whole centimetres, so an hourly delta on a big
 // river is mostly quantisation noise — the Rhein moves centimetres per day, and
@@ -1350,7 +1390,6 @@ const MONTH_NAME = ['January', 'February', 'March', 'April', 'May', 'June',
 
 const screen = document.getElementById('screen');
 const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)');
-let dirty = true; // set whenever state changes; gates redraws under reduced motion
 let station = (new URLSearchParams(location.search).get('station') || 'BONN').toUpperCase();
 // five mutually exclusive views: the single-station terminal, a whole-river
 // longitudinal profile, the rivers map listing every water at once, the
@@ -1541,7 +1580,7 @@ else if (mode !== 'river') applyStationChrome();
 
 // live chrome: once data is in, the tab title carries the level + trend, the
 // favicon buddy's waterline tracks the real level (MNW…MHW → low…high), and
-// the ASCII grid gets a spoken summary for screen readers
+// the plate gets a spoken summary for screen readers
 const faviconLink = document.querySelector('link[rel="icon"][type="image/svg+xml"]');
 
 function updateFavicon(valueCm) {
@@ -1750,7 +1789,7 @@ async function loadData() {
     if (station !== forStation || mode !== 'station') return; // switched away while fetching — discard
     if (!gauge) {
       state.error = noWaterLevelError(info);
-      dirty = true;
+      scheduleRender();
       return;
     }
     // WT/Q only for stations whose timeseries list offers them — blind probing
@@ -1786,7 +1825,7 @@ async function loadData() {
     state.error = `station "${forStation}" failed: ${e.message}\n` +
       `check the name against ${API}/stations.json or try ?station=BONN`;
   }
-  dirty = true;
+  scheduleRender();
   applyLiveChrome();
 }
 
@@ -1806,7 +1845,7 @@ async function loadWeather() {
     if (station !== forStation) return;
     state.weather = null;
   }
-  dirty = true;
+  scheduleRender();
 }
 
 async function loadNeighbors(info) {
@@ -1844,7 +1883,7 @@ async function loadNeighbors(info) {
   if (!state.info || state.info.uuid !== info.uuid) return; // switched away — discard
   state.neighbors = enriched.filter(Boolean);
   state.flowLowKm = datums.length >= 2 ? downstreamIsLowKm(datums) : null;
-  dirty = true;
+  scheduleRender();
 }
 
 // ---------- river mode (whole-river longitudinal profile) ----------
@@ -1906,7 +1945,7 @@ async function loadRiver() {
       `check ${API}/stations.json?waters=${encodeURIComponent(forRiver)}`;
     state.riverStations = null;
   }
-  dirty = true;
+  scheduleRender();
   setScreenAria();
 }
 
@@ -2060,7 +2099,7 @@ function deleteStation(name) {
   localStorage.removeItem(ARCHIVE_PREFIX + name);
   if (name === station) state.archive = [];
   updateLocalBar();
-  dirty = true;
+  scheduleRender();
 }
 
 let archiveDelArmed = '';
@@ -2230,7 +2269,7 @@ importFile.addEventListener('change', async () => {
     showImportResult(target && target !== station ? `+${added} → ${target}` : `+${added} pts`);
     state.archive = loadArchive(station);
     updateLocalBar();
-    dirty = true;
+    scheduleRender();
   } catch {
     showImportResult('bad file');
   }
@@ -2245,7 +2284,7 @@ clearBtn.addEventListener('click', () => {
     clearArmedAt = 0;
     clearBtn.textContent = 'clear';
     updateLocalBar();
-    dirty = true;
+    scheduleRender();
   } else {
     clearArmedAt = Date.now();
     clearBtn.textContent = 'sure?';
@@ -2277,7 +2316,7 @@ async function loadAircraft() {
     state.aircraft = [];
     state.adsbOk = false;
   }
-  dirty = true;
+  scheduleRender();
 }
 
 // ---------- AIS (optional, own receiver via --ais) ----------
@@ -2309,7 +2348,7 @@ async function loadShips() {
     state.ships = [];
     state.aisOk = false;
   }
-  dirty = true;
+  scheduleRender();
 }
 
 function setAis(raw) {
@@ -2322,59 +2361,12 @@ function setAis(raw) {
   state.ships = [];
   state.aisOk = null;
   loadShips();
-  dirty = true;
+  scheduleRender();
 }
 
 // ---------- grid helpers ----------
 
-function makeGrid(rows) {
-  return {
-    ch: Array.from({ length: rows }, () => Array(COLS).fill(' ')),
-    cl: Array.from({ length: rows }, () => Array(COLS).fill('')),
-    ln: Array.from({ length: rows }, () => Array(COLS).fill('')), // station-link layer
-    rows,
-  };
-}
-
-// mark cells as a click target for a station: gridToHtml emits them as
-// <span data-st="NAME">, and a delegated click handler on #screen switches there
-function linkCells(g, row, col, len, name) {
-  if (row < 0 || row >= g.rows) return;
-  for (let c = Math.max(0, col); c < Math.min(COLS, col + len); c++) g.ln[row][c] = name;
-}
-
-function put(g, row, col, text, cls = '') {
-  if (row < 0 || row >= g.rows) return;
-  for (let i = 0; i < text.length; i++) {
-    const c = col + i;
-    if (c >= 0 && c < COLS) { g.ch[row][c] = text[i]; g.cl[row][c] = cls; }
-  }
-}
-
 function esc(s) { return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
-
-function gridToHtml(g) {
-  const out = [];
-  for (let r = 0; r < g.rows; r++) {
-    let line = '', run = '', runCls = g.cl[r][0], runLn = g.ln[r][0];
-    for (let c = 0; c <= COLS; c++) {
-      const cls = c < COLS ? g.cl[r][c] : null;
-      const ln = c < COLS ? g.ln[r][c] : null;
-      if (cls !== runCls || ln !== runLn || c === COLS) {
-        if (runCls || runLn) {
-          line += '<span' + (runCls ? ` class="${runCls}"` : '') +
-            (runLn ? ` data-st="${esc(runLn)}"` : '') + `>${esc(run)}</span>`;
-        } else {
-          line += esc(run);
-        }
-        run = ''; runCls = cls; runLn = ln;
-      }
-      if (c < COLS) run += g.ch[r][c];
-    }
-    out.push(line);
-  }
-  return out.join('\n');
-}
 
 // ---------- plate helpers (the survey-plate renderers share these) ----------
 // Conventions, enforced by tests:
@@ -2458,6 +2450,33 @@ const T = {
   waveRamp: 'low → high',
   waveScaled: 'Each row is scaled to its OWN gauge’s range over this window, so rows compare shape, not absolute level.',
   timeRight: 'time',
+  trouble: 'TROUBLE',
+  outsideRange: 'outside their normal range',
+  allNormal: 'Every gauge on this river is inside its normal range.',
+  belowLow: 'below mean low water',
+  aboveHigh: 'above mean high water',
+  riverProfile: 'LONGITUDINAL PROFILE',
+  riverSub: 'every gauge at its live water-surface elevation',
+  riverElevAxis: 'water surface elevation in metres above sea level (m NHN), against river kilometre',
+  riverElevNote: 'Elevation is the gauge zero plus the current reading, so gauges on one river can be compared directly.',
+  meanFall: 'mean fall',
+  kindNormal: 'inside MNW…MHW',
+  kindLow: 'below mean low water',
+  kindHigh: 'above mean high water',
+  errorTitle: 'No reading.',
+  tryAgain: 'try again',
+  reportThis: 'report this',
+  loadBody: 'one moment',
+  loadMap: 'Mapping the network…',
+  loadRising: 'Diffing every gauge against its last snapshot…',
+  loadTotal: 'Summing every gauge…',
+  loadTotalYear: 'Summing day by day:',
+  loadRiver: 'Walking',
+  loadWave: 'Sounding day by day:',
+  loadStation: 'Reading',
+  waveFailed: 'The wave view failed for',
+  noMatchFor: 'No exact match for',
+  didYouMean: 'Did you mean one of these?',
 };
 
 // the plate foot's per-view provenance line
@@ -2551,57 +2570,6 @@ function bucketCols(px = plateWidth()) {
   return Math.max(40, Math.min(320, Math.round(px / 3)));
 }
 
-// ---------- big digits (3x5) ----------
-
-const FONT = {
-  '0': ['███', '█ █', '█ █', '█ █', '███'],
-  '1': [' █ ', '██ ', ' █ ', ' █ ', '███'],
-  '2': ['███', '  █', '███', '█  ', '███'],
-  '3': ['███', '  █', '███', '  █', '███'],
-  '4': ['█ █', '█ █', '███', '  █', '  █'],
-  '5': ['███', '█  ', '███', '  █', '███'],
-  '6': ['███', '█  ', '███', '█ █', '███'],
-  '7': ['███', '  █', '  █', '  █', '  █'],
-  '8': ['███', '█ █', '███', '█ █', '███'],
-  '9': ['███', '█ █', '███', '  █', '███'],
-  '-': ['   ', '   ', '███', '   ', '   '], // negative river km exist (e.g. MARBURG, Lahn km -38.7)
-};
-
-function putBig(g, row, col, text, cls) {
-  let x = col;
-  for (const c of text) {
-    const glyph = FONT[c];
-    if (!glyph) { x += 2; continue; }
-    for (let r = 0; r < 5; r++) put(g, row + r, x, glyph[r], cls);
-    x += 4;
-  }
-  return x;
-}
-
-// river-kilometer marker drawn like the roadside Rheinkilometer signs: a framed,
-// paneled number board on two posts. `row` is the top-border row. Width = 4·digits+1
-function putKmSign(g, row, col, km) {
-  const d = String(Math.round(km));
-  const n = d.length, cw = 3;
-  let top = '┌', bot = '└';
-  for (let i = 0; i < n; i++) {
-    top += '─'.repeat(cw) + (i < n - 1 ? '┬' : '┐');
-    bot += '─'.repeat(cw) + (i < n - 1 ? '┴' : '┘');
-  }
-  put(g, row, col, top, 'b');
-  for (let r = 0; r < 5; r++) {
-    let line = '│';
-    for (let i = 0; i < n; i++) line += FONT[d[i]][r] + '│';
-    put(g, row + 1 + r, col, line, 'b');
-  }
-  put(g, row + 6, col, bot, 'b');
-  for (const i of [0, n - 1]) {
-    const c = col + 2 + i * (cw + 1);
-    put(g, row + 7, c, '│', 'b');
-    put(g, row + 8, c, '│', 'b');
-  }
-}
-
 // ---------- sections ----------
 
 function charValue(name) {
@@ -2658,7 +2626,7 @@ function isNight() {
 }
 
 // synodic-month approximation from a known new moon (JD 2451550.1 = 2000-01-06);
-// ±1 day accuracy is plenty for an ASCII scene, no libraries needed
+// ±1 day accuracy is plenty for the drawn moon, no libraries needed
 function moonPhase() {
   const jd = Date.now() / 86400000 + 2440587.5;
   const cycles = (jd - 2451550.1) / 29.530588853;
@@ -2668,44 +2636,6 @@ function moonPhase() {
 // the current moon phase as a 3-row, 5-column glyph drawn through putCell(row,
 // col, text, cls) — callers pass a guarded putter so the moon never overwrites
 // content. Northern-hemisphere orientation: waxing lights up the right side.
-function drawMoonGlyph(putCell, row, col) {
-  const frac = moonPhase(); // 0/1 = new, 0.5 = full
-  if (frac < 0.05 || frac >= 0.95) {
-    // new moon: faint outline only, nothing lit
-    putCell(row,     col + 1, '.-.', 'd');
-    putCell(row + 1, col, '(   )', 'd');
-    putCell(row + 2, col + 1, "`-'", 'd');
-  } else if (frac < 0.25) {
-    // waxing crescent: thin sliver lit on the right
-    putCell(row,     col + 1, '.-.', 'd');
-    putCell(row + 1, col, '(', 'd');
-    putCell(row + 1, col + 3, ':)', 'b');
-    putCell(row + 2, col + 1, "`-'", 'd');
-  } else if (frac < 0.45) {
-    // first quarter / waxing gibbous: right half lit
-    putCell(row,     col + 1, '.-.', 'd');
-    putCell(row + 1, col, '(', 'd');
-    putCell(row + 1, col + 1, '#o)', 'b');
-    putCell(row + 2, col + 1, "`-'", 'd');
-  } else if (frac < 0.55) {
-    // full moon: fully lit disc with a crater
-    putCell(row,     col + 1, '.-.', 'b');
-    putCell(row + 1, col, '( o )', 'b');
-    putCell(row + 2, col + 1, "`-'", 'b');
-  } else if (frac < 0.75) {
-    // last quarter / waning gibbous: left half lit
-    putCell(row,     col + 1, '.-.', 'd');
-    putCell(row + 1, col, '(o#', 'b');
-    putCell(row + 1, col + 3, ')', 'd');
-    putCell(row + 2, col + 1, "`-'", 'd');
-  } else {
-    // waning crescent: thin sliver lit on the left
-    putCell(row,     col + 1, '.-.', 'd');
-    putCell(row + 1, col, '(:', 'b');
-    putCell(row + 1, col + 3, ')', 'd');
-    putCell(row + 2, col + 1, "`-'", 'd');
-  }
-}
 
 function trendPerHour() {
   const a = state.archive;
@@ -2800,7 +2730,6 @@ const flowFrac = (km, kmMin, kmSpan, lowKmDown) => {
   return lowKmDown ? 1 - f : f;
 };
 
-const FLOW_MARK = '≋ downstream →';
 
 // ---------- station live view: the survey plate ----------
 
@@ -3345,16 +3274,7 @@ function renderStation(vm) {
 const RIVER_GLYPH = { low: '▼', high: '▲', normal: '◉' };
 const RIVER_CLS = { low: 's', high: 'w2', normal: 'b' };
 
-// layout rows (see drawRiver): title, legend, then the plot block and trouble list
-const RIVER_PROF_TOP = 3;                          // caption row (m NHN)
-const RIVER_BODY_TOP = RIVER_PROF_TOP + 3;         // first plot-body row (2 label rows above)
-const RIVER_PLOT_H = 10;                            // plot-body height
-const RIVER_TICK_ROW = RIVER_BODY_TOP + RIVER_PLOT_H + 2; // km ticks (2 label rows below)
-const RIVER_FLOW_ROW = RIVER_TICK_ROW + 1;         // ≋ downstream → marker
-const RIVER_TROUBLE_TOP = RIVER_FLOW_ROW + 2;      // TROUBLE header
-
 const fmtKm = k => Number.isInteger(k) ? String(k) : k.toFixed(1);
-const clampCol = (c, w) => Math.max(0, Math.min(COLS - w, c));
 
 // 4-6 round km ticks across [kmMin, kmMax]
 function kmTicks(kmMin, kmMax) {
@@ -3366,171 +3286,143 @@ function kmTicks(kmMin, kmMax) {
   return ticks;
 }
 
-function riverGridRows(stations) {
-  const n = stations.filter(s => s.kind !== 'normal').length;
-  const lines = n ? Math.min(n, 8) + (n > 8 ? 1 : 0) : 1;
-  return RIVER_TROUBLE_TOP + 1 + lines;
-}
+// ---------- whole-river profile: the survey plate ----------
 
-// pure: draws the whole river view (header + profile + trouble list) into g from the
-// prepared station array, so it can be exercised from a fixture without any network
-function drawRiver(g, stations, t) {
+function riverViewModel(stations) {
   const usable = stations.filter(s => s.elev != null);
   const kms = stations.map(s => s.km);
   const kmMin = Math.min(...kms), kmMax = Math.max(...kms);
+  const lowKmDown = usable.length >= 2 ? downstreamIsLowKm(usable) : true;
   const kmSpan = Math.max(kmMax - kmMin, 0.1);
-  const nLow = stations.filter(s => s.kind === 'low').length;
-  const nHigh = stations.filter(s => s.kind === 'high').length;
-
-  // header: dim rule with the river title, then a legend of the three marker glyphs
-  const brand = isCompact() ? `PEGEL://${state.river}` : `PEGELONLINE://${state.river}`;
-  const head = isCompact()
-    ? `─── ${brand} · ${stations.length} st `
-    : `─── ${brand} · ${stations.length} stations · KM ${fmtKm(kmMin)}–${fmtKm(kmMax)} `;
-  putHeadRule(g, head, brand, '[▦ WAVE]', 'cmd:wave'); // station × day heatmap of the same river
-  let lx = 0;
-  put(g, 1, lx, RIVER_GLYPH.normal, RIVER_CLS.normal); put(g, 1, lx + 2, 'ok', 'd'); lx += 5;
-  put(g, 1, lx, '·', 'd'); lx += 2;
-  put(g, 1, lx, RIVER_GLYPH.low, RIVER_CLS.low); put(g, 1, lx + 2, 'low', 'd'); lx += 6;
-  put(g, 1, lx, '·', 'd'); lx += 2;
-  put(g, 1, lx, RIVER_GLYPH.high, RIVER_CLS.high); put(g, 1, lx + 2, 'high', 'd');
-
-  // caption: m NHN (elevation axis) top-left; the flow marker sits under the plot
-  put(g, RIVER_PROF_TOP, 0, 'm NHN', 'd');
-
-  // x = km, DOWNSTREAM RIGHT (matching drawProfile and the station scene); y = elev
-  const xBase = 1, plotW = COLS - 2;
   const elevs = usable.map(s => s.elev);
-  const eMin = Math.min(...elevs), eSpan = Math.max(Math.max(...elevs) - eMin, 0.1);
-  const lowKmDown = downstreamIsLowKm(usable);
-  const xOf = km => xBase + Math.round(flowFrac(km, kmMin, kmSpan, lowKmDown) * (plotW - 1));
+  const eMin = elevs.length ? Math.min(...elevs) : 0;
+  const eSpan = elevs.length ? Math.max(Math.max(...elevs) - eMin, 0.1) : 1;
   const pts = usable.map(s => ({
-    s, x: xOf(s.km),
-    y: RIVER_BODY_TOP + Math.round((1 - (s.elev - eMin) / eSpan) * (RIVER_PLOT_H - 1)),
+    name: s.name, km: s.km, elev: s.elev, value: s.value, kind: s.kind,
+    x: flowFrac(s.km, kmMin, kmSpan, lowKmDown),
+    y: 1 - (s.elev - eMin) / eSpan,
   })).sort((a, b) => a.x - b.x);
-
-  // markers first, into a reservation set so neither labels nor the water line
-  // can ever overwrite (or sit fused against) a marker
-  const key = (r, c) => r * COLS + c;
-  const reserved = new Set();
-  for (const p of pts) {
-    put(g, p.y, p.x, RIVER_GLYPH[p.s.kind], RIVER_CLS[p.s.kind]);
-    reserved.add(key(p.y, p.x));
-    linkCells(g, p.y, p.x, 1, p.s.name);
-  }
-
-  // label placement. >= 12 columns between any two labeled markers is a HARD
-  // constraint for every label; troubled stations get first pick, and a troubled
-  // label that still cannot fit is dropped — the TROUBLE list below carries the
-  // full information regardless. A greedy left-to-right pick over the (x-sorted)
-  // troubled markers maximizes how many fit before normals mop up the leftovers.
-  const LABEL_GAP = 12;
-  const placedXs = [];
-  const fitsGap = x => placedXs.every(px => Math.abs(px - x) >= LABEL_GAP);
-  const chosen = [];
-  for (const p of pts) if (p.s.kind !== 'normal' && fitsGap(p.x)) { placedXs.push(p.x); chosen.push(p); }
-  for (const p of pts) if (p.s.kind === 'normal' && fitsGap(p.x)) { placedXs.push(p.x); chosen.push(p); }
-  chosen.sort((a, b) => a.x - b.x);
-
-  // a label may only be drawn if its cells — plus one padding cell on each side —
-  // are clear of every marker and other label, so nothing renders half-over another
-  // or fused glyph-to-name. Padding is reserved too, so it stays blank (the water
-  // line skips reserved cells), guaranteeing a space or edge around each label.
-  const clearCells = (row, col, len) => {
-    if (row < 0 || row >= g.rows || col < 0 || col + len > COLS) return false;
-    for (let c = col - 1; c <= col + len; c++) if (c >= 0 && c < COLS && reserved.has(key(row, c))) return false;
-    return true;
-  };
-  const reserveCells = (row, col, len) => { for (let c = col - 1; c <= col + len; c++) if (c >= 0 && c < COLS) reserved.add(key(row, c)); };
-
-  const draws = []; // { row, col, text, cls } — applied after the water line
-  let side = -1;    // alternate below/above so adjacent labels never stack vertically
-  for (const p of chosen) {
-    side = -side;
-    const name = p.s.name.slice(0, 10);
-    const nameRow = side > 0 ? p.y + 1 : p.y - 2;
-    const elevRow = side > 0 ? p.y + 2 : p.y - 1;
-    const nameX = clampCol(p.x - (name.length >> 1), name.length);
-    if (!clearCells(nameRow, nameX, name.length)) continue; // no room without overlap → drop
-    reserveCells(nameRow, nameX, name.length);
-    draws.push({ row: nameRow, col: nameX, text: name, cls: p.s.kind === 'normal' ? 'd' : RIVER_CLS[p.s.kind], st: p.s.name });
-    // elevation suffix only when the name row still has >= 6 free columns after it
-    let freeAfter = 0;
-    for (let c = nameX + name.length; c < COLS && !reserved.has(key(nameRow, c)); c++) freeAfter++;
-    const elevTxt = p.s.elev.toFixed(2);
-    const elevX = clampCol(p.x - (elevTxt.length >> 1), elevTxt.length);
-    if (freeAfter >= 6 && clearCells(elevRow, elevX, elevTxt.length)) {
-      reserveCells(elevRow, elevX, elevTxt.length);
-      draws.push({ row: elevRow, col: elevX, text: elevTxt, cls: 'd', st: p.s.name });
-    }
-  }
-
-  // water surface line between consecutive stations, skipping reserved cells so it
-  // never touches a marker or a label (nor their padding)
-  for (let i = 0; i < pts.length - 1; i++) {
-    const a = pts[i], b = pts[i + 1];
-    const steps = Math.max(Math.abs(b.x - a.x), 1), dir = Math.sign(b.x - a.x) || 1;
-    for (let sp = 1; sp < steps; sp++) {
-      const r = Math.round(a.y + ((b.y - a.y) * sp) / steps), c = a.x + dir * sp;
-      if (!reserved.has(key(r, c))) put(g, r, c, '·', 'w');
-    }
-  }
-  // labels last, over the (skipped) water line — every label is a click target
-  for (const d of draws) {
-    put(g, d.row, d.col, d.text, d.cls);
-    if (d.st) linkCells(g, d.row, d.col, d.text.length, d.st);
-  }
-
-  // km ticks along the bottom — ascending km maps either way depending on the
-  // river, so sort by column before placing and skip any that would overprint
-  let lastTickEnd = -1;
-  const tickCols = kmTicks(kmMin, kmMax)
-    .map(k => { const lbl = String(Math.round(k)); return { lbl, tx: clampCol(xOf(k) - (lbl.length >> 1), lbl.length) }; })
-    .sort((a, b) => a.tx - b.tx);
-  for (const { lbl, tx } of tickCols) {
-    if (tx <= lastTickEnd) continue;
-    put(g, RIVER_TICK_ROW, tx, lbl, 'd');
-    lastTickEnd = tx + lbl.length;
-  }
-  put(g, RIVER_FLOW_ROW, 0, FLOW_MARK, 'd');
-
-  // trouble list: every non-normal station, sorted by km, capped at 8 + overflow
-  put(g, RIVER_TROUBLE_TOP, 0, 'TROUBLE', 'd');
   const troubled = stations.filter(s => s.kind !== 'normal').sort((a, b) => a.km - b.km);
-  if (!troubled.length) {
-    put(g, RIVER_TROUBLE_TOP + 1, 0, 'all stations normal', 'd');
-  } else {
-    troubled.slice(0, 8).forEach((s, i) => {
-      const val = s.value != null ? `W ${Math.round(s.value)}` : 'W —';
-      const line = `${RIVER_GLYPH[s.kind]} ${s.name.slice(0, 10).padEnd(10)} ${val} · ${s.kind} · km ${fmtKm(s.km)}`;
-      put(g, RIVER_TROUBLE_TOP + 1 + i, 0, line, RIVER_CLS[s.kind]);
-      linkCells(g, RIVER_TROUBLE_TOP + 1 + i, 0, line.length, s.name);
-    });
-    if (troubled.length > 8) put(g, RIVER_TROUBLE_TOP + 9, 0, `… and ${troubled.length - 8} more`, 'd');
+  const counts = { low: 0, high: 0, normal: 0 };
+  for (const s of stations) counts[s.kind]++;
+  // mean gradient over the whole river — trivially derivable, absent before
+  const drop = usable.length >= 2
+    ? Math.abs(usable[usable.length - 1].elev - usable[0].elev) : null;
+  return {
+    kind: 'river',
+    river: state.river,
+    gauges: stations.length,
+    kmMin, kmMax, kmSpan, lowKmDown,
+    eMin, eMax: eMin + eSpan,
+    pts,
+    ticks: kmTicks(kmMin, kmMax).map(k => ({
+      km: k, x: flowFrac(k, kmMin, kmSpan, lowKmDown), label: fmtKm(k),
+    })),
+    counts,
+    gradient: drop != null && kmSpan > 0 ? drop / kmSpan : null,
+    troubled: troubled.map(s => ({
+      name: s.name, km: s.km, kind: s.kind, value: s.value,
+      elev: s.elev,
+      glyph: RIVER_GLYPH[s.kind],
+      text: s.kind === 'low' ? T.belowLow : T.aboveHigh,
+    })),
+    summary: screenSummary(),
+    source: `${T.sourceWsv} · ${T.refreshEvery}`,
+  };
+}
+
+const RIVER_W = 340, RIVER_H = 150;
+
+function renderRiverChart(vm) {
+  const padL = 30, padR = 10, padT = 10, padB = 26;
+  const X = f => padL + f * (RIVER_W - padL - padR);
+  const Y = f => padT + f * (RIVER_H - padT - padB);
+  const parts = [];
+  parts.push(`<line class="ax" x1="${padL}" y1="${RIVER_H - padB}" x2="${RIVER_W - padR}" y2="${RIVER_H - padB}"/>`);
+  for (const t of vm.ticks) {
+    parts.push(`<line class="grid-v" x1="${X(t.x).toFixed(1)}" y1="${padT}" x2="${X(t.x).toFixed(1)}" y2="${RIVER_H - padB}"/>`);
+    parts.push(`<text class="axl" x="${X(t.x).toFixed(1)}" y="${RIVER_H - padB + 11}" text-anchor="middle">${esc(t.label)}</text>`);
   }
-  // night decorates the river view too: moon and stars, only into cells that are
-  // empty AND unreserved so the plot, labels and their padding always win. Star
-  // glyphs avoid '·' here — that's the water line's glyph
-  if (isNight()) {
-    const putSky = (r, c, s, cls) => {
-      for (let i = 0; i < s.length; i++) {
-        const x = c + i;
-        if (s[i] !== ' ' && r >= 0 && r < g.rows && x >= 0 && x < COLS &&
-            g.ch[r][x] === ' ' && !reserved.has(key(r, x))) { g.ch[r][x] = s[i]; g.cl[r][x] = cls; }
-      }
-    };
-    drawMoonGlyph(putSky, RIVER_PROF_TOP, 8);
-    const starGlyphs = ['˙', '+', '˙', '*'];
-    for (let x = 0; x < COLS; x++) {
-      for (let r = RIVER_PROF_TOP; r < RIVER_TICK_ROW - 1; r++) {
-        const h = ((x + 1) * 2654435761 ^ (r + 1) * 40503) >>> 0;
-        if (h % 61) continue; // sparser than the station view — the plot needs the room
-        const phase = (Math.floor(t / 2) + (h >>> 8)) % 4;
-        putSky(r, x, starGlyphs[phase], 'd');
-      }
-    }
+  if (vm.pts.length > 1) {
+    parts.push(`<polyline class="rv-line" points="${vm.pts.map(p => `${X(p.x).toFixed(1)},${Y(p.y).toFixed(1)}`).join(' ')}"/>`);
   }
-  return { nLow, nHigh, labels: draws }; // labels exposed for layout testing
+  for (const p of vm.pts) {
+    const label = `${p.name}: ${p.elev.toFixed(2)} m NHN, km ${fmtKm(p.km)}` +
+      (p.value != null ? `, ${Math.round(p.value)} cm` : '') + `, ${p.kind}`;
+    parts.push(`<a${navAttrs(p.name)}><title>${esc(label)}</title>` +
+      `<circle class="rv-dot k-${p.kind}" cx="${X(p.x).toFixed(1)}" cy="${Y(p.y).toFixed(1)}" r="${p.kind === 'normal' ? 2.6 : 4}"/>` +
+      `<rect class="hit" x="${(X(p.x) - 11).toFixed(1)}" y="${(Y(p.y) - 11).toFixed(1)}" width="22" height="22"/></a>`);
+  }
+  parts.push(`<text class="axl" x="${padL - 4}" y="${padT + 4}" text-anchor="end">${Math.round(vm.eMax)}</text>`);
+  parts.push(`<text class="axl" x="${padL - 4}" y="${(RIVER_H - padB).toFixed(0)}" text-anchor="end">${Math.round(vm.eMin)}</text>`);
+  return svgWrap(`0 0 ${RIVER_W} ${RIVER_H}`, parts.join(''),
+    ' class="chart river" role="group"' + attr('aria-label', vm.summary));
+}
+
+function renderRiver(vm) {
+  const vh = `<p class="vh">${esc(vm.summary)}</p>`;
+  const grad = vm.gradient != null ? ` · ${esc(T.meanFall)} ${vm.gradient.toFixed(2)} m/km` : '';
+  const head = `<header class="p-head"><h1>${esc(vm.river)}</h1>` +
+    `<p class="p-sub">${vm.gauges} ${esc(plural(vm.gauges, 'gauge'))} · ${Math.round(vm.kmSpan)} km${grad} — ${esc(T.riverSub)}</p></header>`;
+  const tabs = `<nav class="p-tabs" aria-label="view">` +
+    navOpen('cmd:live', 'on') + 'profile' + navClose('cmd:live') +
+    navOpen('cmd:wave') + 'wave' + navClose('cmd:wave') + '</nav>';
+  const trouble = vm.troubled.length
+    ? `<section class="p-block"><h2 class="p-h2">${esc(T.trouble)} · ${vm.troubled.length} ${esc(plural(vm.troubled.length, 'gauge'))} ${esc(T.outsideRange)}</h2>` +
+      `<ol class="board trouble">` + vm.troubled.map((s, i) =>
+        `<li class="${s.kind === 'low' ? 'down' : 'up'}"><span class="b-rank">${i + 1}</span>` +
+        `<span class="b-dir" aria-hidden="true">${esc(s.glyph)}</span>` +
+        `<a class="b-name"${navAttrs(s.name)}>${esc(s.name)}</a>` +
+        `<span class="b-now">${s.value != null ? Math.round(s.value) + ' cm' : '—'}</span>` +
+        `<span class="b-rate">${esc(s.text)}</span>` +
+        `<span class="b-badge">km ${esc(fmtKm(s.km))}</span></li>`).join('') +
+      '</ol></section>'
+    : `<section class="p-block"><h2 class="p-h2">${esc(T.trouble)}</h2><p class="p-dim">${esc(T.allNormal)}</p></section>`;
+  const key = `<dl class="p-key"><dt>${esc(T.key)}</dt>` +
+    `<dd><span class="lg"><svg class="sw" viewBox="0 0 12 12" aria-hidden="true"><circle class="rv-dot k-normal" cx="6" cy="6" r="2.6"/></svg><span class="lgn">${esc(T.kindNormal)}</span></span></dd>` +
+    `<dd><span class="lg"><svg class="sw" viewBox="0 0 12 12" aria-hidden="true"><circle class="rv-dot k-low" cx="6" cy="6" r="4"/></svg><span class="lgn">${esc(T.kindLow)}</span></span></dd>` +
+    `<dd><span class="lg"><svg class="sw" viewBox="0 0 12 12" aria-hidden="true"><circle class="rv-dot k-high" cx="6" cy="6" r="4"/></svg><span class="lgn">${esc(T.kindHigh)}</span></span></dd>` +
+    `<dd>${esc(T.riverElevNote)}</dd></dl>`;
+  // on a phone the trouble list is the answer to "is anything wrong here?",
+  // so it comes first; the profile follows for anyone who wants the shape
+  return `<section class="plate river-plate">${vh}${head}${tabs}${trouble}` +
+    `<section class="p-block"><h2 class="p-h2">${esc(T.riverProfile)}</h2>` +
+    `<p class="p-sub2">${esc(T.riverElevAxis)}</p>${renderRiverChart(vm)}` +
+    `<div class="pf-flow"><span>← ${esc(T.downstream)}</span><span>${esc(T.upstream)} →</span></div>` +
+    key + '</section></section>';
+}
+
+// ---------- the buddy: every empty, loading and error state ----------
+
+// One drawing, five moods — the same water-drop the favicon and the OG card
+// already carry, so a failure still looks like this site rather than a stack
+// trace. --fill drives the waterline exactly as updateFavicon does.
+function renderBuddy(mood, fill = 0.5) {
+  const y = (44 - 22 * Math.max(0, Math.min(1, fill))).toFixed(1);
+  const wave = w => `M2 ${w} q6 -5 12 0 t12 0 t12 0 t12 0 t12 0`;
+  const mouth = mood === 'sad' ? 'M22 30 q10 -9 20 0'
+    : mood === 'sleep' ? 'M26 28 h12'
+    : 'M22 26 q10 9 20 0';
+  const eyes = mood === 'sleep'
+    ? '<path class="ink-s" d="M18 19 q5 4 10 0 M36 19 q5 4 10 0"/>'
+    : '<circle class="ink" cx="23" cy="19" r="5"/><circle class="ink" cx="41" cy="19" r="5"/>' +
+      '<circle class="glint" cx="24.6" cy="17.4" r="1.7"/><circle class="glint" cx="42.6" cy="17.4" r="1.7"/>';
+  return svgWrap('0 0 64 64',
+    '<clipPath id="bd"><rect x="6" y="8" width="52" height="48" rx="16"/></clipPath>' +
+    '<rect class="face" x="6" y="8" width="52" height="48" rx="16" stroke-width="3"/>' +
+    `<g clip-path="url(#bd)"><path class="bw" d="${wave(y)} V60 H2 Z"/>` +
+    `<path class="bw-line" d="${wave(y)}"/></g>` +
+    eyes + `<path class="mouth" d="${mouth}"/>`,
+    ` class="buddy ${mood}" role="img" aria-hidden="true"`);
+}
+
+function renderState(kind, title, body, extra = '') {
+  const mood = kind === 'error' ? 'sad' : kind === 'sleep' ? 'sleep' : 'happy';
+  const fill = kind === 'error' ? 0 : kind === 'loading' ? 0.5 : 0.7;
+  return `<section class="plate state-plate"><div class="state">` +
+    renderBuddy(mood, fill) +
+    `<div class="state-say"><p class="state-title">${esc(title)}</p>` +
+    `<p class="state-body">${esc(body)}</p>${extra}</div></div></section>`;
 }
 
 // ---------- multi-year statistics (years view: heatmap · monthly range · overlay) ----------
@@ -3636,7 +3528,7 @@ function histSelYear(st) {
 function setHistYear(y) {
   histYear = y;
   if (histFocus) histFocus = { y, m: histFocus.m }; // the readout follows the year
-  dirty = true;
+  scheduleRender();
   renderHistoryBar(); // the ◂ year ▸ chips mirror the selection
 }
 
@@ -3702,23 +3594,6 @@ function unusualNow() {
   const cur = state.gauge && state.gauge.currentMeasurement;
   if (!cur || !Number.isFinite(cur.value)) return null;
   return unusualStats(histStats(), cur.value, new Date().getUTCMonth());
-}
-
-function putHeaderTag(g, row, text, cmd) {
-  const col = COLS - text.length - 4;
-  put(g, row, col, text, 'b');
-  linkCells(g, row, col, text.length, cmd);
-}
-
-// a dim header rule with the brand bolded and a right-aligned [tag] control —
-// a long head (think MITTELLANDKANAL at 44 cols) is ellipsized so the tag
-// never overwrites real text
-function putHeadRule(g, head, brand, tag, cmd) {
-  const max = COLS - tag.length - 5;
-  const shown = head.length > max ? head.slice(0, Math.max(0, max - 2)) + '… ' : head;
-  put(g, 0, 0, shown.padEnd(COLS, '─'), 'd');
-  put(g, 0, 4, brand.slice(0, Math.max(0, shown.length - 4)), 'b');
-  putHeaderTag(g, 0, tag, cmd);
 }
 
 // ---------- years view: the survey plate ----------
@@ -4009,12 +3884,12 @@ async function loadWave() {
         const k = kinds.get(r.name);
         if (k && k !== r.kind) { r.kind = k; changed = true; }
       }
-      if (changed) dirty = true;
+      if (changed) scheduleRender();
     }
     return;
   }
   waveData = { river: forRiver, loading: true };
-  dirty = true;
+  scheduleRender();
   try {
     const manifest = await loadRepoManifest() || {};
     const cands = prepared.filter(s => s.uuid);
@@ -4067,7 +3942,7 @@ async function loadWave() {
     if (mode !== 'river' || state.river !== forRiver) return;
     waveData = { river: forRiver, error: e.message };
   }
-  dirty = true;
+  scheduleRender();
   setScreenAria();
 }
 
@@ -4139,8 +4014,8 @@ function renderWave(vm) {
 // Germany's border as (lon, lat) vertices, walked clockwise from the Ems estuary.
 // Coarse on purpose: this locates river names, it is not a chart, and no reading on
 // the page is derived from it. Rasterising a polygon rather than pinning one
-// hand-drawn ASCII shape keeps the outline right at every grid width — the
-// 44-column compact layout gets a real map instead of a clipped one.
+// hand-drawn shape keeps the outline right at every width — a phone gets a
+// real map instead of a clipped one.
 const DE_OUTLINE = [
   [7.20, 53.24], [6.98, 52.63], [6.72, 52.05], [6.15, 51.90], [6.05, 51.25],
   [6.02, 50.75], [6.35, 49.85], [6.36, 49.45], [6.55, 49.20], [6.85, 49.15],
@@ -4544,7 +4419,7 @@ async function loadRising() {
     if (mode !== 'rising' || risingDays !== want) return;
     state.rising = { data: null, error: `the rising board failed: ${e.message}` };
   }
-  dirty = true;
+  scheduleRender();
   setScreenAria();
 }
 
@@ -4559,7 +4434,7 @@ function risingSetDays(n, push = true) {
   applyRisingChrome();
   renderHistoryBar();
   state.rising = null;
-  dirty = true;
+  scheduleRender();
   setScreenAria();
   if (mode === 'rising') loadRising();
 }
@@ -4872,7 +4747,7 @@ function totalView() {
     totalYear = totalMonth = totalDay = null;
   }
   const shard = totalMonth != null ? totalShardCache.get(totalYear) : null;
-  const key = [totalYear, totalMonth, totalDay, totalDiff, COLS, ov.generated,
+  const key = [totalYear, totalMonth, totalDay, totalDiff, plateDensity(), ov.generated,
     shard && shard.rivers ? shard.generated : ''].join('|');
   if (totalViewCache && totalViewCache.key === key) return totalViewCache.view;
   let view;
@@ -5158,7 +5033,7 @@ async function loadTotal() {
     if (mode !== 'total') return;
     state.total = { overview: null, top: null, error: `the totals aren't built yet: ${e.message}` };
   }
-  dirty = true;
+  scheduleRender();
   setScreenAria();
 }
 
@@ -5170,7 +5045,7 @@ async function loadTotalYear(y) {
   } catch (e) {
     totalShardCache.set(y, { error: `no daily totals for ${y}: ${e.message}` });
   }
-  dirty = true;
+  scheduleRender();
   setScreenAria();
 }
 
@@ -5181,7 +5056,7 @@ function totalSetZoom(y, m, d, push = true) {
   history[push ? 'pushState' : 'replaceState'](null, '', totalQuery());
   applyTotalChrome();
   renderHistoryBar();
-  dirty = true;
+  scheduleRender();
   setScreenAria();
 }
 
@@ -5199,7 +5074,7 @@ function totalSetDiff(on) {
   history.replaceState(null, '', totalQuery());
   applyTotalChrome();
   renderHistoryBar();
-  dirty = true;
+  scheduleRender();
   setScreenAria();
 }
 
@@ -5220,7 +5095,7 @@ function setView(v, push = true) {
   renderHistoryBar();
   if (v === 'years') ensureHistoryCoverage(null); // pull the multi-year WSV archive
   if (v === 'wave') loadWave();
-  dirty = true;
+  scheduleRender();
   setScreenAria();
   if (document.startViewTransition && !reduceMotion.matches) {
     const vt = document.startViewTransition(renderNow);
@@ -5231,11 +5106,12 @@ function setView(v, push = true) {
 
 // controls shared by the in-grid targets (data-st="cmd:…") and the bar chips
 function runGridCmd(c) {
-  if (c === 'live') setView('live');
+  if (c === 'retry') { state.error = null; scheduleRender(); if (mode === 'station') loadData(); else if (mode === 'river') loadRiver(); else if (mode === 'rising') loadRising(); else if (mode === 'total') loadTotal(); }
+  else if (c === 'live') setView('live');
   else if (c === 'wave') setView('wave');
   else if (c === 'rmap') setView('live');
   else if (c === 'rlist') setView('list');
-  else if (c === 'abs' || c === 'anom') { histMode = c; dirty = true; renderHistoryBar(); }
+  else if (c === 'abs' || c === 'anom') { histMode = c; scheduleRender(); renderHistoryBar(); }
   else if (c.startsWith('hm:')) {
     const [y, m] = c.slice(3).split(':').map(Number);
     histFocus = { y, m };
@@ -5324,7 +5200,7 @@ function switchStation(name, adsb, push = true) {
   histCache = null;
   applyStationChrome();
   applyModeChrome(); // restore the station chrome if we came from river mode
-  dirty = true;
+  scheduleRender();
   updateLocalBar();
   setScreenAria();
   // cross-fade the grid from the old station to the connecting screen; a
@@ -5374,7 +5250,7 @@ function switchRiver(name, push = true) {
   if (push) history[push === 'replace' ? 'replaceState' : 'pushState'](null, '', '?river=' + encodeURIComponent(next) + viewSuffix());
   applyRiverChrome();
   applyModeChrome();
-  dirty = true;
+  scheduleRender();
   setScreenAria();
   if (document.startViewTransition && !reduceMotion.matches) {
     const vt = document.startViewTransition(renderNow);
@@ -5408,7 +5284,7 @@ function switchRivers(push = true) {
   if (push) history[push === 'replace' ? 'replaceState' : 'pushState'](null, '', '?rivers');
   applyRiversChrome();
   applyModeChrome();
-  dirty = true;
+  scheduleRender();
   setScreenAria();
   if (document.startViewTransition && !reduceMotion.matches) {
     const vt = document.startViewTransition(renderNow);
@@ -5439,7 +5315,7 @@ function switchRising(push = true) {
   if (push) history[push === 'replace' ? 'replaceState' : 'pushState'](null, '', risingQuery());
   applyRisingChrome();
   applyModeChrome();
-  dirty = true;
+  scheduleRender();
   setScreenAria();
   if (document.startViewTransition && !reduceMotion.matches) {
     const vt = document.startViewTransition(renderNow);
@@ -5462,7 +5338,7 @@ function switchTotal(push = true) {
   if (mode === 'total') { // already here: only the zoom state may have moved (popstate)
     applyTotalChrome();
     renderHistoryBar();
-    dirty = true;
+    scheduleRender();
     setScreenAria();
     return;
   }
@@ -5478,7 +5354,7 @@ function switchTotal(push = true) {
   if (push) history[push === 'replace' ? 'replaceState' : 'pushState'](null, '', totalQuery());
   applyTotalChrome();
   applyModeChrome();
-  dirty = true;
+  scheduleRender();
   setScreenAria();
   if (document.startViewTransition && !reduceMotion.matches) {
     const vt = document.startViewTransition(renderNow);
@@ -5496,7 +5372,7 @@ function switchTotal(push = true) {
 function dismissHelp() {
   if (!state.help) return;
   state.help = null;
-  dirty = true;
+  scheduleRender();
   setScreenAria();
 }
 
@@ -5543,7 +5419,7 @@ function helpText(unknownFlag) {
     'PEGEL(1)                 PEGEL:// terminal manual                 PEGEL(1)',
     '',
     'NAME',
-    '    pegel - live ASCII water level terminal for German rivers',
+    '    pegel - live water level survey plates for German rivers',
     '',
     'SYNOPSIS',
     '    > pegel [STATION] [--station NAME] [--river NAME] [--rivers] [--rising]',
@@ -5588,7 +5464,7 @@ function runCommand(raw) {
   }
   if (cmd.help || cmd.unknownFlag) {
     state.help = helpText(cmd.unknownFlag);
-    dirty = true;
+    scheduleRender();
     setScreenAria();
     syncStationInput();
     return;
@@ -5608,13 +5484,13 @@ function runCommand(raw) {
     updateLocalBar();
   }
   dismissHelp();
-  dirty = true;
+  scheduleRender();
   syncStationInput(); // a --river command switched to river mode, so this clears the field
 }
 
 // substring search over stations and rivers, umlaut-folded — the prompt should
 // find "MAGDEBURG-STROMBRÜCKE" when someone types the town, not feed the typed
-// fragment to the API and serve a sea monster. startsWith matches rank first.
+// fragment to the API and serve an error. startsWith matches rank first.
 function findMatches(raw) {
   const q = foldStrip(raw);
   if (!q) return [];
@@ -5637,13 +5513,13 @@ function findMatches(raw) {
 function dismissSuggest() {
   if (!state.suggest) return;
   state.suggest = null;
-  dirty = true;
+  scheduleRender();
   setScreenAria();
 }
 
 function showSuggest(q, matches) {
   state.suggest = { q, matches };
-  dirty = true;
+  scheduleRender();
   setScreenAria();
   stationInput.value = q.toUpperCase();
 }
@@ -5651,21 +5527,28 @@ function showSuggest(q, matches) {
 // the did-you-mean screen: every row is a click target (rivers open the
 // whole-river profile via the river: link convention)
 const SUGGEST_MAX = 12;
-function drawSuggest(g, s) {
-  put(g, 0, 0, `─── NO EXACT MATCH FOR "${s.q.toUpperCase()}" `.padEnd(COLS, '─'), 'd');
-  put(g, 2, 2, 'did you mean:', 'b');
-  s.matches.slice(0, SUGGEST_MAX).forEach((m, i) => {
-    const row = 4 + i;
-    const meta = m.river ? 'river · whole profile'
-      : (() => { const md = stationMeta.get(m.name.toUpperCase()); return md ? [md.w, md.km != null ? 'km ' + Math.round(md.km) : ''].filter(Boolean).join(' · ') : ''; })();
-    const name = m.name.slice(0, 34);
-    put(g, row, 2, '▸ ' + name, 'b');
-    if (meta && !isCompact()) put(g, row, 40, meta, 'd');
-    linkCells(g, row, 2, isCompact() ? name.length + 2 : COLS - 4, m.river ? 'river:' + m.name : m.name);
-  });
-  if (s.matches.length > SUGGEST_MAX) put(g, 4 + SUGGEST_MAX, 2, `… and ${s.matches.length - SUGGEST_MAX} more — keep typing`, 'd');
-  put(g, g.rows - 1, 2, 'click a row, or press esc', 'd');
+function suggestViewModel(sg) {
+  return {
+    kind: 'suggest',
+    q: sg.q,
+    matches: sg.matches.slice(0, SUGGEST_MAX).map(m => ({
+      name: m.name,
+      target: m.river ? 'river:' + m.name : m.name,
+      meta: m.river ? T.wholeRiver : stationLabel(m.name.toUpperCase()),
+    })),
+    more: Math.max(0, sg.matches.length - SUGGEST_MAX),
+  };
 }
+
+function renderSuggest(vm) {
+  const rows = vm.matches.map(m =>
+    `<li><a${navAttrs(m.target)}><span class="name">${esc(m.name)}</span>` +
+    (m.meta ? `<span class="meta">${esc(m.meta)}</span>` : '') + '</a></li>').join('');
+  const extra = `<ul class="suggest">${rows}</ul>` +
+    (vm.more ? `<p class="p-dim">… and ${vm.more} more — keep typing</p>` : '');
+  return renderState('ask', `${T.noMatchFor} “${vm.q}”`, T.didYouMean, extra);
+}
+
 
 function applyPrompt() {
   acClose();
@@ -6253,7 +6136,7 @@ async function loadRepoArchive() {
   if (entry) {
     state.repoArchive = entry.none ? 'none' : 'available';
     state.archiveSource = entry.source || null;
-    dirty = true;
+    scheduleRender();
     if (entry.none) return; // known gap — skip the pointless fetches
   }
   const uuid = info.uuid;
@@ -6288,7 +6171,7 @@ async function loadRepoArchive() {
   mergeIntoArchive(forStation, measurements);
   state.archive = loadArchive(forStation);
   updateLocalBar();
-  dirty = true;
+  scheduleRender();
 }
 
 async function ensureHistoryCoverage(days) {
@@ -6304,7 +6187,7 @@ async function ensureHistoryCoverage(days) {
     mergeIntoArchive(forStation, measurements);
     state.archive = loadArchive(forStation);
     updateLocalBar();
-    dirty = true;
+    scheduleRender();
   } catch { /* best-effort backfill; sparkline just falls back to whatever's local */ }
 }
 
@@ -6318,7 +6201,7 @@ function setHistory(k) {
   history.replaceState(null, '', '?' + q.toString());
   renderHistoryBar();
   ensureHistoryCoverage(historyPreset().d);
-  dirty = true;
+  scheduleRender();
 }
 
 // hydrate suggestions from cache synchronously so an ASCII-spelled ?station= (e.g. a
@@ -6355,6 +6238,15 @@ for (const id of ['info-link', 'appbar-info']) {
 document.getElementById('infobox-close').addEventListener('click', () => infobox.close());
 
 // the plate foot's [copy] — the permalink as one click, native share stays in the footer
+// the error plate's "report this" is rendered fresh each time, so it is wired
+// by delegation rather than by id
+screen.addEventListener('click', e => {
+  const el = e.target && e.target.closest ? e.target.closest('#state-report') : null;
+  if (!el) return;
+  e.preventDefault();
+  openReport();
+});
+
 const permaCopy = document.getElementById('perma-copy');
 permaCopy.addEventListener('click', async () => {
   try {
@@ -6430,7 +6322,7 @@ function buildReportSections(note) {
   ];
 
   const viewport = [
-    `- COLS: ${COLS}`,
+    `- plate: ${Math.round(plateWidth())}px ${plateDensity()}`,
     `- viewport: ${vw}×${vh}`,
   ];
 
@@ -6516,13 +6408,13 @@ function updateReportPreview() {
   reportPreview.value = buildReportBody(reportNote.value);
 }
 
-reportLink.addEventListener('click', e => {
-  e.preventDefault();
+function openReport() {
   reportNote.value = '';
   updateReportPreview();
   reportbox.showModal();
   reportNote.focus();
-});
+}
+reportLink.addEventListener('click', e => { e.preventDefault(); openReport(); });
 reportNote.addEventListener('input', updateReportPreview);
 document.getElementById('reportbox-close').addEventListener('click', () => reportbox.close());
 
@@ -6537,112 +6429,12 @@ reportCopyBtn.addEventListener('click', async () => {
   } catch { /* clipboard permission denied — the body stays visible in the textarea to select manually */ }
 });
 
-// ---------- main loop ----------
+// ---------- render ----------
 
-// the error screen: a big horned sea monster surfaces and devours the little
-// sailboat, on a loop. approach -> jaws gape over the boat -> CHOMP -> wink,
-// gulp & bubbles -> dive back under -> repeat. faces left, toward the boat.
-function wreckFrame(t) {
-  const W = 46, H = 12;
-  const buf = Array.from({ length: H }, () => Array(W).fill(' '));
-  const put = (r, c, s) => { for (let i = 0; i < s.length; i++) { const cc = c + i, ch = s[i]; if (ch !== ' ' && r >= 0 && r < H && cc >= 0 && cc < W) buf[r][cc] = ch; } };
-  const putArr = (r, c, a) => a.forEach((s, i) => put(r + i, c, s));
-  const C = 7, p = (t % C) / C;
-  const surf = H - 3;   // waterline (waves fill the rows below)
-  const bx = 2, chompX = 4, offX = W + 6;   // offX is fully past the right edge
-  const lerp = (a, b, f) => Math.round(a + (b - a) * f);
-
-  // sailboat, bobbing — gone the instant the jaws snap shut
-  const eaten = p >= 0.52;
-  if (!eaten) {
-    const bob = Math.sin(t * 3) > 0.3 ? 0 : -1;  // bob up only, hull stays above the waves
-    putArr(surf - 5 + bob, bx, ['   |>', '   |\\', '   |#\\', '   |##\\', '___|###\\', '\\_______/']);
-  }
-
-  // monster: glides in from the right, lunges over the boat, chomps, then swims
-  // all the way off the right edge
-  let mx, open;
-  if (p < 0.14) { mx = offX; open = false; }
-  else if (p < 0.40) { mx = lerp(offX, chompX, (p - 0.14) / 0.26); open = p >= 0.32; }
-  else if (p < 0.52) { mx = chompX; open = true; }
-  else if (p < 0.66) { mx = chompX; open = false; }
-  else { mx = lerp(chompX, offX, (p - 0.66) / 0.34); open = false; }
-  const my = surf - 8;
-  const happy = p >= 0.52;                 // full and content once it has eaten the boat
-  const eye = happy ? '^' : '◣';           // angry glare while hunting; happy squint after
-  let jaw;
-  if (open) {
-    jaw = [
-      '        /\\  /\\  /\\',
-      '    ___/  \\/  \\/  \\_',
-      '   /                 \\',
-      '  /             ___   \\',
-      ' < VVVVVVVV    / ' + eye + ' \\   \\',
-      ' < -==<        \\___/   |',
-      ' < ^^^^^^^^           _/',
-      '  \\                  /',
-      '   \\________________/',
-    ];
-  } else if (happy) {
-    jaw = [
-      '        /\\  /\\  /\\',
-      '    ___/  \\/  \\/  \\_',
-      '   /                 \\',
-      '  /             ___   \\',
-      ' |  ______     / ' + eye + ' \\   \\',
-      ' |  \\____/     \\___/   |',
-      ' |                    _/',
-      '  \\                  /',
-      '   \\________________/',
-    ];
-  } else {
-    jaw = [
-      '        /\\  /\\  /\\',
-      '    ___/  \\/  \\/  \\_',
-      '   /                 \\',
-      '  /             ___   \\',
-      ' | XXXXXXXX    / ' + eye + ' \\   \\',
-      ' |  ______     \\___/   |',
-      ' | XXXXXXXX           _/',
-      '  \\                  /',
-      '   \\________________/',
-    ];
-  }
-  const swim = happy && p >= 0.66 && Math.sin(t * 4) > 0 ? -1 : 0;  // bob up as it swims off
-  putArr(my + swim, mx, jaw);
-
-  if (happy) put(0, mx + 14 + (Math.floor(t * 2) % 2), '♪');  // humming a happy tune
-  if (p >= 0.50 && p < 0.56) put(my + 1, bx, 'CHOMP!');   // snap flash by the boat
-
-  // waves: 2 base rows always, plus a swell that rises once the monster swims off
-  // and recedes as the next boat drifts in — the sea expands to fill the scene
-  const wv = '~∼≈~';
-  const waveRow = (r, o) => { for (let c = 0; c < W; c++) if (buf[r][c] === ' ') buf[r][c] = wv[((c + Math.floor(t * 4) + o) % wv.length + wv.length) % wv.length]; };
-  let swell = 0;
-  if (p >= 0.72) swell = (p - 0.72) / 0.28 * 2;      // sea rises as the monster swims off
-  else if (p < 0.20) swell = (1 - p / 0.20) * 2;     // and recedes as the next boat drifts in
-  for (let wr = 0; wr < 2 + Math.round(swell); wr++) waveRow(H - 1 - wr, wr * 2);
-
-  // bubbles trailing where the boat went down (left of the maw)
-  if (p >= 0.56 && p < 0.82) {
-    for (let k = 0; k < 3; k++) {
-      const br = (surf - 1) - (Math.floor(t * 4 + k * 2) % 3);
-      put(br, mx - 1 - k * 2, k % 2 ? '°' : 'o');
-    }
-  }
-  return buf.map(r => r.join('').replace(/\s+$/, '')).join('\n');
-}
-
-// the screen only ever swaps when its content actually changed: static views
-// (years, wave, the daytime river profile, help) hold one stable DOM, so click
-// targets stop being yanked out from under the pointer 8 times a second
+// The screen only swaps when its content actually changed. It mattered more
+// when the grid repainted eight times a second; it still saves a full parse
+// whenever a refresh brings back a reading that has not moved.
 let lastScreen = null;
-function setScreenText(text) {
-  setScreenGridMode(); // every plain-text screen is a pre/mono one
-  if (text === lastScreen) return;
-  lastScreen = text;
-  screen.textContent = text;
-}
 function setScreenHtml(html) {
   if (html === lastScreen) return;
   lastScreen = html;
@@ -6651,82 +6443,37 @@ function setScreenHtml(html) {
 // Coexistence scaffolding while views migrate off the character grid: a plate
 // view flips #screen out of pre/mono mode (and drops fitFont's inline font
 // size), a grid view flips it back. Dies with the last draw* function.
-function setScreenPlate(html) {
-  if (screen.className !== 'dom') {
-    screen.className = 'dom';
-    screen.style.fontSize = '';
-    screen.setAttribute('role', 'presentation');
-    lastScreen = null;
-  }
-  setScreenHtml(html);
-}
-function setScreenGridHtml(html) {
-  setScreenGridMode();
-  setScreenHtml(html);
-}
-function setScreenGridMode() {
-  if (screen.className === 'dom') {
-    screen.className = '';
-    screen.setAttribute('role', 'img');
-    lastScreen = null;
-    fitFont();
-  }
-}
-
-function render(t) {
-  if (state.help) {
-    setScreenText(state.help);
-    return;
-  }
+const setScreenPlate = setScreenHtml;
+function render() {
+  if (state.help) { setScreenPlate(`<pre class="manpage">${esc(state.help)}</pre>`); return; }
   if (state.suggest) {
-    const g = makeGrid(6 + Math.min(state.suggest.matches.length, SUGGEST_MAX) + (state.suggest.matches.length > SUGGEST_MAX ? 1 : 0));
-    drawSuggest(g, state.suggest);
-    setScreenGridHtml(gridToHtml(g));
+    const vm = suggestViewModel(state.suggest);
+    setScreenPlate(renderSuggest(vm));
     return;
   }
   if (mode === 'rivers') {
-    if (!riversOverview().length) {
-      setScreenText(`mapping the network ${'·'.repeat(1 + Math.floor(t * 2) % 3)}`);
-      return;
-    }
+    if (!riversOverview().length) return setScreenLoading(T.loadMap);
     const vm = riversViewModel();
     setScreenPlate(renderRivers(vm));
     setSourceLine(vm.source);
     return;
   }
   if (mode === 'rising') {
-    if (state.rising && state.rising.error) {
-      setScreenText(`${wreckFrame(t)}\n\nERROR\n\n${state.rising.error}`);
-      return;
-    }
-    if (!state.rising) {
-      setScreenText(`diffing every gauge against yesterday ${'·'.repeat(1 + Math.floor(t * 2) % 3)}`);
-      return;
-    }
+    if (state.rising && state.rising.error) return setScreenError(state.rising.error);
+    if (!state.rising) return setScreenLoading(T.loadRising);
     const vm = risingViewModel();
     setScreenPlate(renderRising(vm));
     setSourceLine(vm.source);
     return;
   }
   if (mode === 'total') {
-    if (state.total && state.total.error) {
-      setScreenText(`${wreckFrame(t)}\n\nERROR\n\n${state.total.error}`);
-      return;
-    }
-    if (!state.total) {
-      setScreenText(`summing every gauge ${'·'.repeat(1 + Math.floor(t * 2) % 3)}`);
-      return;
-    }
+    if (state.total && state.total.error) return setScreenError(state.total.error);
+    if (!state.total) return setScreenLoading(T.loadTotal);
     // month/day levels need the year shard — fetch it lazily on first sight
     if (totalMonth != null && totalShardCache.get(totalYear) === undefined) loadTotalYear(totalYear);
     const view = totalView();
     if (view.level === 'pending') {
-      if (view.error) {
-        setScreenText(`${wreckFrame(t)}\n\nERROR\n\n${view.error}`);
-      } else {
-        setScreenText(`summing ${totalYear} day by day ${'·'.repeat(1 + Math.floor(t * 2) % 3)}`);
-      }
-      return;
+      return view.error ? setScreenError(view.error) : setScreenLoading(`${T.loadTotalYear} ${totalYear}…`);
     }
     const vm = totalPlateModel();
     setScreenPlate(renderTotal(vm));
@@ -6734,42 +6481,30 @@ function render(t) {
     return;
   }
   if (mode === 'river') {
-    if (state.error) { setScreenText(`${wreckFrame(t)}\n\nERROR\n\n${state.error}`); return; }
-    if (!state.riverStations) {
-      setScreenText(`mapping ${state.river} ${'·'.repeat(1 + Math.floor(t * 2) % 3)}`);
-      return;
-    }
+    if (state.error) return setScreenError(state.error);
+    if (!state.riverStations) return setScreenLoading(`${T.loadRiver} ${state.river}…`);
     if (viewMode === 'wave') {
-      if (waveData && waveData.error) {
-        setScreenText(`${wreckFrame(t)}\n\nERROR\n\nwave data for "${state.river}" failed: ${waveData.error}\nclick elsewhere or retry via ?river=${state.river}&view=wave`);
-        return;
-      }
+      if (waveData && waveData.error) return setScreenError(`${T.waveFailed} ${state.river}: ${waveData.error}`);
       if (!waveData || waveData.loading) {
         if (!waveData) loadWave(); // e.g. booted straight into ?view=wave
-        setScreenText(`sounding ${state.river} day by day ${'·'.repeat(1 + Math.floor(t * 2) % 3)}`);
-        return;
+        return setScreenLoading(`${T.loadWave} ${state.river}…`);
       }
       const vm = waveViewModel(waveData);
       setScreenPlate(renderWave(vm));
       setSourceLine(vm.source);
       return;
     }
-    const g = makeGrid(riverGridRows(state.riverStations));
-    drawRiver(g, state.riverStations, t);
-    setScreenGridHtml(gridToHtml(g));
-    if (!fitted) { fitted = true; fitFont(); }
+    const vm = riverViewModel(state.riverStations);
+    setScreenPlate(renderRiver(vm));
+    setSourceLine(vm.source);
     return;
   }
-  if (state.error) {
-    setScreenText(`${wreckFrame(t)}\n\nERROR\n\n${state.error}`);
-    return;
-  }
+  if (state.error) return setScreenError(state.error);
   if (!state.gauge || !state.gauge.currentMeasurement ||
-      !Number.isFinite(state.gauge.currentMeasurement.value)) {
-    // a non-numeric current value would render blank big digits under a
+      !Number.isFinite(state.gauge.currentMeasurement.value) || !state.info) {
+    // a non-numeric current value would render a blank hero under a
     // healthy-looking header — treat it like "no measurement yet" instead
-    setScreenText(`connecting to pegelonline.wsv.de ${'·'.repeat(1 + Math.floor(t * 2) % 3)}`);
-    return;
+    return setScreenLoading(`${T.loadStation} ${station}…`);
   }
   if (viewMode === 'years') {
     const vm = yearsViewModel();
@@ -6781,38 +6516,33 @@ function render(t) {
   setScreenPlate(renderStation(vm));
   setSourceLine(vm.source);
 }
+
+function setScreenLoading(what) {
+  setScreenPlate(renderState('loading', what, T.loadBody));
+  setSourceLine(T.sourceWsv);
+}
+
+function setScreenError(msg) {
+  // the sea monster's successor: same buddy, empty and holding still
+  setScreenPlate(renderState('error', T.errorTitle, msg,
+    `<p class="state-actions">${navOpen('cmd:retry')}${esc(T.tryAgain)}${navClose('cmd:retry')}` +
+    ` <a href="#" id="state-report">${esc(T.reportThis)}</a></p>`));
+  setSourceLine(T.sourceWsv);
+}
+
 let fitted = false;
 
-function renderNow() {
-  render(reduceMotion.matches ? 0 : (performance.now() - start) / 1000);
+function renderNow() { render(); }
+
+// Coalesce every "the data moved" signal into one render on the next frame:
+// a burst of loaders landing together costs one repaint, not one each.
+let renderQueued = false;
+function scheduleRender() {
+  if (renderQueued) return;
+  renderQueued = true;
+  requestAnimationFrame(() => { renderQueued = false; render(); });
 }
 
-function fitFont() {
-  if (screen.className === 'dom') return; // plate views size themselves in CSS
-  // size the grid to the width actually available inside <main>, i.e. minus its
-  // padding and border — otherwise the box overflows the viewport on narrow screens
-  const cs = getComputedStyle(document.querySelector('main'));
-  const chrome = parseFloat(cs.paddingLeft) + parseFloat(cs.paddingRight) +
-    parseFloat(cs.borderLeftWidth) + parseFloat(cs.borderRightWidth);
-  const avail = document.documentElement.clientWidth - chrome - 4;
-  // pick the grid width first: full 84 columns only while the font stays readable
-  // (>= 8px); below that, phones get the 44-column compact layout at a large font
-  const next = avail / (84 * 0.602) >= 8 ? 84 : COMPACT_COLS;
-  if (next !== COLS) {
-    COLS = next;
-    sparkDisplay = null; // spring arrays are sized per chart width
-    dirty = true;
-  }
-  let px = Math.min(15, avail / (COLS * 0.602));
-  screen.style.fontSize = px.toFixed(2) + 'px';
-  // the 0.602 glyph-aspect estimate can be off; correct against the real rendered
-  // width so the grid always fits exactly (only meaningful once the grid is drawn)
-  const w = screen.scrollWidth;
-  if (w > avail) screen.style.fontSize = (px * avail / w).toFixed(2) + 'px';
-}
-
-window.addEventListener('resize', fitFont);
-fitFont();
 updateLocalBar();
 if (mode === 'rivers') {
   applyModeChrome();
@@ -6851,17 +6581,19 @@ setInterval(loadShips, AIS_REFRESH_MS);
 // rAF instead of setInterval: the browser pauses it in hidden tabs for free.
 // Under prefers-reduced-motion the scene is static (t = 0) and only redraws
 // when data actually changed, instead of 8x per second.
-const start = performance.now();
-let lastFrame = -Infinity;
-function frame(now) {
-  requestAnimationFrame(frame);
-  if (now - lastFrame < 118) return; // ~8 fps is plenty for ASCII water
-  lastFrame = now;
-  if (reduceMotion.matches && !dirty) return;
-  dirty = false;
-  render(reduceMotion.matches ? 0 : (now - start) / 1000);
-}
-requestAnimationFrame(frame);
+// The 8 fps repaint loop is gone: every animation is CSS on transform/opacity
+// now, so the page only re-renders when the DATA changes or the reader acts.
+// Steady state is one render per refresh interval instead of eight per second.
+scheduleRender();
+// rAF paused the old loop for free in a hidden tab; the polling intervals need
+// telling. A tab coming back to the front refetches at once rather than showing
+// a stale reading until the next tick.
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden || !document.visibilityState) return;
+  if (mode === 'station') loadData();
+  else if (mode === 'river') loadRiver();
+  else if (mode === 'rising') loadRising();
+});
 </script>
 </body>
 </html>

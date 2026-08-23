@@ -301,12 +301,11 @@ test('findMatches / applyPrompt: place names resolve via substring search', () =
   // the suggest screen renders clickable rows (river rows use the river: prefix)
   const html = app.run(`(() => {
     state.suggest = { q: 'mosel', matches: [{ name: 'Trier OP', river: false }, { name: 'MOSEL', river: true }] };
-    const g = makeGrid(8);
-    drawSuggest(g, state.suggest);
-    return gridToHtml(g);
+    return renderSuggest(suggestViewModel(state.suggest));
   })()`);
-  assert.ok(html.includes('data-st="Trier OP"'));
-  assert.ok(html.includes('data-st="river:MOSEL"'));
+  assert.ok(html.includes('data-nav="Trier OP"'));
+  assert.ok(html.includes('data-nav="river:MOSEL"'));
+  assert.ok(html.includes('Did you mean'), 'and says what it is asking');
 });
 
 // ---------- river mode data ----------
@@ -391,8 +390,8 @@ test('profileViewModel: every neighbour keeps its full name and its own row', ()
 
 // ---------- drawRiver layout invariants (worst case: 30 stations, 24 troubled) ----------
 
-test('drawRiver: no label overlaps even on a crowded, clustered river', () => {
-  const app = loadApp({ now: NOON }); // noon: keeps the night sky layer out of the layout
+test('riverViewModel: a crowded river keeps every gauge, and names its troubled ones', () => {
+  const app = loadApp({ now: NOON });
   const sts = Array.from({ length: 30 }, (_, i) => ({
     name: 'ST' + String(i).padStart(2, '0'),
     km: 100 + i * 0.8 + (i % 5 === 0 ? i : 0), // clusters with occasional jumps
@@ -401,89 +400,52 @@ test('drawRiver: no label overlaps even on a crowded, clustered river', () => {
     kind: i % 5 === 4 ? 'normal' : (i % 2 ? 'low' : 'high'),
   }));
   app.run(`state.river = 'TESTFLUSS'`);
-  const { res, grid } = app.run(`(() => {
-    const sts = ${JSON.stringify(sts)};
-    const g = makeGrid(riverGridRows(sts));
-    const res = drawRiver(g, sts, 0);
-    return { res, grid: g.ch.map(r => r.join('')) };
+  const { vm, html } = app.run(`(() => {
+    const vm = riverViewModel(${JSON.stringify(sts)});
+    return { vm, html: renderRiver(vm) };
   })()`);
-
-  assert.equal(res.nLow, 12);
-  assert.equal(res.nHigh, 12);
-  assert.ok(res.labels.length >= 2, 'at least some labels were placed');
-
-  // every drawn label stays inside the 84-column grid…
-  for (const l of res.labels) {
-    assert.ok(l.col >= 0 && l.col + l.text.length <= 84, `label ${l.text} inside the grid`);
+  assert.equal(vm.counts.low, 12);
+  assert.equal(vm.counts.high, 12);
+  assert.equal(vm.pts.length, 30, 'every gauge is plotted — the grid could only label a few');
+  // the trouble list carries ALL 24, not 8 plus an overflow line
+  assert.equal(vm.troubled.length, 24);
+  assert.ok(!html.includes('… and 16 more'), 'nothing is truncated any more');
+  assert.ok(html.includes('TROUBLE'), 'trouble list header present');
+  for (const s of vm.troubled) assert.ok(html.includes(s.name), `${s.name} is listed`);
+  // dots stay inside the plot box at any width — fractions, not columns
+  for (const p of vm.pts) {
+    assert.ok(p.x >= 0 && p.x <= 1, `${p.name} x in range`);
+    assert.ok(p.y >= 0 && p.y <= 1, `${p.name} y in range`);
   }
-  // …and no two labels on the same row overlap or sit fused together
-  const byRow = new Map();
-  for (const l of res.labels) {
-    byRow.set(l.row, [...(byRow.get(l.row) || []), l]);
-  }
-  for (const [row, labels] of byRow) {
-    labels.sort((a, b) => a.col - b.col);
-    for (let i = 1; i < labels.length; i++) {
-      const prev = labels[i - 1];
-      assert.ok(labels[i].col > prev.col + prev.text.length,
-        `row ${row}: "${prev.text}" and "${labels[i].text}" keep a blank cell between them`);
-    }
-  }
-
-  const flat = grid.join('\n');
-  assert.ok(flat.includes('TROUBLE'), 'trouble list header present');
-  assert.ok(flat.includes('… and 16 more'), '24 troubled stations cap at 8 + overflow line');
+  assert.ok(vm.gradient > 0, 'the mean fall is derived and reported');
+  assert.ok(html.includes('mean fall'), 'and named on the plate');
 });
+
 
 // ---------- grid & escaping ----------
-
-test('putKmSign / putBig: negative river km render instead of crashing', () => {
-  const app = loadApp();
-  const grid = app.run(`(() => {
-    const g = makeGrid(12);
-    putKmSign(g, 0, 0, -38.7); // MARBURG (Lahn) — km signs must survive a minus
-    putBig(g, 9, 0, '-39', 'b');
-    return g.ch.map(r => r.join(''));
-  })()`);
-  assert.ok(grid[3].includes('███'), 'minus glyph drawn inside the sign');
-  assert.ok(grid[0].includes('┌───┬───┬───┐'), 'three-cell sign frame for "-39"');
-  assert.ok(grid[11].includes('███'), 'big digits render the minus row');
-});
-
-test('gridToHtml: escapes markup, emits class and link runs', () => {
-  const app = loadApp();
-  const html = app.run(`(() => {
-    const g = makeGrid(1);
-    put(g, 0, 0, '<&>', 'b');
-    linkCells(g, 0, 0, 3, 'A"B');
-    return gridToHtml(g);
-  })()`);
-  assert.ok(html.includes('&lt;&amp;&gt;'), 'grid text is HTML-escaped');
-  assert.ok(html.includes('data-st="A&quot;B"'), 'link layer emitted, attribute quotes escaped');
-  assert.ok(html.includes('class="b"'));
-});
 
 // ---------- responsive COLS breakpoint (Chrome desktop cannot shrink below ~500px,
 // so the 84 ↔ 44 switch is pinned here instead of via window resizing) ----------
 
-test('fitFont: picks 44 columns on phone widths, 84 on desktop, and switches back', () => {
+test('layout: density follows the measured plate width, with no hard tier fork', () => {
+  // fitFont's two-tier 84/44-column fork is gone: the plate is CSS-sized and
+  // only genuine CONTENT decisions still read a width
   const phone = loadApp({ width: 390 });
-  assert.equal(phone.run('COLS'), 44, '390px viewport boots into the compact grid');
-  assert.equal(phone.run('isCompact()'), true);
-  assert.ok(parseFloat(phone.el('screen').style.fontSize) >= 8, 'compact font stays readable (>= 8px)');
+  assert.equal(phone.run('plateDensity()'), 'narrow');
+  assert.equal(phone.run('typeof COLS'), 'undefined', 'no column count survives');
+  assert.equal(phone.run('typeof fitFont'), 'undefined', 'and no font-fitting hack');
 
   const desktop = loadApp({ width: 1200 });
-  assert.equal(desktop.run('COLS'), 84, '1200px viewport uses the full grid');
-  assert.equal(desktop.run('isCompact()'), false);
+  assert.equal(desktop.run('plateDensity()'), 'wide');
 
-  // crossing the breakpoint at runtime (rotate / window resize)
+  // crossing the breakpoint at runtime (rotate / window resize) is continuous
   desktop.document.documentElement.clientWidth = 390;
-  desktop.run('fitFont()');
-  assert.equal(desktop.run('COLS'), 44, 'shrinking re-picks the compact grid');
+  assert.equal(desktop.run('plateDensity()'), 'narrow', 'shrinking re-reads the width');
+  assert.equal(desktop.run('bucketCols()'), 130, 'and the data density follows it');
   desktop.document.documentElement.clientWidth = 1200;
-  desktop.run('fitFont()');
-  assert.equal(desktop.run('COLS'), 84, 'growing restores the full grid');
+  assert.equal(desktop.run('plateDensity()'), 'wide');
 });
+
 
 // ---------- repo-hosted WSV archive (scripts/fetch-wsv-archive.mjs + client) ----------
 
@@ -994,7 +956,7 @@ test('buildReportBody: covers everything the renderer branches on, redacts recei
   assert.match(body, /history range: 7d/);
   assert.match(body, /points in local archive: 2/);
   assert.match(body, /hosted archive loaded: true \(source: WSV\)/);
-  assert.match(body, /COLS: 84/);
+  assert.match(body, /plate: \d+px (narrow|wide)/);
   assert.match(body, /flowLowKm: true/);
   assert.match(body, /neighbors: 3/);
   assert.match(body, /W: 250 cm/);
@@ -1374,25 +1336,26 @@ test('history bar: view chips per mode — PROFILE/WAVE on rivers, ABS/ANOM in y
   assert.ok(labels(live).includes('24H') && labels(live).includes('▦ YEARS'), 'live station keeps the range presets');
 });
 
-test('setScreenText/Html: the screen only swaps when content changed', () => {
+test('setScreenHtml: the screen only swaps when the content changed', () => {
   const app = loadApp();
   const stable = app.run(`(() => {
     state.help = 'MAN PAGE';
-    render(0);
-    const first = screen.textContent;
-    screen.textContent = 'SENTINEL'; // a repaint would overwrite this
-    render(0.5);
-    return { first, second: screen.textContent };
+    render();
+    const first = screen.innerHTML;
+    screen.innerHTML = 'SENTINEL'; // a repaint would overwrite this
+    render();
+    return { first, second: screen.innerHTML };
   })()`);
-  assert.equal(stable.first, 'MAN PAGE');
+  assert.match(stable.first, /MAN PAGE/);
   assert.equal(stable.second, 'SENTINEL', 'unchanged content leaves the DOM alone');
   const changed = app.run(`(() => {
     state.help = 'NEW PAGE';
-    render(1);
-    return screen.textContent;
+    render();
+    return screen.innerHTML;
   })()`);
-  assert.equal(changed, 'NEW PAGE', 'changed content still repaints');
+  assert.match(changed, /NEW PAGE/, 'changed content still repaints');
 });
+
 
 test('year paging + month readout: chips step and clamp, cells report numbers', () => {
   const app = loadApp({ width: 1200, now: JULY });
@@ -1680,22 +1643,6 @@ test('years view: no backwards range title without a completed year', () => {
   assert.ok(html.includes('at least one completed year'));
 });
 
-
-test('putHeadRule: long river names ellipsize instead of being overwritten by the tag', () => {
-  const app = loadApp({ width: 390, now: NOON });
-  const sts = Array.from({ length: 12 }, (_, i) => ({
-    name: 'S' + i, km: i * 10, value: 100, elev: 50 - i, kind: 'normal',
-  }));
-  app.run(`state.river = 'MITTELLANDKANAL'`);
-  const row0 = app.run(`(() => {
-    const g = makeGrid(riverGridRows(${JSON.stringify(sts)}));
-    drawRiver(g, ${JSON.stringify(sts)}, 0);
-    return g.ch[0].join('');
-  })()`);
-  assert.ok(row0.includes('[▦ WAVE]'), 'tag present');
-  assert.ok(row0.includes('… '), 'head text ellipsized');
-  assert.ok(/(… |─)\[▦ WAVE\]/.test(row0), 'the tag borders padding or the ellipsis, never clipped text');
-});
 
 test('foldYearsIntoWindow survives malformed archive years without throw or NaN', () => {
   const app = loadApp();
