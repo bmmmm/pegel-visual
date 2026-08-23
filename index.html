@@ -687,6 +687,41 @@
   .bh { stroke: color-mix(in oklab, var(--ink) 55%, transparent); }
   .bh-f { fill: color-mix(in oklab, var(--ink) 55%, transparent); }
   .defs-only { position: absolute; width: 0; height: 0; }
+  /* ---- rivers map ---- */
+  .chart.map { max-height: 74vh; margin-inline: auto; }
+  .map .mout { fill: color-mix(in oklab, var(--water) 22%, transparent); stroke: var(--ink); stroke-width: 1.2; stroke-linejoin: round; }
+  .map .mdot { fill: var(--water-line); stroke: var(--paper); stroke-width: 0.8; }
+  .map .mlbl {
+    font-family: var(--font-data);
+    font-size: 7.2px;
+    fill: var(--ink);
+    dominant-baseline: auto;
+  }
+  .map a:hover .mlbl { text-decoration: underline; }
+  .map a:hover .mdot { fill: var(--ink); }
+  /* ---- A–Z index ---- */
+  .a-z {
+    list-style: none;
+    margin: 1em 0 0;
+    padding: 0;
+    columns: 18rem;
+    column-gap: 2em;
+    font-family: var(--font-data);
+    font-size: 0.85em;
+  }
+  .a-z li { break-inside: avoid; }
+  .a-z a {
+    display: flex;
+    gap: 1ch;
+    align-items: baseline;
+    padding: 0.2em 0.2ch;
+    color: var(--ink);
+    text-decoration: none;
+    border-bottom: 1px solid var(--rule);
+  }
+  .a-z a:hover { background: var(--ink); color: var(--paper); }
+  .a-z .meta { margin-left: auto; color: var(--mid); font-size: 0.9em; }
+  .a-z a:hover .meta { color: var(--paper); }
   .swr { stroke: var(--ink); stroke-width: 1.5; }
   .sw { width: 12px; height: 12px; flex: none; }
   .p-key .lg { display: inline-flex; align-items: center; gap: 0.5ch; }
@@ -1059,11 +1094,13 @@ let station = (new URLSearchParams(location.search).get('station') || 'BONN').to
 let mode = (p => p.has('rising') ? 'rising' : p.has('rivers') ? 'rivers' : p.has('total') ? 'total' : p.get('river') ? 'river' : 'station')(new URLSearchParams(location.search));
 // sub-view within a mode: station mode offers 'years' (multi-year statistics),
 // river mode offers 'wave' (station × day heatmap). 'live' is the default of both.
-const VIEW_KEYS = ['live', 'years', 'wave'];
+// rivers mode offers 'list' (the A–Z index of every water)
+const VIEW_KEYS = ['live', 'years', 'wave', 'list'];
+// which sub-views each mode actually has — everything else falls back to 'live'
+const MODE_VIEWS = { station: ['years'], river: ['wave'], rivers: ['list'], rising: [], total: [] };
 let viewMode = (new URLSearchParams(location.search).get('view') || 'live').toLowerCase();
 if (!VIEW_KEYS.includes(viewMode)) viewMode = 'live';
-if (mode === 'rivers' || mode === 'rising' || mode === 'total') viewMode = 'live'; // no sub-views there
-else if (mode === 'river' ? viewMode === 'years' : viewMode === 'wave') viewMode = 'live';
+if (viewMode !== 'live' && !MODE_VIEWS[mode].includes(viewMode)) viewMode = 'live';
 const viewSuffix = () => viewMode === 'live' ? '' : '&view=' + viewMode;
 
 // ?total zoom state: ALL years → one year → one month → one day. Ephemeral like
@@ -1119,7 +1156,7 @@ const wsvArchiveLink = document.getElementById('wsv-archive-link');
 // (which used to silently share the gauge even from ?total, ?rising, ?rivers, …)
 function currentModeQuery() {
   if (mode === 'river') return '?river=' + encodeURIComponent(state.river) + viewSuffix();
-  if (mode === 'rivers') return '?rivers';
+  if (mode === 'rivers') return '?rivers' + viewSuffix();
   if (mode === 'rising') return risingQuery();
   if (mode === 'total') return totalQuery();
   return '?station=' + encodeURIComponent(station) + viewSuffix();
@@ -1152,8 +1189,8 @@ function applyRiverChrome() {
 }
 
 function applyRiversChrome() {
-  document.title = 'PEGEL://RIVERS';
-  stationLink.textContent = '?rivers';
+  document.title = 'PEGEL://RIVERS' + (viewMode === 'list' ? ' · A-Z' : '');
+  stationLink.textContent = '?rivers' + viewSuffix();
   stationLink.href = currentModeQuery();
   permaLabel.textContent = 'rivers link:';
 }
@@ -2111,6 +2148,9 @@ const T = {
     'also grows with every gauge that joins the archive — for trends use Δ change.',
   totalNoteDiff: 'Net day-over-day change, counting only gauges that reported on both days — ' +
     'a gauge’s first reporting day never counts, so coverage changes cancel out.',
+  riversTitle: 'ALL WATERS',
+  riversSub: 'every water PEGELONLINE serves, placed at the centre of its own gauges',
+  riversPick: 'Pick a water to walk it gauge by gauge, or open the A–Z index for the full list.',
 };
 
 // the plate foot's per-view provenance line
@@ -2148,6 +2188,8 @@ function totalHref(y, m, d, diff = totalDiff) {
 function navHref(target) {
   if (target.startsWith('cmd:')) {
     const c = target.slice(4);
+    if (c === 'rmap') return '?rivers';
+    if (c === 'rlist') return '?rivers&view=list';
     if (c === 'tall') return totalHref(null, null, null);
     if (c === 'tsum') return totalHref(totalYear, totalMonth, totalDay, false);
     if (c === 'tdiff') return totalHref(totalYear, totalMonth, totalDay, true);
@@ -3815,19 +3857,22 @@ const DE_OUTLINE = [
   [7.00, 53.35],
 ];
 const MAP_LON = [5.6, 15.4], MAP_LAT = [47.1, 55.2];
-// A character cell is about twice as tall as it is wide, so a full-width map would
-// squash the country flat. Capping the width and centring it keeps the shape
-// recognisable while leaving the outer columns free for labels to spill into.
-const mapWidth = () => Math.min(COLS, 56);
-const mapHeight = () => isCompact() ? 18 : 28;
-// Cap the map by gauge count, not by whatever happens to fit. Without it the placer
-// keeps going until the cells run out and the outline drowns in a wall of names —
-// including one-gauge canals that carry no information at this zoom. The rest is not
-// lost, it moves to the table, which is the readable place for a long tail anyway.
-const mapLabelCap = () => isCompact() ? 14 : 26;
-const mapX0 = () => Math.floor((COLS - mapWidth()) / 2);
-const mapCol = lon => mapX0() + Math.round((lon - MAP_LON[0]) / (MAP_LON[1] - MAP_LON[0]) * (mapWidth() - 1));
-const mapRow = lat => Math.round((MAP_LAT[1] - lat) / (MAP_LAT[1] - MAP_LAT[0]) * (mapHeight() - 1));
+// Equirectangular projection with the longitude scaled by cos(mean latitude):
+// a degree of longitude is only ~0.63 of a degree of latitude at 51 N, and
+// ignoring that is what made the character-grid map look squashed. The result
+// is a portrait plate (ratio ~0.76), which suits a phone screen.
+const MAP_LAT_MEAN = (MAP_LAT[0] + MAP_LAT[1]) / 2;
+const MAP_LON_SCALE = Math.cos(MAP_LAT_MEAN * Math.PI / 180);
+const MAP_W = 240;
+const MAP_H = Math.round(MAP_W * (MAP_LAT[1] - MAP_LAT[0]) /
+  ((MAP_LON[1] - MAP_LON[0]) * MAP_LON_SCALE));
+const mapX = lon => (lon - MAP_LON[0]) / (MAP_LON[1] - MAP_LON[0]) * MAP_W;
+const mapY = lat => (MAP_LAT[1] - lat) / (MAP_LAT[1] - MAP_LAT[0]) * MAP_H;
+// Cap the labels drawn on the map itself: without it the outline drowns in a
+// wall of names, including one-gauge canals that carry nothing at this zoom.
+// Nothing is lost — the rest moves to the A–Z index, which is the readable
+// place for a long tail anyway.
+const mapLabelCap = () => plateDensity() === 'narrow' ? 12 : 26;
 
 // One entry per water: gauge count plus the centroid of its gauges. A centroid is a
 // blunt anchor for something as long as the Rhein (it lands near Koblenz), but it
@@ -3860,155 +3905,129 @@ function riversOverview() {
   return list;
 }
 
-// draw the border, one glyph per segment direction so the coastline reads as a line
-function drawOutline(g, row) {
-  const h = mapHeight();
-  for (let i = 0; i < DE_OUTLINE.length; i++) {
-    const a = DE_OUTLINE[i], b = DE_OUTLINE[(i + 1) % DE_OUTLINE.length];
-    const c0 = mapCol(a[0]), r0 = mapRow(a[1]);
-    const dc = mapCol(b[0]) - c0, dr = mapRow(b[1]) - r0;
-    const steps = Math.max(Math.abs(dc), Math.abs(dr));
-    const glyph = Math.abs(dc) > Math.abs(dr) * 2 ? '─'
-      : Math.abs(dr) > Math.abs(dc) * 2 ? '│'
-      : (dc > 0) === (dr > 0) ? '╲' : '╱';
-    for (let s = 0; s <= steps; s++) {
-      const f = steps ? s / steps : 0;
-      const r = row + Math.round(r0 + dr * f), c = Math.round(c0 + dc * f);
-      if (r < row || r >= row + h || c < 0 || c >= COLS) continue;
-      if (g.ch[r][c] === ' ') put(g, r, c, glyph, 'd');
-    }
-  }
-}
+// ---------- rivers map: the survey plate ----------
 
-// Biggest water first, so the busiest ones get the readable spots. A label that
-// cannot be placed without colliding is not squeezed in — it falls through to the
-// table below, which is why the map stays legible as the list grows.
-function placeRiverLabels(g, row, rivers) {
-  const h = mapHeight(), spilled = [];
-  // Cells owned by a dot or a label. The outline is *not* in here: a marker may
-  // sit on the border (plenty of gauges do), but nothing may ever land on another
-  // water's text — a stray dot through "RHEIN 36" silently reads as "RHEIN 6".
-  const ink = new Set();
-  const key = (r, c) => r * COLS + c;
-  const claim = (r, c, len) => { for (let i = c; i < c + len; i++) ink.add(key(r, i)); };
-  const freeInk = (r, c, len) => {
-    if (r < row || r >= row + h || c < 0 || c + len > COLS) return false;
-    for (let i = Math.max(0, c - 1); i < Math.min(COLS, c + len + 1); i++) if (ink.has(key(r, i))) return false;
-    return true;
-  };
-  // a label additionally needs blank paper, so it never breaks up the outline
-  const freeLabel = (r, c, len) => {
-    if (!freeInk(r, c, len)) return false;
-    for (let i = Math.max(0, c - 1); i < Math.min(COLS, c + len + 1); i++) if (g.ch[r][i] !== ' ') return false;
-    return true;
-  };
-  let drawn = 0;
+// Dot radius by gauge count, in three legible steps — the legend names them,
+// so size is a readable channel rather than decoration.
+const MAP_DOT_STEPS = [
+  { min: 30, r: 4.2, label: '30+' },
+  { min: 10, r: 3.0, label: '10–29' },
+  { min: 0, r: 2.0, label: '1–9' },
+];
+const mapDot = n => MAP_DOT_STEPS.find(s => n >= s.min);
+
+// Label placement in SVG user units. Same idea as the character-grid placer —
+// try the nearest free spot, rows weighted heavier than columns — but on a
+// continuous plane with real bounding boxes, so nothing collides at any width.
+const MAP_LABEL_SIZE = 7.2;
+const MAP_CHAR_W = MAP_LABEL_SIZE * 0.58;
+const MAP_LINE_H = MAP_LABEL_SIZE * 1.25;
+
+function mapLabelBox(x, y, text, anchorEnd) {
+  const w = text.length * MAP_CHAR_W;
+  return { x0: anchorEnd ? x - w : x, x1: anchorEnd ? x : x + w,
+    y0: y - MAP_LABEL_SIZE * 0.8, y1: y + MAP_LABEL_SIZE * 0.3 };
+}
+const boxHit = (a, b) => !(a.x1 < b.x0 - 1 || a.x0 > b.x1 + 1 || a.y1 < b.y0 - 1 || a.y0 > b.y1 + 1);
+
+// pure: rivers (sorted by gauge count) -> placed labels + the spilled tail
+function placeRiverLabels(rivers, cap = mapLabelCap()) {
+  const placed = [], spilled = [], boxes = [];
   for (const rv of rivers) {
-    // rivers arrive sorted by gauge count, so the cap keeps the biggest ones
-    if (rv.la == null || rv.lo == null || drawn >= mapLabelCap()) { spilled.push(rv); continue; }
-    const label = `${rv.name} ${rv.n}`;
-    const c0 = mapCol(rv.lo), r0 = row + mapRow(rv.la);
-    if (r0 < row || r0 >= row + h || c0 < 0 || c0 >= COLS || !freeInk(r0, c0, 1)) { spilled.push(rv); continue; }
-    // Candidates ordered by how far they stray from the dot, rows weighted heavier
-    // than columns because a label one row off reads as belonging to a different
-    // place, while one a few columns out still reads as the same spot. The map's
-    // margins are fair game — that is where the outer rivers put their names.
-    const cands = [];
-    for (const dr of [0, -1, 1, -2, 2, -3, 3]) {
-      for (const gap of [2, 5, 9]) {
-        cands.push([r0 + dr, c0 + gap, Math.abs(dr) * 4 + gap]);
-        cands.push([r0 + dr, c0 - label.length - gap, Math.abs(dr) * 4 + gap + 1]);
+    if (rv.la == null || rv.lo == null || placed.length >= cap) { spilled.push(rv); continue; }
+    const x = mapX(rv.lo), y = mapY(rv.la);
+    if (x < 0 || x > MAP_W || y < 0 || y > MAP_H) { spilled.push(rv); continue; }
+    const dot = mapDot(rv.n);
+    const text = `${rv.name} ${rv.n}`;
+    const dotBox = { x0: x - dot.r, x1: x + dot.r, y0: y - dot.r, y1: y + dot.r };
+    if (boxes.some(b => boxHit(dotBox, b))) { spilled.push(rv); continue; }
+    let spot = null;
+    for (const dy of [0, -MAP_LINE_H, MAP_LINE_H, -2 * MAP_LINE_H, 2 * MAP_LINE_H]) {
+      for (const gap of [dot.r + 2.5, dot.r + 7, dot.r + 13]) {
+        for (const end of [false, true]) {
+          const lx = end ? x - gap : x + gap, ly = y + dy + MAP_LABEL_SIZE * 0.3;
+          const box = mapLabelBox(lx, ly, text, end);
+          // the margins are fair game, the plate is not: a label must stay inside
+          if (box.x0 < -34 || box.x1 > MAP_W + 34) continue;
+          if (boxes.some(b => boxHit(box, b))) continue;
+          spot = { lx, ly, end, box };
+          break;
+        }
+        if (spot) break;
       }
+      if (spot) break;
     }
-    cands.sort((a, b) => a[2] - b[2]);
-    const spot = cands.find(([r, c]) => freeLabel(r, c, label.length));
     if (!spot) { spilled.push(rv); continue; }
-    drawn++;
-    claim(r0, c0, 1);
-    claim(spot[0], spot[1], label.length);
-    put(g, r0, c0, '◉', 'b');
-    linkCells(g, r0, c0, 1, 'river:' + rv.name);
-    put(g, spot[0], spot[1], label);
-    linkCells(g, spot[0], spot[1], label.length, 'river:' + rv.name);
+    boxes.push(dotBox, spot.box);
+    placed.push({ name: rv.name, n: rv.n, x, y, r: dot.r, text,
+      lx: spot.lx, ly: spot.ly, anchor: spot.end ? 'end' : 'start' });
   }
-  return spilled;
+  return { placed, spilled };
 }
 
-const RIVERS_TABLE_ROWS = 8;
-const RIVERS_CELL_MAX = 20; // "Freiburger Hafenpriel" is 21 and would eat a whole column
-
-// whatever the map could not hold, alphabetically in as many columns as fit. Entries
-// are ellipsized rather than allowed to overrun into the neighbouring column, where
-// they would collide with another water's gauge count and misreport both.
-const riversCell = rv => {
-  const count = ` ${rv.n}`;
-  const room = RIVERS_CELL_MAX - count.length;
-  const name = rv.name.length > room ? rv.name.slice(0, room - 1) + '…' : rv.name;
-  return { name, count: String(rv.n), text: name + count };
-};
-
-function riversTable(spilled) {
-  const names = [...spilled].sort((a, b) => a.name.localeCompare(b.name));
-  const widest = names.length ? Math.max(...names.map(r => riversCell(r).text.length)) : 8;
-  const colW = Math.min(RIVERS_CELL_MAX + 2, widest + 2);
-  const cols = Math.max(1, Math.floor(COLS / colW));
-  const rows = Math.min(RIVERS_TABLE_ROWS, Math.ceil(names.length / cols));
-  const shown = Math.min(names.length, cols * rows);
-  return { names, colW, cols, rows, shown };
-}
-
-// Measuring has to replay the placement exactly as drawRivers will run it, outline
-// included — the border takes cells away from labels, so probing a blank grid would
-// under-count what spills into the table and size the grid short.
-function riversGridRows(rivers) {
-  const probe = makeGrid(mapHeight());
-  drawOutline(probe, 0);
-  const t = riversTable(placeRiverLabels(probe, 0, rivers));
-  return 2 + mapHeight() + 2 + t.rows + 2;
-}
-
-function drawRivers(g, rivers) {
-  const waters = rivers.length;
+function riversViewModel() {
+  const rivers = riversOverview();
+  const { placed, spilled } = placeRiverLabels(rivers);
   const gauges = rivers.reduce((a, r) => a + r.n, 0);
-  const title = '─── PEGELONLINE://RIVERS ';
-  const meta = isCompact() ? ` ${waters} WATERS ───` : ` ${waters} WATERS · ${gauges} GAUGES ───`;
-  put(g, 0, 0, title.padEnd(Math.max(title.length, COLS - meta.length), '─') + meta, 'd');
-  put(g, 0, 4, 'PEGELONLINE://RIVERS', 'b');
-
-  // row 1 sits empty between the title and the map — hand it to the sibling view
-  const risingLink = "▲ who's rising right now";
-  put(g, 1, 0, risingLink, 'w2');
-  linkCells(g, 1, 0, risingLink.length, 'rising');
-
-  const mapTop = 2;
-  drawOutline(g, mapTop);
-  const spilled = placeRiverLabels(g, mapTop, rivers);
-
-  let row = mapTop + mapHeight() + 1;
-  put(g, row, 0, 'pick a water to walk it gauge by gauge', 'd');
-  row += 1;
-  if (!spilled.length) return;
-
-  // name the reason for the second list rather than implying the map is complete:
-  // some of these have no coordinates at all, the rest simply found no free cell
-  const unplaced = spilled.filter(r => r.la == null).length;
-  const why = unplaced ? `${spilled.length} not on the map · ${unplaced} without coordinates` : `${spilled.length} not on the map`;
-  const head = `─ ${why} `;
-  put(g, row, 0, head + '─'.repeat(Math.max(0, COLS - head.length)), 'd');
-  row += 1;
-
-  const t = riversTable(spilled);
-  for (let i = 0; i < t.shown; i++) {
-    const cell = riversCell(t.names[i]);
-    const r = row + (i % t.rows), c = Math.floor(i / t.rows) * t.colW;
-    if (c + cell.text.length > COLS) continue;
-    put(g, r, c, cell.name);
-    put(g, r, c + cell.name.length + 1, cell.count, 'd');
-    linkCells(g, r, c, cell.text.length, 'river:' + t.names[i].name);
-  }
-  const rest = t.names.length - t.shown;
-  if (rest > 0) put(g, row + t.rows, 0, `+ ${rest} more — type a name into --river`, 'd');
+  return {
+    kind: 'rivers',
+    tab: viewMode === 'list' ? 'list' : 'map',
+    waters: rivers.length,
+    gauges,
+    placed,
+    spilled: [...spilled].sort((a, b) => a.name.localeCompare(b.name)),
+    unplaced: spilled.filter(r => r.la == null).length,
+    all: [...rivers].sort((a, b) => a.name.localeCompare(b.name)),
+    summary: screenSummary(),
+    source: `${T.sourceWsv} station list · positions are the centroid of each water's own gauges`,
+  };
 }
+
+function renderRiversMap(vm) {
+  const outline = DE_OUTLINE.map(([lo, la]) => `${mapX(lo).toFixed(1)},${mapY(la).toFixed(1)}`).join(' ');
+  const marks = vm.placed.map(p =>
+    `<a${navAttrs('river:' + p.name)}><title>${esc(p.name)}: ${p.n} ${esc(plural(p.n, 'gauge'))}</title>` +
+    `<circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="${p.r}" class="mdot"/>` +
+    `<text x="${p.lx.toFixed(1)}" y="${p.ly.toFixed(1)}" class="mlbl"${attr('text-anchor', p.anchor)}>${esc(p.text)}</text>` +
+    // an invisible target keeps the dot tappable at phone scale
+    `<rect x="${(p.x - 11).toFixed(1)}" y="${(p.y - 11).toFixed(1)}" width="22" height="22" class="hit"/></a>`).join('');
+  return svgWrap(`-34 -6 ${MAP_W + 68} ${MAP_H + 12}`,
+    `<polygon points="${outline}" class="mout"/>${marks}`,
+    ' class="chart map" role="group"' + attr('aria-label', vm.summary));
+}
+
+function renderRiversList(vm) {
+  const rows = vm.all.map(r =>
+    `<li><a${navAttrs('river:' + r.name)}><span class="name">${esc(r.name)}</span>` +
+    `<span class="meta">${r.n} ${esc(plural(r.n, 'gauge'))}</span></a></li>`).join('');
+  return `<ol class="a-z">${rows}</ol>`;
+}
+
+function renderRivers(vm) {
+  const vh = `<p class="vh">${esc(vm.summary)}</p>`;
+  const head = `<header class="p-head"><h1>${esc(T.riversTitle)}</h1>` +
+    `<p class="p-sub">${vm.waters} ${esc(plural(vm.waters, 'water'))} · ${vm.gauges} ${esc(plural(vm.gauges, 'gauge'))} — ${esc(T.riversSub)}</p></header>`;
+  const tabs = `<nav class="p-tabs" aria-label="view">` +
+    navOpen('cmd:rmap', vm.tab === 'map' ? 'on' : '') + 'map' + navClose('cmd:rmap') +
+    navOpen('cmd:rlist', vm.tab === 'list' ? 'on' : '') + 'A–Z index' + navClose('cmd:rlist') + '</nav>';
+  if (vm.tab === 'list') {
+    return `<section class="plate">${vh}${head}${tabs}${renderRiversList(vm)}</section>`;
+  }
+  const swatch = s => `<svg class="sw" viewBox="0 0 12 12" aria-hidden="true"><circle cx="6" cy="6"${attr('r', s.r)} class="mdot"/></svg>`;
+  const key = `<dl class="p-key"><dt>${esc(T.key)}</dt>` +
+    MAP_DOT_STEPS.slice().reverse().map(s =>
+      `<dd><span class="lg">${swatch(s)}<span class="lgn">${esc(s.label)} ${esc(T.gauges)}</span></span></dd>`).join('') +
+    `<dd>Each water sits at the centre of its own gauges, so a long river lands mid-course.</dd>` +
+    (vm.spilled.length
+      ? `<dd>${vm.spilled.length} ${esc(plural(vm.spilled.length, 'water'))} ${vm.spilled.length === 1 ? 'is' : 'are'} not drawn` +
+        (vm.unplaced ? ` — ${vm.unplaced} of them carry no coordinates at all (the Austrian Donau, the Czech Elbe, the Dutch Rhine)` : '') +
+        `. They are counted above and listed in the A–Z index.</dd>`
+      : '') +
+    '</dl>';
+  return `<section class="plate">${vh}${head}${tabs}${renderRiversMap(vm)}${key}` +
+    `<p class="p-readout">${esc(T.riversPick)}</p></section>`;
+}
+
 
 // ---------- rising board: every gauge ranked by its daily rise ----------
 
@@ -4890,14 +4909,16 @@ function totalSetDiff(on) {
 
 function setView(v, push = true) {
   if (v === viewMode) return;
-  if (mode === 'river' ? v === 'years' : v === 'wave') return; // wrong mode for this view
+  if (v !== 'live' && !MODE_VIEWS[mode].includes(v)) return; // wrong mode for this view
   viewMode = v;
   if (push) {
     const q = new URLSearchParams(location.search);
     if (v === 'live') q.delete('view'); else q.set('view', v);
     history.pushState(null, '', '?' + q.toString());
   }
-  if (mode === 'river') applyRiverChrome(); else applyStationChrome();
+  if (mode === 'river') applyRiverChrome();
+  else if (mode === 'rivers') applyRiversChrome();
+  else applyStationChrome();
   renderHistoryBar();
   if (v === 'years') ensureHistoryCoverage(null); // pull the multi-year WSV archive
   if (v === 'wave') loadWave();
@@ -4914,6 +4935,8 @@ function setView(v, push = true) {
 function runGridCmd(c) {
   if (c === 'live') setView('live');
   else if (c === 'wave') setView('wave');
+  else if (c === 'rmap') setView('live');
+  else if (c === 'rlist') setView('list');
   else if (c === 'abs' || c === 'anom') { histMode = c; dirty = true; renderHistoryBar(); }
   else if (c.startsWith('hm:')) {
     const [y, m] = c.slice(3).split(':').map(Number);
@@ -6364,15 +6387,13 @@ function render(t) {
     return;
   }
   if (mode === 'rivers') {
-    const rivers = riversOverview();
-    if (!rivers.length) {
+    if (!riversOverview().length) {
       setScreenText(`mapping the network ${'·'.repeat(1 + Math.floor(t * 2) % 3)}`);
       return;
     }
-    const g = makeGrid(riversGridRows(rivers));
-    drawRivers(g, rivers);
-    setScreenGridHtml(gridToHtml(g));
-    if (!fitted) { fitted = true; fitFont(); }
+    const vm = riversViewModel();
+    setScreenPlate(renderRivers(vm));
+    setSourceLine(vm.source);
     return;
   }
   if (mode === 'rising') {
