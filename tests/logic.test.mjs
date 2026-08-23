@@ -301,12 +301,31 @@ test('findMatches / applyPrompt: place names resolve via substring search', () =
   // the suggest screen renders clickable rows (river rows use the river: prefix)
   const html = app.run(`(() => {
     state.suggest = { q: 'mosel', matches: [{ name: 'Trier OP', river: false }, { name: 'MOSEL', river: true }] };
-    const g = makeGrid(8);
-    drawSuggest(g, state.suggest);
-    return gridToHtml(g);
+    return renderSuggest(suggestViewModel(state.suggest));
   })()`);
-  assert.ok(html.includes('data-st="Trier OP"'));
-  assert.ok(html.includes('data-st="river:MOSEL"'));
+  assert.ok(html.includes('data-nav="Trier OP"'));
+  assert.ok(html.includes('data-nav="river:MOSEL"'));
+  assert.ok(html.includes('Did you mean'), 'and says what it is asking');
+});
+
+test('search folds umlauts both ways: KOELN and KOLN both find KÖLN', () => {
+  const app = loadApp();
+  app.run(`fillDatalist([
+    { n: 'KÖLN', w: 'RHEIN', km: 688 },
+    { n: 'MÜNSTER', w: 'DORTMUND-EMS-KANAL', km: 70 },
+    { n: 'BONN', w: 'RHEIN', km: 654.8 },
+  ])`);
+  app.run(`fillWaters(['RHEIN', 'MÜRITZSEE'])`);
+
+  const names = expr => app.run(`${expr}.map(m => m.name)`);
+  assert.deepEqual(names(`findMatches('KOELN')`), ['KÖLN'], 'the OE spelling the README promises');
+  assert.deepEqual(names(`findMatches('KOLN')`), ['KÖLN'], 'the stripped spelling still works');
+  assert.deepEqual(names(`findMatches('KÖLN')`), ['KÖLN'], 'and so does the real one');
+  assert.deepEqual(names(`findMatches('MUENSTER')`), ['MÜNSTER']);
+  assert.deepEqual(names(`findMatches('MUERITZ')`), ['MÜRITZSEE'], 'rivers fold too');
+  assert.deepEqual(names(`matchNames('OELN', knownStations, () => '')`), ['KÖLN'], 'substring, not only prefix');
+  // the finder dialog and the typeahead dropdown read the same matcher
+  assert.deepEqual(names(`finderMatches('KOELN')`), ['KÖLN']);
 });
 
 // ---------- river mode data ----------
@@ -360,40 +379,73 @@ test('kmTicks: round steps, in range, 2-7 ticks', () => {
 // 3 of 4 real profiles at 44 columns, and 1 in 6 at 84. The worst case below packs
 // the longest real station names onto near-identical elevations and adjacent km,
 // which is what forced the collision. Every label must survive intact at any width.
-test('drawProfile: labels never overwrite each other, at any width', () => {
+test('profileViewModel: every neighbour keeps its full name and its own row', () => {
   const neighbors = [
     { name: 'DUISBURG-MEIDERICH SCHLEUSE UW', km: 6.1, lat: 51.4, lon: 6.7, elev: 85.98 },
     { name: 'FRIEDRICHSTADT STRASSENBRÜCKE', km: 6.4, lat: 51.4, lon: 6.7, elev: 85.99 },
     { name: 'Niederbiel Schleuse Kanal OP', km: 6.9, lat: 51.4, lon: 6.7, elev: 86.01 },
   ];
-  for (const width of [390, 1200]) {
-    const app = loadApp({ width, now: NOON });
-    const { cols, rows } = app.run(`(() => {
-      station = 'FRIEDRICHSTADT STRASSENBRÜCKE';
+  const app = loadApp({ now: NOON });
+  const { vm, html } = app.run(`(() => {
+    station = 'FRIEDRICHSTADT STRASSENBRÜCKE';
+    state.info = { water: { shortname: 'RHEIN' } };
+    state.neighbors = ${JSON.stringify(neighbors)};
+    const vm = profileViewModel();
+    return { vm, html: renderProfile(vm) };
+  })()`);
+  assert.equal(vm.pts.length, 3);
+  // the 84-column grid had to ellipsize these; a real list does not
+  for (const p of neighbors) {
+    assert.ok(html.includes(p.name.replace(/&/g, '&amp;')), `"${p.name}" survives whole`);
+    assert.ok(html.includes(p.elev.toFixed(2)), 'with its elevation');
+  }
+  // the label has to match the axis it labels: flowFrac puts upstream at x=0
+  assert.match(html, /\u2190 upstream[\s\S]*downstream \u2192/, 'upstream is named on the left, downstream on the right');
+  const self = vm.pts.find(p => p.self);
+  assert.ok(self, 'the current gauge marks itself');
+  assert.ok(html.includes('data-nav="river:RHEIN"'), 'and leads on to its whole river');
+  assert.ok(html.includes('data-nav="Niederbiel Schleuse Kanal OP"'), 'neighbours are one click away');
+  // ordered upstream→downstream by the fitted flow direction, not by raw km
+  assert.deepEqual(vm.pts.map(p => p.x), [...vm.pts.map(p => p.x)].sort((a, b) => a - b));
+});
+
+// The Rhine counts its km downstream, the Neckar counts them upstream. Whichever
+// way the numbers run, flowFrac puts the upstream gauge on the left — and the axis
+// label under the drawing has to name that same direction.
+test('profileViewModel: upstream stays on the left whichever way the km count runs', () => {
+  const cases = [
+    ['km rises downstream (Rhine)', 'BONN', [
+      { name: 'OBERWINTER', km: 638.19, lat: 50.6, lon: 7.2, elev: 47.45 },
+      { name: 'BONN', km: 654.8, lat: 50.7, lon: 7.1, elev: 43.66 },
+      { name: 'K\u00d6LN', km: 688, lat: 50.9, lon: 6.9, elev: 35.88 },
+    ]],
+    ['km rises upstream (Neckar)', 'HEIDELBERG', [
+      { name: 'MANNHEIM NECKAR', km: 3.1, lat: 49.5, lon: 8.5, elev: 86.34 },
+      { name: 'HEIDELBERG', km: 25.0, lat: 49.4, lon: 8.7, elev: 105.0 },
+      { name: 'PLOCHINGEN', km: 202.6, lat: 48.7, lon: 9.4, elev: 247.39 },
+    ]],
+  ];
+  for (const [label, self, neighbors] of cases) {
+    const app = loadApp({ now: NOON });
+    const { vm, html } = app.run(`(() => {
+      station = ${JSON.stringify(self)};
+      state.flowLowKm = null;
       state.info = { water: { shortname: 'RHEIN' } };
       state.neighbors = ${JSON.stringify(neighbors)};
-      const g = makeGrid(PROFILE_ROWS + PROFILE_FOOT);
-      drawProfile(g, 0);
-      return { cols: COLS, rows: g.ch.map(r => r.join('')) };
+      const vm = profileViewModel();
+      return { vm, html: renderProfile(vm) };
     })()`);
-    const flat = rows.join('\n');
-    for (const p of neighbors) {
-      const elev = p.elev.toFixed(2), km = `km ${p.km}`;
-      // the name is shortened only as far as the width forces — never further
-      const budget = cols - elev.length - km.length - 4;
-      const name = p.name.length > budget ? p.name.slice(0, budget - 1) + '…' : p.name;
-      assert.ok(flat.includes(`${name} ${elev} · ${km}`),
-        `${cols} cols: "${name} ${elev} · ${km}" survives intact`);
-    }
-    assert.ok(flat.includes('≋ downstream →'), `${cols} cols: flow marker survives`);
-    for (const r of rows) assert.ok(r.length <= cols, `${cols} cols: no row overflows`);
+    const leftmost = vm.pts.reduce((a, b) => (a.x <= b.x ? a : b));
+    const highest = vm.pts.reduce((a, b) => (a.elev >= b.elev ? a : b));
+    assert.equal(leftmost.name, highest.name, `${label}: the upstream gauge is drawn leftmost`);
+    assert.match(html, /\u2190 upstream[\s\S]*downstream \u2192/, `${label}: and the axis names it upstream`);
   }
 });
 
 // ---------- drawRiver layout invariants (worst case: 30 stations, 24 troubled) ----------
 
-test('drawRiver: no label overlaps even on a crowded, clustered river', () => {
-  const app = loadApp({ now: NOON }); // noon: keeps the night sky layer out of the layout
+test('riverViewModel: a crowded river keeps every gauge, and names its troubled ones', () => {
+  const app = loadApp({ now: NOON });
   const sts = Array.from({ length: 30 }, (_, i) => ({
     name: 'ST' + String(i).padStart(2, '0'),
     km: 100 + i * 0.8 + (i % 5 === 0 ? i : 0), // clusters with occasional jumps
@@ -402,89 +454,52 @@ test('drawRiver: no label overlaps even on a crowded, clustered river', () => {
     kind: i % 5 === 4 ? 'normal' : (i % 2 ? 'low' : 'high'),
   }));
   app.run(`state.river = 'TESTFLUSS'`);
-  const { res, grid } = app.run(`(() => {
-    const sts = ${JSON.stringify(sts)};
-    const g = makeGrid(riverGridRows(sts));
-    const res = drawRiver(g, sts, 0);
-    return { res, grid: g.ch.map(r => r.join('')) };
+  const { vm, html } = app.run(`(() => {
+    const vm = riverViewModel(${JSON.stringify(sts)});
+    return { vm, html: renderRiver(vm) };
   })()`);
-
-  assert.equal(res.nLow, 12);
-  assert.equal(res.nHigh, 12);
-  assert.ok(res.labels.length >= 2, 'at least some labels were placed');
-
-  // every drawn label stays inside the 84-column grid…
-  for (const l of res.labels) {
-    assert.ok(l.col >= 0 && l.col + l.text.length <= 84, `label ${l.text} inside the grid`);
+  assert.equal(vm.counts.low, 12);
+  assert.equal(vm.counts.high, 12);
+  assert.equal(vm.pts.length, 30, 'every gauge is plotted — the grid could only label a few');
+  // the trouble list carries ALL 24, not 8 plus an overflow line
+  assert.equal(vm.troubled.length, 24);
+  assert.ok(!html.includes('… and 16 more'), 'nothing is truncated any more');
+  assert.ok(html.includes('TROUBLE'), 'trouble list header present');
+  for (const s of vm.troubled) assert.ok(html.includes(s.name), `${s.name} is listed`);
+  // dots stay inside the plot box at any width — fractions, not columns
+  for (const p of vm.pts) {
+    assert.ok(p.x >= 0 && p.x <= 1, `${p.name} x in range`);
+    assert.ok(p.y >= 0 && p.y <= 1, `${p.name} y in range`);
   }
-  // …and no two labels on the same row overlap or sit fused together
-  const byRow = new Map();
-  for (const l of res.labels) {
-    byRow.set(l.row, [...(byRow.get(l.row) || []), l]);
-  }
-  for (const [row, labels] of byRow) {
-    labels.sort((a, b) => a.col - b.col);
-    for (let i = 1; i < labels.length; i++) {
-      const prev = labels[i - 1];
-      assert.ok(labels[i].col > prev.col + prev.text.length,
-        `row ${row}: "${prev.text}" and "${labels[i].text}" keep a blank cell between them`);
-    }
-  }
-
-  const flat = grid.join('\n');
-  assert.ok(flat.includes('TROUBLE'), 'trouble list header present');
-  assert.ok(flat.includes('… and 16 more'), '24 troubled stations cap at 8 + overflow line');
+  assert.ok(vm.gradient > 0, 'the mean fall is derived and reported');
+  assert.ok(html.includes('mean fall'), 'and named on the plate');
 });
+
 
 // ---------- grid & escaping ----------
-
-test('putKmSign / putBig: negative river km render instead of crashing', () => {
-  const app = loadApp();
-  const grid = app.run(`(() => {
-    const g = makeGrid(12);
-    putKmSign(g, 0, 0, -38.7); // MARBURG (Lahn) — km signs must survive a minus
-    putBig(g, 9, 0, '-39', 'b');
-    return g.ch.map(r => r.join(''));
-  })()`);
-  assert.ok(grid[3].includes('███'), 'minus glyph drawn inside the sign');
-  assert.ok(grid[0].includes('┌───┬───┬───┐'), 'three-cell sign frame for "-39"');
-  assert.ok(grid[11].includes('███'), 'big digits render the minus row');
-});
-
-test('gridToHtml: escapes markup, emits class and link runs', () => {
-  const app = loadApp();
-  const html = app.run(`(() => {
-    const g = makeGrid(1);
-    put(g, 0, 0, '<&>', 'b');
-    linkCells(g, 0, 0, 3, 'A"B');
-    return gridToHtml(g);
-  })()`);
-  assert.ok(html.includes('&lt;&amp;&gt;'), 'grid text is HTML-escaped');
-  assert.ok(html.includes('data-st="A&quot;B"'), 'link layer emitted, attribute quotes escaped');
-  assert.ok(html.includes('class="b"'));
-});
 
 // ---------- responsive COLS breakpoint (Chrome desktop cannot shrink below ~500px,
 // so the 84 ↔ 44 switch is pinned here instead of via window resizing) ----------
 
-test('fitFont: picks 44 columns on phone widths, 84 on desktop, and switches back', () => {
+test('layout: density follows the measured plate width, with no hard tier fork', () => {
+  // fitFont's two-tier 84/44-column fork is gone: the plate is CSS-sized and
+  // only genuine CONTENT decisions still read a width
   const phone = loadApp({ width: 390 });
-  assert.equal(phone.run('COLS'), 44, '390px viewport boots into the compact grid');
-  assert.equal(phone.run('isCompact()'), true);
-  assert.ok(parseFloat(phone.el('screen').style.fontSize) >= 8, 'compact font stays readable (>= 8px)');
+  assert.equal(phone.run('plateDensity()'), 'narrow');
+  assert.equal(phone.run('typeof COLS'), 'undefined', 'no column count survives');
+  assert.equal(phone.run('typeof fitFont'), 'undefined', 'and no font-fitting hack');
 
   const desktop = loadApp({ width: 1200 });
-  assert.equal(desktop.run('COLS'), 84, '1200px viewport uses the full grid');
-  assert.equal(desktop.run('isCompact()'), false);
+  assert.equal(desktop.run('plateDensity()'), 'wide');
 
-  // crossing the breakpoint at runtime (rotate / window resize)
+  // crossing the breakpoint at runtime (rotate / window resize) is continuous
   desktop.document.documentElement.clientWidth = 390;
-  desktop.run('fitFont()');
-  assert.equal(desktop.run('COLS'), 44, 'shrinking re-picks the compact grid');
+  assert.equal(desktop.run('plateDensity()'), 'narrow', 'shrinking re-reads the width');
+  assert.equal(desktop.run('bucketCols()'), 130, 'and the data density follows it');
   desktop.document.documentElement.clientWidth = 1200;
-  desktop.run('fitFont()');
-  assert.equal(desktop.run('COLS'), 84, 'growing restores the full grid');
+  assert.equal(desktop.run('plateDensity()'), 'wide');
 });
+
 
 // ---------- repo-hosted WSV archive (scripts/fetch-wsv-archive.mjs + client) ----------
 
@@ -650,22 +665,24 @@ test('loadRepoArchive: an available entry carries its source through to state', 
   assert.equal(app.run('state.archiveSource'), 'Rijkswaterstaat', 'source flows from the manifest entry');
 });
 
-test('drawHistYears: attributes the hosted archive to its manifest source', () => {
+test('yearsViewModel: attributes the hosted archive to its manifest source', () => {
   for (const [source, label] of [[null, 'WSV'], ['Rijkswaterstaat', 'Rijkswaterstaat']]) {
     const app = loadApp({ now: NOON });
-    const rows = app.run(`(() => {
+    const { vm, html } = app.run(`(() => {
       station = 'LOBITH';
       state.info = { uuid: 'u', water: { shortname: 'RHEIN' } };
       state.repoArchive = 'available';
       state.archiveSource = ${JSON.stringify(source)};
-      state.archive = []; // too little history → the "fetching the … archive" line
-      const g = makeGrid(24);
-      drawHistYears(g);
-      return g.ch.map(r => r.join(''));
+      state.archive = []; // too little history -> the "fetching the ..." line
+      const vm = yearsViewModel();
+      return { vm, html: renderYears(vm) };
     })()`);
-    assert.ok(rows.join('\n').includes(`fetching the ${label} archive`), `${label} attribution shown in the years view`);
+    assert.equal(vm.thin, true);
+    assert.ok(vm.reason.includes(`fetching the ${label} archive`), `${label} attribution shown`);
+    assert.ok(html.includes(label), 'and it reaches the plate');
   }
 });
+
 
 // ---------- Rijkswaterstaat adapter (scripts/fetch-rws-archive.mjs) ----------
 
@@ -904,23 +921,22 @@ test('client in January: a not-yet-frozen current.json still maps to its own yea
     'points land on Dec 30, 2026 — the file year wins, not the wall clock');
 });
 
-test('drawSparkline: renders a time axis labeled from real timestamps', () => {
+test('historyViewModel: the time axis is labelled from real timestamps', () => {
   const app = loadApp({ now: NOON });
   // two years of daily points ending at NOON — multi-year span → YYYY-MM ticks
   const days = 730;
   const pts = Array.from({ length: days }, (_, i) => [NOON - (days - 1 - i) * 864e5, 100 + (i % 40)]);
   app.run(`state.archive = ${JSON.stringify(pts)}`);
   app.run(`historyKey = 'all'`);
-  const grid = app.run(`(() => {
-    const g = makeGrid(10);
-    drawSparkline(g, 0, 0.5);
-    return g.ch.map(r => r.join(''));
-  })()`);
-  const axis = grid[2 + 4 + 1]; // SPLASH_ROWS + SPARK_ROWS + 1
-  assert.ok(/\d{4}-\d{2}/.test(axis), `axis carries YYYY-MM ticks: "${axis.trim()}"`);
-  assert.ok(axis.trimStart().startsWith('2024-01'), 'first tick sits at the two-years-ago start (NOON is 2026-01-15)');
-  assert.ok(axis.includes('2026-01'), 'last tick is the now end');
-  assert.ok(grid[0].includes('HISTORY'), 'label row intact');
+  const h = app.run('historyViewModel()');
+  assert.equal(h.empty, false);
+  assert.ok(h.ticks.every(t => /^\d{4}-\d{2}$/.test(t.text)), `YYYY-MM ticks: ${h.ticks.map(t => t.text)}`);
+  assert.equal(h.ticks[0].text, '2024-01', 'the first tick sits at the two-years-ago start (NOON is 2026-01-15)');
+  assert.equal(h.ticks.at(-1).text, '2026-01', 'the last tick is the now end');
+  assert.ok(h.ticks.every(t => t.frac >= 0 && t.frac <= 1), 'ticks are positioned as fractions, not columns');
+  // ticks read their own column's timestamp: gaps compress, so a linear time
+  // axis would misplace them
+  assert.ok(h.ticks[0].frac < h.ticks.at(-1).frac, 'and run left to right');
 });
 
 test('history presets: 1Y/5Y exist, API backfill stays within its 30-day reach', () => {
@@ -956,6 +972,67 @@ test('first-visit ASCII ?station= link self-corrects once the station list arriv
   assert.equal(globalThis.__replaced, true, 'canonical URL replaces the broken one');
   assert.equal(globalThis.__pushed, undefined, 'Back must not land on the 404 URL again');
   delete globalThis.__replaced; delete globalThis.__pushed;
+});
+
+// a returning visitor's cached station names, so boot resolves without the network
+const WARM_STATIONS = {
+  'pegel.stations': JSON.stringify({
+    v: 2,
+    t: Date.now(),
+    list: [
+      { n: 'MAGDEBURG-BUCKAU', w: 'ELBE', km: 318 },
+      { n: 'MAGDEBURG-STROMBRÜCKE', w: 'ELBE', km: 326.6 },
+      { n: 'KÖLN', w: 'RHEIN', km: 688 },
+      { n: 'BONN', w: 'RHEIN', km: 654.8 },
+    ],
+  }),
+};
+
+test('deep link: an ambiguous ?station= opens the did-you-mean list, not a 404', () => {
+  const app = loadApp({ search: '?station=MAGDEBURG', storage: WARM_STATIONS });
+  const sg = app.run('state.suggest');
+  assert.ok(sg, 'the shared link takes the same resolution path the prompt takes');
+  assert.equal(sg.q, 'MAGDEBURG');
+  assert.deepEqual(sg.matches.map(m => m.name), ['MAGDEBURG-BUCKAU', 'MAGDEBURG-STROMBRÜCKE']);
+  assert.equal(app.run('station'), 'MAGDEBURG', 'no gauge is picked on the reader’s behalf');
+});
+
+test('deep link: only an ambiguous name gets the list — unknown, unique and folded stay as they were', () => {
+  const nope = loadApp({ search: '?station=XXXXNOPE', storage: WARM_STATIONS });
+  assert.equal(nope.run('state.suggest'), null, 'nothing resembles it — the error plate is the honest answer');
+  assert.equal(nope.run('station'), 'XXXXNOPE');
+
+  const one = loadApp({ search: '?station=BUCKAU', storage: WARM_STATIONS });
+  assert.equal(one.run('state.suggest'), null);
+  assert.equal(one.run('station'), 'MAGDEBURG-BUCKAU', 'a single substring match is adopted outright');
+
+  const ascii = loadApp({ search: '?station=KOELN', storage: WARM_STATIONS });
+  assert.equal(ascii.run('state.suggest'), null);
+  assert.equal(ascii.run('station'), 'KÖLN', 'the exact fold still wins before any search');
+
+  const river = loadApp({ search: '?river=RHEIN&station=MAGDEBURG', storage: WARM_STATIONS });
+  assert.equal(river.run('state.suggest'), null, 'river mode owns the plate — no suggest screen over it');
+});
+
+test('recent chips: only a gauge that actually answered is remembered', async () => {
+  const dead = loadApp({ search: '?station=MAGDEBURG', storage: WARM_STATIONS });
+  assert.equal(dead.localStorage['pegel.recent'], undefined, 'a deep link that never loaded leaves no chip');
+  dead.run(`switchStation('XXXXNOPE', '')`);
+  assert.equal(dead.localStorage['pegel.recent'], undefined, 'nor does switching to a name that fails');
+
+  const app = loadApp({ search: '?station=BONN', storage: WARM_STATIONS });
+  app.run(`fetch = url => {
+    const body =
+      url.includes('/stations/BONN.json') ? { shortname: 'BONN', water: { shortname: 'RHEIN' }, km: 654.8, timeseries: [{ shortname: 'W' }] } :
+      url.includes('/stations/BONN/W.json') ? { currentMeasurement: { timestamp: new Date().toISOString(), value: 250 } } :
+      url.includes('measurements.json') ? [] : null;
+    return body === null
+      ? Promise.reject(new Error('offline (test stub)'))
+      : Promise.resolve({ ok: true, json: () => Promise.resolve(body) });
+  }`);
+  await app.run('loadData()');
+  assert.ok(app.localStorage['pegel.recent'], 'a reading arrived — now it earns its chip');
+  assert.deepEqual(JSON.parse(app.localStorage['pegel.recent']), ['BONN']);
 });
 
 test('archive script: migrateStation names the malformed year file instead of a bare SyntaxError', async () => {
@@ -994,7 +1071,7 @@ test('buildReportBody: covers everything the renderer branches on, redacts recei
   assert.match(body, /history range: 7d/);
   assert.match(body, /points in local archive: 2/);
   assert.match(body, /hosted archive loaded: true \(source: WSV\)/);
-  assert.match(body, /COLS: 84/);
+  assert.match(body, /plate: \d+px (narrow|wide)/);
   assert.match(body, /flowLowKm: true/);
   assert.match(body, /neighbors: 3/);
   assert.match(body, /W: 250 cm/);
@@ -1171,68 +1248,98 @@ test('buildHistStats: climatology comes from past years only, leap days index cl
   assert.equal(st.nov, 0, 'the current year has no data after mid-July');
 });
 
-test('heatAbs / heatAnom: ramp binning, diverging direction classes', () => {
+test('heatBinAbs / heatBinAnom: lightness bins, direction as its own channel', () => {
   const app = loadApp();
-  assert.equal(app.run(`heatAbs(0, 0, 100)`), '░');
-  assert.equal(app.run(`heatAbs(99, 0, 100)`), '█');
-  assert.equal(app.run(`heatAbs(-50, 0, 100)`), '░', 'below-range clamps');
-  assert.equal(app.run(`heatAbs(500, 0, 100)`), '█', 'above-range clamps');
-  assert.deepEqual(app.run(`heatAnom(0.1)`), { ch: '·', cls: 'd' }, 'near-normal is the neutral midpoint');
-  assert.deepEqual(app.run(`heatAnom(3)`), { ch: '█', cls: 'w2' }, 'very wet: densest glyph, flood accent');
-  assert.deepEqual(app.run(`heatAnom(-3)`), { ch: '█', cls: 's' }, 'very dry: densest glyph, drought accent');
-  assert.equal(app.run(`heatAnom(1)`).ch, '▒');
+  // the ramp stays a LIGHTNESS ramp (one hue, dark = more), which is safe by
+  // construction; the CSS turns the bin into a colour-mix step
+  assert.equal(app.run(`heatBinAbs(0, 0, 100)`), 0);
+  assert.equal(app.run(`heatBinAbs(99, 0, 100)`), 3);
+  assert.equal(app.run(`heatBinAbs(-50, 0, 100)`), 0, 'below-range clamps');
+  assert.equal(app.run(`heatBinAbs(500, 0, 100)`), 3, 'above-range clamps');
+  // anomaly keeps magnitude in the bin and puts direction in its OWN field, so
+  // the renderer can hatch it rather than relying on hue
+  assert.deepEqual(app.run(`heatBinAnom(0.1)`), { bin: -1, dir: 0 }, 'near-normal is the neutral midpoint');
+  assert.deepEqual(app.run(`heatBinAnom(3)`), { bin: 3, dir: 1 }, 'very wet: densest bin, wet direction');
+  assert.deepEqual(app.run(`heatBinAnom(-3)`), { bin: 3, dir: -1 }, 'very dry: densest bin, dry direction');
+  assert.equal(app.run(`heatBinAnom(1).bin`), 1);
+  assert.equal(app.run(`heatBinAnom(1).dir`), 1);
 });
 
-test('drawHistYears: all three sections render inside the grid, at both widths', () => {
-  for (const width of [390, 1200]) {
-    const app = loadApp({ width, now: JULY });
-    seedArchive(app);
-    const { rows, cols, html } = app.run(`(() => {
-      const g = makeGrid(histGridRows(histStats()));
-      drawHistYears(g);
-      return { rows: g.ch.map(r => r.join('')), cols: COLS, html: gridToHtml(g) };
-    })()`);
-    const flat = rows.join('\n');
-    for (const y of ['2024', '2025', '2026']) assert.ok(flat.includes(y), `${cols} cols: year row ${y}`);
-    assert.ok(flat.includes('[ABS]') && flat.includes('[ANOM]'), `${cols} cols: mode toggles`);
-    assert.ok(flat.includes('low → high'), `${cols} cols: heat-ramp legend present (default ABS mode)`);
-    assert.ok(html.includes('data-st="cmd:live"'), `${cols} cols: back target`);
-    assert.ok(html.includes('data-st="cmd:hy:2024"'), `${cols} cols: year rows are pickable`);
-    // the overlay's month axis is the last drawn row — if it shows, nothing was clipped
-    const axisRe = cols === 84 ? /JAN.*FEB.*DEC/ : /J.+F.+M.+A.+M.+J.+J.+A.+S.+O.+N.+D/;
-    assert.ok(rows.some(r => axisRe.test(r)), `${cols} cols: axes drawn`);
-    assert.ok(rows[rows.length - 2].trim().length > 0, `${cols} cols: axis row inside the grid`);
-    for (const r of rows) assert.ok(r.length <= cols, `${cols} cols: no row overflows`);
-    assert.ok(flat.includes('█'), `${cols} cols: the selected year draws as a bold line`);
+
+test('renderYears: heatmap, monthly range and the year overlay all render', () => {
+  const app = loadApp({ now: JULY });
+  seedArchive(app);
+  const { vm, html } = app.run(`(() => {
+    const vm = yearsViewModel();
+    return { vm, html: renderYears(vm) };
+  })()`);
+  assert.equal(vm.thin, false);
+  for (const y of [2024, 2025, 2026]) {
+    assert.ok(vm.rows.some(r => r.y === y), `year row ${y}`);
+    assert.ok(html.includes(`>${y}<`), `${y} is printed`);
   }
+  // a real table: rows and columns are announced, cells carry their own label
+  assert.ok(html.includes('<table class="heat">'), 'the heatmap is a real table');
+  assert.ok(html.includes('<th scope="row">') && html.includes('<th scope="col">'), 'with real headers');
+  assert.ok(html.includes('aria-label="July 2026'), 'and every cell says what it is');
+  assert.ok(html.includes('data-nav="cmd:hy:2024"'), 'year rows stay pickable');
+  assert.ok(html.includes('data-nav="cmd:hm:2026:6"'), 'month cells too');
+  assert.ok(html.includes('data-nav="cmd:live"'), 'back target');
+  // all three sections
+  assert.ok(html.includes('MONTHLY HEAT'), 'section 1');
+  assert.ok(html.includes('LONG-TERM MONTHLY RANGE'), 'section 2');
+  assert.ok(html.includes('EVERY YEAR BY DAY OF YEAR'), 'section 3');
+  assert.ok(html.includes('class="ov-sel"'), 'the picked year is drawn bold in the overlay');
 });
 
-test('drawHistYears: anomaly mode shades wet months blue and dry months warm', () => {
+
+test('renderYears: the "pick a month cell" hint is printed once, not twice', () => {
+  const app = loadApp({ now: JULY });
+  seedArchive(app);
+  const html = app.run('renderYears(yearsViewModel())');
+  const hint = app.run('T.yearsHint');
+  const hits = html.split(hint).length - 1;
+  // it belongs to the readout panel's empty state; the key names marks only
+  assert.equal(hits, 1, `"${hint}" appears ${hits} times`);
+  assert.ok(html.includes(`class="p-dim p-readout">${hint}`), 'and the survivor is the readout');
+});
+
+
+test('renderYears: anomaly mode marks direction with a hatch, not just a hue', () => {
   const app = loadApp({ now: JULY });
   // 2026: January +150 (wet), May/June -150 (dry) against the 2024/25 baseline
   seedArchive(app, `y === 2026 && m === 0 ? 150 : y === 2026 && (m === 4 || m === 5) ? -150 : 0`);
-  const cls = app.run(`(() => {
+  const { vm, html } = app.run(`(() => {
     histMode = 'anom';
-    const g = makeGrid(histGridRows(histStats()));
-    drawHistYears(g);
+    const vm = yearsViewModel();
+    const html = renderYears(vm);
     histMode = 'abs';
-    const row2026 = 4 + 2; // heatTop + index of 2026
-    return { jan: g.cl[row2026].slice(5, 9), jun: g.cl[row2026].slice(5 + 5 * 5, 5 + 5 * 5 + 4) };
+    return { vm, html };
   })()`);
-  assert.ok(cls.jan.every(c => c === 'w2'), 'january cells wear the wet accent');
-  assert.ok(cls.jun.every(c => c === 's'), 'june cells wear the dry accent');
+  const row = vm.rows.find(r => r.y === 2026);
+  assert.equal(row.cells[0].dir, 1, 'january reads wet');
+  assert.equal(row.cells[5].dir, -1, 'june reads dry');
+  // direction is a CLASS the CSS hatches, so it survives greyscale and CVD
+  assert.ok(html.includes(' wet"'), 'wet cells carry the wet class');
+  assert.ok(html.includes(' dry"'), 'dry cells carry the dry class');
+  assert.ok(html.includes('−2 σ') && html.includes('+2 σ'), 'the diverging legend labels its zero');
+  assert.ok(html.includes('standard deviation'), 'and glosses sigma instead of assuming it');
 });
 
-test('drawHistYears: too little data says so instead of drawing noise', () => {
+
+test('yearsViewModel: too little data says so instead of drawing noise', () => {
   const app = loadApp({ now: JULY });
   app.run(`state.archive = [[${JULY} - 864e5, 100], [${JULY}, 110]]; histCache = null; state.repoArchive = 'none'`);
-  const flat = app.run(`(() => {
-    const g = makeGrid(histGridRows(histStats()));
-    drawHistYears(g);
-    return g.ch.map(r => r.join('')).join('\\n');
+  const { vm, html } = app.run(`(() => {
+    const vm = yearsViewModel();
+    return { vm, html: renderYears(vm) };
   })()`);
-  assert.ok(flat.includes('no multi-year archive'), 'the none-manifest case is named');
+  assert.equal(vm.thin, true);
+  assert.ok(vm.reason.includes('no multi-year archive'), 'the none-manifest case is named');
+  assert.ok(html.includes('no multi-year archive'));
+  assert.ok(html.includes('grows with every visit'), 'and points at what does help');
 });
+
 
 // ---------- wave view (river station × day heatmap) ----------
 
@@ -1250,36 +1357,63 @@ test('foldYearsIntoWindow: maps archive days into the window across a year bound
   assert.deepEqual(vals, [105, 125, 205, null, 225, null], 'daily mid = (min+max)/2, gaps stay null');
 });
 
-test('drawWave: rows render per-station scaled, labeled and inside the grid', () => {
-  for (const width of [390, 1200]) {
-    const app = loadApp({ width, now: JULY });
-    const { rows, cols, html } = app.run(`(() => {
-      const nDays = WAVE_FETCH_DAYS;
-      const day0 = epochDay(Date.now()) - (nDays - 1);
-      const mk = (name, kind, base) => ({ name, km: 0, kind,
-        vals: Array.from({ length: nDays }, (_, i) => base + (i % 20)) });
-      const w = { river: 'TESTFLUSS', day0, nDays, shown: 3, total: 5, rows: [
-        mk('OBEN', 'normal', 100), mk('MITTE', 'high', 500),
-        { name: 'FLAT', km: 0, kind: 'low', vals: Array(nDays).fill(42) },
-      ]};
-      const g = makeGrid(waveGridRows(w));
-      drawWave(g, w);
-      return { rows: g.ch.map(r => r.join('')), cols: COLS, html: gridToHtml(g) };
-    })()`);
-    const flat = rows.join('\n');
-    assert.ok(flat.includes('OBEN') && flat.includes('MITTE'), `${cols} cols: station names`);
-    assert.ok(flat.includes('3 of 5'), `${cols} cols: sampling is disclosed`);
-    assert.ok(flat.includes('low') && flat.includes('scaled per station'),
-      `${cols} cols: ramp legend + per-station-scaling caveat present`);
-    assert.ok(flat.includes('≋ downstream ↓'), `${cols} cols: flow marker`);
-    assert.ok(html.includes('data-st="OBEN"'), `${cols} cols: rows are click targets`);
-    assert.ok(html.includes('data-st="cmd:live"'), `${cols} cols: back target`);
-    // compact wraps the info line onto an extra row, pushing the station rows down by one
-    const flatRow = rows[cols === 44 ? 6 : 5];
-    assert.ok(/▒+\s*$/.test(flatRow) && !flatRow.includes('█'), `${cols} cols: a flat station renders mid-shade, not noise`);
-    for (const r of rows) assert.ok(r.length <= cols, `${cols} cols: no row overflows`);
-  }
+test('waveViewModel: rows are scaled per gauge, labelled and disclosed', () => {
+  const app = loadApp({ now: JULY });
+  const { vm, html } = app.run(`(() => {
+    const nDays = WAVE_FETCH_DAYS;
+    const day0 = epochDay(Date.now()) - (nDays - 1);
+    const mk = (name, kind, base) => ({ name, km: 0, kind,
+      vals: Array.from({ length: nDays }, (_, i) => base + (i % 20)) });
+    const w = { river: 'TESTFLUSS', day0, nDays, shown: 3, total: 5, rows: [
+      mk('OBEN', 'normal', 100), mk('MITTE', 'high', 500),
+      { name: 'FLAT', km: 0, kind: 'low', vals: Array(nDays).fill(42) },
+    ]};
+    const vm = waveViewModel(w);
+    return { vm, html: renderWave(vm) };
+  })()`);
+  assert.deepEqual(vm.rows.map(r => r.name), ['OBEN', 'MITTE', 'FLAT']);
+  assert.ok(html.includes('OBEN') && html.includes('MITTE'), 'station names');
+  assert.ok(html.includes('3 of 5 gauges sampled'), 'the sampling is disclosed');
+  // the caveat that used to be a clipped fragment is now a full sentence
+  assert.ok(html.includes('scaled to its OWN gauge'), 'per-gauge scaling explained');
+  assert.ok(html.includes('compare shape, not absolute level'), 'and why it matters');
+  assert.ok(html.includes('data-nav="OBEN"'), 'rows are click targets');
+  assert.ok(html.includes('data-nav="cmd:live"'), 'back target');
+  // a dead-flat gauge takes a mid bin rather than reading as noise or as a peak
+  const flat = vm.rows.find(r => r.name === 'FLAT');
+  assert.ok(flat.cells.every(c => c.bin === 1), 'a flat gauge sits mid-ramp');
+  const oben = vm.rows.find(r => r.name === 'OBEN');
+  assert.ok(oben.cells.some(c => c.bin === 0) && oben.cells.some(c => c.bin === 3),
+    'a varying gauge uses its own full range');
+  assert.ok(html.includes('<table class="heat wave">'), 'a real table');
+  assert.ok(html.includes('no reading') || vm.rows.every(r => r.cells.every(c => c.v != null)),
+    'gaps are named rather than blank');
 });
+
+
+test('renderWave: the key names the row glyph it prefixes every station with', () => {
+  const app = loadApp({ now: JULY });
+  const { html, glyphs, labels } = app.run(`(() => {
+    const nDays = WAVE_FETCH_DAYS;
+    const day0 = epochDay(Date.now()) - (nDays - 1);
+    const mk = (name, kind) => ({ name, km: 0, kind,
+      vals: Array.from({ length: nDays }, (_, i) => 100 + (i % 20)) });
+    const w = { river: 'TESTFLUSS', day0, nDays, shown: 3, total: 3, rows: [
+      mk('OBEN', 'normal'), mk('MITTE', 'high'), mk('UNTEN', 'low') ]};
+    return { html: renderWave(waveViewModel(w)),
+      glyphs: RIVER_GLYPH, labels: [T.kindLow, T.kindNormal, T.kindHigh] };
+  })()`);
+  const key = html.slice(html.indexOf('<dl class="p-key">'));
+  // a legend for every mark it uses: all three states, each named
+  for (const kind of ['low', 'normal', 'high']) {
+    assert.ok(key.includes(`class="k-${kind}"`), `the key carries the ${kind} glyph`);
+  }
+  for (const g of [glyphs.low, glyphs.normal, glyphs.high]) {
+    assert.ok(key.includes(`>${g}</span>`), `the key draws ${g}`);
+  }
+  for (const label of labels) assert.ok(key.includes(label), `the key names "${label}"`);
+});
+
 
 // ---------- sub-view switching ----------
 
@@ -1320,22 +1454,24 @@ test('cropWaveWindow: cuts leading days until half the rows have data', () => {
   assert.equal(app.run(`cropWaveWindow([{ vals: [null, null] }], 2)`), 0, 'never-covered window stays uncut');
 });
 
-test('drawWave: a short window right-aligns against now', () => {
+test('waveViewModel: a short window keeps every day it has', () => {
   const app = loadApp({ now: JULY });
-  const rows = app.run(`(() => {
+  const vm = app.run(`(() => {
     const nDays = 20;
     const day0 = epochDay(Date.now()) - (nDays - 1);
     const w = { river: 'X', day0, nDays, shown: 1, total: 1, rows: [
       { name: 'OBEN', km: 0, kind: 'normal', vals: Array.from({ length: nDays }, (_, i) => i) },
     ]};
-    const g = makeGrid(waveGridRows(w));
-    drawWave(g, w);
-    return g.ch.map(r => r.join(''));
+    return waveViewModel(w);
   })()`);
-  const dataRow = rows[3];
-  assert.ok(/█\s*$/.test(dataRow), 'the newest day sits at the right edge');
-  assert.equal(dataRow.trimEnd().length, 84, 'right-aligned to the last column');
+  // the character grid had to right-align a short window against the last
+  // column; a table just carries all 20 days
+  assert.equal(vm.days, 20);
+  assert.equal(vm.rows[0].cells.length, 20);
+  assert.equal(vm.rows[0].cells.at(-1).bin, 3, 'the newest day is the highest of its own range');
+  assert.equal(vm.rows[0].cells[0].bin, 0);
 });
+
 
 test('history bar: view chips per mode — PROFILE/WAVE on rivers, ABS/ANOM in years', () => {
   const labels = app => app.el('history-bar').children.map(b => b.textContent);
@@ -1351,34 +1487,34 @@ test('history bar: view chips per mode — PROFILE/WAVE on rivers, ABS/ANOM in y
   assert.ok(labels(live).includes('24H') && labels(live).includes('▦ YEARS'), 'live station keeps the range presets');
 });
 
-test('setScreenText/Html: the screen only swaps when content changed', () => {
+test('setScreenHtml: the screen only swaps when the content changed', () => {
   const app = loadApp();
   const stable = app.run(`(() => {
     state.help = 'MAN PAGE';
-    render(0);
-    const first = screen.textContent;
-    screen.textContent = 'SENTINEL'; // a repaint would overwrite this
-    render(0.5);
-    return { first, second: screen.textContent };
+    render();
+    const first = screen.innerHTML;
+    screen.innerHTML = 'SENTINEL'; // a repaint would overwrite this
+    render();
+    return { first, second: screen.innerHTML };
   })()`);
-  assert.equal(stable.first, 'MAN PAGE');
+  assert.match(stable.first, /MAN PAGE/);
   assert.equal(stable.second, 'SENTINEL', 'unchanged content leaves the DOM alone');
   const changed = app.run(`(() => {
     state.help = 'NEW PAGE';
-    render(1);
-    return screen.textContent;
+    render();
+    return screen.innerHTML;
   })()`);
-  assert.equal(changed, 'NEW PAGE', 'changed content still repaints');
+  assert.match(changed, /NEW PAGE/, 'changed content still repaints');
 });
 
-test('year paging + month readout: chips step and clamp, cells print numbers', () => {
+
+test('year paging + month readout: chips step and clamp, cells report numbers', () => {
   const app = loadApp({ width: 1200, now: JULY });
   seedArchive(app);
-  // ◂ steps back through archived years and clamps at the oldest
+  // the year pager steps back through archived years and clamps at the oldest
   assert.equal(app.run(`(stepHistYear(-1), histSelYear(histStats()))`), 2025);
   assert.equal(app.run(`(stepHistYear(-1), stepHistYear(-1), stepHistYear(-1), histSelYear(histStats()))`), 2024, 'clamped at the oldest year');
   assert.equal(app.run(`(stepHistYear(1), histSelYear(histStats()))`), 2025);
-  // the bar carries ◂ / year / ▸ chips while the years view is open
   const labels = app.run(`(viewMode = 'years', renderHistoryBar(), 0)`) === 0
     ? app.el('history-bar').children.map(b => b.textContent) : [];
   assert.ok(labels.includes('◂') && labels.includes('▸') && labels.includes('2025'), 'year pager chips present');
@@ -1386,17 +1522,23 @@ test('year paging + month readout: chips step and clamp, cells print numbers', (
   app.run(`runGridCmd('hm:2024:3')`);
   assert.deepEqual(app.run('histFocus'), { y: 2024, m: 3 });
   assert.equal(app.run('histSelYear(histStats())'), 2024);
-  const { flat, html } = app.run(`(() => {
-    const g = makeGrid(histGridRows(histStats()));
-    drawHistYears(g);
-    return { flat: g.ch.map(r => r.join('')).join('\\n'), html: gridToHtml(g) };
+  const { vm, html } = app.run(`(() => {
+    const vm = yearsViewModel();
+    return { vm, html: renderYears(vm) };
   })()`);
-  assert.ok(/▸ 2024 APR · ⌀ \d+ cm · min \d+ · max \d+ · vs mean \d+ \([+-]?\d+\.\d(σ)\)/u.test(flat), 'readout prints mean, min-max and sigma');
-  assert.ok(html.includes('data-st="cmd:hm:2025:0"'), 'month cells are pick targets');
+  assert.equal(vm.readout.empty, false);
+  assert.equal(vm.readout.y, 2024);
+  assert.equal(vm.readout.m, 3);
+  // the readout is a sentence now, not a glyph-prefixed one-liner
+  assert.match(vm.readout.say, /^April 2024 averaged \d+ cm, ranging \d+–\d+ cm\./, vm.readout.say);
+  assert.match(vm.readout.say, /σ (above|below) the long-term April mean of \d+ cm/, 'and names what it is measured against');
+  assert.ok(html.includes(vm.readout.say.slice(0, 20)), 'and it reaches the plate');
+  assert.ok(html.includes('data-nav="cmd:hm:2025:0"'), 'month cells are pick targets');
   // paging the year drags the readout month along
   app.run(`stepHistYear(1)`);
   assert.deepEqual(app.run('histFocus'), { y: 2025, m: 3 });
 });
+
 
 // ---------- regression tests for the QA-sweep findings ----------
 
@@ -1431,17 +1573,21 @@ test('countGaps tolerates the 6-hourly thinned cadence of multi-year points', ()
   assert.equal(app.run(`countGaps(${JSON.stringify(recent)})`).gaps, 1, '3h stays a gap for recent points');
 });
 
-test('drawSparkline renders a flat series at half height, not as an empty chart', () => {
+test('renderHistory: a flat series draws at half height, not as an empty chart', () => {
   const app = loadApp({ now: NOON });
-  const flat = app.run(`(() => {
+  const { h, html } = app.run(`(() => {
     state.archive = Array.from({ length: 50 }, (_, i) => [${NOON} - (50 - i) * 36e5, 77]);
     historyKey = 'all';
-    const g = makeGrid(SPLASH_ROWS + SPARK_ROWS + 3);
-    drawSparkline(g, 0, 0);
-    return g.ch.map(r => r.join('')).join('\\n');
+    const h = historyViewModel();
+    return { h, html: renderHistory(h) };
   })()`);
-  assert.ok(flat.includes('█'), 'water body visible for a constant level');
-  assert.ok(flat.includes('min 77  max 77'));
+  assert.equal(h.series.min, 77);
+  assert.equal(h.series.max, 77);
+  assert.ok(html.includes('77 cm'), 'the scale still names the level');
+  // a flat window normalises to mid-box rather than collapsing every point to
+  // zero fill, which used to read as "no data"
+  assert.ok(html.includes('class="h-fill"'), 'the water body is still drawn');
+  assert.ok(/48\.0|48 /.test(html), 'the surface sits at half of the 96-unit box');
 });
 
 test('bucketSeries: buckets tile the window, extremes come from every point', () => {
@@ -1473,9 +1619,9 @@ test('bucketSeries: buckets tile the window, extremes come from every point', ()
 // the hosted archive merges as two synthetic points per day (min 06:00, max
 // 18:00), so one sample per column used to be a coin flip between the two — and
 // the caption described that subsample rather than the window
-test('drawSparkline: the caption reports the window extremes, not a column subsample', () => {
+test('historyViewModel: the scale reports the window extremes, not a subsample', () => {
   const app = loadApp({ now: NOON });
-  const grid = app.run(`(() => {
+  const { h, html } = app.run(`(() => {
     const pts = [];
     for (let d = 0; d < 900; d++) {
       const ts = ${NOON} - (900 - d) * 864e5;
@@ -1486,35 +1632,33 @@ test('drawSparkline: the caption reports the window extremes, not a column subsa
     pts[901][1] = 987;
     state.archive = pts;
     historyKey = 'all';
-    sparkDisplay = null;
-    const g = makeGrid(12);
-    drawSparkline(g, 0, 0);
-    return g.ch.map(r => r.join(''));
+    const h = historyViewModel();
+    return { h, html: renderHistory(h) };
   })()`);
-  assert.ok(grid[0].includes('min 12  max 987'),
-    `caption carries the real extremes: "${grid[0].trim()}"`);
-  const body = grid.slice(3, 7).join('\n');
-  assert.ok(/[▒▓]/.test(body), 'columns that merged more than one point draw a min–max band');
-  assert.ok(grid[4].includes('▒ range'), 'the hatched span is named beside the chart');
+  assert.equal(h.series.min, 12, 'the real window low, not the low of whatever a column sampled');
+  assert.equal(h.series.max, 987);
+  assert.ok(html.includes('987 cm') && html.includes('12 cm'), 'and the scale prints them');
+  assert.equal(h.banded, true, 'columns that merged more than one point carry a band');
+  assert.ok(html.includes('class="h-band"'), 'which is drawn as its own polygon');
+  assert.ok(html.includes('min–max inside one pixel column'), 'and named in the legend');
 });
 
-test('drawSparkline: windows with fewer points than columns stay solid, unbanded', () => {
+test('historyViewModel: windows with fewer points than columns carry no band', () => {
   for (const width of [390, 1200]) {
     const app = loadApp({ now: NOON, width });
-    const grid = app.run(`(() => {
-      // 20 hourly readings — fewer than either grid's column count
+    const { h, html } = app.run(`(() => {
+      // 20 hourly readings — fewer than either width's bucket count
       state.archive = Array.from({ length: 20 }, (_, i) => [${NOON} - (20 - i) * 36e5, 100 + i * 3]);
       historyKey = '24h';
-      sparkDisplay = null;
-      const g = makeGrid(12);
-      drawSparkline(g, 0, 0);
-      return g.ch.map(r => r.join(''));
+      const h = historyViewModel();
+      return { h, html: renderHistory(h) };
     })()`);
-    const flat = grid.join('\n');
-    assert.ok(!/[▒▓]/.test(flat), `${width}px: no band glyphs when every bucket holds one point`);
-    assert.ok(!flat.includes('▒ range'), `${width}px: no band legend either`);
-    assert.ok(flat.includes('█'), `${width}px: solid water body`);
-    assert.ok(grid[0].includes('min 100  max 157'), `${width}px: caption: "${grid[0].trim()}"`);
+    assert.equal(h.banded, false, `${width}px: no band when every bucket holds one point`);
+    assert.ok(!html.includes('class="h-band"'), `${width}px: and none is drawn`);
+    assert.ok(!html.includes('min–max inside'), `${width}px: no band legend either`);
+    assert.equal(h.series.min, 100, `${width}px: extremes are the window's`);
+    assert.equal(h.series.max, 157);
+    assert.ok(html.includes('class="h-fill"'), `${width}px: the water body is still there`);
   }
 });
 
@@ -1588,44 +1732,54 @@ test('unusualText: terminal one-liner, compact variant fits 44 columns', () => {
     ['0th', '1st', '2nd', '3rd', '4th', '11th', '12th', '13th', '21st', '42nd', '100th']);
 });
 
-test('drawSparkline: the unusual line appears only with an archive, and costs one row', () => {
+test('the insight sentence: spelled out for everyone, terse line kept for the fluent', () => {
   const mk = search => {
     const app = loadApp({ now: JULY, search });
     seedArchive(app);
-    app.run(`historyKey = 'all'; sparkDisplay = null;`);
+    app.run(`historyKey = 'all';`);
     return app;
   };
-  // no gauge reading yet → the line (and its grid row) must not exist
+  // no gauge reading yet -> no verdict, and no readout block
   const bare = mk('?station=BONN');
   assert.equal(bare.run('unusualNow()'), null, 'no current measurement, no verdict');
-  assert.equal(bare.run(`(() => { const g = makeGrid(12); return drawSparkline(g, 0, 0); })()`),
-    bare.run('SPLASH_ROWS + SPARK_ROWS + 2'), 'grid height unchanged without the line');
 
   const app = mk('?station=BONN');
   app.run(`state.gauge = { currentMeasurement: { value: 342, timestamp: ${JULY} } }`);
   const u = app.run('unusualNow()');
   assert.ok(u, 'three seeded years are enough archive to judge against');
-  assert.equal(u.month, 6, 'JULY fixture → the July climatology');
-  assert.equal(app.run(`(() => { const g = makeGrid(12); return drawSparkline(g, 0, 0); })()`),
-    app.run('SPLASH_ROWS + SPARK_ROWS + 3'), 'the line takes exactly one extra row');
-  const { text, cls } = app.run(`(() => {
-    const g = makeGrid(12);
-    drawSparkline(g, 0, 0);
-    const r = SPLASH_ROWS + SPARK_ROWS + 2; // axis row + 1
-    return { text: g.ch[r].join('').trim(), cls: g.cl[r].join('') };
-  })()`);
-  assert.match(text, /^342 cm · \d+(st|nd|rd|th) pct of 3y · JUL mean \d+ \([+-][\d.]+σ\)$/,
-    `line reads as designed: "${text}"`);
-  // the seeded summer trough sits far below 342 cm → a wet anomaly wears the flood accent
-  assert.ok(u.z >= 1.5 && cls.includes('w2'), `far-out σ takes the flood accent (z=${u.z})`);
+  assert.equal(u.month, 6, 'JULY fixture -> the July climatology');
+  assert.ok(u.fromYear, 'and the model carries the first archived year');
 
-  // a station WSV keeps no archive for renders exactly as before
+  const say = app.run(`insightSentence(unusualNow(), 342)`);
+  // this is the line the feedback was about: "91st pct of 26y" told nobody anything
+  assert.match(say, /342 cm/, 'names the reading');
+  assert.match(say, /higher than/, 'in words, not jargon');
+  // said from whichever end is the short one: "higher than 1 %" is true of a
+  // record low but reads like good news
+  const recordLow = app.run(`insightSentence({ pct: 1, fromYear: 1999, years: 27, month: 7, climMean: 250, z: -1.9 }, 96)`);
+  assert.match(recordLow, /lower than <b>99 %<\/b>/, 'a record low is said as a record low');
+  assert.match(recordLow, /clearly dry/, 'and the season comparison agrees');
+  // and from whichever end is the short one — "higher than 1 %" reads like good
+  // news when it is actually a record low
+  const low = app.run(`insightSentence({ pct: 1, fromYear: 1999, years: 27, month: 7, climMean: 250, z: -1.9 }, 96)`);
+  assert.match(low, /lower than <b>99 %<\/b>/, 'a record low is said as a record low');
+  assert.match(say, /of all days recorded here since/, 'and says what it is compared against');
+  assert.match(say, /since <b>\d{4}<\/b>/, 'naming the first archived year, not "26y"');
+  assert.match(say, /July/, 'the month is spelled out, not JUL');
+  assert.ok(!/pct|sigma|\bσ\b/.test(say), 'no unexplained abbreviations in the spoken line');
+
+  // the terse mono line survives underneath it, unchanged, for people who read it fluently
+  const terse = app.run('unusualText(unusualNow(), false)');
+  assert.match(terse, /^342 cm · \d+(st|nd|rd|th) pct of 3y · JUL mean \d+ \([+-][\d.]+σ\)$/,
+    `terse line unchanged: "${terse}"`);
+
+  // a station WSV keeps no archive for still says nothing rather than guessing
   const none = loadApp({ now: JULY, search: '?station=BONN' });
   none.run(`state.archive = [[${JULY} - 36e5, 300], [${JULY}, 342]]; histCache = null;`);
   none.run(`state.gauge = { currentMeasurement: { value: 342, timestamp: ${JULY} } }; state.repoArchive = 'none';`);
   assert.equal(none.run('unusualNow()'), null, 'two local points are not a distribution');
+  assert.equal(none.run('insightSentence(unusualNow(), 342)'), null, 'and no sentence is invented');
 });
-
 test('histStats cache: switching stations never serves the old station\'s stats', () => {
   const mk = v => { const pts = []; for (let d = 0; d < 365; d++) { const ts = Date.UTC(2025, 0, 1) + d * 864e5; pts.push([ts + 6 * 36e5, v], [ts + 18 * 36e5, v]); } return pts; };
   const app = loadApp({ now: JULY, search: '?station=BONN&view=years' });
@@ -1636,36 +1790,19 @@ test('histStats cache: switching stations never serves the old station\'s stats'
   assert.equal(app.run(`histStats().byYear.get(2025)[0]`), 500, 'identical archive shape must not collide in the cache');
 });
 
-test('years view: no backwards MONTHLY RANGE title without a completed year', () => {
+test('years view: no backwards range title without a completed year', () => {
   const app = loadApp({ now: JULY });
-  const flat = app.run(`(() => {
+  const html = app.run(`(() => {
     const pts = [];
     for (let d = 0; d < 60; d++) { const ts = Date.UTC(2026, 0, 1) + d * 864e5; pts.push([ts + 6 * 36e5, 200]); }
     state.archive = pts; histCache = null;
-    const g = makeGrid(histGridRows(histStats()));
-    drawHistYears(g);
-    return g.ch.map(r => r.join('')).join('\\n');
+    return renderYears(yearsViewModel());
   })()`);
-  assert.ok(!flat.includes('2026–2025'), 'no end-before-start range');
-  assert.ok(flat.includes('MONTHLY RANGE'), 'section title survives');
-  assert.ok(flat.includes('needs at least one completed year'));
+  assert.ok(!html.includes('2026–2025'), 'no end-before-start range');
+  assert.ok(html.includes('LONG-TERM MONTHLY RANGE'), 'section title survives');
+  assert.ok(html.includes('at least one completed year'));
 });
 
-test('putHeadRule: long river names ellipsize instead of being overwritten by the tag', () => {
-  const app = loadApp({ width: 390, now: NOON });
-  const sts = Array.from({ length: 12 }, (_, i) => ({
-    name: 'S' + i, km: i * 10, value: 100, elev: 50 - i, kind: 'normal',
-  }));
-  app.run(`state.river = 'MITTELLANDKANAL'`);
-  const row0 = app.run(`(() => {
-    const g = makeGrid(riverGridRows(${JSON.stringify(sts)}));
-    drawRiver(g, ${JSON.stringify(sts)}, 0);
-    return g.ch[0].join('');
-  })()`);
-  assert.ok(row0.includes('[▦ WAVE]'), 'tag present');
-  assert.ok(row0.includes('… '), 'head text ellipsized');
-  assert.ok(/(… |─)\[▦ WAVE\]/.test(row0), 'the tag borders padding or the ellipsis, never clipped text');
-});
 
 test('foldYearsIntoWindow survives malformed archive years without throw or NaN', () => {
   const app = loadApp();
@@ -1693,20 +1830,27 @@ test('wave cache: the 5-min river poll refreshes the state badges on cached rows
   assert.equal(app.run('waveData.rows[0].kind'), 'high', 'badge follows the live state without a refetch');
 });
 
-test('year overlay: MHW and MNW sharing a row combine their label', () => {
+test('year overlay: reference levels are drawn and named on their own rules', () => {
   const app = loadApp({ now: JULY });
   seedArchive(app);
-  const flat = app.run(`(() => {
+  const { vm, html } = app.run(`(() => {
     state.gauge = { currentMeasurement: { value: 200 }, characteristicValues: [
       { shortname: 'MHW', value: 212 }, { shortname: 'MNW', value: 210 },
     ]};
-    const g = makeGrid(histGridRows(histStats()));
-    drawHistYears(g);
+    const vm = yearsViewModel();
+    const html = renderYears(vm);
     state.gauge = null;
-    return g.ch.map(r => r.join('')).join('\\n');
+    return { vm, html };
   })()`);
-  assert.ok(flat.includes('┤ MHW+MNW'), 'both levels named on the shared row');
+  // the character grid had to merge two labels that landed on one row
+  // ("MHW+MNW"); a continuous scale gives each its own rule and label
+  assert.deepEqual(vm.overlay.marks.map(m => m.k), ['MHW', 'MNW']);
+  // each level gets its own rule, and both are named in the key — the axis text
+  // itself stays out of the SVG so it cannot scale with the viewBox
+  assert.equal((html.match(/class="href-line"/g) || []).length >= 2, true, 'each gets its own rule');
+  assert.ok(html.includes('MHW 212') && html.includes('MNW 210'), 'both named with their values');
 });
+
 
 // ---------- trend ----------
 
@@ -1748,7 +1892,7 @@ test('trendPerHour: under an hour of history is unknown, not steady', () => {
   assert.equal(hour, -3, 'exactly an hour is enough');
 });
 
-test('drawHeader: prints the trend with a decimal and an em dash when unknown', () => {
+test('the station head: prints the trend with a decimal and an em dash when unknown', () => {
   const render = archive => {
     const app = loadApp({ now: NOON });
     return app.run(`(() => {
@@ -1756,25 +1900,30 @@ test('drawHeader: prints the trend with a decimal and an em dash when unknown', 
       state.info = { water: { shortname: 'RHEIN' }, km: 654.8 };
       state.gauge = { currentMeasurement: { value: 77, timestamp: ${NOON}, stateMnwMhw: 'low' } };
       state.archive = ${archive};
-      const g = makeGrid(HEADER_ROWS);
-      drawHeader(g, 0, 0);
-      return g.ch.map(r => r.join('')).join('\\n');
+      state.neighbors = [];
+      return renderStation(stationViewModel());
     })()`);
   };
   const falling = render(`[[${NOON} - 6 * 36e5, 80], [${NOON}, 77]]`);
-  assert.ok(falling.includes('▼ -0.5 cm/h'), `decimal slope with a falling arrow, got:\n${falling}`);
+  assert.ok(falling.includes('▼ -0.5 cm/h'), 'decimal slope with a falling arrow');
 
   const steady = render(`[[${NOON} - 6 * 36e5, 77], [${NOON}, 77]]`);
   assert.ok(steady.includes('▬ 0.0 cm/h'), 'a flat river reads 0.0 without a sign');
 
   // -0.04 cm/h is steady; "-0.0" would read like a rendering fault
   const creep = render(`[[${NOON} - 6 * 36e5, 77.24], [${NOON}, 77]]`);
-  assert.ok(creep.includes('▬ 0.0 cm/h'), `sub-0.05 drift prints unsigned, got:\n${creep}`);
+  assert.ok(creep.includes('▬ 0.0 cm/h'), 'sub-0.05 drift prints unsigned');
 
-  assert.ok(render(`[[${NOON} - 30 * 60000, 80], [${NOON}, 77]]`).includes('▬ — cm/h'),
+  assert.ok(render(`[[${NOON} - 30 * 60000, 80], [${NOON}, 77]]`).includes('<dd title'),
     'too little history shows an em dash rather than a fabricated zero');
-});
+  assert.ok(render(`[[${NOON} - 30 * 60000, 80], [${NOON}, 77]]`).includes('>—<'), 'literally an em dash');
 
+  // the hero reading and its unit are real selectable text now, not block glyphs
+  const h = render(`[[${NOON} - 6 * 36e5, 80], [${NOON}, 77]]`);
+  assert.ok(h.includes('<span class="hero-n">77</span>'), 'the level is text');
+  assert.ok(h.includes('above this gauge’s own zero mark'), 'and says what the number means');
+  assert.ok(h.includes('class="km-sign"') && h.includes('654.8'), 'the km board survives as a real sign');
+});
 // ---------- characteristic values ----------
 
 test('charRecord: reads the API\'s bare date strings as well as the object form', () => {
@@ -1797,11 +1946,11 @@ test('charRecord: reads the API\'s bare date strings as well as the object form'
   assert.equal(span, 2020, 'timespan fallback survives');
 });
 
-test('drawChart: low water keeps MNW and NNW visible and in the right order', () => {
+test('sceneModel: low water keeps every mark visible and strictly in order', () => {
   const app = loadApp({ now: NOON });
   // BONN's real values on 2026-08-09: the level sits below its own record low, so
-  // NNW, MNW and the water line all round onto one row of the MHW-pinned scale
-  const rows = app.run(`(() => {
+  // NNW, MNW and the water line all land within a hair of each other
+  const s = app.run(`(() => {
     station = 'BONN';
     state.info = { water: { shortname: 'RHEIN' }, km: 654.8, latitude: 50.736, longitude: 7.108 };
     state.gauge = { currentMeasurement: { value: 77, timestamp: ${NOON}, stateMnwMhw: 'low' },
@@ -1811,23 +1960,30 @@ test('drawChart: low water keeps MNW and NNW visible and in the right order', ()
         { shortname: 'MNW', value: 121 }, { shortname: 'MW', value: 290 }, { shortname: 'MHW', value: 680 },
       ] };
     state.archive = [];
-    const g = makeGrid(CHART_ROWS + 2);
-    drawChart(g, 0, 0);
-    return g.ch.map(r => r.join(''));
+    state.neighbors = [];
+    return sceneModel();
   })()`);
 
-  const rowOfLabel = name => rows.findIndex(r => r.includes(name));
-  for (const name of ['MHW 680', 'MW 290', 'MNW 121', 'NNW 81', 'W 77']) {
-    assert.notEqual(rowOfLabel(name), -1, `${name} is drawn`);
+  const all = [...s.marks, ...s.above, ...s.below];
+  for (const key of ['MHW', 'MW', 'MNW', 'NNW']) {
+    assert.ok(all.some(m => m.key === key), `${key} is accounted for`);
   }
-  // rows count downwards, so a higher level must sit on a lower row index
-  const order = ['MHW 680', 'MW 290', 'MNW 121', 'NNW 81', 'W 77'].map(rowOfLabel);
-  for (let i = 1; i < order.length; i++) {
-    assert.ok(order[i] > order[i - 1],
-      `marker order inverted: ${JSON.stringify(order)}\n${rows.join('\n')}`);
+  // fractions grow downwards, so a higher value must sit at a smaller fraction —
+  // asserted on the model itself instead of inferred from character rows
+  const drawn = s.marks.slice().sort((a, b) => b.cm - a.cm);
+  for (let i = 1; i < drawn.length; i++) {
+    assert.ok(drawn[i].frac > drawn[i - 1].frac,
+      `mark order inverted: ${JSON.stringify(drawn.map(m => [m.key, m.cm, m.frac]))}`);
   }
+  // the water line keeps its place in that ranking too
+  for (const m of s.marks) {
+    if (m.cm >= s.value) assert.ok(m.frac <= s.surface, `${m.key} (${m.cm}) must not sit below the water line`);
+    else assert.ok(m.frac >= s.surface, `${m.key} (${m.cm}) must not sit above the water line`);
+  }
+  assert.equal(s.flags.drought, true, '77 cm is below MNW 121');
+  assert.ok(s.band, 'the normal range band spans MNW to MHW');
+  assert.ok(s.band.top < s.band.bottom, 'with high water at the top of the box');
 });
-
 // ---------- rivers map (?rivers) ----------
 
 const seedRivers = (app, list) => app.run(`(() => {
@@ -1861,92 +2017,71 @@ test('riversOverview: counts every gauge, anchors only on the located ones', () 
   assert.equal(moldau.la, null, 'and left unanchored rather than placed at 0,0');
 });
 
-test('rivers map: every water is either drawn intact or listed, never corrupted', () => {
-  for (const width of [1200, 390]) {
-    const app = loadApp({ search: '?rivers', width });
-    const list = crowd(40);
-    const out = app.run(`(() => {
-      fillDatalist(${JSON.stringify(list)});
-      const rivers = riversOverview();
-      const g = makeGrid(riversGridRows(rivers));
-      // replay the placement to learn which ones drawRivers will spill
-      const probe = makeGrid(mapHeight());
-      drawOutline(probe, 0);
-      const spilled = placeRiverLabels(probe, 0, rivers).map(r => r.name);
-      drawRivers(g, rivers);
-      return { rivers: rivers.map(r => ({ name: r.name, n: r.n })), spilled,
-               rows: g.ch.map(r => r.join('')), cols: COLS };
-    })()`);
+const seedRiversPlate = (app, list, view = 'live') => app.run(`(() => {
+  fillDatalist(${JSON.stringify(list)});
+  viewMode = ${JSON.stringify(view)};
+  const vm = riversViewModel();
+  return { vm, html: renderRivers(vm) };
+})()`);
 
-    const flat = out.rows.join('\n');
-    const placed = out.rivers.filter(r => !out.spilled.includes(r.name));
-    assert.ok(placed.length > 0, `${width}px: something must reach the map`);
-    // The bug this guards: a later water's dot landing inside an earlier label
-    // turned "RHEIN 36" into "RHEIN ◉6" — a wrong number, rendered confidently.
-    for (const rv of placed) {
-      assert.ok(flat.includes(`${rv.name} ${rv.n}`),
-        `${width}px: ${rv.name} ${rv.n} was placed but is not intact on screen`);
-    }
-    for (const rv of out.rivers) {
-      assert.ok(flat.includes(rv.name), `${width}px: ${rv.name} vanished entirely`);
-    }
-    for (const r of out.rows) {
-      assert.ok(r.replace(/\s+$/, '').length <= out.cols, `${width}px: row wider than COLS`);
-    }
-  }
-});
-
-test('rivers map: the grid is sized for the table it actually draws', () => {
-  // Long names make the table columns wide, so the spill overflows RIVERS_TABLE_ROWS
-  // and the "+ N more" footer appears — the bottom-most row the map ever writes, and
-  // the one an off-by-one in riversGridRows would silently drop.
-  const wide = Array.from({ length: 130 * 2 }, (_, i) => {
-    const w = Math.floor(i / 2);
-    return { n: `S${i}`, w: `LONG_WATER_NAME_${String(w).padStart(3, '0')}`, km: i,
-             la: 48.4 + (w % 9) * 0.5, lo: 7.4 + Math.floor(w / 9) * 0.55 };
-  });
-  for (const width of [1200, 390]) {
-    const app = loadApp({ search: '?rivers', width });
-    const r = app.run(`(() => {
-      fillDatalist(${JSON.stringify(wide)});
-      const rivers = riversOverview();
-      const g = makeGrid(riversGridRows(rivers));
-      drawRivers(g, rivers);
-      const text = g.ch.map(x => x.join(''));
-      return { rows: g.rows, text,
-               lastUsed: text.reduce((acc, x, i) => x.trim() ? i : acc, 0),
-               footer: text.some(x => x.includes('more — type a name')) };
-    })()`);
-    assert.ok(r.footer, `${width}px: the overflow footer is part of this case`);
-    assert.ok(r.lastUsed < r.rows, `${width}px: last written row ${r.lastUsed} outside grid of ${r.rows}`);
-    assert.ok(r.rows - r.lastUsed <= 2, `${width}px: ${r.rows - r.lastUsed} spare rows is oversized`);
-  }
-});
-
-test('rivers map: names and table entries are click targets for their river', () => {
+test('riversViewModel: every water is either placed or spilled, counts conserved', () => {
   const app = loadApp({ search: '?rivers' });
   const list = crowd(40);
-  const links = app.run(`(() => {
-    fillDatalist(${JSON.stringify(list)});
-    const rivers = riversOverview();
-    const g = makeGrid(riversGridRows(rivers));
-    drawRivers(g, rivers);
-    return [...new Set(g.ln.flat().filter(Boolean))];
-  })()`);
-  assert.ok(links.length >= 40, `every water is reachable, got ${links.length}`);
-  assert.ok(links.every(l => l.startsWith('river:') || l === 'rising'),
-    'targets open river mode (plus the one rising-board link)');
-  assert.ok(links.includes('river:W00'), 'a mapped water is linked');
-  assert.ok(links.includes('rising'), 'the rising board is reachable from the map');
+  const { vm, html } = seedRiversPlate(app, list);
+  assert.ok(vm.placed.length > 0, 'something must reach the map');
+  // the real invariant the old character-collision test was a proxy for:
+  // nothing is silently dropped between the map and the index
+  assert.equal(vm.placed.length + vm.spilled.length, vm.waters, 'placed + spilled = every water');
+  assert.equal(vm.gauges, list.length, 'the gauge count is the whole list');
+  const named = new Set([...vm.placed, ...vm.spilled].map(r => r.name));
+  assert.equal(named.size, vm.waters, 'no water appears twice');
+  assert.equal(vm.all.length, vm.waters, 'and the A–Z index carries all of them');
+  assert.ok(html.includes('data-nav="river:W00"'), 'a mapped water links to its profile');
 });
 
-test('rivers map: long names are ellipsized, never run into the next column', () => {
+test('placeRiverLabels: no label overlaps another at any label cap', () => {
   const app = loadApp({ search: '?rivers' });
-  const cell = app.run(`riversCell({ name: 'Freiburger Hafenpriel', n: 1 })`);
-  assert.ok(cell.text.length <= 20, `cell fits its column, got ${cell.text.length}`);
-  assert.ok(cell.name.endsWith('…'), 'the name is visibly truncated, not silently cut');
-  const short = app.run(`riversCell({ name: 'ALLER', n: 5 })`);
-  assert.equal(short.text, 'ALLER 5', 'short names are left alone');
+  app.run(`fillDatalist(${JSON.stringify(crowd(40))})`);
+  for (const cap of [6, 14, 26]) {
+    const placed = app.run(`placeRiverLabels(riversOverview(), ${cap}).placed`);
+    assert.ok(placed.length <= cap, `cap ${cap} is respected`);
+    // real bounding-box check, which the character grid could only approximate
+    for (let i = 0; i < placed.length; i++) {
+      for (let j = i + 1; j < placed.length; j++) {
+        const a = app.run(`mapLabelBox(${placed[i].lx}, ${placed[i].ly}, ${JSON.stringify(placed[i].text)}, ${placed[i].anchor === 'end'})`);
+        const b = app.run(`mapLabelBox(${placed[j].lx}, ${placed[j].ly}, ${JSON.stringify(placed[j].text)}, ${placed[j].anchor === 'end'})`);
+        assert.equal(app.run(`boxHit(${JSON.stringify(a)}, ${JSON.stringify(b)})`), false,
+          `cap ${cap}: "${placed[i].text}" overlaps "${placed[j].text}"`);
+      }
+    }
+  }
+});
+
+test('renderRivers: the map projects Germany, not a squashed grid', () => {
+  const app = loadApp({ search: '?rivers' });
+  // a degree of longitude is ~0.63 of a degree of latitude at 51 N; ignoring
+  // that is what flattened the character-grid map
+  const scale = app.run('MAP_LON_SCALE');
+  assert.ok(scale > 0.6 && scale < 0.65, `cos(51.15) ≈ 0.627, got ${scale}`);
+  const h = app.run('MAP_H'), w = app.run('MAP_W');
+  assert.ok(h > w, 'Germany comes out portrait, which also suits a phone');
+  const { html } = seedRiversPlate(app, crowd(12));
+  assert.ok(html.includes('<polygon points='), 'the border is one real polygon');
+  assert.ok(html.includes('class="mdot"'), 'gauges cluster into dots');
+  assert.ok(html.includes('30+'), 'the legend names the dot sizes');
+});
+
+test('riversViewModel: the A–Z index is the browsable list the map cannot be', () => {
+  const app = loadApp({ search: '?rivers&view=list' });
+  assert.equal(app.run('viewMode'), 'list', 'the index is its own URL state');
+  const { vm, html } = seedRiversPlate(app, crowd(40), 'list');
+  assert.equal(vm.tab, 'list');
+  assert.deepEqual(vm.all.map(r => r.name), [...vm.all.map(r => r.name)].sort(), 'sorted A–Z');
+  assert.ok(html.includes('<ol class="a-z">'), 'a real ordered list');
+  assert.ok(html.includes('data-nav="river:W00"'));
+  assert.ok(!html.includes('<polygon'), 'the map steps aside for the index');
+  assert.equal(app.run(`navHref('cmd:rlist')`), '?rivers&view=list', 'the tab is a shareable link');
+  assert.equal(app.run(`navHref('cmd:rmap')`), '?rivers');
 });
 
 test('rivers map: ?rivers boots into the map and --rivers switches into it', () => {
@@ -1991,33 +2126,34 @@ test('currentModeQuery: the share link follows whatever mode is actually on scre
   assert.equal(app.run('currentModeQuery()'), '?rising', 'and into ?rising');
 });
 
-test('applyModeChrome: marks the active global-view button, footer label matches the mode', () => {
+test('applyModeChrome: marks the active nav item, footer label matches the mode', () => {
   const rivers = loadApp({ search: '?rivers' });
-  assert.equal(rivers.el('rivers-btn').className, 'flag-btn on', 'the active button gets .on');
+  assert.equal(rivers.el('rivers-btn').className, 'on', 'the active item gets .on');
   assert.equal(rivers.el('rivers-btn').getAttribute('aria-current'), 'page');
-  assert.equal(rivers.el('rising-btn').className, 'flag-btn', 'the other two stay plain');
+  assert.equal(rivers.el('rising-btn').className, '', 'the other two stay plain');
   assert.equal(rivers.el('rising-btn').getAttribute('aria-current'), 'false');
-  assert.equal(rivers.el('total-btn').className, 'flag-btn');
+  assert.equal(rivers.el('total-btn').className, '');
   assert.equal(rivers.el('footer-perma-label').textContent, 'rivers link:');
 
   const rising = loadApp({ search: '?rising' });
-  assert.equal(rising.el('rising-btn').className, 'flag-btn on');
+  assert.equal(rising.el('rising-btn').className, 'on');
   assert.equal(rising.el('footer-perma-label').textContent, 'rising link:');
 
   const total = loadApp({ search: '?total' });
-  assert.equal(total.el('total-btn').className, 'flag-btn on');
+  assert.equal(total.el('total-btn').className, 'on');
   assert.equal(total.el('footer-perma-label').textContent, 'total link:');
 
-  // station mode: none of the three global-view buttons is "the current mode".
+  // station mode: the station item is current, the three global views are not.
   // Station-mode boot never calls applyModeChrome() itself (the static markup's
   // default class is already correct there), so call it explicitly, same as the
   // "back button" test above does for the same reason.
   const station = loadApp({ search: '?station=BONN' });
   station.run('applyModeChrome()');
   for (const id of ['rivers-btn', 'rising-btn', 'total-btn']) {
-    assert.equal(station.el(id).className, 'flag-btn', `${id} unmarked in station mode`);
+    assert.equal(station.el(id).className, '', `${id} unmarked in station mode`);
     assert.equal(station.el(id).getAttribute('aria-current'), 'false');
   }
+  assert.equal(station.el('home-btn').getAttribute('aria-current'), 'page');
   assert.equal(station.el('footer-perma-label').textContent, 'station link:');
 
   const river = loadApp({ search: '?river=RHEIN' });
@@ -2048,7 +2184,7 @@ test('boot: a deep link straight into a ?total month/day zoom titles the tab wit
   assert.equal(loadApp({ search: '?total&y=2024&d=2024-05-12' }).document.title, 'PEGEL://TOTAL · MAY 2024 · 12');
 });
 
-test('back button: offered in river and map mode, naming the station it returns to', () => {
+test('station nav item: names the way back in river and map mode', () => {
   // Neither view shows the station you came from, so without this the only way
   // back is remembering a name and typing it.
   for (const [search, where] of [['?rivers', 'the map'], ['?river=RHEIN', 'the river profile']]) {
@@ -2057,19 +2193,25 @@ test('back button: offered in river and map mode, naming the station it returns 
       station = 'KÖLN';
       applyModeChrome();
       const b = document.getElementById('home-btn');
-      return { hidden: b.hidden, text: b.textContent, title: b.title };
+      return { hidden: b.hidden, text: b.textContent, title: b.title, nav: b.dataset.nav, href: b.href };
     })()`);
     assert.equal(btn.hidden, false, `shown on ${where}`);
     assert.equal(btn.text, '← KÖLN', `${where}: names its target, not a generic "home"`);
     assert.match(btn.title, /KÖLN/, `${where}: title names the target too`);
+    assert.equal(btn.nav, 'KÖLN', `${where}: dispatches through the nav grammar`);
+    assert.equal(btn.href, '?station=K%C3%96LN', `${where}: the href is honest`);
   }
 
-  // and stays out of the way where it would be a no-op
+  // on the gauge itself it is the current page, named plainly
   const station = loadApp({ search: '?station=BONN' });
-  assert.equal(station.run(`(() => {
+  const self = station.run(`(() => {
     applyModeChrome();
-    return document.getElementById('home-btn').hidden;
-  })()`), true, 'hidden in station mode');
+    const b = document.getElementById('home-btn');
+    return { hidden: b.hidden, text: b.textContent, current: b.getAttribute('aria-current') };
+  })()`);
+  assert.equal(self.hidden, false, 'always present in the nav');
+  assert.equal(self.text, 'BONN');
+  assert.equal(self.current, 'page');
 });
 
 test('back button: leaving the map redraws the station even if it never changed', () => {
@@ -2086,27 +2228,42 @@ test('back button: leaving the map redraws the station even if it never changed'
   assert.equal(after.station, 'BONN', 'landing on the station the button named');
 });
 
-test('drawChart: no marker label ever runs past the grid edge', () => {
-  for (const [value, width] of [[77, 1200], [1013, 1200], [77, 390], [1013, 390]]) {
-    const app = loadApp({ now: NOON, width });
-    const { cols, longest } = app.run(`(() => {
-      station = 'BONN';
-      state.info = { water: { shortname: 'RHEIN' }, km: 654.8, latitude: 50.736, longitude: 7.108 };
-      state.gauge = { currentMeasurement: { value: ${value}, timestamp: ${NOON}, stateMnwMhw: 'low' },
-        characteristicValues: [
-          { shortname: 'HHW', value: 1013, occurrences: ['1993-12-23'] },
-          { shortname: 'NNW', value: 81, occurrences: ['2018-10-22'] },
-          { shortname: 'MNW', value: 121 }, { shortname: 'MW', value: 290 }, { shortname: 'MHW', value: 680 },
-        ] };
-      state.archive = [];
-      const g = makeGrid(CHART_ROWS + 2);
-      drawChart(g, 0, 0);
-      return { cols: COLS, longest: Math.max(...g.ch.map(r => r.join('').replace(/\\s+$/, '').length)) };
-    })()`);
-    assert.ok(longest <= cols, `W=${value} at ${width}px: row of ${longest} exceeds COLS ${cols}`);
+test('sceneModel: marks off the scale become margin arrows instead of being clipped', () => {
+  const seed = (app, value) => app.run(`(() => {
+    station = 'BONN';
+    state.info = { water: { shortname: 'RHEIN' }, km: 654.8, latitude: 50.736, longitude: 7.108 };
+    state.gauge = { currentMeasurement: { value: ${value}, timestamp: ${NOON}, stateMnwMhw: 'low' },
+      characteristicValues: [
+        { shortname: 'HHW', value: 1013, occurrences: ['1993-12-23'] },
+        { shortname: 'NNW', value: 81, occurrences: ['2018-10-22'] },
+        { shortname: 'MNW', value: 121 }, { shortname: 'MW', value: 290 }, { shortname: 'MHW', value: 680 },
+      ] };
+    state.archive = [];
+    state.neighbors = [];
+    const vm = stationViewModel();
+    return { scene: vm.scene, html: renderStation(vm) };
+  })()`);
+
+  // low water: HHW 1013 sits far above the MHW-pinned scale, so it belongs in
+  // the top margin rather than clipped off the chart
+  const low = seed(loadApp({ now: NOON }), 77);
+  assert.ok(low.scene.above.some(m => m.key === 'HHW'), 'HHW is reported above the box');
+  assert.ok(low.html.includes('↑ HHW'), 'as an explicit up arrow');
+  assert.ok(low.html.includes('1013'), 'carrying its value');
+  assert.ok(low.html.includes('1993'), 'and the year it happened');
+
+  // at the record level itself the scale grows to hold it, so no arrow is needed
+  const high = seed(loadApp({ now: NOON }), 1013);
+  assert.ok(high.scene.topCm > 1013, 'the flood scale makes room above the level');
+  assert.equal(high.scene.above.some(m => m.key === 'HHW'), false, 'HHW is on the chart now');
+  assert.equal(high.scene.flags.flood, true, 'and the scene knows it is a flood');
+
+  // every label lives in an HTML gutter, so nothing can be clipped by a column count
+  assert.ok(low.html.includes('class="gutter"'), 'labels sit on paper beside the drawing');
+  for (const key of ['MHW', 'MW', 'MNW']) {
+    assert.ok(low.html.includes(`<b>${key}</b>`), `${key} is named in full in the gutter`);
   }
 });
-
 // ---------- rising board ----------
 
 // raw bulk-endpoint station entry, same shape the live API returns
@@ -2206,48 +2363,150 @@ test('risingBadge: HIGH/LOW override the ETA, spanless stations get none', () =>
   assert.equal(badge({ mnw: 100, mhw: 400, v: 399, kind: 'normal', cmPerDay: 0.001 }), null, 'an ETA beyond 99 days is noise, not a forecast');
 });
 
-test('drawRising: grid is sized for what it draws, rows link to their stations', () => {
-  for (const width of [1200, 390]) {
-    const app = loadApp({ now: NOON, width });
-    const iso = new Date(NOON - 864e5).toISOString();
-    const values = Object.fromEntries(Array.from({ length: 30 }, (_, i) => [`s${i}`, 100]));
-    const shard = shardWith(2026, 1, 31, 13, iso, values);
-    // 25 risers (overflow past the top 20), 4 fallers, 1 steady
-    const raw = Array.from({ length: 30 }, (_, i) => {
-      const v = i < 25 ? 110 + i : i < 29 ? 90 - i : 100;
-      return bulk(`s${i}`, `ST${String(i).padStart(2, '0')}`, 'RIVER', v, SPAN);
-    });
-    const r = app.run(`(() => {
-      const d = risingOverview(parseBulkStations(${JSON.stringify(raw)}), ${JSON.stringify(shard)}, ${NOON});
-      const g = makeGrid(risingGridRows(d));
-      drawRising(g, d);
-      const rows = g.ch.map(r => r.join('').replace(/\\s+$/, ''));
-      return { d, rows, gridRows: g.rows, cols: COLS,
-        links: [...new Set(g.ln.flat().filter(Boolean))],
-        lastUsed: rows.reduce((a, r, i) => r ? i : a, 0) };
-    })()`);
-    assert.equal(r.d.risers.length, 20, 'capped at the top 20');
-    assert.equal(r.d.counts.rising, 25);
-    assert.equal(r.lastUsed, r.gridRows - 1, `at ${width}px the grid ends exactly at its last drawn row`);
-    assert.ok(r.rows.some(x => x.includes('… 5 more rising')), 'overflow names what it hides');
-    assert.ok(r.rows.every(x => x.length <= r.cols), `no row exceeds COLS at ${width}px`);
-    assert.ok(r.links.includes('ST24') && r.links.includes('ST26'),
-      'the fastest riser and a faller row are click targets (ST00 rose slowest — overflowed)');
-    assert.ok(r.links.every(l => /^ST\d\d$/.test(l)), 'targets are plain station names');
-  }
+// the plate renderers read state.rising (data + the shard the sparklines use),
+// so every rising view-model test goes through the same seam the app does
+function risingPlate(app, raw, shard, nowTs, lookback = 1) {
+  return app.run(`(() => {
+    mode = 'rising';
+    const d = risingOverview(parseBulkStations(${JSON.stringify(raw)}), ${JSON.stringify(shard)}, ${nowTs}, ${lookback});
+    state.rising = { data: d, snapshot: ${JSON.stringify(shard)}, error: null };
+    const vm = risingViewModel();
+    return { vm, html: renderRising(vm) };
+  })()`);
+}
+
+test('risingViewModel: ranks, caps at the top 20, counts the overflow', () => {
+  const app = loadApp({ now: NOON });
+  const iso = new Date(NOON - 864e5).toISOString();
+  const values = Object.fromEntries(Array.from({ length: 30 }, (_, i) => [`s${i}`, 100]));
+  const shard = shardWith(2026, 1, 31, 13, iso, values);
+  // 25 risers (overflow past the top 20), 4 fallers, 1 steady
+  const raw = Array.from({ length: 30 }, (_, i) => {
+    const v = i < 25 ? 110 + i : i < 29 ? 90 - i : 100;
+    return bulk(`s${i}`, `ST${String(i).padStart(2, '0')}`, 'RIVER', v, SPAN);
+  });
+  const { vm } = risingPlate(app, raw, shard, NOON);
+  assert.equal(vm.risers.length, 20, 'capped at the top 20');
+  assert.equal(vm.counts.rising, 25);
+  assert.equal(vm.moreRising, 5, 'the overflow is counted, not silently dropped');
+  assert.equal(vm.risers[0].rank, 1);
+  assert.equal(vm.risers[0].n, 'ST24', 'the fastest riser leads');
+  assert.ok(vm.risers.every(r => r.dir === 'up'), 'risers are marked as rising');
+  assert.ok(vm.fallers.every(r => r.dir === 'down'));
+  // risers and fallers share one bar scale, so a steeper fall visibly outweighs
+  // a gentler rise instead of both maxing out their own half of the board
+  assert.equal(vm.fallers[0].pct, 100, 'the biggest absolute mover sets the scale');
+  assert.equal(vm.risers[0].pct, 89, '+34 cm/d against the -38 cm/d leader');
+  assert.ok([...vm.risers, ...vm.fallers].every(r => r.pct >= 0 && r.pct <= 100), 'bar widths stay in range');
 });
 
-test('drawRising: without a baseline the board says so and shows live counts', () => {
+test('renderRising: every row is a link carrying its rate, no COLS in sight', () => {
+  const app = loadApp({ now: NOON });
+  const iso = new Date(NOON - 864e5).toISOString();
+  const shard = shardWith(2026, 1, 31, 13, iso, { a: 100, b: 100 });
+  const raw = [bulk('a', 'UP', 'RHEIN', 150, SPAN), bulk('b', 'DOWN', 'MAIN', 60, SPAN)];
+  const { html } = risingPlate(app, raw, shard, NOON);
+  assert.ok(html.includes('href="?station=UP"'), 'the gauge is an honest link');
+  assert.ok(html.includes('data-nav="UP"'), 'and dispatches through the nav grammar');
+  assert.ok(html.includes('href="?river=RHEIN"'), 'the river column links to its profile');
+  assert.ok(html.includes('<ol class="board">'), 'a ranked list is a real ordered list');
+  assert.match(html, /\+50\.0 cm\/d/, 'the rate is spelled out with its unit');
+  assert.ok(html.includes('150 cm'), 'the absolute level rides along — new next to the ASCII board');
+  assert.ok(html.includes('class="p-key"'), 'the legend is in the plate, not in a modal');
+  assert.ok(html.includes('tidal gauges are excluded'), 'the caveat survives the redesign');
+});
+
+test('renderRising: the key names the sparkline and the rate bar it draws', () => {
+  const app = loadApp({ now: NOON });
+  const iso = new Date(NOON - 864e5).toISOString();
+  const shard = shardWith(2026, 1, 31, 13, iso, { a: 100, b: 100 });
+  const raw = [bulk('a', 'UP', 'RHEIN', 150, SPAN), bulk('b', 'DOWN', 'MAIN', 60, SPAN)];
+  const { html } = risingPlate(app, raw, shard, NOON);
+  const board = html.slice(0, html.indexOf('<dl class="p-key">'));
+  const key = html.slice(html.indexOf('<dl class="p-key">'));
+  // both marks are drawn in the board, so both have to be named in the key
+  assert.ok(board.includes('class="b-spark"'), 'the board draws sparklines');
+  assert.ok(board.includes('--pct:'), 'and a magnitude bar behind each rate');
+  assert.ok(key.includes('class="b-spark lg-spark"'), 'the key shows the same spark mark');
+  assert.ok(key.includes('class="lg-bar up"') && key.includes('class="lg-bar down"'),
+    'and the bar in both directions');
+  assert.ok(key.includes(app.run('T.risingSparkKey')), 'the spark is explained');
+  assert.ok(key.includes(app.run('T.risingBarKey')), 'the bar is explained');
+});
+
+// WSV passes three waters through as raw tokens (NEUE_MAAS). Those read as their
+// longname — ITTER_DIEMEL is "ITTER ZUR DIEMEL", so underscore-to-space would be
+// wrong — while short codes stay codes and the shortname stays the identity.
+test('waterLabel: only underscored waters swap, and only for display', () => {
+  const app = loadApp({ now: NOON });
+  const out = app.run(`(() => {
+    fillWaters(['NEUE_MAAS', 'ITTER_DIEMEL', 'MLK'], { NEUE_MAAS: 'NEUE MAAS', ITTER_DIEMEL: 'ITTER ZUR DIEMEL' });
+    return { neue: waterLabel('NEUE_MAAS'), itter: waterLabel('ITTER_DIEMEL'),
+             mlk: waterLabel('MLK'), plain: waterLabel('RHEIN'), blank: waterLabel('') };
+  })()`);
+  assert.equal(out.neue, 'NEUE MAAS');
+  assert.equal(out.itter, 'ITTER ZUR DIEMEL', 'the longname, not underscore-to-space');
+  assert.equal(out.mlk, 'MLK', 'a short code stays a short code');
+  assert.equal(out.plain, 'RHEIN');
+  assert.equal(out.blank, '');
+
+  const iso = new Date(NOON - 864e5).toISOString();
+  const shard = shardWith(2026, 1, 31, 13, iso, { s0: 100 });
+  const raw = [bulk('s0', 'ROTTERDAM', 'NEUE_MAAS', 140, SPAN)];
+  const { html } = risingPlate(app, raw, shard, NOON);
+  assert.ok(html.includes('>NEUE MAAS<'), 'the board row reads the display name');
+  assert.ok(html.includes('data-nav="river:NEUE_MAAS"'), 'while the link still carries the identity');
+});
+
+// a quiet river is a real state, not a half-loaded view: without this the counts
+// and the key sit either side of a gap that names nothing
+test('renderRising: a baseline with nothing moving still says so', () => {
+  const app = loadApp({ now: NOON });
+  const iso = new Date(NOON - 864e5).toISOString();
+  const values = Object.fromEntries(Array.from({ length: 6 }, (_, i) => [`s${i}`, 100]));
+  const shard = shardWith(2026, 1, 31, 13, iso, values);
+  const raw = Array.from({ length: 6 }, (_, i) => bulk(`s${i}`, `ST${i}`, 'RIVER', 100, SPAN));
+  const { vm, html } = risingPlate(app, raw, shard, NOON);
+  assert.equal(vm.risers.length, 0, 'nobody rose');
+  assert.equal(vm.fallers.length, 0, 'nobody fell');
+  assert.equal(vm.counts.steady, 6, 'and the baseline was there all along');
+  assert.ok(!html.includes('<ol class="board">'), 'no empty board list is drawn');
+  assert.match(html, /Nothing moved/, 'the quiet is named instead of left blank');
+});
+
+test('renderRising: a hostile gauge name never reaches markup unescaped', () => {
+  const app = loadApp({ now: NOON });
+  const iso = new Date(NOON - 864e5).toISOString();
+  const shard = shardWith(2026, 1, 31, 13, iso, { a: 100 });
+  const raw = [bulk('a', '"><img src=x onerror=1>', 'R<X', 150, SPAN)];
+  const { html } = risingPlate(app, raw, shard, NOON);
+  assert.ok(!html.includes('<img'), 'no injected element');
+  assert.ok(!html.includes('R<X'), 'the river name is escaped too');
+  assert.ok(html.includes('&lt;img'), 'it renders as visible text instead');
+});
+
+test('sparkPath: normalises per row, skips gaps, needs two points', () => {
+  const app = loadApp();
+  assert.equal(app.run('sparkPath([100])'), '', 'a single point is no shape');
+  assert.equal(app.run('sparkPath([null, null])'), '', 'gaps alone are no shape');
+  const p = app.run('sparkPath([100, 200], 60, 14)');
+  assert.match(p, /^M/, 'starts with a move');
+  assert.equal(p.split('L').length, 2, 'two points, one line segment');
+  // the low value sits at the bottom of the box, the high at the top
+  const ys = p.match(/[\d.]+ ([\d.]+)/g).map(s => parseFloat(s.split(' ')[1]));
+  assert.ok(ys[0] > ys[1], 'a rising series draws upward (SVG y grows downward)');
+  const gapped = app.run('sparkPath([100, null, 200])');
+  assert.equal(gapped.split(/[ML]/).length - 1, 2, 'the null slot is skipped, not drawn as zero');
+});
+
+test('risingViewModel: without a baseline it carries the live counts and the reason', () => {
   const app = loadApp({ now: NOON });
   const raw = [bulk('a', 'A', 'X', 500, SPAN, 'high'), bulk('b', 'B', 'X', 90, SPAN, 'low'), bulk('c', 'C', 'X', 250, [['MThw', 300]])];
-  const rows = app.run(`(() => {
-    const d = risingOverview(parseBulkStations(${JSON.stringify(raw)}), null, ${NOON});
-    const g = makeGrid(risingGridRows(d));
-    drawRising(g, d);
-    return g.ch.map(r => r.join('').replace(/\\s+$/, ''));
-  })()`);
-  assert.ok(rows.some(x => x.includes('no baseline yet')), 'names the missing piece');
-  assert.ok(rows.some(x => x.includes('1 high') && x.includes('1 low') && x.includes('1 tidal')), 'live counts still render');
+  const { vm, html } = risingPlate(app, raw, null, NOON);
+  assert.equal(vm.noBaseline, true);
+  assert.match(vm.reason, /no baseline yet/, 'names the missing piece');
+  assert.deepEqual({ high: vm.live.high, low: vm.live.low, tidal: vm.live.tidal }, { high: 1, low: 1, tidal: 1 });
+  assert.ok(html.includes('1 high') && html.includes('1 low') && html.includes('1 tidal'), 'live counts still render');
 });
 
 test('rising board: ?rising boots into it and --rising switches into it', () => {
@@ -2400,41 +2659,28 @@ test('risingOverview: the 7-day view normalises over the real span and skips wee
   assert.equal(d7.lookbackDays, 7);
 });
 
-test('drawRising: the 7-day view labels the span it really measured, and fits both widths', () => {
+test('risingViewModel: the 7-day view carries the span it really measured', () => {
   const shard = shardOf(2026, 1, 31, { ...JAN_DAYS, 7: null }, { a: { 8: 105, 13: 160 } });
   const raw = [bulk('a', 'WEEK', 'RHEIN', 170, SPAN)];
-  for (const width of [1200, 390]) {
-    const app = loadApp({ now: NOON, width });
-    const r = app.run(`(() => {
-      const d = risingOverview(parseBulkStations(${JSON.stringify(raw)}), ${JSON.stringify(shard)}, ${NOON}, 7);
-      const g = makeGrid(risingGridRows(d));
-      drawRising(g, d);
-      const rows = g.ch.map(r => r.join('').replace(/\\s+$/, ''));
-      return { d, rows, cols: COLS, gridRows: g.rows, lastUsed: rows.reduce((a, r, i) => r ? i : a, 0) };
-    })()`);
-    assert.equal(r.d.elapsedDays.toFixed(1), '6.0', 'the missed Jan 8 leaves a six-day span');
-    assert.ok(r.rows.some(x => x.includes('Δ6.0d')), `at ${width}px the header states the real span, not the nominal seven`);
-    assert.ok(r.rows.some(x => x.includes(width === 1200 ? '(+65 cm)' : '(+65)')),
-      `at ${width}px the row carries the centimetres of the whole span next to the rate`);
-    assert.ok(r.rows.some(x => x.includes('+10.8')), '65 cm over 6.02 days');
-    assert.ok(r.rows.every(x => x.length <= r.cols), `no row exceeds COLS at ${width}px`);
-    assert.equal(r.lastUsed, r.gridRows - 1, 'the grid still ends exactly at its last drawn row');
-  }
+  const app = loadApp({ now: NOON });
+  const { vm, html } = risingPlate(app, raw, shard, NOON, 7);
+  assert.equal(vm.elapsedDays.toFixed(1), '6.0', 'the missed Jan 8 leaves a six-day span');
+  assert.ok(html.includes('Δ6.0 d back'), 'the header states the real span, not the nominal seven');
+  assert.equal(vm.risers[0].deltaCm, 65, 'the row carries the centimetres of the whole span');
+  assert.ok(html.includes('(+65 cm)'), 'and prints them next to the rate');
+  assert.ok(html.includes('+10.8 cm/d'), '65 cm over 6.02 days');
+  assert.ok(vm.risers[0].spark.length > 1, 'the row gets its 7-day shape from the same shard');
 });
 
-test('drawRising: without a week-old baseline the 7-day view names what is missing', () => {
+test('risingViewModel: without a week-old baseline the empty state names the week', () => {
   const app = loadApp({ now: NOON });
   const shard = shardOf(2026, 1, 31, { 11: capture(2026, 1, 12) }, { a: { 11: 100 } });
   const raw = [bulk('a', 'A', 'X', 500, SPAN, 'high'), bulk('b', 'B', 'X', 90, SPAN, 'low')];
-  const rows = app.run(`(() => {
-    const d = risingOverview(parseBulkStations(${JSON.stringify(raw)}), ${JSON.stringify(shard)}, ${NOON}, 7);
-    const g = makeGrid(risingGridRows(d));
-    drawRising(g, d);
-    return g.ch.map(r => r.join('').replace(/\\s+$/, ''));
-  })()`);
-  assert.ok(rows.some(x => x.includes('no baseline a week back yet')), 'the empty state is about the week, not the day');
-  assert.ok(rows.some(x => x.includes('1D view')), 'and points at the view that does work');
-  assert.ok(rows.some(x => x.includes('1 high') && x.includes('1 low')), 'live counts still render');
+  const { vm, html } = risingPlate(app, raw, shard, NOON, 7);
+  assert.equal(vm.noBaseline, true);
+  assert.match(vm.reason, /a week back/, 'the empty state is about the week, not the day');
+  assert.ok(html.includes('1-day view'), 'and points at the view that does work');
+  assert.ok(html.includes('1 high') && html.includes('1 low'), 'live counts still render');
 });
 
 test('loadRising: the 7-day baseline crosses into the previous month\'s shard', async () => {
@@ -2555,10 +2801,8 @@ const seedTotal = (app, zoom = 'null, null, null') => app.run(`(() => {
   state.total = { overview: ${JSON.stringify(totalOverviewFix)}, top: totalTopRivers(${JSON.stringify(totalOverviewFix)}), error: null };
   totalShardCache.set(2025, ${JSON.stringify(totalShardFix)});
   [totalYear, totalMonth, totalDay] = [${zoom}];
-  const view = totalView();
-  const g = makeGrid(totalGridRows(view));
-  drawTotal(g, view);
-  return { html: gridToHtml(g), rows: g.ch.map(r => r.join('')), level: view.level, cols: COLS };
+  const vm = totalPlateModel();
+  return { vm, html: renderTotal(vm), level: vm.level };
 })()`);
 
 test('totalTopRivers: fixed all-time ranking, exactly K bands', () => {
@@ -2685,89 +2929,91 @@ const seedTotalDiff = (app, zoom = 'null, null, null', overview = totalOverviewF
   state.total = { overview: ${JSON.stringify(overview)}, top: totalTopRivers(${JSON.stringify(overview)}), error: null };
   totalShardCache.set(2025, ${JSON.stringify(shard)});
   [totalYear, totalMonth, totalDay] = [${zoom}];
-  const view = totalView();
-  const g = makeGrid(totalGridRows(view));
-  drawTotal(g, view);
-  return { html: gridToHtml(g), rows: g.ch.map(r => r.join('')), level: view.level, cols: COLS };
+  const vm = totalPlateModel();
+  return { vm, html: renderTotal(vm), level: vm.level };
 })()`);
 
-test('drawTotal diff: diverging bars carry zoom targets, day list links rivers', () => {
-  for (const width of [1200, 390]) {
-    const all = seedTotalDiff(loadApp({ search: '?total&diff', width }));
-    assert.equal(all.level, 'all');
-    assert.ok(all.html.includes('data-st="cmd:ty:2024"'), `${width}px: year bars clickable`);
-    assert.ok(all.rows.join('').includes('Σ net'), `${width}px: net footer present`);
+test('renderTotal diff: diverging bars around a labelled zero, rivers linked', () => {
+  const all = seedTotalDiff(loadApp({ search: '?total&diff' }));
+  assert.equal(all.level, 'all');
+  assert.ok(all.html.includes('href="?total&amp;diff&amp;y=2024"'), 'a year bar is a real link that keeps Δ');
+  // 2024 nets +132, 2025 +120 — both positive, so both sit above the zero line
+  assert.ok(all.vm.bars.every(b => b.frac > 0), 'the fixture rises in both years');
+  assert.ok(all.html.includes('class="db rose"'), 'rising bars are marked as risen');
+  assert.ok(all.html.includes('>0</text>'), 'the zero line is labelled');
 
-    const month = seedTotalDiff(loadApp({ search: '?total&diff', width }), '2025, 4, null');
-    assert.equal(month.level, 'month');
-    assert.ok(month.html.includes('data-st="cmd:td:2025:4:12"'), `${width}px: day bars clickable`);
-    assert.ok(month.rows.join('').includes('last 7 days'), `${width}px: trailing week footer`);
+  const month = seedTotalDiff(loadApp({ search: '?total&diff' }), '2025, 4, null');
+  assert.equal(month.level, 'month');
+  assert.ok(month.html.includes('href="?total&amp;diff&amp;y=2025&amp;d=2025-05-12"'), 'a day bar deep-links');
+  assert.ok(month.html.includes('class="db fell"'), 'falling days are hatched, not only coloured');
 
-    const day = seedTotalDiff(loadApp({ search: '?total&diff', width }), '2025, 4, 12');
-    assert.equal(day.level, 'day');
-    assert.ok(day.html.includes('data-st="river:R1"'), `${width}px: ranked rows link to rivers`);
-    assert.ok(day.rows.join('').includes('paired gauges'), `${width}px: paired-gauge count shown`);
-    for (const r of day.rows) {
-      assert.ok(r.replace(/\s+$/, '').length <= day.cols, `${width}px: row wider than COLS`);
-    }
-  }
+  const day = seedTotalDiff(loadApp({ search: '?total&diff' }), '2025, 4, 12');
+  assert.equal(day.level, 'day');
+  assert.ok(day.html.includes('href="?river=R1"'), 'ranked rows link to their river');
+  assert.ok(day.html.includes('paired'), 'the paired-gauge caveat is on screen');
+  assert.ok(day.html.includes('never counts'), 'and the reason it matters');
 });
 
-test('drawTotal diff: data built before the diff series degrades to a note', () => {
+test('renderTotal diff: data built before the diff series degrades to a note', () => {
   const { diff, ...ovNoDiff } = totalOverviewFix;
   const preDiff = seedTotalDiff(loadApp({ search: '?total&diff' }), 'null, null, null', ovNoDiff);
   assert.equal(preDiff.level, 'missing');
-  assert.ok(preDiff.rows.join('').includes('not built yet'));
+  assert.ok(preDiff.html.includes('not built yet'));
   const shardNoDv = JSON.parse(JSON.stringify(totalShardFix));
   for (const rv of Object.values(shardNoDv.rivers)) { delete rv.dv; delete rv.dn; }
   const oldShard = seedTotalDiff(loadApp({ search: '?total&diff' }), '2025, 4, null', totalOverviewFix, shardNoDv);
   assert.equal(oldShard.level, 'missing');
 });
 
-test('drawTotal: every level carries its zoom targets, at both widths', () => {
-  for (const width of [1200, 390]) {
-    const all = seedTotal(loadApp({ search: '?total', width }));
-    assert.equal(all.level, 'all');
-    assert.ok(all.html.includes('data-st="cmd:ty:2024"'), `${width}px: year bars clickable`);
-    assert.ok(all.html.includes('data-st="river:R1"'), `${width}px: legend river linked`);
-    assert.ok(all.html.includes('OTHER'), `${width}px: OTHER in the legend`);
-    assert.ok(!all.html.includes('data-st="river:OTHER"'), `${width}px: OTHER is not a river`);
+test('totalPlateModel: every level carries its zoom links and its crumb trail', () => {
+  const all = seedTotal(loadApp({ search: '?total' }));
+  assert.equal(all.level, 'all');
+  assert.ok(all.html.includes('href="?total&amp;y=2024"'), 'year bars are links');
+  assert.deepEqual(all.vm.crumbs.map(c => c.label), ['ALL']);
+  assert.equal(all.vm.crumbs[0].current, true, 'the top level is where we are');
 
-    const year = seedTotal(loadApp({ search: '?total', width }), '2025, null, null');
-    assert.equal(year.level, 'year');
-    assert.ok(year.html.includes('data-st="cmd:tm:2025:4"'), `${width}px: month bars clickable`);
-    assert.ok(year.html.includes('data-st="cmd:tback"'), `${width}px: back tag present`);
+  const year = seedTotal(loadApp({ search: '?total' }), '2025, null, null');
+  assert.equal(year.level, 'year');
+  assert.ok(year.html.includes('href="?total&amp;y=2025&amp;m=5"'), 'month bars are links');
+  assert.deepEqual(year.vm.crumbs.map(c => c.label), ['ALL', '2025']);
 
-    const month = seedTotal(loadApp({ search: '?total', width }), '2025, 4, null');
-    assert.equal(month.level, 'month');
-    assert.ok(month.html.includes('data-st="cmd:td:2025:4:12"'), `${width}px: day bars clickable`);
+  const month = seedTotal(loadApp({ search: '?total' }), '2025, 4, null');
+  assert.equal(month.level, 'month');
+  assert.ok(month.html.includes('href="?total&amp;y=2025&amp;d=2025-05-12"'), 'day bars deep-link');
+  assert.deepEqual(month.vm.crumbs.map(c => c.label), ['ALL', '2025', 'MAY']);
 
-    const day = seedTotal(loadApp({ search: '?total', width }), '2025, 4, 12');
-    assert.equal(day.level, 'day');
-    assert.ok(day.html.includes('data-st="river:R1"'), `${width}px: ranked rows link to rivers`);
-    assert.ok(day.html.includes('data-st="cmd:tback"'), `${width}px: back tag present`);
-    for (const r of day.rows) {
-      assert.ok(r.replace(/\s+$/, '').length <= day.cols, `${width}px: row wider than COLS`);
-    }
-  }
+  const day = seedTotal(loadApp({ search: '?total' }), '2025, 4, 12');
+  assert.equal(day.level, 'day');
+  assert.ok(day.html.includes('href="?river=R1"'), 'ranked rows link to rivers');
+  assert.ok(!day.html.includes('href="?river=OTHER"'), 'OTHER is a band, never a river link');
+  assert.deepEqual(day.vm.crumbs.map(c => c.label), ['ALL', '2025', 'MAY', '12']);
 });
 
-test('drawTotal: the day list spills into a counted rest line when it overflows', () => {
-  const app = loadApp({ search: '?total', width: 390 }); // compact: 8 rows
-  const out = app.run(`(() => {
-    const rivers = {};
-    for (let i = 0; i < 17; i++) rivers['X' + String(i).padStart(2, '0')] = { v: Array(365).fill(100 + i), n: Array(365).fill(1) };
-    const shard = { y: 2025, generated: 'g', rivers };
-    const ov = ${JSON.stringify(totalOverviewFix)};
-    state.total = { overview: ov, top: totalTopRivers(ov), error: null };
-    totalShardCache.set(2025, shard);
-    [totalYear, totalMonth, totalDay] = [2025, 4, 12];
-    const view = totalView();
-    const g = makeGrid(totalGridRows(view));
-    drawTotal(g, view);
-    return g.ch.map(r => r.join('')).join('\\n');
-  })()`);
-  assert.ok(out.includes('+ 9 more rivers'), 'compact shows 8 of 17, the rest is counted');
+test('renderTotal: every band carries a hatch as well as a colour', () => {
+  const all = seedTotal(loadApp({ search: '?total' }));
+  // five named bands + OTHER, each with its own pattern — meaning never rides
+  // on hue alone, so the chart survives greyscale and colour blindness
+  assert.equal(all.vm.bands.length, 6);
+  assert.equal(all.vm.bands.at(-1).name, 'OTHER');
+  const pats = all.vm.bands.map(b => b.pattern);
+  assert.equal(new Set(pats).size, 6, 'every band has a distinct hatch');
+  for (const p of pats) assert.ok(all.html.includes(`id="tb-${p}"`), `${p} pattern is defined`);
+  assert.ok(all.html.includes('url(#tb-solid)'), 'and actually used as a fill');
+  assert.ok(all.html.includes('greyscale'), 'the legend says why the hatching is there');
+  // legend shares are computed over the whole visible range, not one column
+  assert.ok(all.vm.bands.every(b => b.pct >= 0 && b.pct <= 100));
+  assert.ok(Math.abs(all.vm.bands.reduce((a, b) => a + b.pct, 0) - 100) <= 2, 'shares add up');
+});
+
+test('renderTotal: the day breakdown ranks every river that reported', () => {
+  const day = seedTotal(loadApp({ search: '?total' }), '2025, 4, 12');
+  const rows = day.vm.breakdown.rows;
+  assert.equal(rows.length, 7, 'no truncation — the plate has room the 84 columns did not');
+  assert.deepEqual(rows.map(r => r.name), ['R1', 'R2', 'R3', 'R4', 'R5', 'R6', 'R7']);
+  assert.equal(rows[0].rank, 1);
+  assert.equal(rows[0].pct, 100, 'the biggest sets the bar scale');
+  assert.equal(rows.reduce((a, r) => a + r.share, 0), 100, 'shares are whole percents of the day');
+  assert.ok(day.html.includes('×1'), 'the gauge count per river rides along');
 });
 
 test('boot: ?total routes by deep link, day clamped to the real month length', () => {
@@ -2805,12 +3051,158 @@ test('prompt: --total switches, the man page names it', () => {
   assert.equal(app.run('mode'), 'total');
 });
 
-test('total chrome: breadcrumb in the history bar, home button offered', () => {
+test('total chrome: the plate owns the zoom trail, the chip bar steps aside', () => {
   const app = loadApp({ search: '?total&y=2025&d=2025-05-12' });
-  assert.equal(app.el('history-bar').hidden, false, 'the bar carries the breadcrumb');
-  assert.equal(app.el('home-btn').hidden, false, 'the way back to the station');
-  // the element stub accumulates children across renders (textContent = ''
-  // clears nothing there), so only the last render's chips are asserted
-  const labels = app.el('history-bar').children.map(b => b.textContent);
-  assert.deepEqual(labels.slice(-4), ['ALL', '2025', 'MAY', '12']);
+  // the breadcrumb and the metric switch are real links inside the plate now;
+  // a second set of chips outside it would be two controls for one state
+  assert.equal(app.el('history-bar').hidden, true, 'no duplicate chip breadcrumb');
+  assert.equal(app.el('home-btn').hidden, false, 'the way back to the station stays');
+  const crumbs = app.run('totalCrumbs()');
+  assert.deepEqual(crumbs.map(c => c.label), ['ALL', '2025', 'MAY', '12']);
+  assert.equal(crumbs.at(-1).current, true, 'the deepest level is where we are');
+  assert.equal(app.run(`navHref('cmd:ty:2025')`), '?total&y=2025', 'each crumb is a real URL');
+});
+
+// ---------- plate helpers (display redesign, stage 0) ----------
+
+test('harness guard: index.html holds exactly one bare script block', async () => {
+  const { readFileSync } = await import('node:fs');
+  const html = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
+  // the loader regex-extracts the first <script>…</script>; a renderer that
+  // ever emits the literal closing tag would silently truncate the suite's
+  // view of the app, and a second bare <script> would shadow half the code
+  assert.equal(html.split('<script>').length, 2, 'exactly one bare <script> tag');
+  assert.equal(html.split('</script').length, 2, 'exactly one closing script tag');
+});
+
+test('navHref: the data-st grammar maps to honest hrefs', () => {
+  const app = loadApp();
+  assert.equal(app.run(`navHref('BONN')`), '?station=BONN');
+  assert.equal(app.run(`navHref('river:ELDE MÜRITZ WASSERSTRASSE')`),
+    '?river=ELDE%20M%C3%9CRITZ%20WASSERSTRASSE');
+  assert.equal(app.run(`navHref('rising')`), '?rising');
+  assert.equal(app.run(`navHref('cmd:abs')`), null, 'in-view toggles with no URL stay buttons');
+  assert.ok(app.run(`navAttrs('cmd:abs')`).includes('data-nav="cmd:abs"'));
+  assert.ok(!app.run(`navAttrs('cmd:abs')`).includes('href'), 'no href on a URL-less cmd target');
+  const a = app.run(`navAttrs('B<ONN"')`);
+  assert.ok(!a.includes('<'), 'hostile names never reach markup unescaped');
+});
+
+test('navTo: routes through the same switches as the grid layer', () => {
+  const app = loadApp();
+  app.run(`navTo('river:RHEIN')`);
+  assert.equal(app.run('mode'), 'river');
+  app.run(`navTo('rising')`);
+  assert.equal(app.run('mode'), 'rising');
+});
+
+test('plateDensity/bucketCols: scale with the measured width, clamped', () => {
+  const phone = loadApp({ width: 390 });
+  assert.equal(phone.run('plateDensity()'), 'narrow');
+  assert.equal(phone.run('bucketCols()'), 130);
+  const desk = loadApp({ width: 1200 });
+  assert.equal(desk.run('plateDensity()'), 'wide');
+  assert.equal(desk.run('bucketCols()'), 320, 'clamped: 1200/3 = 400 caps at 320');
+  assert.equal(desk.run('bucketCols(60)'), 40, 'floor at 40 buckets');
+});
+
+// ---------- shell (display redesign, stage 1) ----------
+
+test('navHref: the global views are URL targets too', () => {
+  const app = loadApp();
+  assert.equal(app.run(`navHref('rivers')`), '?rivers');
+  assert.equal(app.run(`navHref('total')`), '?total');
+  app.run(`navTo('total')`);
+  assert.equal(app.run('mode'), 'total');
+  app.run(`navTo('rivers')`);
+  assert.equal(app.run('mode'), 'rivers');
+});
+
+test('watersIndex: groups gauges under their water, biggest first, by km', () => {
+  const app = loadApp();
+  app.run(`fillDatalist([
+    { n: 'EMMERICH', w: 'RHEIN', km: 851.9 },
+    { n: 'BONN', w: 'RHEIN', km: 654.8 },
+    { n: 'KÖLN', w: 'RHEIN', km: 688 },
+    { n: 'HANN.MÜNDEN', w: 'WESER', km: 0.9 },
+    { n: 'NIRGENDWO', w: '', km: null },
+  ])`);
+  const idx = app.run('watersIndex()');
+  assert.equal(idx[0].w, 'RHEIN', 'most gauges first');
+  assert.deepEqual(idx[0].stations.map(s => s.n), ['BONN', 'KÖLN', 'EMMERICH'], 'stations ordered by km');
+  assert.equal(idx[1].w, 'WESER');
+  assert.equal(idx[2].w, '', 'waterless gauges collect under the blank key (skipped by the tree)');
+});
+
+test('finderMatches: one ranked list, gauges before waters, waters marked', () => {
+  const app = loadApp();
+  app.run(`fillDatalist([{ n: 'WESEL', w: 'RHEIN', km: 814 }])`);
+  app.run(`fillWaters(['WESER', 'WERRA'])`);
+  const m = app.run(`finderMatches('WES')`);
+  assert.equal(m[0].name, 'WESEL');
+  assert.equal(m[0].water, undefined);
+  assert.ok(m.some(x => x.name === 'WESER' && x.water === true), 'the river is offered as a river');
+});
+
+test('renderCrumbs: All waters ▸ water ▸ gauge, with honest hrefs', () => {
+  const app = loadApp({ search: '?station=BONN' });
+  const html = app.run(`(() => {
+    state.info = { water: { shortname: 'RHEIN' } };
+    lastCrumbs = null;
+    renderCrumbs();
+    return document.getElementById('crumbs').innerHTML;
+  })()`);
+  assert.ok(html.includes('data-nav="rivers"'), 'All waters is a link to the map');
+  assert.ok(html.includes('href="?river=RHEIN"'), 'the water is a link to its profile');
+  assert.ok(html.includes('aria-current="page">BONN'), 'the gauge is the current page');
+
+  const rising = loadApp({ search: '?rising' });
+  const rhtml = rising.run(`(() => {
+    lastCrumbs = null;
+    renderCrumbs();
+    return document.getElementById('crumbs').innerHTML;
+  })()`);
+  assert.ok(rhtml.includes('rising board'), 'boards name themselves');
+});
+
+// ---------- keyboard layer (display redesign, stage 8) ----------
+
+test('KEYMAP: the help sheet is rendered from the same list the handler uses', () => {
+  const app = loadApp({ search: '?station=BONN' });
+  const map = app.run('KEYMAP');
+  assert.ok(map.length >= 6, 'a real map, not a token gesture');
+  for (const [k, what] of map) {
+    assert.equal(typeof k, 'string');
+    assert.ok(what.length > 3, `${k} explains itself`);
+  }
+  // the sheet is filled from KEYMAP, so it cannot drift from the bindings
+  const sheet = app.el('keymap').innerHTML;
+  for (const [k] of map) assert.ok(sheet.includes(k.trim()), `${k.trim()} reaches the help sheet`);
+});
+
+test('stepNeighbour: [ and ] walk the river without leaving the keyboard', () => {
+  const app = loadApp({ search: '?station=BONN', now: NOON });
+  // the Rhine: km counts downstream, so elevation falls as km rises
+  const seed = at => app.run(`(() => {
+    station = ${JSON.stringify(at)};
+    state.flowLowKm = false;
+    state.neighbors = [
+      { name: 'KÖLN', km: 688, lat: 50.9, lon: 6.9, elev: 45.3 },
+      { name: 'BONN', km: 654.8, lat: 50.7, lon: 7.1, elev: 51.8 },
+      { name: 'OBERWINTER', km: 637, lat: 50.6, lon: 7.2, elev: 55.1 },
+    ];
+  })()`);
+
+  seed('BONN');
+  app.run('stepNeighbour(1)');
+  assert.equal(app.run('station'), 'OBERWINTER', '] goes one gauge upstream');
+
+  seed('BONN');
+  app.run('stepNeighbour(-1)');
+  assert.equal(app.run('station'), 'KÖLN', '[ goes one gauge downstream');
+
+  // at the end of the list it stays put rather than wrapping into a surprise
+  seed('KÖLN');
+  app.run('stepNeighbour(-1)');
+  assert.equal(app.run('station'), 'KÖLN', 'the end of the list is a stop, not a wrap');
 });

@@ -1,8 +1,13 @@
 # pegel-visual
 
-Live ASCII water level terminal for German rivers — a single static page,
-Bauhaus black-and-white, powered by the open [PEGELONLINE](https://www.pegelonline.wsv.de)
+Live water level survey plates for German rivers — a single static page,
+ink-and-pastel linework, powered by the open [PEGELONLINE](https://www.pegelonline.wsv.de)
 REST API (WSV). No build step, no backend, no dependencies.
+
+Every view is a *plate*: a title block saying what you are looking at, the
+drawing itself, a legend for every mark it uses, and a foot naming the source
+and the age of the reading. If a section cannot name itself in its own legend,
+it does not ship.
 
 **Live:** https://bmmmm.github.io/pegel-visual/
 
@@ -13,7 +18,7 @@ _      _      _      _      _      _      _      _
 
 ## What it shows
 
-- current level as big block digits, trend per hour, MNW/MHW state. The trend
+- current level as a hero reading, trend per hour, MNW/MHW state. The trend
   averages over 6 hours: gauges report whole centimetres and a big river moves
   centimetres per *day*, so an hourly slope rounds to a flat `0` almost every
   time. Under an hour of history it reads `—`, not a made-up zero
@@ -147,7 +152,7 @@ an app from the browser menu.
 ## The rivers map
 
 `--rivers` (the button next to the river field, or `?rivers`) puts every water
-PEGELONLINE serves on one screen — a schematic ASCII outline of Germany with
+PEGELONLINE serves on one screen — a schematic outline of Germany with
 each river anchored at the centroid of its own gauges and labelled with how
 many it has. Click a name to open that river's profile.
 
@@ -155,11 +160,13 @@ many it has. Click a name to open that river's profile.
 ?rivers
 ```
 
-The outline is rasterised from a coarse polygon rather than drawn as fixed
-ASCII art, so it stays a map at any grid width, including the 44-column
-compact layout. Placement is greedy from the busiest water down: names that
-find no free cell are listed under the map instead of being squeezed over a
-neighbour.
+The outline is an SVG polygon under an equirectangular projection with the
+longitude scaled by cos(51.15 N), so Germany keeps its shape at any width
+instead of being squashed by character-cell proportions. Label placement is
+greedy from the busiest water down, with real bounding-box collision: names
+that find no free spot are listed in the A–Z index instead of being squeezed
+over a neighbour. The `A–Z index` tab lists every water with its gauge count —
+the browsable list the map cannot be.
 
 A `← STATION` button next to `--rivers` leads back to the gauge you came from.
 It shows up in the map and in whole-river mode — neither has a station on
@@ -243,18 +250,20 @@ snapshot-sourced days as provisional until the next monthly rebuild.
 
 ## Whole-river mode
 
-Instead of one station, view an entire river as a single ASCII longitudinal
+Instead of one station, view an entire river as a single longitudinal
 profile: every gauge on the river laid out by river kilometre (downstream to
 the left), plotted at its live water-surface elevation (m NHN), with a
 `TROUBLE` list of every station currently running low or high. One request to
 PEGELONLINE fetches the whole river; it refreshes on the same 5-minute cycle.
-Markers use a distinct glyph per state so colour never carries meaning alone:
-`◉` normal, `▼` low, `▲` high. Every marker, label and `TROUBLE` row is a
-click target — one click jumps into that station's terminal (the elevation
-profile's neighbor stations are clickable the same way).
+Markers carry shape as well as colour so meaning never rides on hue alone.
+Every marker and `TROUBLE` row is a real link — one click jumps into that
+gauge's plate (the elevation profile's neighbours work the same way). On a
+phone the `TROUBLE` list comes first: it is the answer to "is anything wrong
+on this river?"
 
-On narrow screens the whole app switches from the 84-column grid to a
-44-column compact layout instead of shrinking the font into illegibility.
+Layout is continuous: container queries and SVG viewBoxes size every plate to
+the space it actually has, so there is no hard phone/desktop fork and no font
+shrunk into illegibility.
 
 Entry points — the query param or the prompt's `--river` flag (any case,
 multi-word river names allowed):
