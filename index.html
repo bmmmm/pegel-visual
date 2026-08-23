@@ -74,7 +74,7 @@
     background: var(--paper);
     color: var(--ink);
   }
-  pre, form, #ac, #localbar, #recent, #history-bar, #plate-foot { font-family: var(--font-data); }
+  pre, form, #ac, #localbar, #recent, #plate-foot { font-family: var(--font-data); }
   main {
     margin: 5vh auto 0;
     padding: 1.6em 1.8em;
@@ -107,6 +107,9 @@
   }
   @media (pointer: coarse) {
     #screen a, #screen button { min-block-size: 2.75rem; }
+    /* a chip row is a dozen targets side by side — 44 px each would push the
+       chart it steers off the first screen. 36 px still clears WCAG 2.2 AA. */
+    #screen .p-tabs a, #screen .p-tabs button { min-block-size: 2.25rem; }
   }
   ::view-transition-old(screen), ::view-transition-new(screen) { animation-duration: 0.35s; }
   form {
@@ -138,7 +141,7 @@
     max-width: min(34ch, calc(100vw - 6em)); /* 34ch fits the longest name (30) plus caret room */
     padding-right: 0.6ch; /* room for the caret so the last letter never clips */
   }
-  #adsb-input, #ais-input { width: 26ch; text-transform: none; }
+  #adsb-input, #ais-input { text-transform: none; }
   form .cmd + .cmd { margin-top: 0.7em; }
   form .cont { padding-left: 8ch; } /* lines up under --station, like a wrapped shell command */
   /* fixed-width flag so the station and river inputs start at the same column */
@@ -158,6 +161,20 @@
   form .flag-btn:hover,
   form .flag-btn.on { background: var(--ink); color: var(--paper); }
   form .hint { color: var(--mid); }
+  /* the receiver flags: one folded line by default, so the prompt is the two
+     fields that navigate. Opened, each flag gets its own line — two URL inputs
+     side by side never fit a phone. */
+  #prompt-more { margin-top: 0.7em; }
+  #prompt-more > summary {
+    cursor: pointer;
+    color: var(--mid);
+    min-block-size: 1.8em;
+    align-content: center;
+  }
+  #prompt-more > summary:hover { color: var(--ink); }
+  #prompt-more[open] > summary { margin-bottom: 0.5em; }
+  .cmd-more { margin-top: 0.4em; }
+  .cmd-more input { width: 26ch; max-width: calc(100% - 10ch); }
   /* live typeahead: a custom dropdown (the native datalist can't fold umlauts,
      rank, or carry the km/water context) positioned under the active input */
   #prompt { position: relative; }
@@ -238,7 +255,7 @@
     @starting-style {
       #local-detail:not([hidden]) { opacity: 0; translate: 0 -0.4em; }
     }
-    #recent button, #history-bar button {
+    #recent button {
       transition: opacity 0.3s, scale 0.3s, background 0.15s, color 0.15s;
       @starting-style { opacity: 0; scale: 0.7; }
     }
@@ -271,7 +288,7 @@
     cursor: pointer;
   }
   #local-detail .row-btn:hover { color: var(--ink); }
-  #recent, #history-bar {
+  #recent {
     margin-top: 1em;
     font-size: 0.8em;
     color: var(--mid);
@@ -282,9 +299,8 @@
   }
   /* display:flex above outranks the UA's [hidden] rule — without this, river
      mode showed the per-station bars it had explicitly hidden */
-  #recent[hidden], #history-bar[hidden] { display: none; }
-  #history-bar { margin-top: 0.8em; }
-  #recent button, #history-bar button {
+  #recent[hidden] { display: none; }
+  #recent button {
     font: inherit;
     color: var(--ink);
     background: none;
@@ -292,8 +308,7 @@
     padding: 0.05em 0.6ch;
     cursor: pointer;
   }
-  #recent button:hover, #history-bar button:hover,
-  #history-bar button.on { background: var(--ink); color: var(--paper); }
+  #recent button:hover { background: var(--ink); color: var(--paper); }
   /* body centers its flex items, so without a cap the footer grows to fit its
      longest line and sticks out past the main box — hence the ch-based ceiling */
   footer {
@@ -424,7 +439,16 @@
     cursor: pointer;
   }
   #finder-btn:hover { background: var(--ink); color: var(--paper); }
-  #appbar-info { color: var(--mid); text-decoration: none; }
+  /* a single glyph is a 14 px hit box — give it a real one, in both directions */
+  #appbar-info {
+    color: var(--mid);
+    text-decoration: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-inline-size: 1.7em;
+    min-block-size: 1.7em;
+  }
   #appbar-info:hover { color: var(--ink); }
   /* ---- breadcrumbs: where am I, one level per hop ---- */
   #crumbs {
@@ -721,6 +745,21 @@
   }
   .km-n { display: block; font-size: 1.5rem; font-weight: 700; font-variant-numeric: tabular-nums; }
   .km-u { display: block; font-size: 0.66em; color: var(--mid); }
+  /* On a phone the three head parts each claimed a row of their own and the km
+     sign ended up orphaned against the right edge, two rows below the reading
+     it belongs to. Pin it beside the hero — reading left, place right — and let
+     the facts run the full width underneath. */
+  @container plate (max-width: 34rem) {
+    .station-head {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      align-items: end;
+      gap: 1.1em 1.2ch;
+    }
+    .station-head .hero { grid-area: 1 / 1; }
+    .station-head .km-sign { grid-area: 1 / 2; margin-left: 0; align-self: start; }
+    .station-head .facts { grid-column: 1 / -1; gap: 0.9em 1.4em; }
+  }
   .p-block { margin-top: 1.8em; }
   /* ---- the living river scene ---- */
   .scene-wrap {
@@ -864,7 +903,11 @@
   .pf-list a:hover .km { color: var(--paper); }
   /* ---- motion: transform/opacity only, and never under reduced motion ---- */
   @media (prefers-reduced-motion: no-preference) {
-    .scene .waves { animation: drift var(--dur, 7s) linear infinite; }
+    /* One drift cycle carries the surface a full scene width (320 units). At 7s
+       that read as a mountain torrent on every gauge; a lowland river moves,
+       but it does not race. 18s is a slow, legible glide — wind still doubles
+       it, so the weather signal survives. */
+    .scene .waves { animation: drift var(--dur, 18s) linear infinite; }
     .scene .star { animation: twinkle 4s ease-in-out infinite; animation-delay: var(--d, 0s); }
     .scene .rain line { animation: fall 0.7s linear infinite; animation-delay: var(--d, 0s); }
     .scene .snow circle { animation: flake 6s linear infinite; animation-delay: var(--d, 0s); }
@@ -1149,21 +1192,40 @@
   }
   .p-crumbs a:hover, .p-crumbs button:hover { color: var(--ink); text-decoration: underline; }
   .p-crumbs [aria-current] { color: var(--ink); font-weight: 700; }
+  /* ---- plate controls: the chips that steer the drawing above/below them ----
+     They wrap rather than scroll: a hidden chip in an overflow track is a range
+     nobody finds on a phone. */
   .p-tabs {
     display: flex;
-    gap: 0.5ch;
-    margin-top: 0.9em;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.35em 0.5ch;
+    margin: 0.7em 0 0.9em;
     font-family: var(--font-data);
     font-size: 0.85em;
   }
+  .p-tabs-lbl {
+    font-size: 0.8em;
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+    color: var(--dim);
+    margin-right: 0.4ch;
+  }
+  .p-tabs-lbl:not(:first-child) { margin-left: 0.8ch; }
+  /* the value a pager steps: a readout between ◂ and ▸, never a target */
+  .p-tabs-val { font-weight: 700; font-variant-numeric: tabular-nums; padding: 0 0.3ch; }
   .p-tabs a, .p-tabs button {
     font: inherit;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
     color: var(--ink);
     background: none;
     border: 1px solid var(--ink);
-    padding: 0.1em 0.8ch;
+    padding: 0.15em 0.8ch;
     text-decoration: none;
     cursor: pointer;
+    white-space: nowrap;
   }
   .p-tabs .on, .p-tabs a:hover, .p-tabs button:hover { background: var(--ink); color: var(--paper); }
   .p-readout {
@@ -1203,13 +1265,42 @@
     }
     .board .b-now { text-align: left; }
   }
+  /* ---- touch sizing ----
+     Last in the sheet on purpose: these are overrides of the component rules
+     above, and an id-vs-id fight is decided by source order. Everything outside
+     the plate was drawn for a mouse — single glyphs and 0.75 em text links came
+     out 10–19 px tall under a fingertip. */
+  @media (pointer: coarse) {
+    #brand, #appbar-info, #finder-btn, #perma-copy, #local-stats,
+    #localbar a, #export-btn, #import-btn, #clear-btn,
+    #plate-foot a, #footer-nav a, #crumbs a {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-block-size: 2.25rem;
+    }
+    /* a lone glyph needs the width too; the text links keep their own */
+    #appbar-info, #finder-btn { min-inline-size: 2.25rem; }
+    /* the caret stays small on purpose: the whole stats line toggles the
+       breakdown, so the big target is already there next to it */
+  }
   @media (max-width: 640px) {
     main { margin-top: 2vh; padding: 1em 0.7em; }
     footer { margin: 1em 0.7em 2em; }
     form .cont { padding-left: 0; } /* the indent costs more than the alignment is worth here */
-    #recent button, #history-bar button { padding: 0.2em 0.7ch; } /* a little more tap area */
+    /* pure garnish, and the plate foot already states the refresh cadence — on a
+       phone it only bought a wrapped orphan line under the station field */
+    .cmd-deco { display: none; }
+    #recent button { padding: 0.2em 0.7ch; } /* a little more tap area */
     #infobox, #reportbox { padding: 1em 0.9em; max-width: calc(100vw - 1.6em); }
-    #appbar { margin: -1em -0.7em 1em; padding: 0.6em 0.7em; }
+    /* One row on a phone: wordmark, the four views, the two tools. It only fits
+       once the gaps tighten and the finder drops to its glyph (its aria-label
+       and title still say "find a gauge or river"), and that buys back the whole
+       second row at the top of the screen. */
+    #appbar { margin: -1em -0.7em 1em; padding: 0.4em 0.7em; gap: 0.3em 0.6em; font-size: 0.85em; }
+    #mode-nav { gap: 0.2em 0.65em; }
+    #appbar-tools { margin-left: 0; gap: 0.4em; }
+    #finder-btn .btn-lbl { display: none; }
     /* the finder becomes a full sheet: rows are the tap targets, the keyboard
        gets the input pinned at the top */
     #finder {
@@ -1234,27 +1325,34 @@
       <a id="total-btn" href="?total" data-nav="total" title="--total · all rivers, summed">totals</a>
     </nav>
     <div id="appbar-tools">
-      <button id="finder-btn" type="button" aria-haspopup="dialog" title="find a gauge or river">⌕ find</button>
+      <button id="finder-btn" type="button" aria-haspopup="dialog" aria-label="find a gauge or river"
+        title="find a gauge or river">⌕<span class="btn-lbl"> find</span></button>
       <a id="appbar-info" href="#" title="--info · what am I looking at?">ⓘ</a>
     </div>
   </header>
   <nav id="crumbs" aria-label="you are here"></nav>
   <div id="screen">loading…</div>
   <form id="prompt" autocomplete="off">
-    <div class="cmd">&gt; pegel <span class="flag">--station</span> <input id="station-input" name="station" spellcheck="false" placeholder="station" autocomplete="off" role="combobox" aria-expanded="false" aria-controls="ac" aria-autocomplete="list" aria-label="station name"> --refresh 300s
+    <div class="cmd">&gt; pegel <span class="flag">--station</span> <input id="station-input" name="station" spellcheck="false" placeholder="station" autocomplete="off" role="combobox" aria-expanded="false" aria-controls="ac" aria-autocomplete="list" aria-label="station name"><span class="cmd-deco"> --refresh 300s</span>
     </div>
     <div class="cmd cont"><span class="flag">--river</span> <input id="river-input" name="river" spellcheck="false" placeholder="whole river" autocomplete="off" role="combobox" aria-expanded="false" aria-controls="ac" aria-autocomplete="list" aria-label="river name">
     </div>
-    <div class="cmd cont">--adsb
-      <input id="adsb-input" name="adsb" spellcheck="false" placeholder="receiver url (optional)"
-        aria-label="ADS-B receiver URL"> --ais
-      <input id="ais-input" name="ais" spellcheck="false" placeholder="receiver url (optional)"
-        aria-label="AIS receiver URL">
-    </div>
+    <details id="prompt-more" class="cmd cont">
+      <summary>--adsb --ais <span class="hint">· your own live receivers</span></summary>
+      <div class="cmd-more">
+        <span class="flag">--adsb</span>
+        <input id="adsb-input" name="adsb" spellcheck="false" placeholder="receiver url (optional)"
+          aria-label="ADS-B receiver URL">
+      </div>
+      <div class="cmd-more">
+        <span class="flag">--ais</span>
+        <input id="ais-input" name="ais" spellcheck="false" placeholder="receiver url (optional)"
+          aria-label="AIS receiver URL">
+      </div>
+    </details>
     <ul id="ac" role="listbox" hidden></ul>
     <button type="submit" hidden>go</button>
   </form>
-  <nav id="history-bar" aria-label="history range"></nav>
   <nav id="recent" aria-label="recently viewed stations" hidden></nav>
   <div id="localbar">
     <div id="local-line">
@@ -1302,8 +1400,9 @@
     <dt>history &amp; archive</dt>
     <dd>The sparkline starts with the API's data and grows: every visit merges new
       points into a local archive in your browser, so over time it covers more than
-      the API can serve. Pick a window with the history chips (<b>24H … ALL</b>) —
-      the choice lands in the URL, so shared links reproduce it. <b>export</b> /
+      the API can serve. Pick a window with the range chips that sit on the
+      <b>HISTORY</b> block itself (<b>24H … ALL</b>, <b>30D</b> to start) — the
+      choice lands in the URL, so shared links reproduce it. <b>export</b> /
       <b>import</b> / <b>clear</b> manage the archive; nothing ever leaves your
       browser. Want years instead of days? Picking <b>1Y / 5Y / ALL</b> fetches
       the WSV raw archive (data back to <b>2000</b>, condensed to daily min/max,
@@ -1314,7 +1413,7 @@
     <dt>years view</dt>
     <dd>The <b>▦ YEARS</b> chip (or <b>?view=years</b>) turns the station into a
       multi-year statistics terminal: a heatmap of every archived year by month
-      (<b>ABS</b> shades the level itself, <b>ANOM</b> shades the deviation from
+      (<b>absolute</b> shades the level itself, <b>anomaly</b> shades the deviation from
       that month's long-term mean — dry months warm, wet months blue), the
       long-term monthly min–max band with median against the current year, and a
       day-of-year overlay of all years with one year bold — click any year in
@@ -1324,7 +1423,7 @@
       from the long-term month mean in σ. Built from the same daily WSV archive
       the 1Y/5Y/ALL ranges use.</dd>
     <dt>wave view</dt>
-    <dd>In river mode, the <b>PROFILE / ▦ WAVE</b> chips under the prompt,
+    <dd>In river mode, the <b>profile / wave</b> chips under the river’s name,
       <b>[▦ WAVE]</b> in the header or <b>?view=wave</b> draw the whole
       river as a station × day heatmap: rows run downstream, columns are days,
       dark cells are high water — a flood wave shows up as a diagonal ridge
@@ -1531,7 +1630,8 @@ function totalQuery() {
 // 7 = against a week back. A display flip like ?total&diff, URL-synced as the
 // same kind of bare flag so a shared link reproduces the view.
 let risingDays = new URLSearchParams(location.search).has('d7') ? 7 : 1;
-const risingQuery = () => risingDays > 1 ? '?rising&d7' : '?rising';
+const risingHref = n => n > 1 ? '?rising&d7' : '?rising';
+const risingQuery = () => risingHref(risingDays);
 
 const stationLink = document.getElementById('station-link');
 const permaLabel = document.getElementById('footer-perma-label');
@@ -1596,19 +1696,14 @@ function applyTotalChrome() {
   permaLabel.textContent = 'total link:';
 }
 
-// river and rivers mode hide the per-station chrome (archive bar, history range,
-// recent chips); the prompt form stays so users can jump back to a station
+// river and rivers mode hide the per-station chrome (archive bar, recent chips);
+// the prompt form stays so users can jump back to a station. Every control that
+// steers the drawing itself now rides on the plate, next to what it changes.
 function applyModeChrome() {
   const perStation = mode === 'station';
   document.getElementById('localbar').hidden = !perStation;
   if (!perStation) document.getElementById('recent').hidden = true;
   else renderRecent();
-  renderHistoryBar(); // stays visible in river mode too — it carries the view chips
-  // only the map has nothing to put in the bar: the rising board fills it with
-  // its 1D/7D lookback chips, river mode with the view chips, total with the zoom crumbs
-  // the map has nothing to put in the bar, and ?total carries its own controls
-  // inside the plate — the rest fill it with ranges, view or lookback chips
-  document.getElementById('history-bar').hidden = mode === 'rivers' || mode === 'total';
   // The app bar's station item doubles as the way back: neither the map nor the
   // boards show the gauge you came from, so away from it the item reads "← BONN".
   // It always names its target — never a generic "home".
@@ -1854,12 +1949,15 @@ async function loadData() {
   const isNewStation = !state.info; // switchStation resets info to null before calling us
   try {
     const enc = encodeURIComponent(forStation);
-    // be gentle to the WSV API: seed the archive once with 15 days, afterwards
-    // request only the delta since the newest locally archived point
+    // seed the archive once with the widest window the live API serves, so the
+    // default 30D range is whole on a first visit instead of showing a stub and
+    // a "not enough readings" warning; afterwards request only the delta since
+    // the newest locally archived point. A gap wider than the API's own reach
+    // cannot be closed by a delta, so that falls back to a fresh seed.
     const arc = loadArchive(forStation);
     const lastTs = arc.length ? arc[arc.length - 1][0] : 0;
-    const inWindow = lastTs && Date.now() - lastTs < 14 * 864e5;
-    const start = inWindow ? new Date(lastTs + 1000).toISOString() : 'P15D';
+    const inWindow = lastTs && Date.now() - lastTs < (API_MAX_DAYS - 1) * 864e5;
+    const start = inWindow ? new Date(lastTs + 1000).toISOString() : `P${API_MAX_DAYS}D`;
     const [info, gauge, delta] = await Promise.all([
       state.info || getJson(`${API}/stations/${enc}.json?includeTimeseries=true`),
       // 48 of the 786 stations carry no W series at all, so this 404s by design —
@@ -2505,6 +2603,11 @@ const T = {
   aboveZero: 'above this gauge’s own zero mark',
   sceneTitle: 'THE RIVER RIGHT NOW',
   history: 'HISTORY',
+  showLabel: 'show',
+  viewLabel: 'view',
+  yearsChip: '▦ YEARS',
+  yearsChipNote: 'multi-year statistics: monthly heatmap, range band, year overlay',
+  riseOver: 'rise over',
   historyThin: 'Not enough readings yet for this window — the local archive grows with every visit.',
   histDaily: 'the reading over time',
   histBand: 'min–max inside one pixel column',
@@ -2606,6 +2709,13 @@ function navHref(target) {
     const c = target.slice(4);
     if (c === 'rmap') return '?rivers';
     if (c === 'rlist') return '?rivers&view=list';
+    // the plate's own controls: each one owns a URL, so a chip is a real link
+    // you can share, middle-click and go back from
+    if (c === 'live') return viewHref('live');
+    if (c === 'wave') return viewHref('wave');
+    if (c === 'years') return viewHref('years');
+    if (c.startsWith('h:')) return historyHref(c.slice(2));
+    if (c.startsWith('rd:')) return risingHref(+c.slice(3));
     if (c === 'tall') return totalHref(null, null, null);
     if (c === 'tsum') return totalHref(totalYear, totalMonth, totalDay, false);
     if (c === 'tdiff') return totalHref(totalYear, totalMonth, totalDay, true);
@@ -2763,10 +2873,15 @@ const HISTORY_PRESETS = [
 // the live API only reaches ~30 days back; longer windows need the imported
 // WSV archive (see the "full archive" link) — used to gate backfill + warnings
 const API_MAX_DAYS = 30;
+// 30D is the widest window the live API serves on its own: a first visit gets a
+// month of shape without waiting on the multi-year archive download, and it is
+// the range that actually answers "is this river high or low right now?".
+// ALL is one chip away for anyone who wants the whole record.
+const HISTORY_DEFAULT = '30d';
 // an explicit ?history= in a shared link wins over the local preference
 let historyKey = (new URLSearchParams(location.search).get('history') || '').toLowerCase()
-  || localStorage.getItem(HISTORY_KEY) || 'all';
-if (!HISTORY_PRESETS.some(p => p.k === historyKey)) historyKey = 'all';
+  || localStorage.getItem(HISTORY_KEY) || HISTORY_DEFAULT;
+if (!HISTORY_PRESETS.some(p => p.k === historyKey)) historyKey = HISTORY_DEFAULT;
 const historyPreset = () => HISTORY_PRESETS.find(p => p.k === historyKey);
 
 // spring state for the sparkline transition: reset (set to null) on station switch or
@@ -3079,7 +3194,7 @@ function renderScene(vm) {
         `<rect class="floe" x="${(i * 47 + (seed % 20)).toFixed(1)}" y="${(surfY - 4).toFixed(1)}" width="${18 + (i % 3) * 7}" height="8" rx="1.5"/>`).join('') +
       '</g>');
   } else {
-    p.push(`<g class="waves"${attr('style', `--dur:${f.windy ? 3 : 7}s`)}>` +
+    p.push(`<g class="waves"${attr('style', `--dur:${f.windy ? 9 : 18}s`)}>` +
       `<path class="w-far" d="${wave(surfY - 1.5)}"/><path class="w-near" d="${wave(surfY)}"/></g>`);
   }
   p.push(`<line class="surface" x1="0" y1="${surfY.toFixed(1)}" x2="${SCENE_W}" y2="${surfY.toFixed(1)}"/>`);
@@ -3218,10 +3333,46 @@ function historyRefMarks(min, max) {
   return out;
 }
 
+// ---------- plate controls ----------
+
+// Every control that steers a plate is drawn ON the plate, in a row directly
+// under the mark it changes. They used to live in one bar past the prompt, a
+// full screen below the chart they moved — the reader had to remember which
+// drawing a chip belonged to. One helper, so the range chips, the view tabs and
+// the year pager are the same object with the same tap target.
+// items, in order: { t: nav target, label, on?, title? } is a chip,
+// { lbl } a dim word that groups the chips after it, { val } the value a pair of
+// pager chips is stepping — it is a readout, not a target, so it is not a link
+// you can click to no effect. A falsy entry is skipped.
+function ctlRow(label, items, aria) {
+  return `<nav class="p-tabs"${attr('aria-label', aria || label || 'controls')}>` +
+    (label ? `<span class="p-tabs-lbl">${esc(label)}</span>` : '') +
+    items.filter(Boolean).map(it =>
+      it.lbl ? `<span class="p-tabs-lbl">${esc(it.lbl)}</span>` :
+      it.val ? `<span class="p-tabs-val">${esc(it.val)}</span>` :
+      navOpen(it.t, it.on ? 'on' : '',
+        (it.title ? attr('title', it.title) : '') + (it.on ? ' aria-current="true"' : '')) +
+      esc(it.label) + navClose(it.t)).join('') +
+    '</nav>';
+}
+
+// the sparkline window + the way into the multi-year view, right under the
+// chart's own heading
+function historyCtl() {
+  return ctlRow(T.showLabel, [
+    ...HISTORY_PRESETS.map(p => ({
+      t: 'cmd:h:' + p.k, label: p.label, on: p.k === historyKey,
+      title: p.d && p.d > API_MAX_DAYS ? `${p.label} — needs the imported multi-year archive` : '',
+    })),
+    { t: 'cmd:years', label: T.yearsChip, title: T.yearsChipNote },
+  ], 'history range');
+}
+
 function renderHistory(h) {
   if (h.empty) {
+    // the empty window is exactly when the range chips matter most — keep them
     return `<section class="p-block"><h2 class="p-h2">${esc(T.history)} · ${esc(h.label)}</h2>` +
-      `<p class="p-dim">${esc(T.historyThin)}</p></section>`;
+      historyCtl() + `<p class="p-dim">${esc(T.historyThin)}</p></section>`;
   }
   const { lo, hi, min, max } = h.series;
   const n = lo.length;
@@ -3255,6 +3406,7 @@ function renderHistory(h) {
     `<dd>${h.points} readings${h.note ? '' : ''}</dd>` +
     (h.note ? `<dd class="warn">${esc(h.note.text)}</dd>` : '') + '</dl>';
   return `<section class="p-block"><h2 class="p-h2">${esc(T.history)} · ${esc(h.label)}</h2>` +
+    historyCtl() +
     `<div class="hist-wrap">${scale}${chart}</div>${axis}${key}</section>`;
 }
 
@@ -3501,9 +3653,10 @@ function renderRiver(vm) {
   const grad = vm.gradient != null ? ` · ${esc(T.meanFall)} ${vm.gradient.toFixed(2)} m/km` : '';
   const head = `<header class="p-head"><h1>${esc(waterLabel(vm.river))}</h1>` +
     `<p class="p-sub">${vm.gauges} ${esc(plural(vm.gauges, 'gauge'))} · ${Math.round(vm.kmSpan)} km${grad} — ${esc(T.riverSub)}</p></header>`;
-  const tabs = `<nav class="p-tabs" aria-label="view">` +
-    navOpen('cmd:live', 'on') + 'profile' + navClose('cmd:live') +
-    navOpen('cmd:wave') + 'wave' + navClose('cmd:wave') + '</nav>';
+  const tabs = ctlRow(T.viewLabel, [
+    { t: 'cmd:live', label: 'profile', on: true, title: 'longitudinal profile with live elevations' },
+    { t: 'cmd:wave', label: 'wave', title: 'station × day heatmap — the wave rolls downstream' },
+  ], 'river view');
   const trouble = vm.troubled.length
     ? `<section class="p-block"><h2 class="p-h2">${esc(T.trouble)} · ${vm.troubled.length} ${esc(plural(vm.troubled.length, 'gauge'))} ${esc(T.outsideRange)}</h2>` +
       `<ol class="board trouble">` + vm.troubled.map((s, i) =>
@@ -3666,10 +3819,9 @@ function setHistYear(y) {
   histYear = y;
   if (histFocus) histFocus = { y, m: histFocus.m }; // the readout follows the year
   scheduleRender();
-  renderHistoryBar(); // the ◂ year ▸ chips mirror the selection
 }
 
-// page through the archived years with the bar chips, clamped at both ends
+// page through the archived years with the ◂ ▸ chips, clamped at both ends
 function stepHistYear(d) {
   const st = histStats();
   if (!st.years.length) return;
@@ -3959,15 +4111,24 @@ function renderYears(vm) {
   const vh = `<p class="vh">${esc(vm.summary)}</p>`;
   const head = `<header class="p-head"><h1>${esc(vm.station)} · ${esc(T.yearsTitle)}</h1>` +
     `<p class="p-sub">${vm.thin ? '' : `${vm.years.length} ${esc(plural(vm.years.length, 'year'))} of daily readings — ${esc(T.yearsSub)}`}</p></header>`;
-  const back = `<nav class="p-tabs" aria-label="view">` +
-    navOpen('cmd:live') + '← live' + navClose('cmd:live') + '</nav>';
+  const back = ctlRow('', [
+    { t: 'cmd:live', label: '← live', title: 'back to the live gauge' },
+  ], 'view');
   if (vm.thin) {
     return `<section class="plate">${vh}${head}${back}<div class="p-empty"><p>${esc(vm.reason)}</p>` +
       `<p class="p-dim">${esc(T.yearsGrows)}</p></div></section>`;
   }
-  const modes = `<nav class="p-tabs" aria-label="heat mode">` +
-    navOpen('cmd:abs', vm.mode === 'abs' ? 'on' : '') + 'absolute' + navClose('cmd:abs') +
-    navOpen('cmd:anom', vm.mode === 'anom' ? 'on' : '') + 'anomaly' + navClose('cmd:anom') + '</nav>';
+  // shading mode and the picked year steer the same table, so they share one row
+  const yi = vm.years.indexOf(vm.selYear);
+  const modes = ctlRow('shade', [
+    { t: 'cmd:abs', label: 'absolute', on: vm.mode === 'abs', title: 'shade the level itself' },
+    { t: 'cmd:anom', label: 'anomaly', on: vm.mode === 'anom', title: 'shade the deviation from the month mean' },
+    vm.years.length > 1 && { lbl: 'year' },
+    yi > 0 && { t: `cmd:hy:${vm.years[yi - 1]}`, label: '◂', title: `${vm.years[yi - 1]} — overlay and readout follow` },
+    vm.years.length > 1 && { val: String(vm.selYear) },
+    yi >= 0 && yi < vm.years.length - 1 &&
+      { t: `cmd:hy:${vm.years[yi + 1]}`, label: '▸', title: `${vm.years[yi + 1]} — overlay and readout follow` },
+  ], 'heat mode and year');
   const readout = vm.readout.empty
     ? `<p class="p-dim p-readout">${esc(vm.readout.hint)}</p>`
     : `<section class="p-block readout"><p class="say">${esc(vm.readout.say)}</p></section>`;
@@ -4129,9 +4290,10 @@ function renderWave(vm) {
   const vh = `<p class="vh">${esc(vm.summary)}</p>`;
   const head = `<header class="p-head"><h1>${esc(waterLabel(vm.river))} · ${esc(T.waveTitle)}</h1>` +
     `<p class="p-sub">${esc(T.waveSub)}</p></header>`;
-  const tabs = `<nav class="p-tabs" aria-label="view">` +
-    navOpen('cmd:live') + 'profile' + navClose('cmd:live') +
-    navOpen('cmd:wave', 'on') + 'wave' + navClose('cmd:wave') + '</nav>';
+  const tabs = ctlRow(T.viewLabel, [
+    { t: 'cmd:live', label: 'profile', title: 'longitudinal profile with live elevations' },
+    { t: 'cmd:wave', label: 'wave', on: true, title: 'station × day heatmap — the wave rolls downstream' },
+  ], 'river view');
   // a label sits over the CENTRE of its day column, so it lands on the cell it
   // names rather than on the grid's outer edge
   const cols = vm.months.map(m =>
@@ -4351,9 +4513,10 @@ function renderRivers(vm) {
   const vh = `<p class="vh">${esc(vm.summary)}</p>`;
   const head = `<header class="p-head"><h1>${esc(T.riversTitle)}</h1>` +
     `<p class="p-sub">${vm.waters} ${esc(plural(vm.waters, 'water'))} · ${vm.gauges} ${esc(plural(vm.gauges, 'gauge'))} — ${esc(T.riversSub)}</p></header>`;
-  const tabs = `<nav class="p-tabs" aria-label="view">` +
-    navOpen('cmd:rmap', vm.tab === 'map' ? 'on' : '') + 'map' + navClose('cmd:rmap') +
-    navOpen('cmd:rlist', vm.tab === 'list' ? 'on' : '') + 'A–Z index' + navClose('cmd:rlist') + '</nav>';
+  const tabs = ctlRow(T.viewLabel, [
+    { t: 'cmd:rmap', label: 'map', on: vm.tab === 'map', title: 'every water at the centre of its own gauges' },
+    { t: 'cmd:rlist', label: 'A–Z index', on: vm.tab === 'list', title: 'the full list, including the waters the map cannot place' },
+  ], 'all waters view');
   if (vm.tab === 'list') {
     return `<section class="plate">${vh}${head}${tabs}${renderRiversList(vm)}</section>`;
   }
@@ -4603,7 +4766,6 @@ function risingSetDays(n, push = true) {
   risingDays = n;
   if (push) history.replaceState(null, '', risingQuery());
   applyRisingChrome();
-  renderHistoryBar();
   state.rising = null;
   scheduleRender();
   setScreenAria();
@@ -4700,9 +4862,14 @@ function renderRisingRow(x) {
 function renderRising(vm) {
   const head = `<header class="p-head"><h1>${esc(T.risingTitle)}</h1>` +
     `<p class="p-sub">${esc(T.risingSub)}</p></header>`;
+  // the board's one control: how far back the diff reaches
+  const tabs = ctlRow(T.riseOver, [
+    { t: 'cmd:rd:1', label: '1D', on: vm.lookbackDays === 1, title: 'against yesterday’s snapshot — cm per day' },
+    { t: 'cmd:rd:7', label: '7D', on: vm.lookbackDays === 7, title: 'against the snapshot a week back — the slower swell, still cm per day' },
+  ], 'rising lookback');
   const vh = `<p class="vh">${esc(vm.summary)}</p>`;
   if (vm.noBaseline) {
-    return `<section class="plate">${vh}${head}` +
+    return `<section class="plate">${vh}${head}${tabs}` +
       `<div class="p-empty"><p>${esc(vm.reason)}</p>` +
       `<p class="p-dim">right now: ${vm.live.high} high · ${vm.live.low} low · ${vm.live.normal} normal · ${vm.live.tidal} tidal</p>` +
       `<p class="p-dim">${esc(vm.lookbackDays > 1 ? 'the 1-day view works with a single day of snapshots' : 'come back tomorrow for cm per day')}</p></div></section>`;
@@ -4736,7 +4903,7 @@ function renderRising(vm) {
   // a baseline with nothing above the flat band still owes the reader a sentence:
   // an unnamed gap between the counts and the key reads as a half-loaded view
   const boards = board('RISING', vm.risers, vm.moreRising) + board('FALLING', vm.fallers, vm.moreFalling);
-  return `<section class="plate">${vh}${head}${counts}<p class="p-sub2">${esc(base)}</p>` +
+  return `<section class="plate">${vh}${head}${tabs}${counts}<p class="p-sub2">${esc(base)}</p>` +
     (boards || `<p class="p-dim">${esc(T.risingStill)}</p>`) +
     key + '</section>';
 }
@@ -5176,9 +5343,10 @@ function renderTotal(vm) {
       ? `<span aria-current="true">${esc(c.label)}</span>`
       : navOpen(c.target) + esc(c.label) + navClose(c.target)) + '</li>').join('') +
     '</ol></nav>';
-  const metric = `<nav class="p-tabs" aria-label="metric">` +
-    navOpen('cmd:tsum', vm.diff ? '' : 'on') + 'Σ sum' + navClose('cmd:tsum') +
-    navOpen('cmd:tdiff', vm.diff ? 'on' : '') + 'Δ change' + navClose('cmd:tdiff') + '</nav>';
+  const metric = ctlRow('show', [
+    { t: 'cmd:tsum', label: 'Σ sum', on: !vm.diff, title: 'the summed level itself' },
+    { t: 'cmd:tdiff', label: 'Δ change', on: vm.diff, title: 'the net daily change instead of the level' },
+  ], 'metric');
   const head = `<header class="p-head"><h1>${esc(T.totalTitle)}</h1>` +
     `<p class="p-sub">${esc(vm.diff ? T.totalSubDiff : T.totalSubSum)}</p></header>`;
   if (vm.level === 'missing') {
@@ -5236,7 +5404,6 @@ function totalSetZoom(y, m, d, push = true) {
   totalYear = y; totalMonth = m; totalDay = d;
   history[push ? 'pushState' : 'replaceState'](null, '', totalQuery());
   applyTotalChrome();
-  renderHistoryBar();
   scheduleRender();
   setScreenAria();
 }
@@ -5254,26 +5421,31 @@ function totalSetDiff(on) {
   totalDiff = on;
   history.replaceState(null, '', totalQuery());
   applyTotalChrome();
-  renderHistoryBar();
   scheduleRender();
   setScreenAria();
 }
 
 // ---------- sub-view switching ----------
 
+// the URL a sub-view lives at — shared by the tab chips (as their href) and by
+// setView (as the entry it pushes), so a chip can never point somewhere else
+// than the click takes you
+function viewHref(v) {
+  const q = new URLSearchParams(location.search);
+  if (v === 'live') q.delete('view'); else q.set('view', v);
+  const s = q.toString();
+  return s ? '?' + s : location.pathname;
+}
+
 function setView(v, push = true) {
   if (v === viewMode) return;
   if (v !== 'live' && !MODE_VIEWS[mode].includes(v)) return; // wrong mode for this view
+  const href = viewHref(v);
   viewMode = v;
-  if (push) {
-    const q = new URLSearchParams(location.search);
-    if (v === 'live') q.delete('view'); else q.set('view', v);
-    history.pushState(null, '', '?' + q.toString());
-  }
+  if (push) history.pushState(null, '', href);
   if (mode === 'river') applyRiverChrome();
   else if (mode === 'rivers') applyRiversChrome();
   else applyStationChrome();
-  renderHistoryBar();
   if (v === 'years') ensureHistoryCoverage(null); // pull the multi-year WSV archive
   if (v === 'wave') loadWave();
   scheduleRender();
@@ -5290,9 +5462,12 @@ function runGridCmd(c) {
   if (c === 'retry') { state.error = null; scheduleRender(); if (mode === 'station') loadData(); else if (mode === 'river') loadRiver(); else if (mode === 'rising') loadRising(); else if (mode === 'total') loadTotal(); }
   else if (c === 'live') setView('live');
   else if (c === 'wave') setView('wave');
+  else if (c === 'years') setView('years');
   else if (c === 'rmap') setView('live');
   else if (c === 'rlist') setView('list');
-  else if (c === 'abs' || c === 'anom') { histMode = c; scheduleRender(); renderHistoryBar(); }
+  else if (c.startsWith('h:')) setHistory(c.slice(2));
+  else if (c.startsWith('rd:')) risingSetDays(+c.slice(3));
+  else if (c === 'abs' || c === 'anom') { histMode = c; scheduleRender(); }
   else if (c.startsWith('hm:')) {
     const [y, m] = c.slice(3).split(':').map(Number);
     histFocus = { y, m };
@@ -5320,6 +5495,9 @@ const aisInput = document.getElementById('ais-input');
 stationInput.value = station;
 adsbInput.value = adsbRaw;
 aisInput.value = aisRaw;
+// the receiver URLs are expert wiring — folded away unless this visitor uses
+// them, so the prompt reads as the two fields that actually navigate
+document.getElementById('prompt-more').open = !!(adsbRaw || aisRaw);
 
 // the river field always shows the water in view: the river itself in river mode,
 // otherwise the current station's water (filled once its info arrives)
@@ -5357,7 +5535,7 @@ function switchStation(name, adsb, push = true) {
     q.set('station', station);
     if (adsbRaw) q.set('adsb', adsbRaw);
     if (aisRaw) q.set('ais', aisRaw);
-    if (historyKey !== 'all') q.set('history', historyKey);
+    if (historyKey !== HISTORY_DEFAULT) q.set('history', historyKey);
     if (viewMode !== 'live') q.set('view', viewMode);
     history[push === 'replace' ? 'replaceState' : 'pushState'](null, '', '?' + q.toString());
   }
@@ -5519,7 +5697,6 @@ function switchTotal(push = true) {
   dismissSuggest();
   if (mode === 'total') { // already here: only the zoom state may have moved (popstate)
     applyTotalChrome();
-    renderHistoryBar();
     scheduleRender();
     setScreenAria();
     return;
@@ -5619,7 +5796,7 @@ function helpText(unknownFlag) {
     '                      (the Σ/Δ chips switch to net daily change, ?total&diff)',
     '    --adsb URL        set your local ADS-B receiver URL; no value clears it',
     '    --ais URL         set your local AIS receiver URL (AIS-catcher); no value clears it',
-    `    --history RANGE   set the sparkline window: ${HISTORY_PRESETS.map(p => p.k).join(' ')}`,
+    `    --history RANGE   set the sparkline window: ${HISTORY_PRESETS.map(p => p.k).join(' ')} (default ${HISTORY_DEFAULT})`,
     '    --view MODE       live | years (station statistics) | wave (river heatmap)',
     '    --export          download the whole local archive as JSON',
     '    --clear           delete the local archive (no confirmation - you typed it)',
@@ -6330,70 +6507,6 @@ finderInput.addEventListener('keydown', e => {
   rows[finderIndex].scrollIntoView({ block: 'nearest' });
 });
 
-// ---------- history range chips ----------
-
-// one bar, four shapes: range presets + YEARS toggle (station live), YEARS +
-// ABS/ANOM (years view), PROFILE/WAVE view chips (river mode), and the zoom
-// breadcrumb (total mode)
-function renderHistoryBar() {
-  const nav = document.getElementById('history-bar');
-  nav.textContent = '';
-  const chip = (label, on, fn, title) => {
-    const b = document.createElement('button');
-    b.type = 'button';
-    b.textContent = label;
-    if (title) b.title = title;
-    if (on) b.className = 'on';
-    b.addEventListener('click', fn);
-    nav.append(b);
-  };
-  if (mode === 'river') {
-    nav.setAttribute('aria-label', 'river view');
-    nav.append('view ');
-    chip('PROFILE', viewMode !== 'wave', () => setView('live'), 'longitudinal profile with live elevations');
-    chip('▦ WAVE', viewMode === 'wave', () => setView('wave'), 'station × day heatmap — the wave rolls downstream');
-    return;
-  }
-  if (mode === 'rising') {
-    // the board has no history window and no sub-views — the bar carries its
-    // one control instead: how far back the diff reaches
-    nav.setAttribute('aria-label', 'rising lookback');
-    nav.append('rise over ');
-    chip('1D', risingDays === 1, () => risingSetDays(1), 'against yesterday\'s snapshot — cm per day');
-    chip('7D', risingDays === 7, () => risingSetDays(7), 'against the snapshot a week back — the slower swell, still cm per day');
-    return;
-  }
-  if (mode === 'total') {
-    // the metric switch and the zoom breadcrumb both live in the plate now,
-    // as real links — duplicating them here would be two sets of controls for
-    // one piece of state
-    nav.hidden = true;
-    return;
-  }
-  nav.setAttribute('aria-label', 'history range');
-  nav.append('history ');
-  // in the years view the range chips are meaningless (it always shows all
-  // years), so they make room for the heatmap's ABS/ANOM switch
-  if (viewMode !== 'years') {
-    for (const p of HISTORY_PRESETS) chip(p.label, p.k === historyKey, () => setHistory(p.k));
-  }
-  chip('▦ YEARS', viewMode === 'years', () => setView(viewMode === 'years' ? 'live' : 'years'),
-    'multi-year statistics: monthly heatmap, range band, year overlay');
-  if (viewMode === 'years') {
-    nav.append(' · ');
-    chip('ABS', histMode === 'abs', () => runGridCmd('abs'), 'shade the level itself');
-    chip('ANOM', histMode === 'anom', () => runGridCmd('anom'), 'shade the deviation from the month mean');
-    const st = histStats();
-    if (st.years.length) {
-      const sel = histSelYear(st);
-      nav.append(' · ');
-      chip('◂', false, () => stepHistYear(-1), 'previous year — overlay + readout follow');
-      chip(String(sel), true, () => setHistYear(st.curYear), 'the bold overlay year · click to jump back to the current year');
-      chip('▸', false, () => stepHistYear(1), 'next year — overlay + readout follow');
-    }
-  }
-}
-
 // backfill from the API when a picked range reaches further back than what's
 // locally archived yet — the WSV API keeps ~30 days, so this covers everything
 // up to 30D without waiting for the local archive to accumulate that much itself
@@ -6480,15 +6593,21 @@ async function ensureHistoryCoverage(days) {
   } catch { /* best-effort backfill; sparkline just falls back to whatever's local */ }
 }
 
+// the range chips are real links, so the href they carry and the state this
+// setter writes come from one place — they cannot drift apart
+function historyHref(k) {
+  const q = new URLSearchParams(location.search);
+  if (k === HISTORY_DEFAULT) q.delete('history'); else q.set('history', k);
+  const s = q.toString();
+  return s ? '?' + s : location.pathname;
+}
+
 function setHistory(k) {
   if (k === historyKey) return;
   historyKey = k;
   localStorage.setItem(HISTORY_KEY, k);
-  // keep shared links reproducing the visible range ('all' is the default → no param)
-  const q = new URLSearchParams(location.search);
-  if (k === 'all') q.delete('history'); else q.set('history', k);
-  history.replaceState(null, '', '?' + q.toString());
-  renderHistoryBar();
+  // keep shared links reproducing the visible range (the default → no param)
+  history.replaceState(null, '', historyHref(k));
   ensureHistoryCoverage(historyPreset().d);
   scheduleRender();
 }
@@ -6827,7 +6946,6 @@ function scheduleRender() {
 // screen needs the renderer, and renderQueued is only live from here down
 resolveDeepLink(false);
 renderRecent();
-renderHistoryBar();
 
 updateLocalBar();
 if (mode === 'rivers') {

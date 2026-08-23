@@ -10,6 +10,13 @@
   a title block, the drawing, a legend for every mark it uses, and a foot
   naming source and reading age. If a section cannot name itself in its own
   legend, it does not ship.
+- **Controls live on the plate.** Anything that changes a drawing — range,
+  sub-view, lookback, shading, year — is rendered by that plate's own renderer
+  as one `ctlRow()` directly above the mark it steers. There is no control bar
+  outside `#screen`; a chip a screen away from its chart is a chip nobody
+  connects to it. Each chip carries a real `href` via `navHref` (`cmd:h:30d`,
+  `cmd:rd:7`, `cmd:years`, …), so the state it sets is shareable and the Back
+  button works; only genuinely URL-less toggles (`cmd:abs`) stay buttons.
 - **Conventions the test harness depends on:** every `*ViewModel()` and
   `render*()` is a **top-level `function` declaration** (a `const` arrow inside
   a block is unreachable from `app.run`), and no renderer may ever emit the

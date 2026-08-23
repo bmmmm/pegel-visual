@@ -1473,18 +1473,22 @@ test('waveViewModel: a short window keeps every day it has', () => {
 });
 
 
-test('history bar: view chips per mode — PROFILE/WAVE on rivers, ABS/ANOM in years', () => {
-  const labels = app => app.el('history-bar').children.map(b => b.textContent);
-  const river = loadApp({ search: '?river=RHEIN' });
-  assert.ok(labels(river).includes('PROFILE') && labels(river).includes('▦ WAVE'), 'river mode gets real view buttons');
-  assert.ok(!labels(river).includes('24H'), 'range presets are station business');
-
-  const years = loadApp({ search: '?station=BONN&view=years' });
-  const l = labels(years);
-  assert.ok(l.includes('▦ YEARS') && l.includes('ABS') && l.includes('ANOM'), 'years view gets the heatmap switch as buttons');
-
+test('plate controls: the range chips ride the history block, as real links', () => {
   const live = loadApp({ search: '?station=BONN' });
-  assert.ok(labels(live).includes('24H') && labels(live).includes('▦ YEARS'), 'live station keeps the range presets');
+  const ctl = live.run('historyCtl()');
+  for (const k of ['24h', '3d', '7d', '15d', '30d', '1y', '5y', '10y', '20y', 'all']) {
+    assert.ok(ctl.includes(`data-nav="cmd:h:${k}"`), `${k} is offered`);
+  }
+  assert.ok(ctl.includes('▦ YEARS') && ctl.includes('data-nav="cmd:years"'), 'and the way into the years view');
+  assert.ok(ctl.includes('class="on" href="?station=BONN" data-nav="cmd:h:30d"'),
+    'the default window is lit and its link drops the redundant param');
+  assert.ok(ctl.includes('href="?station=BONN&amp;history=24h" data-nav="cmd:h:24h"'),
+    'every other window is a shareable URL');
+
+  // and the block that draws the chart carries them — not a bar past the prompt
+  const empty = live.run(`renderHistory({ empty: true, label: '30D' })`);
+  assert.ok(empty.includes('data-nav="cmd:h:24h"'), 'even an empty window keeps its range chips');
+  assert.equal(live.run(`typeof renderHistoryBar`), 'undefined', 'the standalone chip bar is gone');
 });
 
 test('setScreenHtml: the screen only swaps when the content changed', () => {
@@ -1515,9 +1519,11 @@ test('year paging + month readout: chips step and clamp, cells report numbers', 
   assert.equal(app.run(`(stepHistYear(-1), histSelYear(histStats()))`), 2025);
   assert.equal(app.run(`(stepHistYear(-1), stepHistYear(-1), stepHistYear(-1), histSelYear(histStats()))`), 2024, 'clamped at the oldest year');
   assert.equal(app.run(`(stepHistYear(1), histSelYear(histStats()))`), 2025);
-  const labels = app.run(`(viewMode = 'years', renderHistoryBar(), 0)`) === 0
-    ? app.el('history-bar').children.map(b => b.textContent) : [];
-  assert.ok(labels.includes('◂') && labels.includes('▸') && labels.includes('2025'), 'year pager chips present');
+  // the pager sits in the heat block's own control row, beside ABSOLUTE/ANOMALY
+  const pager = app.run(`(viewMode = 'years', renderYears(yearsViewModel()))`);
+  assert.ok(pager.includes('>◂<') && pager.includes('>▸<') && pager.includes('>2025<'), 'year pager chips present');
+  assert.ok(pager.includes('data-nav="cmd:hy:2024"'), 'and each step names the year it lands on');
+  assert.ok(pager.indexOf('cmd:abs') < pager.indexOf('cmd:hy:'), 'one row: shading mode, then the year');
   // picking a heatmap cell focuses the month AND puts its year on top
   app.run(`runGridCmd('hm:2024:3')`);
   assert.deepEqual(app.run('histFocus'), { y: 2024, m: 3 });
@@ -2723,29 +2729,33 @@ test('loadRising: the 7-day baseline crosses into the previous month\'s shard', 
   assert.deepEqual(day.run('globalThis.__fetched').filter(u => u.includes('snapshots')), ['archive/snapshots/2026-08.json']);
 });
 
-test('rising board: the 1D/7D toggle rides the URL and fills the history bar', () => {
-  const chips = app => app.el('history-bar').children.slice(-2);
+test('rising board: the 1D/7D toggle rides the URL and sits on the board', () => {
+  // the lookback chips are rendered by the board itself, above the ranking
+  const chips = app => app.run(`(() => {
+    state.rising = { data: { lookbackDays: risingDays, noBaseline: true,
+      live: { high: 0, low: 0, normal: 0, tidal: 0 } }, error: null };
+    return renderRising(risingViewModel());
+  })()`);
   const boot = loadApp({ search: '?rising&d7' });
   assert.equal(boot.run('risingDays'), 7, '?rising&d7 boots into the week view');
   assert.equal(boot.run('currentModeQuery()'), '?rising&d7', 'and shares as that link');
-  assert.equal(boot.el('history-bar').hidden, false, 'the board fills the bar instead of hiding it');
   assert.equal(boot.el('station-link').textContent, '?rising&d7');
   assert.equal(boot.document.title, 'PEGEL://RISING · 7D', 'the tab says which board this is');
-  assert.deepEqual(chips(boot).map(b => b.textContent), ['1D', '7D']);
-  assert.deepEqual(chips(boot).map(b => b.className), ['', 'on'], 'the active lookback is lit');
+  const bootHtml = chips(boot);
+  assert.ok(bootHtml.includes('href="?rising" data-nav="cmd:rd:1"'), '1D is a real link');
+  assert.ok(bootHtml.includes('class="on" href="?rising&amp;d7" data-nav="cmd:rd:7"'), 'the active lookback is lit');
 
   const plain = loadApp({ search: '?rising' });
   assert.equal(plain.run('risingDays'), 1, 'the default stays 1D');
   assert.equal(plain.run('currentModeQuery()'), '?rising');
-  assert.deepEqual(chips(plain).map(b => b.className), ['on', '']);
+  assert.ok(chips(plain).includes('class="on" href="?rising" data-nav="cmd:rd:1"'));
   plain.run(`state.rising = { data: { noBaseline: true }, error: null }`);
-  plain.run('risingSetDays(7)');
+  plain.run(`runGridCmd('rd:7')`);
   assert.equal(plain.run('currentModeQuery()'), '?rising&d7', 'flipping the chip rewrites the link');
   assert.equal(plain.run('state.rising'), null, 'and drops the board built on the other baseline');
-  assert.deepEqual(chips(plain).map(b => b.className), ['', 'on']);
+  assert.ok(chips(plain).includes('class="on" href="?rising&amp;d7" data-nav="cmd:rd:7"'));
   plain.run('risingSetDays(1)');
   assert.equal(plain.run('currentModeQuery()'), '?rising');
-  assert.deepEqual(chips(plain).map(b => b.className), ['on', '']);
   plain.run('risingSetDays(3)');
   assert.equal(plain.run('risingDays'), 1, 'only the two offered lookbacks are reachable');
 
@@ -2753,8 +2763,6 @@ test('rising board: the 1D/7D toggle rides the URL and fills the history bar', (
   const from = loadApp({ search: '?station=BONN' });
   from.run('risingDays = 7; switchRising()');
   assert.equal(from.run('currentModeQuery()'), '?rising&d7');
-  assert.equal(from.el('history-bar').hidden, false);
-  assert.equal(loadApp({ search: '?rivers' }).el('history-bar').hidden, true, 'the map still has nothing to put in the bar');
 });
 
 test('loadRising: a hard bulk failure reports, switching away mid-fetch discards', async () => {
@@ -3051,11 +3059,10 @@ test('prompt: --total switches, the man page names it', () => {
   assert.equal(app.run('mode'), 'total');
 });
 
-test('total chrome: the plate owns the zoom trail, the chip bar steps aside', () => {
+test('total chrome: the plate owns the zoom trail', () => {
   const app = loadApp({ search: '?total&y=2025&d=2025-05-12' });
-  // the breadcrumb and the metric switch are real links inside the plate now;
+  // the breadcrumb and the metric switch are real links inside the plate;
   // a second set of chips outside it would be two controls for one state
-  assert.equal(app.el('history-bar').hidden, true, 'no duplicate chip breadcrumb');
   assert.equal(app.el('home-btn').hidden, false, 'the way back to the station stays');
   const crumbs = app.run('totalCrumbs()');
   assert.deepEqual(crumbs.map(c => c.label), ['ALL', '2025', 'MAY', '12']);
