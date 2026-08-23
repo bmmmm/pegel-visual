@@ -50,6 +50,11 @@
     /* prose wears sans; every number, unit, flag, URL and the prompt wear mono */
     --font-text: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
     --font-data: ui-monospace, 'SF Mono', Monaco, 'Cascadia Mono', monospace;
+    /* The gutter that holds a chart's value scale. The plot and the x-axis strip
+       below it are separate boxes at DIFFERENT font sizes, so the same `5.5ch`
+       resolved to 55 px in one and 35 px in the other and every x label sat left
+       of its own gridline. One rem token cannot drift. */
+    --axis-gutter: 3.5rem;
   }
   ::selection { background: var(--water-deep); color: var(--paper); }
   :where(a, button):focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
@@ -606,8 +611,8 @@
   .board .b-dir { grid-area: dir; }
   .board li.up .b-dir { color: var(--water-line); }
   .board li.down .b-dir { color: var(--dry-line); }
-  .board li.up { --bar: color-mix(in oklab, var(--water) 45%, transparent); }
-  .board li.down { --bar: color-mix(in oklab, var(--dry) 60%, transparent); }
+  .board li.up, .lg-bar.up { --bar: color-mix(in oklab, var(--water) 45%, transparent); }
+  .board li.down, .lg-bar.down { --bar: color-mix(in oklab, var(--dry) 60%, transparent); }
   .board .b-name {
     grid-area: name;
     color: var(--ink);
@@ -630,17 +635,21 @@
   }
   .board .b-river:hover { color: var(--ink); text-decoration: underline; }
   .board .b-now { grid-area: now; text-align: right; color: var(--mid); }
-  .board .b-rate {
-    grid-area: rate;
-    text-align: right;
-    padding-right: 0.6ch;
-    /* the magnitude bar lives behind the number — pastel fill, no second axis */
+  .board .b-rate { grid-area: rate; text-align: right; padding-right: 0.6ch; }
+  /* The magnitude bar lives behind the number — pastel fill, no second axis. The
+     key's swatch takes the very same rule and the very same --bar token, so the
+     legend cannot drift from the mark it explains. */
+  .board .b-rate, .lg-bar {
     background: linear-gradient(to right, var(--bar, transparent) calc(var(--pct, 0) * 1%), transparent calc(var(--pct, 0) * 1%));
   }
+  .lg-bar { --pct: 70; display: inline-block; width: 2.4rem; height: 1.1em; border-bottom: 1px solid var(--rule); }
   .board .b-span { color: var(--mid); font-size: 0.85em; }
   .board .b-spark { grid-area: spark; width: 60px; height: 14px; align-self: center; }
-  .board .b-spark path { fill: none; stroke: var(--water-line); stroke-width: 1.5; }
-  .board li.down .b-spark path { stroke: var(--dry-line); }
+  /* the spark's marks are unscoped so the key's swatch is painted by the same
+     rules as the board's own sparklines */
+  .b-spark path { fill: none; stroke: var(--water-line); stroke-width: 1.5; }
+  .down .b-spark path { stroke: var(--dry-line); }
+  .lg-spark { width: 3.4rem; height: 14px; flex: none; }
   .board .b-badge { grid-area: badge; font-size: 0.85em; color: var(--mid); white-space: nowrap; }
   .board .b-badge.eta { cursor: help; border-bottom: 1px dotted var(--dim); }
   /* ---- charts: SVG in logical coordinates, scaled by the container ---- */
@@ -729,7 +738,10 @@
      stretches to fill, so the box just has to be tall enough for the gutter
      labels and short enough not to eat a desktop screen. */
   .scene-plot { height: clamp(15rem, 46cqi, 26rem); min-width: 0; }
-  .scene { display: block; width: 100%; height: 100%; max-height: 26rem; }
+  /* `.scene` is the mark vocabulary, not a size: the legend swatches carry the
+     same class so one rule paints the drawing and its key alike. Only the
+     drawing inside `.scene-plot` takes the plate-filling geometry. */
+  .scene-plot .scene { display: block; width: 100%; height: 100%; max-height: 26rem; }
   .gutter { position: relative; border-left: 1px solid var(--rule); background: var(--paper); }
   .gut-lines { list-style: none; margin: 0; padding: 0; position: absolute; inset: 0; }
   .gutter li {
@@ -783,7 +795,7 @@
   .scene .plane path { fill: none; stroke: var(--ink); stroke-width: 1.3; stroke-linejoin: round; }
   .scene .craft-lbl { font-family: var(--font-data); font-size: 7px; fill: var(--mid); }
   /* ---- history chart ---- */
-  .hist-wrap { display: grid; grid-template-columns: 5.5ch 1fr; align-items: stretch; }
+  .hist-wrap { display: grid; grid-template-columns: var(--axis-gutter) 1fr; align-items: stretch; }
   .hist { height: 6.5rem; border-bottom: 1px solid var(--ink); }
   .h-scale {
     display: flex;
@@ -799,7 +811,7 @@
   .h-axis {
     position: relative;
     height: 1.3em;
-    margin-left: 5.5ch;
+    margin-left: var(--axis-gutter);
     font-family: var(--font-data);
     font-size: 0.66rem;
     color: var(--mid);
@@ -867,7 +879,15 @@
   @keyframes floe { to { transform: translateX(60px); } }
   /* ---- heat tables (years + wave): density is the magnitude channel,
      hatch the direction channel — both survive greyscale and colour blindness ---- */
-  .heat { border-collapse: collapse; width: 100%; margin-top: 0.8em; font-family: var(--font-data); }
+  /* fixed layout: under `auto` the two label columns take their share of the
+     free width, leaving a dead field left of the year chips and a gap before ⌀ */
+  /* Fixed layout: under `auto` the two label columns take their share of the
+     free width, leaving a dead field left of the year chips and a gap before ⌀.
+     The widths ride on <col>, not on the cells: a fixed-layout table with this
+     many columns ignores a width set on a th — measured, not assumed. */
+  .heat { border-collapse: collapse; width: 100%; table-layout: fixed; margin-top: 0.8em; font-family: var(--font-data); }
+  .heat .c-year { width: 3rem; }
+  .heat .c-mean { width: 2.6rem; }
   .heat th, .heat td { padding: 0; }
   .heat thead th {
     font-size: 0.62rem;
@@ -923,28 +943,41 @@
   }
   .p-key .diverge .hsw + .hsw { margin-left: 1px; }
   .p-key .scalebar { display: flex; justify-content: space-between; width: 8rem; font-size: 0.9em; }
-  /* the wave table scrolls sideways rather than shrinking the cells away */
-  .wave-wrap { overflow-x: auto; }
+  /* The wave table scrolls sideways rather than shrinking the cells away, and
+     the month strip scrolls WITH it — both are children of the same overflow
+     box, both span the same width, and both start their day grid at the same
+     offset. That offset is ONE token, in rem: written as `11ch` it resolved
+     against two different font sizes and left the month label 600 px from the
+     column it names. */
+  /* `position: relative` is load-bearing: every day cell carries a visually
+     hidden <span> for screen readers, and an absolutely positioned box whose
+     containing block is the page escapes this scroller and drags the whole
+     document sideways (measured: 556 px of scroll width at a 390 px viewport). */
+  .wave-wrap { position: relative; overflow-x: auto; --wave-name: 8rem; --wave-min: 34rem; }
   .wave-months {
     position: relative;
     height: 1.1em;
-    margin-left: 11ch;
+    margin-left: var(--wave-name);
+    min-width: calc(var(--wave-min) - var(--wave-name));
     font-family: var(--font-data);
     font-size: 0.62rem;
     color: var(--dim);
   }
   .wave-months span { position: absolute; transform: translateX(-50%); }
-  .heat.wave { min-width: 34rem; }
+  /* fixed layout is what makes the name column obey a width at all: under
+     `auto` a max-width on a cell is ignored and the names eat the whole grid */
+  .heat.wave { table-layout: fixed; min-width: var(--wave-min); }
   .heat.wave td { height: 0.85rem; }
-  .heat.wave th[scope="row"] { max-width: 11ch; overflow: hidden; text-overflow: ellipsis; }
-  .heat.wave th a { display: flex; gap: 0.6ch; }
-  .heat.wave .wg { color: var(--mid); }
-  .heat.wave .k-low .wg { color: var(--dry-line); }
-  .heat.wave .k-high .wg { color: var(--water-line); }
+  .heat.wave .c-name { width: var(--wave-name); }
+  .heat.wave th[scope="row"] { overflow: hidden; text-align: left; }
+  .heat.wave th a { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .wg { color: var(--mid); margin-right: 0.6ch; }
+  .k-low .wg { color: var(--dry-line); }
+  .k-high .wg { color: var(--water-line); }
   /* ---- climatology + overlay charts ---- */
   /* geometry stretches, labels do not: the SVG fills its box and the axis text
      lives in HTML beside and beneath it at a fixed size */
-  .plot-wrap { display: grid; grid-template-columns: 5.5ch 1fr; align-items: stretch; }
+  .plot-wrap { display: grid; grid-template-columns: var(--axis-gutter) 1fr; align-items: stretch; }
   .plot-wrap .chart { width: 100%; height: 100%; }
   .v-scale {
     display: flex;
@@ -960,7 +993,7 @@
   .x-axis {
     position: relative;
     height: 1.3em;
-    margin-left: 5.5ch;
+    margin-left: var(--axis-gutter);
     font-family: var(--font-data);
     font-size: 0.66rem;
     color: var(--mid);
@@ -976,7 +1009,8 @@
   .ov-sel { fill: none; stroke: var(--water-line); stroke-width: 1.8; }
   /* ---- the buddy: every empty, loading and error state ---- */
   .state-plate { display: flex; align-items: center; justify-content: center; min-height: 14rem; }
-  .state { display: flex; gap: 1.4em; align-items: flex-start; max-width: 46ch; }
+  .state { display: flex; gap: 1.4em; align-items: flex-start; max-width: 46ch; min-width: 0; }
+  .state-say { min-width: 0; }
   .buddy { width: 4.5rem; height: 4.5rem; flex: none; }
   .buddy .face { fill: var(--paper); stroke: var(--ink); }
   .buddy .bw { fill: var(--water); }
@@ -986,7 +1020,12 @@
   .buddy .glint { fill: var(--paper); }
   .buddy .mouth { fill: none; stroke: var(--ink); stroke-width: 3; stroke-linecap: round; }
   .state-title { margin: 0; font-size: 1.15em; font-weight: 600; }
-  .state-body { margin: 0.4em 0 0; color: var(--mid); }
+  /* the body carries the failing URL, which has no break opportunity of its own:
+     without `anywhere` its min-content width pushes the whole plate past the
+     screen on both sides, and the left half of that overflow cannot be scrolled
+     to. The URL is the diagnostic value of this plate, so it wraps — never
+     truncates. */
+  .state-body { margin: 0.4em 0 0; color: var(--mid); overflow-wrap: anywhere; }
   .state-actions { margin: 0.9em 0 0; display: flex; gap: 1em; font-size: 0.9em; }
   .state-actions a, .state-actions button {
     font: inherit;
@@ -1019,11 +1058,13 @@
   /* ---- whole-river profile ---- */
   .river .rv-line { fill: none; stroke: var(--water-line); stroke-width: 1.4; }
   .river .grid-v { stroke: var(--rule); stroke-width: 1; stroke-dasharray: 2 4; }
-  .river .rv-dot { fill: var(--paper); stroke: var(--ink); stroke-width: 1.4; }
+  .river .rv-dot { fill: var(--paper); stroke: var(--ink); stroke-width: 1.4; stroke-linejoin: round; }
   .river .rv-dot.k-low { fill: var(--dry-line); stroke: var(--dry-line); }
   .river .rv-dot.k-high { fill: var(--water-line); stroke: var(--water-line); }
   .river a:hover .rv-dot { stroke: var(--ink); stroke-width: 2.4; }
-  .river { height: 11rem; }
+  /* `.river` is the mark vocabulary the chart and its swatches share; only the
+     chart itself takes the height */
+  .chart.river { height: 11rem; }
   .trouble li {
     grid-template-columns: 2.4ch 1.6ch minmax(11ch, 1fr) 7ch minmax(14ch, auto) max-content;
     grid-template-areas: "rank dir name now rate badge";
@@ -1044,13 +1085,14 @@
   .map .mdot { fill: var(--water-line); stroke: var(--paper); stroke-width: 0.8; }
   .map .mlbl {
     font-family: var(--font-data);
-    font-size: 7.2px;
+    /* user units, set per render so the viewBox scale cancels out — see mapLabelUnits() */
+    font-size: var(--mlbl, 7.2px);
     fill: var(--ink);
     dominant-baseline: auto;
     /* a paper halo so a name crossing the coastline stays readable */
     paint-order: stroke;
     stroke: var(--paper);
-    stroke-width: 2.6px;
+    stroke-width: calc(var(--mlbl, 7.2px) * 0.36);
     stroke-linejoin: round;
   }
   .map a:hover .mlbl { text-decoration: underline; }
@@ -2444,6 +2486,8 @@ const T = {
   risingNoDay: 'no baseline yet — the daily snapshot needs another day',
   risingNoWeek: 'no baseline a week back yet — the daily snapshot needs more days',
   etaNote: 'a straight-line guess at today’s rate — not a forecast',
+  risingSparkKey: 'the gauge’s own last days, one point per snapshot — drawn in the direction’s colour',
+  risingBarKey: 'the bar behind each cm/d value: its length is that rate against the fastest gauge on the board',
   totalTitle: 'ALL RIVERS SUMMED',
   totalSubSum: 'every reporting gauge’s daily mid level, added up',
   totalSubDiff: 'how much the summed stages moved from one day to the next',
@@ -3325,10 +3369,14 @@ function renderStation(vm) {
     vm.scene.receivers.map(r => `<span class="rcv ${r.ok ? 'on' : 'off'}">${esc(r.text)}</span>`).join('') +
     '</p>' +
     `<dl class="p-key"><dt>${esc(T.key)}</dt>` +
-    `<dd><span class="lg"><svg class="sw" viewBox="0 0 12 12" aria-hidden="true"><line class="surface" x1="0" y1="6" x2="12" y2="6"/></svg><span class="lgn">${esc(T.keyNow)}</span></span></dd>` +
-    `<dd><span class="lg"><svg class="sw" viewBox="0 0 12 12" aria-hidden="true"><line class="mark mean" x1="0" y1="6" x2="12" y2="6"/></svg><span class="lgn">${esc(T.keyMeans)}</span></span></dd>` +
-    `<dd><span class="lg"><svg class="sw" viewBox="0 0 12 12" aria-hidden="true"><line class="mark record" x1="0" y1="6" x2="12" y2="6"/></svg><span class="lgn">${esc(T.keyRecords)}</span></span></dd>` +
-    (vm.scene.band ? `<dd><span class="lg"><svg class="sw" viewBox="0 0 12 12" aria-hidden="true"><rect class="band" x="0" y="2" width="12" height="8"/></svg><span class="lgn">${esc(T.keyBand)}</span></span></dd>` : '') +
+    `<dd><span class="lg"><svg class="sw scene" viewBox="0 0 12 12" aria-hidden="true"><line class="surface" x1="0" y1="6" x2="12" y2="6"/></svg><span class="lgn">${esc(T.keyNow)}</span></span></dd>` +
+    `<dd><span class="lg"><svg class="sw scene" viewBox="0 0 12 12" aria-hidden="true"><line class="mark mean" x1="0" y1="6" x2="12" y2="6"/></svg><span class="lgn">${esc(T.keyMeans)}</span></span></dd>` +
+    `<dd><span class="lg"><svg class="sw scene" viewBox="0 0 12 12" aria-hidden="true"><line class="mark record" x1="0" y1="6" x2="12" y2="6"/></svg><span class="lgn">${esc(T.keyRecords)}</span></span></dd>` +
+    // the band is a pale fill bounded by its own hairlines in the drawing, so the
+    // swatch shows both marks — a 4 % fill alone is invisible at 12 px
+    (vm.scene.band ? `<dd><span class="lg"><svg class="sw scene" viewBox="0 0 12 12" aria-hidden="true"><rect class="band" x="0" y="2" width="12" height="8"/>` +
+      `<line class="band-edge" x1="0" y1="2" x2="12" y2="2"/><line class="band-edge" x1="0" y1="10" x2="12" y2="10"/>` +
+      `</svg><span class="lgn">${esc(T.keyBand)}</span></span></dd>` : '') +
     '</dl></section>';
   const u = vm.history.empty ? null : vm.history.insight;
   const readout = u
@@ -3403,6 +3451,20 @@ function riverViewModel(stations) {
 
 const RIVER_W = 340, RIVER_H = 150;
 
+// The profile's state mark. Normal is a ring, low a wedge pointing down and high
+// one pointing up: direction survives greyscale, so it never rides on hue alone,
+// and the legend swatch is the same call as the chart — the two cannot drift.
+function rvMark(kind, cx, cy) {
+  const x = +cx, y = +cy;
+  if (kind === 'low' || kind === 'high') {
+    const s = kind === 'high' ? -1 : 1;
+    const base = (y - s * 2.6).toFixed(1);
+    return `<path class="rv-dot k-${kind}" d="M${x.toFixed(1)} ${(y + s * 4.2).toFixed(1)}` +
+      `L${(x + 4.2).toFixed(1)} ${base}L${(x - 4.2).toFixed(1)} ${base}Z"/>`;
+  }
+  return `<circle class="rv-dot k-normal" cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="2.6"/>`;
+}
+
 function renderRiverChart(vm) {
   const padL = 30, padR = 10, padT = 10, padB = 26;
   const X = f => padL + f * (RIVER_W - padL - padR);
@@ -3419,7 +3481,7 @@ function renderRiverChart(vm) {
     const label = `${p.name}: ${p.elev.toFixed(2)} m NHN, km ${fmtKm(p.km)}` +
       (p.value != null ? `, ${Math.round(p.value)} cm` : '') + `, ${p.kind}`;
     parts.push(`<a${navAttrs(p.name)}><title>${esc(label)}</title>` +
-      `<circle class="rv-dot k-${p.kind}" cx="${X(p.x).toFixed(1)}" cy="${Y(p.y).toFixed(1)}" r="${p.kind === 'normal' ? 2.6 : 4}"/>` +
+      rvMark(p.kind, X(p.x), Y(p.y)) +
       `<rect class="hit" x="${(X(p.x) - 11).toFixed(1)}" y="${(Y(p.y) - 11).toFixed(1)}" width="22" height="22"/></a>`);
   }
   // Axis labels live in HTML, never in the SVG: a viewBox stretched from 390 px
@@ -3452,9 +3514,9 @@ function renderRiver(vm) {
       '</ol></section>'
     : `<section class="p-block"><h2 class="p-h2">${esc(T.trouble)}</h2><p class="p-dim">${esc(T.allNormal)}</p></section>`;
   const key = `<dl class="p-key"><dt>${esc(T.key)}</dt>` +
-    `<dd><span class="lg"><svg class="sw" viewBox="0 0 12 12" aria-hidden="true"><circle class="rv-dot k-normal" cx="6" cy="6" r="2.6"/></svg><span class="lgn">${esc(T.kindNormal)}</span></span></dd>` +
-    `<dd><span class="lg"><svg class="sw" viewBox="0 0 12 12" aria-hidden="true"><circle class="rv-dot k-low" cx="6" cy="6" r="4"/></svg><span class="lgn">${esc(T.kindLow)}</span></span></dd>` +
-    `<dd><span class="lg"><svg class="sw" viewBox="0 0 12 12" aria-hidden="true"><circle class="rv-dot k-high" cx="6" cy="6" r="4"/></svg><span class="lgn">${esc(T.kindHigh)}</span></span></dd>` +
+    [['normal', T.kindNormal], ['low', T.kindLow], ['high', T.kindHigh]].map(([k, label]) =>
+      `<dd><span class="lg"><svg class="sw river" viewBox="0 0 12 12" aria-hidden="true">${rvMark(k, 6, 6)}</svg>` +
+      `<span class="lgn">${esc(label)}</span></span></dd>`).join('') +
     `<dd>${esc(T.riverElevNote)}</dd></dl>`;
   // on a phone the trouble list is the answer to "is anything wrong here?",
   // so it comes first; the profile follows for anyone who wants the shape
@@ -3777,6 +3839,8 @@ function renderYearsHeat(vm) {
       navClose(`cmd:hm:${r.y}:${c.m}`) + '</td>').join('') +
     `<td class="ymean">${r.mean == null ? '' : r.mean}</td></tr>`).join('');
   return `<table class="heat"><caption class="vh">${esc(T.yearsHeatCap)}</caption>` +
+    // the two label columns are sized on <col>, not on their cells — see .heat
+    `<colgroup><col class="c-year"><col span="12"><col class="c-mean"></colgroup>` +
     `<thead><tr><th></th>${head}<th class="ymean">⌀</th></tr></thead><tbody>${rows}</tbody></table>`;
 }
 
@@ -3786,8 +3850,9 @@ function renderYearsLegend(vm) {
     return `<dl class="p-key"><dt>${esc(T.key)}</dt>` +
       `<dd><span class="lg">${[0, 1, 2, 3].map(b => sw('b' + b)).join('')}` +
       `<span class="lgn">${vm.lo} cm → ${vm.hi} cm — darker is higher water</span></span></dd>` +
-      `<dd><span class="lg">${sw('nd')}<span class="lgn">${esc(T.noData)}</span></span></dd>` +
-      `<dd>${esc(T.yearsHint)}</dd></dl>`;
+      // the hint is not a mark: it belongs to the readout panel's empty state,
+      // which already carries it — the key names marks only
+      `<dd><span class="lg">${sw('nd')}<span class="lgn">${esc(T.noData)}</span></span></dd></dl>`;
   }
   return `<dl class="p-key"><dt>${esc(T.key)}</dt>` +
     `<dd><span class="lg diverge">` +
@@ -4065,22 +4130,32 @@ function renderWave(vm) {
   const tabs = `<nav class="p-tabs" aria-label="view">` +
     navOpen('cmd:live') + 'profile' + navClose('cmd:live') +
     navOpen('cmd:wave', 'on') + 'wave' + navClose('cmd:wave') + '</nav>';
+  // a label sits over the CENTRE of its day column, so it lands on the cell it
+  // names rather than on the grid's outer edge
   const cols = vm.months.map(m =>
-    `<span${attr('style', `left:${(m.i / Math.max(1, vm.days - 1) * 100).toFixed(2)}%`)}>${esc(m.label)}</span>`).join('');
+    `<span${attr('style', `left:${((m.i + 0.5) / Math.max(1, vm.days) * 100).toFixed(2)}%`)}>${esc(m.label)}</span>`).join('');
   const rows = vm.rows.map(r =>
     `<tr><th scope="row" class="k-${r.kind}">` +
     `<a${navAttrs(r.name)}><span class="wg" aria-hidden="true">${esc(RIVER_GLYPH[r.kind])}</span>${esc(r.name)}</a></th>` +
     r.cells.map(c => `<td class="${c.bin < 0 ? 'nd' : 'b' + c.bin}"${attr('title', c.label)}><span class="vh">${esc(c.label)}</span></td>`).join('') +
     '</tr>').join('');
+  // every row is prefixed with its state glyph, so the key names all three
+  const glyphs = [['low', T.kindLow], ['normal', T.kindNormal], ['high', T.kindHigh]].map(([k, label]) =>
+    `<dd><span class="lg"><span class="k-${k}"><span class="wg" aria-hidden="true">${esc(RIVER_GLYPH[k])}</span></span>` +
+    `<span class="lgn">${esc(label)}</span></span></dd>`).join('');
   const key = `<dl class="p-key"><dt>${esc(T.key)}</dt>` +
     `<dd><span class="lg">${[0, 1, 2, 3].map(b => `<span class="hsw b${b}"></span>`).join('')}` +
     `<span class="lgn">${esc(T.waveRamp)}</span></span></dd>` +
     `<dd><span class="lg"><span class="hsw nd"></span><span class="lgn">${esc(T.noData)}</span></span></dd>` +
+    glyphs +
     `<dd>${esc(T.waveScaled)}</dd>` +
     `<dd>${esc(vm.from)} → ${esc(vm.to)}${vm.shown < vm.total ? ` · ${vm.shown} of ${vm.total} gauges sampled` : ''}</dd></dl>`;
   return `<section class="plate">${vh}${head}${tabs}` +
-    `<div class="wave-months">${cols}</div>` +
-    `<div class="wave-wrap"><table class="heat wave"><caption class="vh">${esc(T.waveTitle)}</caption><tbody>${rows}</tbody></table></div>` +
+    `<div class="wave-wrap"><div class="wave-months">${cols}</div>` +
+    `<table class="heat wave"><caption class="vh">${esc(T.waveTitle)}</caption>` +
+    // the name column's width lives on a <col>: a fixed-layout table this wide
+    // ignores a width set on the cell itself
+    `<colgroup><col class="c-name"></colgroup><tbody>${rows}</tbody></table></div>` +
     `<div class="pf-flow"><span>↓ ${esc(T.downstream)}</span><span>${esc(T.timeRight)} →</span></div>` +
     key + '</section>';
 }
@@ -4168,20 +4243,33 @@ const mapDot = n => MAP_DOT_STEPS.find(s => n >= s.min);
 // Label placement in SVG user units. Same idea as the character-grid placer —
 // try the nearest free spot, rows weighted heavier than columns — but on a
 // continuous plane with real bounding boxes, so nothing collides at any width.
-const MAP_LABEL_SIZE = 7.2;
-const MAP_CHAR_W = MAP_LABEL_SIZE * 0.58;
-const MAP_LINE_H = MAP_LABEL_SIZE * 1.25;
+// A map label is SVG <text>, so a size given in user units is multiplied by the
+// viewBox scale: a fixed 7.2 read 8 px on a phone and 27 px at 1280. Every other
+// chart fixed this by moving its labels into HTML; the map cannot (a name sits at
+// an arbitrary point on the drawing), so it divides the scale out instead — one
+// constant px size, expressed in the user units the plate is actually drawn at.
+// Placement and paint take the same number, so the collision boxes stay honest.
+const MAP_LABEL_PX = 11;
+const MAP_VB_W = MAP_W + 68;
+function mapLabelUnits() {
+  const scale = Math.min(4, Math.max(0.8, plateWidth() / MAP_VB_W));
+  return Math.round(MAP_LABEL_PX / scale * 100) / 100;
+}
+// a monospace advance is ~0.6em; 0.58 under-measured every name and let two
+// labels sit flush against each other at full width
+const MAP_CHAR_RATIO = 0.62;
 
-function mapLabelBox(x, y, text, anchorEnd) {
-  const w = text.length * MAP_CHAR_W;
+function mapLabelBox(x, y, text, anchorEnd, size = mapLabelUnits()) {
+  const w = text.length * size * MAP_CHAR_RATIO;
   return { x0: anchorEnd ? x - w : x, x1: anchorEnd ? x : x + w,
-    y0: y - MAP_LABEL_SIZE * 0.8, y1: y + MAP_LABEL_SIZE * 0.3 };
+    y0: y - size * 0.8, y1: y + size * 0.3 };
 }
 const boxHit = (a, b) => !(a.x1 < b.x0 - 1 || a.x0 > b.x1 + 1 || a.y1 < b.y0 - 1 || a.y0 > b.y1 + 1);
 
 // pure: rivers (sorted by gauge count) -> placed labels + the spilled tail
-function placeRiverLabels(rivers, cap = mapLabelCap()) {
+function placeRiverLabels(rivers, cap = mapLabelCap(), size = mapLabelUnits()) {
   const placed = [], spilled = [], boxes = [];
+  const lineH = size * 1.25;
   for (const rv of rivers) {
     if (rv.la == null || rv.lo == null || placed.length >= cap) { spilled.push(rv); continue; }
     const x = mapX(rv.lo), y = mapY(rv.la);
@@ -4191,11 +4279,11 @@ function placeRiverLabels(rivers, cap = mapLabelCap()) {
     const dotBox = { x0: x - dot.r, x1: x + dot.r, y0: y - dot.r, y1: y + dot.r };
     if (boxes.some(b => boxHit(dotBox, b))) { spilled.push(rv); continue; }
     let spot = null;
-    for (const dy of [0, -MAP_LINE_H, MAP_LINE_H, -2 * MAP_LINE_H, 2 * MAP_LINE_H]) {
+    for (const dy of [0, -lineH, lineH, -2 * lineH, 2 * lineH]) {
       for (const gap of [dot.r + 2.5, dot.r + 7, dot.r + 13]) {
         for (const end of [false, true]) {
-          const lx = end ? x - gap : x + gap, ly = y + dy + MAP_LABEL_SIZE * 0.3;
-          const box = mapLabelBox(lx, ly, text, end);
+          const lx = end ? x - gap : x + gap, ly = y + dy + size * 0.3;
+          const box = mapLabelBox(lx, ly, text, end, size);
           // the margins are fair game, the plate is not: a label must stay inside
           if (box.x0 < -34 || box.x1 > MAP_W + 34) continue;
           if (boxes.some(b => boxHit(box, b))) continue;
@@ -4216,7 +4304,8 @@ function placeRiverLabels(rivers, cap = mapLabelCap()) {
 
 function riversViewModel() {
   const rivers = riversOverview();
-  const { placed, spilled } = placeRiverLabels(rivers);
+  const labelSize = mapLabelUnits();
+  const { placed, spilled } = placeRiverLabels(rivers, mapLabelCap(), labelSize);
   const gauges = rivers.reduce((a, r) => a + r.n, 0);
   return {
     kind: 'rivers',
@@ -4224,6 +4313,7 @@ function riversViewModel() {
     waters: rivers.length,
     gauges,
     placed,
+    labelSize,
     spilled: [...spilled].sort((a, b) => a.name.localeCompare(b.name)),
     unplaced: spilled.filter(r => r.la == null).length,
     all: [...rivers].sort((a, b) => a.name.localeCompare(b.name)),
@@ -4240,9 +4330,12 @@ function renderRiversMap(vm) {
     `<text x="${p.lx.toFixed(1)}" y="${p.ly.toFixed(1)}" class="mlbl"${attr('text-anchor', p.anchor)}>${esc(p.text)}</text>` +
     // an invisible target keeps the dot tappable at phone scale
     `<rect x="${(p.x - 11).toFixed(1)}" y="${(p.y - 11).toFixed(1)}" width="22" height="22" class="hit"/></a>`).join('');
-  return svgWrap(`-34 -6 ${MAP_W + 68} ${MAP_H + 12}`,
+  return svgWrap(`-34 -6 ${MAP_VB_W} ${MAP_H + 12}`,
     `<polygon points="${outline}" class="mout"/>${marks}`,
-    ' class="chart map" role="group"' + attr('aria-label', vm.summary));
+    ' class="chart map" role="group"' +
+    // the label size travels with the drawing: user units that cancel this
+    // plate's viewBox scale, so every name paints at MAP_LABEL_PX
+    attr('style', `--mlbl:${vm.labelSize || MAP_LABEL_PX}px`) + attr('aria-label', vm.summary));
 }
 
 function renderRiversList(vm) {
@@ -4629,6 +4722,14 @@ function renderRising(vm) {
     `<dd><b>Δ/day</b> — change since the daily snapshot, normalised to the real elapsed time</dd>` +
     `<dd><b>▲</b> rising ≥ ${RISING_FLAT} cm/d · <b>▬</b> steady · <b>▼</b> falling ≤ −${RISING_FLAT} cm/d</dd>` +
     `<dd><b>→MHW ~4d</b> — ${esc(T.etaNote)}</dd>` +
+    // the two marks the board draws but never named: the row sparkline and the
+    // pastel bar behind each rate
+    `<dd><span class="lg">` +
+      `<svg class="b-spark lg-spark" viewBox="0 0 60 14" aria-hidden="true"><path d="M0 12L15 8L30 9L45 4L60 2"/></svg>` +
+      `<span class="down"><svg class="b-spark lg-spark" viewBox="0 0 60 14" aria-hidden="true"><path d="M0 2L15 5L30 4L45 9L60 12"/></svg></span>` +
+      `<span class="lgn">${esc(T.risingSparkKey)}</span></span></dd>` +
+    `<dd><span class="lg"><span class="lg-bar up"></span><span class="lg-bar down"></span>` +
+      `<span class="lgn">${esc(T.risingBarKey)}</span></span></dd>` +
     `<dd>${c.tidal} tidal gauges are excluded: a day apart the tide has moved ~50 minutes, so their day diff would measure the tide, not the river</dd></dl>`;
   return `<section class="plate">${vh}${head}${counts}<p class="p-sub2">${esc(base)}</p>` +
     board('RISING', vm.risers, vm.moreRising) +

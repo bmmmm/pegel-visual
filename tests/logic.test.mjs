@@ -1293,6 +1293,18 @@ test('renderYears: heatmap, monthly range and the year overlay all render', () =
 });
 
 
+test('renderYears: the "pick a month cell" hint is printed once, not twice', () => {
+  const app = loadApp({ now: JULY });
+  seedArchive(app);
+  const html = app.run('renderYears(yearsViewModel())');
+  const hint = app.run('T.yearsHint');
+  const hits = html.split(hint).length - 1;
+  // it belongs to the readout panel's empty state; the key names marks only
+  assert.equal(hits, 1, `"${hint}" appears ${hits} times`);
+  assert.ok(html.includes(`class="p-dim p-readout">${hint}`), 'and the survivor is the readout');
+});
+
+
 test('renderYears: anomaly mode marks direction with a hatch, not just a hue', () => {
   const app = loadApp({ now: JULY });
   // 2026: January +150 (wet), May/June -150 (dry) against the 2024/25 baseline
@@ -1376,6 +1388,30 @@ test('waveViewModel: rows are scaled per gauge, labelled and disclosed', () => {
   assert.ok(html.includes('<table class="heat wave">'), 'a real table');
   assert.ok(html.includes('no reading') || vm.rows.every(r => r.cells.every(c => c.v != null)),
     'gaps are named rather than blank');
+});
+
+
+test('renderWave: the key names the row glyph it prefixes every station with', () => {
+  const app = loadApp({ now: JULY });
+  const { html, glyphs, labels } = app.run(`(() => {
+    const nDays = WAVE_FETCH_DAYS;
+    const day0 = epochDay(Date.now()) - (nDays - 1);
+    const mk = (name, kind) => ({ name, km: 0, kind,
+      vals: Array.from({ length: nDays }, (_, i) => 100 + (i % 20)) });
+    const w = { river: 'TESTFLUSS', day0, nDays, shown: 3, total: 3, rows: [
+      mk('OBEN', 'normal'), mk('MITTE', 'high'), mk('UNTEN', 'low') ]};
+    return { html: renderWave(waveViewModel(w)),
+      glyphs: RIVER_GLYPH, labels: [T.kindLow, T.kindNormal, T.kindHigh] };
+  })()`);
+  const key = html.slice(html.indexOf('<dl class="p-key">'));
+  // a legend for every mark it uses: all three states, each named
+  for (const kind of ['low', 'normal', 'high']) {
+    assert.ok(key.includes(`class="k-${kind}"`), `the key carries the ${kind} glyph`);
+  }
+  for (const g of [glyphs.low, glyphs.normal, glyphs.high]) {
+    assert.ok(key.includes(`>${g}</span>`), `the key draws ${g}`);
+  }
+  for (const label of labels) assert.ok(key.includes(label), `the key names "${label}"`);
 });
 
 
@@ -2378,6 +2414,24 @@ test('renderRising: every row is a link carrying its rate, no COLS in sight', ()
   assert.ok(html.includes('150 cm'), 'the absolute level rides along — new next to the ASCII board');
   assert.ok(html.includes('class="p-key"'), 'the legend is in the plate, not in a modal');
   assert.ok(html.includes('tidal gauges are excluded'), 'the caveat survives the redesign');
+});
+
+test('renderRising: the key names the sparkline and the rate bar it draws', () => {
+  const app = loadApp({ now: NOON });
+  const iso = new Date(NOON - 864e5).toISOString();
+  const shard = shardWith(2026, 1, 31, 13, iso, { a: 100, b: 100 });
+  const raw = [bulk('a', 'UP', 'RHEIN', 150, SPAN), bulk('b', 'DOWN', 'MAIN', 60, SPAN)];
+  const { html } = risingPlate(app, raw, shard, NOON);
+  const board = html.slice(0, html.indexOf('<dl class="p-key">'));
+  const key = html.slice(html.indexOf('<dl class="p-key">'));
+  // both marks are drawn in the board, so both have to be named in the key
+  assert.ok(board.includes('class="b-spark"'), 'the board draws sparklines');
+  assert.ok(board.includes('--pct:'), 'and a magnitude bar behind each rate');
+  assert.ok(key.includes('class="b-spark lg-spark"'), 'the key shows the same spark mark');
+  assert.ok(key.includes('class="lg-bar up"') && key.includes('class="lg-bar down"'),
+    'and the bar in both directions');
+  assert.ok(key.includes(app.run('T.risingSparkKey')), 'the spark is explained');
+  assert.ok(key.includes(app.run('T.risingBarKey')), 'the bar is explained');
 });
 
 test('renderRising: a hostile gauge name never reaches markup unescaped', () => {
