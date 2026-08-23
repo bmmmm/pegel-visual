@@ -2434,6 +2434,22 @@ test('renderRising: the key names the sparkline and the rate bar it draws', () =
   assert.ok(key.includes(app.run('T.risingBarKey')), 'the bar is explained');
 });
 
+// a quiet river is a real state, not a half-loaded view: without this the counts
+// and the key sit either side of a gap that names nothing
+test('renderRising: a baseline with nothing moving still says so', () => {
+  const app = loadApp({ now: NOON });
+  const iso = new Date(NOON - 864e5).toISOString();
+  const values = Object.fromEntries(Array.from({ length: 6 }, (_, i) => [`s${i}`, 100]));
+  const shard = shardWith(2026, 1, 31, 13, iso, values);
+  const raw = Array.from({ length: 6 }, (_, i) => bulk(`s${i}`, `ST${i}`, 'RIVER', 100, SPAN));
+  const { vm, html } = risingPlate(app, raw, shard, NOON);
+  assert.equal(vm.risers.length, 0, 'nobody rose');
+  assert.equal(vm.fallers.length, 0, 'nobody fell');
+  assert.equal(vm.counts.steady, 6, 'and the baseline was there all along');
+  assert.ok(!html.includes('<ol class="board">'), 'no empty board list is drawn');
+  assert.match(html, /Nothing moved/, 'the quiet is named instead of left blank');
+});
+
 test('renderRising: a hostile gauge name never reaches markup unescaped', () => {
   const app = loadApp({ now: NOON });
   const iso = new Date(NOON - 864e5).toISOString();

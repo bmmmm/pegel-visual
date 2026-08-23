@@ -2483,6 +2483,7 @@ const T = {
   noMatch: 'no gauge or river matches',
   risingTitle: "WHO'S RISING",
   risingSub: 'every gauge ranked by how fast it moved, in centimetres per day',
+  risingStill: 'Nothing moved: since the snapshot, every gauge stayed inside the flat band.',
   risingNoDay: 'no baseline yet — the daily snapshot needs another day',
   risingNoWeek: 'no baseline a week back yet — the daily snapshot needs more days',
   etaNote: 'a straight-line guess at today’s rate — not a forecast',
@@ -4731,9 +4732,11 @@ function renderRising(vm) {
     `<dd><span class="lg"><span class="lg-bar up"></span><span class="lg-bar down"></span>` +
       `<span class="lgn">${esc(T.risingBarKey)}</span></span></dd>` +
     `<dd>${c.tidal} tidal gauges are excluded: a day apart the tide has moved ~50 minutes, so their day diff would measure the tide, not the river</dd></dl>`;
+  // a baseline with nothing above the flat band still owes the reader a sentence:
+  // an unnamed gap between the counts and the key reads as a half-loaded view
+  const boards = board('RISING', vm.risers, vm.moreRising) + board('FALLING', vm.fallers, vm.moreFalling);
   return `<section class="plate">${vh}${head}${counts}<p class="p-sub2">${esc(base)}</p>` +
-    board('RISING', vm.risers, vm.moreRising) +
-    board('FALLING', vm.fallers, vm.moreFalling) +
+    (boards || `<p class="p-dim">${esc(T.risingStill)}</p>`) +
     key + '</section>';
 }
 
