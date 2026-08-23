@@ -718,11 +718,19 @@
     grid-template-columns: 1fr 9.5rem;
     border: 1px solid var(--rule);
   }
-  .scene-plot { aspect-ratio: 320 / 190; min-width: 0; }
-  .scene { display: block; width: 100%; height: 100%; }
+  @container plate (max-width: 30rem) {
+    /* a narrow plate cannot afford a 9.5rem gutter AND a readable drawing */
+    .scene-wrap { grid-template-columns: 1fr 7.5rem; }
+    .gutter li { font-size: 0.62rem; }
+  }
+  /* Height only, never an aspect-ratio: combined with a min-height, aspect-ratio
+     derives a WIDTH from it and blows the drawing past its grid track. The SVG
+     stretches to fill, so the box just has to be tall enough for the gutter
+     labels and short enough not to eat a desktop screen. */
+  .scene-plot { height: clamp(15rem, 46cqi, 26rem); min-width: 0; }
+  .scene { display: block; width: 100%; height: 100%; max-height: 26rem; }
   .gutter { position: relative; border-left: 1px solid var(--rule); background: var(--paper); }
-  .gut-off, .gut-lines { list-style: none; margin: 0; padding: 0; }
-  .gut-lines { position: absolute; inset: 0; }
+  .gut-lines { list-style: none; margin: 0; padding: 0; position: absolute; inset: 0; }
   .gutter li {
     font-family: var(--font-data);
     font-size: 0.68rem;
@@ -732,12 +740,11 @@
     color: var(--mid);
   }
   .gutter .gut-lines li { position: absolute; transform: translateY(-50%); }
+  .gutter .off b { color: var(--mid); }
   .gutter b { font-weight: 700; color: var(--ink); }
   .gutter .cm { font-variant-numeric: tabular-nums; }
   .gutter .yr { color: var(--dim); }
   .gutter .now b, .gutter .now .cm { color: var(--water-line); }
-  .gutter .off { padding-block: 0.25em; }
-  .gutter .off.bottom { position: absolute; bottom: 0; }
   .scene-cap .rcv { margin-left: 1.2ch; }
   .scene-cap .rcv::before { content: '· '; color: var(--dim); }
   .scene-cap .rcv.off { color: var(--dry-line); }
@@ -750,7 +757,8 @@
   }
   /* scene marks */
   .scene .water { fill: var(--water); }
-  .scene .band { fill: color-mix(in oklab, var(--water-line) 12%, transparent); }
+  .scene .band { fill: color-mix(in oklab, var(--ink) 4%, transparent); }
+  .scene .band-edge { stroke: var(--ink); stroke-width: 0.8; stroke-dasharray: 2 3; opacity: 0.3; }
   .scene .dry-bank { fill: color-mix(in oklab, var(--dry) 70%, transparent); }
   .scene .bed { fill: var(--bed); stroke: var(--bed-line); stroke-width: 0.8; }
   .scene .surface { stroke: var(--water-line); stroke-width: 2.2; }
@@ -1014,6 +1022,11 @@
     font-size: 7.2px;
     fill: var(--ink);
     dominant-baseline: auto;
+    /* a paper halo so a name crossing the coastline stays readable */
+    paint-order: stroke;
+    stroke: var(--paper);
+    stroke-width: 2.6px;
+    stroke-linejoin: round;
   }
   .map a:hover .mlbl { text-decoration: underline; }
   .map a:hover .mdot { fill: var(--ink); }
@@ -2780,7 +2793,7 @@ function sceneModel() {
     if (nnw.value < 0 || fracOf(nnw.value) >= BED - 0.005) below.push({ key: 'NNW', cm: nnw.value, year: nnw.year, kind: 'record' });
     else add('NNW', nnw.value, nnw.year, 'record');
   }
-  const MIN_GAP = 0.055; // keeps two labels from sitting on top of each other
+  const MIN_GAP = 0.075; // keeps two labels from sitting on top of each other
   let prev = surface;
   for (const m of marks.filter(m => m.cm >= value).sort((a, b) => a.cm - b.cm)) {
     m.frac = Math.min(m.frac, prev - MIN_GAP);
@@ -2794,6 +2807,20 @@ function sceneModel() {
   // anything pushed out of the box is reported as a margin arrow instead
   const inBox = marks.filter(m => m.frac > 0.01 && m.frac < BED - 0.01);
   for (const m of marks) if (!inBox.includes(m)) (m.cm >= value ? above : below).push(m);
+  // The margin arrows share the label gutter, so they share its coordinate
+  // system too: they get their own fractions at the top and bottom, and the
+  // in-box marks are pushed clear of them. Otherwise "HHW 1013" lands on top
+  // of "MHW 680" the moment the scene is short.
+  inBox.sort((a, b) => a.frac - b.frac);
+  above.forEach((m, i) => { m.frac = i * MIN_GAP; });
+  below.forEach((m, i) => { m.frac = BED - (below.length - 1 - i) * MIN_GAP; });
+  let floor = above.length * MIN_GAP;
+  for (const m of inBox) { m.frac = Math.max(m.frac, floor); floor = m.frac + MIN_GAP; }
+  let ceil = BED - below.length * MIN_GAP;
+  for (let i = inBox.length - 1; i >= 0; i--) {
+    inBox[i].frac = Math.min(inBox[i].frac, ceil);
+    ceil = inBox[i].frac - MIN_GAP;
+  }
 
   // the normal range: the single most useful new mark — is the river behaving?
   const band = mnw != null && mhw != null && mhw > mnw
@@ -2802,7 +2829,7 @@ function sceneModel() {
 
   return {
     value, topCm, bed: BED, surface, band,
-    marks: inBox.sort((a, b) => a.frac - b.frac),
+    marks: inBox,
     above, below,
     flags,
     moon: flags.night && !flags.overcastNight ? moonPhase() : null,
@@ -2944,8 +2971,9 @@ function renderScene(vm) {
     const y = bedY + 4 + Math.sin(i * 0.9 + seed) * 2.6 + Math.sin(i * 0.35 + seed * 2) * 1.9;
     return `${x.toFixed(1)},${y.toFixed(1)}`;
   }).join(' ');
+  // water first, bed on top of it: the bed is the floor, not a backdrop
+  p.push(`<rect class="water" x="0" y="${surfY.toFixed(1)}" width="${SCENE_W}" height="${Math.max(0, SCENE_H - surfY).toFixed(1)}"/>`);
   p.push(`<polygon class="bed" points="0,${SCENE_H} ${bedPts} ${SCENE_W},${SCENE_H}"/>`);
-  p.push(`<rect class="water" x="0" y="${surfY.toFixed(1)}" width="${SCENE_W}" height="${(SCENE_H - surfY).toFixed(1)}"/>`);
   if (f.drought) {
     // the dry bank the water has left behind
     p.push(`<rect class="dry-bank" x="0" y="${Y(s.band ? s.band.bottom : s.surface - 0.12)}" width="${SCENE_W}" height="${Math.max(0, surfY - +Y(s.band ? s.band.bottom : s.surface - 0.12)).toFixed(1)}"/>`);
@@ -2955,6 +2983,9 @@ function renderScene(vm) {
   if (s.band) {
     const t = +Y(s.band.top), b = +Y(s.band.bottom);
     p.push(`<rect class="band" x="0" y="${t.toFixed(1)}" width="${SCENE_W}" height="${Math.max(0.5, b - t).toFixed(1)}"/>`);
+    // bounded, or a tall band just tints the whole sky and reads as more water
+    p.push(`<line class="band-edge" x1="0" y1="${t.toFixed(1)}" x2="${SCENE_W}" y2="${t.toFixed(1)}"/>`);
+    p.push(`<line class="band-edge" x1="0" y1="${b.toFixed(1)}" x2="${SCENE_W}" y2="${b.toFixed(1)}"/>`);
   }
 
   // the surface: one strong line, tiled twice so CSS can drift it seamlessly
@@ -2994,8 +3025,11 @@ function renderScene(vm) {
     }
   } else if (surfY > 26) {
     const cls = 'boat' + (f.icy ? ' stuck' : '') + (f.drought ? ' aground' : '');
+    // aground in a drought it sits on the bed, otherwise it rides the surface
+    const bx = f.icy ? SCENE_W * 0.6 : SCENE_W * 0.34;
+    const by = f.drought ? bedY - 1 : surfY;
     p.push(`<g class="${cls}"${attr('style', `--bob:${f.flood || f.windy ? 1.6 : 3.4}s`)}>` +
-      `<g transform="translate(0 ${(f.drought ? bedY - 2 : surfY).toFixed(1)})">` +
+      `<g transform="translate(${bx.toFixed(1)} ${by.toFixed(1)})">` +
       '<path d="M-11 0 l3 5 h16 l3 -5 Z"/><path class="mast" d="M0 0 V-11 l7 4 l-7 3"/></g></g>');
   }
   for (const a of s.craft.aircraft) {
@@ -3028,16 +3062,16 @@ function renderMoon(cx, cy, r, phase) {
 function renderSceneGutter(vm) {
   const s = vm.scene;
   const row = (frac, key, cm, year, cls) =>
-    `<li class="${cls}"${attr('style', `top:${(frac * 100).toFixed(2)}%`)}>` +
+    `<li class="${cls}"${attr('style', `top:${(Math.max(0, Math.min(1, frac)) * 100).toFixed(2)}%`)}>` +
     `<b>${esc(key)}</b> <span class="cm">${Math.round(cm)}</span>` +
     (year ? ` <span class="yr">${year}</span>` : '') + '</li>';
-  const items = [];
-  for (const m of s.above) items.push(`<li class="off top"><b>↑ ${esc(m.key)}</b> <span class="cm">${Math.round(m.cm)}</span>${m.year ? ` <span class="yr">${m.year}</span>` : ''}</li>`);
-  const inner = s.marks.map(m => row(m.frac, m.key, m.cm, m.year, 'mk ' + m.kind));
-  inner.push(row(s.surface, T.now, s.value, null, 'now'));
-  items.push(`<ul class="gut-lines">${inner.join('')}</ul>`);
-  for (const m of s.below) items.push(`<li class="off bottom"><b>↓ ${esc(m.key)}</b> <span class="cm">${Math.round(m.cm)}</span>${m.year ? ` <span class="yr">${m.year}</span>` : ''}</li>`);
-  return `<div class="gutter"><ul class="gut-off">${items.join('')}</ul></div>`;
+  const items = [
+    ...s.above.map(m => row(m.frac, '↑ ' + m.key, m.cm, m.year, 'off')),
+    ...s.marks.map(m => row(m.frac, m.key, m.cm, m.year, 'mk ' + m.kind)),
+    row(s.surface, T.now, s.value, null, 'now'),
+    ...s.below.map(m => row(m.frac, '↓ ' + m.key, m.cm, m.year, 'off')),
+  ];
+  return `<div class="gutter"><ul class="gut-lines">${items.join('')}</ul></div>`;
 }
 
 // ---------- history chart ----------
@@ -3221,7 +3255,12 @@ function stationViewModel() {
 // old grid printed stays underneath it, for the people who read that fluently.
 function insightSentence(u, value) {
   if (!u) return null;
-  const parts = [`<b>${value} cm</b> — higher than <b>${u.pct} %</b> of all days recorded here since <b>${u.fromYear ?? u.years}</b>.`];
+  // say it from whichever end is the short one: "higher than 1 %" is true of a
+  // record low but reads like good news, where "lower than 99 %" lands
+  const since = u.fromYear ?? u.years;
+  const parts = [u.pct >= 50
+    ? `<b>${value} cm</b> — higher than <b>${u.pct} %</b> of all days recorded here since <b>${since}</b>.`
+    : `<b>${value} cm</b> — lower than <b>${100 - u.pct} %</b> of all days recorded here since <b>${since}</b>.`];
   if (u.climMean != null) {
     const d = Math.round(value - u.climMean);
     const dir = d >= 0 ? 'above' : 'below';
@@ -5838,7 +5877,7 @@ async function loadStationList() {
   let cached = null;
   try { cached = JSON.parse(localStorage.getItem(STATIONS_CACHE)); } catch {}
   const usable = cached && cached.v === STATIONS_CACHE_V && Array.isArray(cached.list);
-  if (usable) fillDatalist(cached.list);
+  if (usable) { fillDatalist(cached.list); riversCache = null; scheduleRender(); }
   if (usable && Date.now() - cached.t < STATIONS_TTL) return; // fresh
   try {
     const all = await getJson(`${API}/stations.json`);
@@ -5851,6 +5890,8 @@ async function loadStationList() {
     const list = [...byName.values()].sort((a, b) => a.n.localeCompare(b.n));
     localStorage.setItem(STATIONS_CACHE, JSON.stringify({ v: STATIONS_CACHE_V, t: Date.now(), list }));
     fillDatalist(list);
+    riversCache = null; // the aggregate is keyed on the list size
+    scheduleRender();   // the map and the finder are built from this list
     // a first-ever visitor opening an ASCII-spelled link (?station=koeln) had no
     // cached list to resolve against and 404ed; now that the names are known,
     // self-correct the error screen to the canonical station. 'replace' like the
@@ -5874,6 +5915,7 @@ async function loadWaterList() {
     const list = [...new Set(waters.map(w => (w.shortname || '').toUpperCase()).filter(Boolean))].sort();
     localStorage.setItem(WATERS_CACHE, JSON.stringify({ t: Date.now(), list }));
     fillWaters(list);
+    scheduleRender();
     // mirror the station self-correction: a first-ever visitor opening an
     // ASCII-spelled ?river= link had no cached water list to fold against
     if (state.error && mode === 'river') {

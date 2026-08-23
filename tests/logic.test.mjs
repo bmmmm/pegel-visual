@@ -1603,6 +1603,15 @@ test('the insight sentence: spelled out for everyone, terse line kept for the fl
   // this is the line the feedback was about: "91st pct of 26y" told nobody anything
   assert.match(say, /342 cm/, 'names the reading');
   assert.match(say, /higher than/, 'in words, not jargon');
+  // said from whichever end is the short one: "higher than 1 %" is true of a
+  // record low but reads like good news
+  const recordLow = app.run(`insightSentence({ pct: 1, fromYear: 1999, years: 27, month: 7, climMean: 250, z: -1.9 }, 96)`);
+  assert.match(recordLow, /lower than <b>99 %<\/b>/, 'a record low is said as a record low');
+  assert.match(recordLow, /clearly dry/, 'and the season comparison agrees');
+  // and from whichever end is the short one — "higher than 1 %" reads like good
+  // news when it is actually a record low
+  const low = app.run(`insightSentence({ pct: 1, fromYear: 1999, years: 27, month: 7, climMean: 250, z: -1.9 }, 96)`);
+  assert.match(low, /lower than <b>99 %<\/b>/, 'a record low is said as a record low');
   assert.match(say, /of all days recorded here since/, 'and says what it is compared against');
   assert.match(say, /since <b>\d{4}<\/b>/, 'naming the first archived year, not "26y"');
   assert.match(say, /July/, 'the month is spelled out, not JUL');
