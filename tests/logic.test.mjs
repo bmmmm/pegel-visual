@@ -2593,10 +2593,8 @@ const seedTotal = (app, zoom = 'null, null, null') => app.run(`(() => {
   state.total = { overview: ${JSON.stringify(totalOverviewFix)}, top: totalTopRivers(${JSON.stringify(totalOverviewFix)}), error: null };
   totalShardCache.set(2025, ${JSON.stringify(totalShardFix)});
   [totalYear, totalMonth, totalDay] = [${zoom}];
-  const view = totalView();
-  const g = makeGrid(totalGridRows(view));
-  drawTotal(g, view);
-  return { html: gridToHtml(g), rows: g.ch.map(r => r.join('')), level: view.level, cols: COLS };
+  const vm = totalPlateModel();
+  return { vm, html: renderTotal(vm), level: vm.level };
 })()`);
 
 test('totalTopRivers: fixed all-time ranking, exactly K bands', () => {
@@ -2723,89 +2721,91 @@ const seedTotalDiff = (app, zoom = 'null, null, null', overview = totalOverviewF
   state.total = { overview: ${JSON.stringify(overview)}, top: totalTopRivers(${JSON.stringify(overview)}), error: null };
   totalShardCache.set(2025, ${JSON.stringify(shard)});
   [totalYear, totalMonth, totalDay] = [${zoom}];
-  const view = totalView();
-  const g = makeGrid(totalGridRows(view));
-  drawTotal(g, view);
-  return { html: gridToHtml(g), rows: g.ch.map(r => r.join('')), level: view.level, cols: COLS };
+  const vm = totalPlateModel();
+  return { vm, html: renderTotal(vm), level: vm.level };
 })()`);
 
-test('drawTotal diff: diverging bars carry zoom targets, day list links rivers', () => {
-  for (const width of [1200, 390]) {
-    const all = seedTotalDiff(loadApp({ search: '?total&diff', width }));
-    assert.equal(all.level, 'all');
-    assert.ok(all.html.includes('data-st="cmd:ty:2024"'), `${width}px: year bars clickable`);
-    assert.ok(all.rows.join('').includes('Σ net'), `${width}px: net footer present`);
+test('renderTotal diff: diverging bars around a labelled zero, rivers linked', () => {
+  const all = seedTotalDiff(loadApp({ search: '?total&diff' }));
+  assert.equal(all.level, 'all');
+  assert.ok(all.html.includes('href="?total&amp;diff&amp;y=2024"'), 'a year bar is a real link that keeps Δ');
+  // 2024 nets +132, 2025 +120 — both positive, so both sit above the zero line
+  assert.ok(all.vm.bars.every(b => b.frac > 0), 'the fixture rises in both years');
+  assert.ok(all.html.includes('class="db rose"'), 'rising bars are marked as risen');
+  assert.ok(all.html.includes('>0</text>'), 'the zero line is labelled');
 
-    const month = seedTotalDiff(loadApp({ search: '?total&diff', width }), '2025, 4, null');
-    assert.equal(month.level, 'month');
-    assert.ok(month.html.includes('data-st="cmd:td:2025:4:12"'), `${width}px: day bars clickable`);
-    assert.ok(month.rows.join('').includes('last 7 days'), `${width}px: trailing week footer`);
+  const month = seedTotalDiff(loadApp({ search: '?total&diff' }), '2025, 4, null');
+  assert.equal(month.level, 'month');
+  assert.ok(month.html.includes('href="?total&amp;diff&amp;y=2025&amp;d=2025-05-12"'), 'a day bar deep-links');
+  assert.ok(month.html.includes('class="db fell"'), 'falling days are hatched, not only coloured');
 
-    const day = seedTotalDiff(loadApp({ search: '?total&diff', width }), '2025, 4, 12');
-    assert.equal(day.level, 'day');
-    assert.ok(day.html.includes('data-st="river:R1"'), `${width}px: ranked rows link to rivers`);
-    assert.ok(day.rows.join('').includes('paired gauges'), `${width}px: paired-gauge count shown`);
-    for (const r of day.rows) {
-      assert.ok(r.replace(/\s+$/, '').length <= day.cols, `${width}px: row wider than COLS`);
-    }
-  }
+  const day = seedTotalDiff(loadApp({ search: '?total&diff' }), '2025, 4, 12');
+  assert.equal(day.level, 'day');
+  assert.ok(day.html.includes('href="?river=R1"'), 'ranked rows link to their river');
+  assert.ok(day.html.includes('paired'), 'the paired-gauge caveat is on screen');
+  assert.ok(day.html.includes('never counts'), 'and the reason it matters');
 });
 
-test('drawTotal diff: data built before the diff series degrades to a note', () => {
+test('renderTotal diff: data built before the diff series degrades to a note', () => {
   const { diff, ...ovNoDiff } = totalOverviewFix;
   const preDiff = seedTotalDiff(loadApp({ search: '?total&diff' }), 'null, null, null', ovNoDiff);
   assert.equal(preDiff.level, 'missing');
-  assert.ok(preDiff.rows.join('').includes('not built yet'));
+  assert.ok(preDiff.html.includes('not built yet'));
   const shardNoDv = JSON.parse(JSON.stringify(totalShardFix));
   for (const rv of Object.values(shardNoDv.rivers)) { delete rv.dv; delete rv.dn; }
   const oldShard = seedTotalDiff(loadApp({ search: '?total&diff' }), '2025, 4, null', totalOverviewFix, shardNoDv);
   assert.equal(oldShard.level, 'missing');
 });
 
-test('drawTotal: every level carries its zoom targets, at both widths', () => {
-  for (const width of [1200, 390]) {
-    const all = seedTotal(loadApp({ search: '?total', width }));
-    assert.equal(all.level, 'all');
-    assert.ok(all.html.includes('data-st="cmd:ty:2024"'), `${width}px: year bars clickable`);
-    assert.ok(all.html.includes('data-st="river:R1"'), `${width}px: legend river linked`);
-    assert.ok(all.html.includes('OTHER'), `${width}px: OTHER in the legend`);
-    assert.ok(!all.html.includes('data-st="river:OTHER"'), `${width}px: OTHER is not a river`);
+test('totalPlateModel: every level carries its zoom links and its crumb trail', () => {
+  const all = seedTotal(loadApp({ search: '?total' }));
+  assert.equal(all.level, 'all');
+  assert.ok(all.html.includes('href="?total&amp;y=2024"'), 'year bars are links');
+  assert.deepEqual(all.vm.crumbs.map(c => c.label), ['ALL']);
+  assert.equal(all.vm.crumbs[0].current, true, 'the top level is where we are');
 
-    const year = seedTotal(loadApp({ search: '?total', width }), '2025, null, null');
-    assert.equal(year.level, 'year');
-    assert.ok(year.html.includes('data-st="cmd:tm:2025:4"'), `${width}px: month bars clickable`);
-    assert.ok(year.html.includes('data-st="cmd:tback"'), `${width}px: back tag present`);
+  const year = seedTotal(loadApp({ search: '?total' }), '2025, null, null');
+  assert.equal(year.level, 'year');
+  assert.ok(year.html.includes('href="?total&amp;y=2025&amp;m=5"'), 'month bars are links');
+  assert.deepEqual(year.vm.crumbs.map(c => c.label), ['ALL', '2025']);
 
-    const month = seedTotal(loadApp({ search: '?total', width }), '2025, 4, null');
-    assert.equal(month.level, 'month');
-    assert.ok(month.html.includes('data-st="cmd:td:2025:4:12"'), `${width}px: day bars clickable`);
+  const month = seedTotal(loadApp({ search: '?total' }), '2025, 4, null');
+  assert.equal(month.level, 'month');
+  assert.ok(month.html.includes('href="?total&amp;y=2025&amp;d=2025-05-12"'), 'day bars deep-link');
+  assert.deepEqual(month.vm.crumbs.map(c => c.label), ['ALL', '2025', 'MAY']);
 
-    const day = seedTotal(loadApp({ search: '?total', width }), '2025, 4, 12');
-    assert.equal(day.level, 'day');
-    assert.ok(day.html.includes('data-st="river:R1"'), `${width}px: ranked rows link to rivers`);
-    assert.ok(day.html.includes('data-st="cmd:tback"'), `${width}px: back tag present`);
-    for (const r of day.rows) {
-      assert.ok(r.replace(/\s+$/, '').length <= day.cols, `${width}px: row wider than COLS`);
-    }
-  }
+  const day = seedTotal(loadApp({ search: '?total' }), '2025, 4, 12');
+  assert.equal(day.level, 'day');
+  assert.ok(day.html.includes('href="?river=R1"'), 'ranked rows link to rivers');
+  assert.ok(!day.html.includes('href="?river=OTHER"'), 'OTHER is a band, never a river link');
+  assert.deepEqual(day.vm.crumbs.map(c => c.label), ['ALL', '2025', 'MAY', '12']);
 });
 
-test('drawTotal: the day list spills into a counted rest line when it overflows', () => {
-  const app = loadApp({ search: '?total', width: 390 }); // compact: 8 rows
-  const out = app.run(`(() => {
-    const rivers = {};
-    for (let i = 0; i < 17; i++) rivers['X' + String(i).padStart(2, '0')] = { v: Array(365).fill(100 + i), n: Array(365).fill(1) };
-    const shard = { y: 2025, generated: 'g', rivers };
-    const ov = ${JSON.stringify(totalOverviewFix)};
-    state.total = { overview: ov, top: totalTopRivers(ov), error: null };
-    totalShardCache.set(2025, shard);
-    [totalYear, totalMonth, totalDay] = [2025, 4, 12];
-    const view = totalView();
-    const g = makeGrid(totalGridRows(view));
-    drawTotal(g, view);
-    return g.ch.map(r => r.join('')).join('\\n');
-  })()`);
-  assert.ok(out.includes('+ 9 more rivers'), 'compact shows 8 of 17, the rest is counted');
+test('renderTotal: every band carries a hatch as well as a colour', () => {
+  const all = seedTotal(loadApp({ search: '?total' }));
+  // five named bands + OTHER, each with its own pattern — meaning never rides
+  // on hue alone, so the chart survives greyscale and colour blindness
+  assert.equal(all.vm.bands.length, 6);
+  assert.equal(all.vm.bands.at(-1).name, 'OTHER');
+  const pats = all.vm.bands.map(b => b.pattern);
+  assert.equal(new Set(pats).size, 6, 'every band has a distinct hatch');
+  for (const p of pats) assert.ok(all.html.includes(`id="tb-${p}"`), `${p} pattern is defined`);
+  assert.ok(all.html.includes('url(#tb-solid)'), 'and actually used as a fill');
+  assert.ok(all.html.includes('greyscale'), 'the legend says why the hatching is there');
+  // legend shares are computed over the whole visible range, not one column
+  assert.ok(all.vm.bands.every(b => b.pct >= 0 && b.pct <= 100));
+  assert.ok(Math.abs(all.vm.bands.reduce((a, b) => a + b.pct, 0) - 100) <= 2, 'shares add up');
+});
+
+test('renderTotal: the day breakdown ranks every river that reported', () => {
+  const day = seedTotal(loadApp({ search: '?total' }), '2025, 4, 12');
+  const rows = day.vm.breakdown.rows;
+  assert.equal(rows.length, 7, 'no truncation — the plate has room the 84 columns did not');
+  assert.deepEqual(rows.map(r => r.name), ['R1', 'R2', 'R3', 'R4', 'R5', 'R6', 'R7']);
+  assert.equal(rows[0].rank, 1);
+  assert.equal(rows[0].pct, 100, 'the biggest sets the bar scale');
+  assert.equal(rows.reduce((a, r) => a + r.share, 0), 100, 'shares are whole percents of the day');
+  assert.ok(day.html.includes('×1'), 'the gauge count per river rides along');
 });
 
 test('boot: ?total routes by deep link, day clamped to the real month length', () => {
@@ -2843,14 +2843,16 @@ test('prompt: --total switches, the man page names it', () => {
   assert.equal(app.run('mode'), 'total');
 });
 
-test('total chrome: breadcrumb in the history bar, home button offered', () => {
+test('total chrome: the plate owns the zoom trail, the chip bar steps aside', () => {
   const app = loadApp({ search: '?total&y=2025&d=2025-05-12' });
-  assert.equal(app.el('history-bar').hidden, false, 'the bar carries the breadcrumb');
-  assert.equal(app.el('home-btn').hidden, false, 'the way back to the station');
-  // the element stub accumulates children across renders (textContent = ''
-  // clears nothing there), so only the last render's chips are asserted
-  const labels = app.el('history-bar').children.map(b => b.textContent);
-  assert.deepEqual(labels.slice(-4), ['ALL', '2025', 'MAY', '12']);
+  // the breadcrumb and the metric switch are real links inside the plate now;
+  // a second set of chips outside it would be two controls for one state
+  assert.equal(app.el('history-bar').hidden, true, 'no duplicate chip breadcrumb');
+  assert.equal(app.el('home-btn').hidden, false, 'the way back to the station stays');
+  const crumbs = app.run('totalCrumbs()');
+  assert.deepEqual(crumbs.map(c => c.label), ['ALL', '2025', 'MAY', '12']);
+  assert.equal(crumbs.at(-1).current, true, 'the deepest level is where we are');
+  assert.equal(app.run(`navHref('cmd:ty:2025')`), '?total&y=2025', 'each crumb is a real URL');
 });
 
 // ---------- plate helpers (display redesign, stage 0) ----------
@@ -2871,9 +2873,9 @@ test('navHref: the data-st grammar maps to honest hrefs', () => {
   assert.equal(app.run(`navHref('river:ELDE MÜRITZ WASSERSTRASSE')`),
     '?river=ELDE%20M%C3%9CRITZ%20WASSERSTRASSE');
   assert.equal(app.run(`navHref('rising')`), '?rising');
-  assert.equal(app.run(`navHref('cmd:tall')`), null, 'in-view controls are buttons, not links');
+  assert.equal(app.run(`navHref('cmd:abs')`), null, 'in-view toggles with no URL stay buttons');
   assert.ok(app.run(`navAttrs('cmd:abs')`).includes('data-nav="cmd:abs"'));
-  assert.ok(!app.run(`navAttrs('cmd:abs')`).includes('href'), 'no href on a cmd target');
+  assert.ok(!app.run(`navAttrs('cmd:abs')`).includes('href'), 'no href on a URL-less cmd target');
   const a = app.run(`navAttrs('B<ONN"')`);
   assert.ok(!a.includes('<'), 'hostile names never reach markup unescaped');
 });

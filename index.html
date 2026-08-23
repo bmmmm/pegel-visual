@@ -661,7 +661,105 @@
   .board li.down .b-spark path { stroke: var(--dry-line); }
   .board .b-badge { grid-area: badge; font-size: 0.85em; color: var(--mid); white-space: nowrap; }
   .board .b-badge.eta { cursor: help; border-bottom: 1px dotted var(--dim); }
+  /* ---- charts: SVG in logical coordinates, scaled by the container ---- */
+  .chart { display: block; width: 100%; height: auto; margin: 1em 0 0.6em; }
+  .chart .ax { stroke: var(--ink); stroke-width: 1; }
+  .chart .axl {
+    font-family: var(--font-data);
+    font-size: 8px;
+    fill: var(--mid);
+  }
+  .chart .hit { fill: transparent; }
+  .chart a { cursor: pointer; }
+  .chart a:hover .seg, .chart a:hover .db { opacity: 0.72; }
+  .chart a:focus-visible { outline: 2px solid var(--ink); outline-offset: 1px; }
+  .chart .db.rose { fill: var(--water); stroke: var(--water-line); stroke-width: 0.6; }
+  /* fell is hatched as well as coloured — direction never rides on hue alone */
+  .chart .db.fell { fill: var(--dry); stroke: var(--dry-line); stroke-width: 0.6; }
+  /* band pattern fills: the rect carries the colour, the strokes the texture */
+  .bf { fill: var(--paper); }
+  .bf-solid { fill: color-mix(in oklab, var(--ink) 14%, var(--paper)); }
+  .bf-fslash { fill: var(--water); }
+  .bf-bslash { fill: color-mix(in oklab, var(--water-line) 26%, var(--paper)); }
+  .bf-dots { fill: var(--dry); }
+  .bf-cross { fill: var(--bed); }
+  .bf-none { fill: var(--paper); }
+  .bh { stroke: color-mix(in oklab, var(--ink) 55%, transparent); }
+  .bh-f { fill: color-mix(in oklab, var(--ink) 55%, transparent); }
+  .defs-only { position: absolute; width: 0; height: 0; }
+  .swr { stroke: var(--ink); stroke-width: 1.5; }
+  .sw { width: 12px; height: 12px; flex: none; }
+  .p-key .lg { display: inline-flex; align-items: center; gap: 0.5ch; }
+  .p-key .lgn { font-family: var(--font-data); color: var(--ink); }
+  .p-key .lgp { color: var(--mid); font-variant-numeric: tabular-nums; }
+  .p-key dd { display: inline-block; margin-right: 1.6em; }
+  /* ---- zoom breadcrumb + metric tabs ---- */
+  .p-crumbs ol {
+    list-style: none;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0 0.5ch;
+    margin: 0.8em 0 0;
+    padding: 0;
+    font-family: var(--font-data);
+    font-size: 0.85em;
+  }
+  .p-crumbs li + li::before { content: '▸'; color: var(--dim); margin-right: 0.5ch; }
+  .p-crumbs a, .p-crumbs button {
+    font: inherit;
+    color: var(--mid);
+    background: none;
+    border: none;
+    padding: 0;
+    text-decoration: none;
+    cursor: pointer;
+  }
+  .p-crumbs a:hover, .p-crumbs button:hover { color: var(--ink); text-decoration: underline; }
+  .p-crumbs [aria-current] { color: var(--ink); font-weight: 700; }
+  .p-tabs {
+    display: flex;
+    gap: 0.5ch;
+    margin-top: 0.9em;
+    font-family: var(--font-data);
+    font-size: 0.85em;
+  }
+  .p-tabs a, .p-tabs button {
+    font: inherit;
+    color: var(--ink);
+    background: none;
+    border: 1px solid var(--ink);
+    padding: 0.1em 0.8ch;
+    text-decoration: none;
+    cursor: pointer;
+  }
+  .p-tabs .on, .p-tabs a:hover, .p-tabs button:hover { background: var(--ink); color: var(--paper); }
+  .p-readout {
+    margin: 1.2em 0 0;
+    padding-top: 0.7em;
+    border-top: 1px solid var(--rule);
+    font-size: 0.85em;
+    color: var(--mid);
+    max-width: 68ch;
+    text-wrap: pretty;
+  }
+  /* the day breakdown reuses the board grid with its own columns */
+  .breakdown li {
+    grid-template-columns: 2.4ch 1.6ch minmax(10ch, 1fr) 4.5ch 8ch 4ch;
+    grid-template-areas: "rank glyph name share rate gauges";
+  }
+  .breakdown .b-glyph { grid-area: glyph; color: var(--mid); }
+  .breakdown .b-share { grid-area: share; text-align: right; color: var(--mid); }
+  .breakdown .b-gauges { grid-area: gauges; text-align: right; color: var(--dim); font-size: 0.85em; }
+  .breakdown .b-rate { background: none; }
   @container plate (max-width: 34rem) {
+    .breakdown li {
+      grid-template-columns: 2.4ch 1.6ch 1fr max-content;
+      grid-template-areas:
+        "rank glyph name rate"
+        ". . share gauges";
+      row-gap: 0.1em;
+    }
+    .breakdown .b-share { text-align: left; }
     .board li {
       grid-template-columns: 2.4ch 1.6ch 1fr max-content;
       grid-template-areas:
@@ -1084,7 +1182,9 @@ function applyModeChrome() {
   renderHistoryBar(); // stays visible in river mode too — it carries the view chips
   // only the map has nothing to put in the bar: the rising board fills it with
   // its 1D/7D lookback chips, river mode with the view chips, total with the zoom crumbs
-  document.getElementById('history-bar').hidden = mode === 'rivers';
+  // the map has nothing to put in the bar, and ?total carries its own controls
+  // inside the plate — the rest fill it with ranges, view or lookback chips
+  document.getElementById('history-bar').hidden = mode === 'rivers' || mode === 'total';
   // The app bar's station item doubles as the way back: neither the map nor the
   // boards show the gauge you came from, so away from it the item reads "← BONN".
   // It always names its target — never a generic "home".
@@ -2003,6 +2103,14 @@ const T = {
   risingNoDay: 'no baseline yet — the daily snapshot needs another day',
   risingNoWeek: 'no baseline a week back yet — the daily snapshot needs more days',
   etaNote: 'a straight-line guess at today’s rate — not a forecast',
+  totalTitle: 'ALL RIVERS SUMMED',
+  totalSubSum: 'every reporting gauge’s daily mid level, added up',
+  totalSubDiff: 'how much the summed stages moved from one day to the next',
+  totalNoteSum: 'Gauge zeros are arbitrary datums, so this is a reading of the network, ' +
+    'not a water volume. Gauges reporting elevation in metres are excluded. The absolute sum ' +
+    'also grows with every gauge that joins the archive — for trends use Δ change.',
+  totalNoteDiff: 'Net day-over-day change, counting only gauges that reported on both days — ' +
+    'a gauge’s first reporting day never counts, so coverage changes cancel out.',
 };
 
 // the plate foot's per-view provenance line
@@ -2024,8 +2132,35 @@ function svgWrap(viewBox, body, attrs = '') {
 // in-view controls, "river:NAME" opens the whole-river profile, "rising" the
 // board, anything else is a station name. URL-addressable targets carry an
 // honest href so middle-click / open-in-new-tab work; cmd:… stay buttons.
+// the ?total zoom levels are URL state, so their in-view controls are real
+// links — middle-click and copy-link-address work on the breadcrumb and on
+// every bar. The metric flag rides along so a zoom never silently drops Δ.
+function totalHref(y, m, d, diff = totalDiff) {
+  const base = diff ? '?total&diff' : '?total';
+  if (d != null) {
+    const iso = `${y}-${String(m + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+    return `${base}&y=${y}&d=${iso}`;
+  }
+  if (y != null) return `${base}&y=${y}` + (m != null ? `&m=${m + 1}` : '');
+  return base;
+}
+
 function navHref(target) {
-  if (target.startsWith('cmd:')) return null;
+  if (target.startsWith('cmd:')) {
+    const c = target.slice(4);
+    if (c === 'tall') return totalHref(null, null, null);
+    if (c === 'tsum') return totalHref(totalYear, totalMonth, totalDay, false);
+    if (c === 'tdiff') return totalHref(totalYear, totalMonth, totalDay, true);
+    if (c === 'tback') {
+      return totalDay != null ? totalHref(totalYear, totalMonth, null)
+        : totalMonth != null ? totalHref(totalYear, null, null)
+        : totalHref(null, null, null);
+    }
+    if (c.startsWith('ty:')) return totalHref(+c.slice(3), null, null);
+    if (c.startsWith('tm:')) { const [y, m] = c.slice(3).split(':').map(Number); return totalHref(y, m, null); }
+    if (c.startsWith('td:')) { const [y, m, d] = c.slice(3).split(':').map(Number); return totalHref(y, m, d); }
+    return null; // in-view toggles with no URL of their own stay buttons
+  }
   if (target.startsWith('river:')) return '?river=' + encodeURIComponent(target.slice(6));
   if (target === 'rising') return '?rising';
   if (target === 'rivers') return '?rivers';
@@ -2037,6 +2172,16 @@ function navAttrs(target) {
   const href = navHref(target);
   return (href ? attr('href', href) : '') + attr('data-nav', target);
 }
+
+// a target with a URL is a link; one without is a button. Both dispatch through
+// the same delegated handler, so callers never branch on it themselves.
+function navOpen(target, cls = '', extra = '') {
+  const href = navHref(target);
+  const c = cls ? attr('class', cls) : '';
+  return href ? `<a${c}${navAttrs(target)}${extra}>`
+    : `<button type="button"${c}${navAttrs(target)}${extra}>`;
+}
+function navClose(target) { return navHref(target) ? '</a>' : '</button>'; }
 
 function navTo(target) { actOnGridTarget(target); }
 
@@ -4235,8 +4380,6 @@ function renderRising(vm) {
 const TOTAL_TOP_K = 5; // named bands; + OTHER = the 6 existing semantic classes
 const TOTAL_BAND_CLASS = ['b', 'w2', 'w', 's', 'bed'];
 const TOTAL_BAND_GLYPH = ['●', '◆', '▲', '■', '▶'];
-const totalChartH = () => isCompact() ? 12 : 18;
-const TOTAL_DAY_ROWS = () => isCompact() ? 8 : 15;
 
 // band identity is fixed for the whole dataset (ranked by all-time mean sum),
 // never by a single column's ranking — a river's color must not jump around
@@ -4444,261 +4587,248 @@ function totalView() {
   return view;
 }
 
-function totalGridRows(view) {
-  if (view.level === 'missing') return 6;
-  if (view.level === 'day') {
-    const shown = Math.min(view.breakdown.rows.length, TOTAL_DAY_ROWS());
-    return 3 + Math.max(shown, 1) + (view.breakdown.rows.length > shown ? 1 : 0) + 2;
+// ---------- total overview: the survey plate ----------
+
+// Six bands, each with its OWN hatch as well as its own fill: the chart stays
+// readable in greyscale, in print, and with any colour vision. The glyph
+// vocabulary (TOTAL_BAND_GLYPH) is the third channel, carried in the legend
+// and the breakdown rows.
+const TOTAL_BAND_PATTERN = ['solid', 'fslash', 'bslash', 'dots', 'cross', 'none'];
+
+function totalBandIndex(name, top) {
+  const i = top.indexOf(name);
+  return i >= 0 ? i : TOTAL_TOP_K; // OTHER
+}
+
+// The pattern defs, emitted ONCE per plate in a hidden SVG: fill="url(#id)"
+// resolves document-wide, so the chart and every legend swatch share one set
+// of ids instead of each carrying a duplicate. Fills come from CSS custom
+// properties, so a theme flip costs no re-render.
+function totalPatternDefs() {
+  const p = (id, body) => `<pattern id="tb-${id}" width="7" height="7" patternUnits="userSpaceOnUse">` +
+    `<rect width="7" height="7" class="bf bf-${id}"/>${body}</pattern>`;
+  const hatch = 'stroke-width="1.1" class="bh"';
+  const defs = '<defs>' +
+    p('solid', '') +
+    p('fslash', `<path d="M-1 8 L8 -1" fill="none" ${hatch}/>`) +
+    p('bslash', `<path d="M-1 -1 L8 8" fill="none" ${hatch}/>`) +
+    p('dots', '<circle cx="2" cy="2" r="1.1" class="bh-f"/><circle cx="5.5" cy="5.5" r="1.1" class="bh-f"/>') +
+    p('cross', `<path d="M-1 8 L8 -1 M-1 -1 L8 8" fill="none" ${hatch}/>`) +
+    p('none', '') +
+    '</defs>';
+  return svgWrap('0 0 0 0', defs, ' class="defs-only" aria-hidden="true" focusable="false"');
+}
+
+// pure: the zoom trail as real links, innermost level marked current
+function totalCrumbs() {
+  const out = [{ label: 'ALL', target: 'cmd:tall', current: totalYear == null }];
+  if (totalYear != null) {
+    out.push({ label: String(totalYear), target: 'cmd:ty:' + totalYear, current: totalMonth == null });
   }
-  return totalChartH() + 10;
+  if (totalMonth != null) {
+    out.push({ label: MONTH_ABBR[totalMonth], target: `cmd:tm:${totalYear}:${totalMonth}`, current: totalDay == null });
+  }
+  if (totalDay != null) {
+    out.push({ label: String(totalDay), target: `cmd:td:${totalYear}:${totalMonth}:${totalDay}`, current: true });
+  }
+  return out;
 }
 
-const TOTAL_LABEL_W = 7; // y-axis gutter: "12.3km" + axis glyph
-
-function drawTotalBars(g, view) {
-  const H = totalChartH(), y0 = 3, top = view.top;
-  const bars = view.bars;
-  const avail = COLS - TOTAL_LABEL_W;
-  const slot = Math.max(1, Math.floor(avail / bars.length));
-  const barW = slot > 1 ? slot - 1 : 1;
-  const peak = Math.max(1, ...bars.map(b => b.total));
-
-  put(g, y0, 0, humanizeSum(peak).padStart(TOTAL_LABEL_W - 1), 'd');
-  put(g, y0, TOTAL_LABEL_W - 1, '┤', 'd');
-  for (let r = y0 + 1; r < y0 + H; r++) put(g, r, TOTAL_LABEL_W - 1, '│', 'd');
-  put(g, y0 + H, TOTAL_LABEL_W - 1, '└' + '─'.repeat(Math.min(avail - 1, slot * bars.length)), 'd');
-
-  bars.forEach((b, i) => {
-    const c0 = TOTAL_LABEL_W + i * slot;
-    let cum = 0, filled = 0;
-    for (const band of b.bands) {
-      if (band.v <= 0) continue;
-      cum += band.v;
-      const upto = Math.round(cum / peak * H);
-      for (let r = filled; r < upto; r++) {
-        put(g, y0 + H - 1 - r, c0, '█'.repeat(barW), totalBandCls(band.name, top));
-      }
-      filled = Math.max(filled, upto);
+// pure: totalView() (unchanged) -> render-ready plate data
+function totalPlateModel() {
+  const view = totalView();
+  const ov = state.total.overview;
+  const vm = {
+    kind: 'total',
+    level: view.level,
+    diff: !!view.diff,
+    scope: totalScope(ov),
+    crumbs: totalCrumbs(),
+    summary: screenSummary(),
+    source: `built from the hosted archive by this site's pipeline · ${ov.fromYear}–${ov.currentYear}`,
+  };
+  if (view.level === 'missing') return vm;
+  vm.bands = (view.top || []).map((name, i) => ({
+    name, i, glyph: TOTAL_BAND_GLYPH[i], pattern: TOTAL_BAND_PATTERN[i],
+  })).concat([{ name: 'OTHER', i: TOTAL_TOP_K, glyph: '·', pattern: 'none' }]);
+  if (view.level === 'day') {
+    const b = view.breakdown;
+    vm.breakdown = {
+      total: b.total,
+      gauges: b.gauges,
+      pairs: b.pairs,
+      provisional: !!b.provisional,
+      rows: b.rows.map((r, i) => ({
+        rank: i + 1,
+        name: r.name,
+        v: r.v,
+        n: r.n,
+        band: totalBandIndex(r.name, view.top),
+        glyph: totalBandGlyph(r.name, view.top),
+        pattern: TOTAL_BAND_PATTERN[totalBandIndex(r.name, view.top)],
+        text: vm.diff ? humanizeDiff(r.v) : humanizeSum(r.v),
+        pct: 0, // filled below against the level's own peak
+      })),
+    };
+    const peak = Math.max(1, ...vm.breakdown.rows.map(r => Math.abs(r.v)));
+    const totalAbs = vm.breakdown.total || 0;
+    for (const r of vm.breakdown.rows) {
+      r.pct = Math.round(Math.abs(r.v) / peak * 100);
+      r.share = !vm.diff && totalAbs ? Math.round(r.v / totalAbs * 100) : null;
     }
-    if (!filled && b.total > 0) { // a sub-half-row day still deserves a base cell
-      const biggest = b.bands.reduce((a, x) => x.v > a.v ? x : a);
-      put(g, y0 + H - 1, c0, '█'.repeat(barW), totalBandCls(biggest.name, top));
-      filled = 1;
-    }
-    // click target: the bar plus a breath above it (at least 4 rows for tiny
-    // bars) — linking the whole empty column would paint the [data-st] dotted
-    // underline as a grid across the blank chart area
-    const reach = Math.min(H, Math.max(filled + 1, 4));
-    for (let r = y0 + H - reach; r < y0 + H; r++) linkCells(g, r, c0, slot, b.cmd);
-  });
-
-  drawTotalTicks(g, bars, view.level, y0 + H + 1, slot);
-
-  // legend: 2 rows × 3 entries, band swatch + across-view share
-  const grand = bars.reduce((a, b) => a + b.total, 0);
-  const sums = new Map();
-  for (const b of bars) for (const band of b.bands) sums.set(band.name, (sums.get(band.name) || 0) + band.v);
-  const legendRow = y0 + H + 3, w = Math.floor(COLS / 3);
-  [...top, 'OTHER'].forEach((name, i) => {
-    const r = legendRow + Math.floor(i / 3), c = (i % 3) * w;
-    const share = grand ? (sums.get(name) || 0) / grand : 0;
-    const label = ` ${name.slice(0, w - 7)} ${Math.round(share * 100)}%`;
-    put(g, r, c, totalBandGlyph(name, top), totalBandCls(name, top));
-    put(g, r, c + 1, label);
-    if (name !== 'OTHER') linkCells(g, r, c, label.length + 1, 'river:' + name);
-  });
-}
-
-// x tick labels, thinned to what the slot width can carry — shared by the
-// stacked-sum and the diverging-diff renderer
-function drawTotalTicks(g, bars, level, tickRow, slot) {
-  if (level === 'all') {
-    const step = slot >= 5 ? 1 : Math.ceil(5 / slot);
-    bars.forEach((b, i) => { if (i % step === 0) put(g, tickRow, TOTAL_LABEL_W + i * slot, b.label, 'd'); });
-  } else if (level === 'year') {
-    bars.forEach((b, i) => put(g, tickRow, TOTAL_LABEL_W + i * slot, slot >= 4 ? b.label : b.label[0], 'd'));
+    return vm;
+  }
+  // chart levels: all / year / month
+  if (vm.diff) {
+    const vals = view.bars.map(b => b.v).filter(v => v != null);
+    const peak = Math.max(1, ...vals.map(Math.abs));
+    vm.peak = peak;
+    vm.bars = view.bars.map(b => ({
+      key: b.key, label: b.label, target: b.cmd, v: b.v,
+      frac: b.v == null ? 0 : b.v / peak,
+      text: b.v == null ? '—' : humanizeDiff(b.v),
+    }));
   } else {
-    bars.forEach((b, i) => {
-      if (b.key === 1 || b.key % 5 === 0) put(g, tickRow, TOTAL_LABEL_W + i * slot, b.label, 'd');
+    const peak = Math.max(1, ...view.bars.map(b => b.total));
+    vm.peak = peak;
+    vm.bars = view.bars.map(b => {
+      let acc = 0;
+      const segments = b.bands.filter(s => s.v > 0).map(s => {
+        const y0 = acc / peak; acc += s.v;
+        return {
+          name: s.name, v: s.v, y0, y1: acc / peak,
+          band: totalBandIndex(s.name, view.top),
+          pattern: TOTAL_BAND_PATTERN[totalBandIndex(s.name, view.top)],
+        };
+      });
+      return { key: b.key, label: b.label, target: b.cmd, total: b.total, segments,
+        text: humanizeSum(b.total) };
     });
+    // legend shares: the whole visible range, not one column
+    const grand = vm.bars.reduce((a, b) => a + b.total, 0) || 1;
+    const per = new Map();
+    for (const b of vm.bars) for (const s of b.segments) per.set(s.name, (per.get(s.name) || 0) + s.v);
+    for (const band of vm.bands) band.pct = Math.round((per.get(band.name) || 0) / grand * 100);
   }
+  vm.provisionalFrom = view.provisionalFrom;
+  return vm;
 }
 
-// diff bars diverge around a zero line — no river stacking here, bands with
-// mixed signs would not stack honestly. Up = the network rose, down = it fell.
-function drawTotalDiffBars(g, view) {
-  const H = totalChartH(), y0 = 3;
-  const bars = view.bars;
-  const avail = COLS - TOTAL_LABEL_W;
-  const slot = Math.max(1, Math.floor(avail / bars.length));
-  const barW = slot > 1 ? slot - 1 : 1;
-  const vals = bars.map(b => b.v).filter(v => v != null);
-  const max = Math.max(0, ...vals), min = Math.min(0, ...vals);
-  const span = (max - min) || 1;
-  // split the rows around the zero line, at least one row per populated side
-  let posH = Math.round((H - 1) * (max / span));
-  if (max > 0 && posH < 1) posH = 1;
-  if (min < 0 && H - 1 - posH < 1) posH = H - 2;
-  const zeroRow = y0 + posH, negH = H - 1 - posH;
+// axis ticks that don't collide: at most one label per ~4.5 slots
+function totalTickEvery(n) { return Math.max(1, Math.ceil(n / (plateDensity() === 'narrow' ? 5 : 12))); }
 
-  if (max > 0) put(g, y0, 0, humanizeDiff(max).padStart(TOTAL_LABEL_W - 1), 'd');
-  put(g, y0, TOTAL_LABEL_W - 1, '┤', 'd');
-  for (let r = y0 + 1; r <= y0 + H; r++) put(g, r, TOTAL_LABEL_W - 1, '│', 'd');
-  if (min < 0) {
-    put(g, y0 + H, 0, humanizeDiff(min).padStart(TOTAL_LABEL_W - 1), 'd');
-    put(g, y0 + H, TOTAL_LABEL_W - 1, '┤', 'd');
+function renderTotalChart(vm) {
+  const W = 360, H = vm.diff ? 180 : 170, padL = 34, padR = 4, padB = 22, padT = 6;
+  const n = vm.bars.length;
+  const plotW = W - padL - padR, plotH = H - padT - padB;
+  const slot = plotW / n;
+  const barW = Math.max(1.2, slot * 0.78);
+  const every = totalTickEvery(n);
+  const zeroY = vm.diff ? padT + plotH / 2 : padT + plotH;
+  const parts = [];
+  // baseline + zero rule
+  parts.push(`<line x1="${padL}" y1="${zeroY}" x2="${W - padR}" y2="${zeroY}" class="ax"/>`);
+  if (vm.diff) {
+    parts.push(`<text x="${padL - 4}" y="${zeroY + 3}" class="axl" text-anchor="end">0</text>`);
+    parts.push(`<text x="${padL - 4}" y="${padT + 8}" class="axl" text-anchor="end">+${humanizeDiff(vm.peak).slice(1)}</text>`);
+    parts.push(`<text x="${padL - 4}" y="${H - padB}" class="axl" text-anchor="end">${humanizeDiff(-vm.peak)}</text>`);
+  } else {
+    parts.push(`<text x="${padL - 4}" y="${padT + 8}" class="axl" text-anchor="end">${humanizeSum(vm.peak)}</text>`);
+    parts.push(`<text x="${padL - 4}" y="${zeroY + 3}" class="axl" text-anchor="end">0</text>`);
   }
-  put(g, zeroRow, TOTAL_LABEL_W - 1, '┼', 'd');
-  put(g, zeroRow, TOTAL_LABEL_W, '┄'.repeat(Math.min(avail, slot * bars.length)), 'd');
-
-  bars.forEach((b, i) => {
-    const c0 = TOTAL_LABEL_W + i * slot;
-    let rows = 0, up = false;
-    if (b.v != null && b.v !== 0) {
-      up = b.v > 0;
-      rows = Math.max(1, Math.round((up ? posH : negH) * Math.abs(b.v) / (up ? max : -min)));
-      for (let k = 1; k <= rows; k++) {
-        put(g, zeroRow + (up ? -k : k), c0, '█'.repeat(barW), up ? 'w' : 'bed');
+  vm.bars.forEach((b, i) => {
+    const x = padL + i * slot + (slot - barW) / 2;
+    const label = vm.diff
+      ? `${b.label}: ${b.text}`
+      : `${b.label}: ${b.text} summed stage`;
+    const inner = [];
+    if (vm.diff) {
+      if (b.v != null && b.v !== 0) {
+        const h = Math.abs(b.frac) * (plotH / 2);
+        const y = b.v > 0 ? zeroY - h : zeroY;
+        inner.push(`<rect x="${x.toFixed(2)}" y="${y.toFixed(2)}" width="${barW.toFixed(2)}" height="${Math.max(0.8, h).toFixed(2)}" class="db ${b.v > 0 ? 'rose' : 'fell'}"/>`);
+      }
+    } else {
+      for (const s of b.segments) {
+        const y = padT + plotH - s.y1 * plotH;
+        const h = (s.y1 - s.y0) * plotH;
+        inner.push(`<rect x="${x.toFixed(2)}" y="${y.toFixed(2)}" width="${barW.toFixed(2)}" height="${Math.max(0.4, h).toFixed(2)}"` +
+          attr('fill', `url(#tb-${s.pattern})`) + ` class="seg"/>`);
       }
     }
-    // click target: the bar plus a breath around the zero line (see the
-    // stacked renderer for why the whole column must not be linked)
-    const r0 = Math.max(y0, zeroRow - Math.max(up ? rows + 1 : 1, 2));
-    const r1 = Math.min(y0 + H, zeroRow + Math.max(up ? 1 : rows + 1, 2));
-    for (let r = r0; r <= r1; r++) linkCells(g, r, c0, slot, b.cmd);
+    // an invisible full-height hit rect keeps thin bars tappable
+    inner.push(`<rect x="${(padL + i * slot).toFixed(2)}" y="${padT}" width="${slot.toFixed(2)}" height="${plotH}" class="hit"/>`);
+    parts.push(`<a${navAttrs(b.target)}><title>${esc(label)}</title>${inner.join('')}</a>`);
+    if (i % every === 0) {
+      parts.push(`<text x="${(padL + i * slot + slot / 2).toFixed(2)}" y="${H - padB + 12}" class="axl" text-anchor="middle">${esc(b.label)}</text>`);
+    }
   });
-
-  drawTotalTicks(g, bars, view.level, y0 + H + 1, slot);
-
-  const grand = bars.reduce((a, b) => a + (b.v || 0), 0);
-  const sumLine = `Σ net ${humanizeDiff(grand)} · `;
-  const legendRow = y0 + H + 3;
-  put(g, legendRow, 0, sumLine, 'd');
-  put(g, legendRow, sumLine.length, '█', 'w');
-  put(g, legendRow, sumLine.length + 1, ' rose · ', 'd');
-  put(g, legendRow, sumLine.length + 9, '█', 'bed');
-  put(g, legendRow, sumLine.length + 10, ' fell', 'd');
-  if (view.level === 'month') {
-    const tail = bars.filter(b => b.v != null).slice(-7);
-    if (tail.length) {
-      put(g, legendRow + 1, 0, `last ${tail.length} day${tail.length > 1 ? 's' : ''}: `
-        + `Σ ${humanizeDiff(tail.reduce((a, b) => a + b.v, 0))}`, 'd');
-    }
-  }
+  return svgWrap(`0 0 ${W} ${H}`, parts.join(''),
+    ' class="chart" role="group"' + attr('aria-label', vm.summary));
 }
 
-function drawTotal(g, view) {
-  const brand = 'PEGEL://TOTAL';
-  if (view.level === 'missing') {
-    put(g, 0, 0, `─── ${brand} · Δ `.padEnd(COLS, '─'), 'd');
-    put(g, 0, 4, brand, 'b');
-    put(g, 2, 0, 'the diff series is not built yet —', 'd');
-    put(g, 3, 0, 'the next archive rebuild adds it', 'd');
-    return;
+function renderTotalLegend(vm) {
+  const sw = p => svgWrap('0 0 12 12',
+    `<rect width="12" height="12" fill="url(#tb-${p})" class="swr"/>`,
+    ' class="sw" aria-hidden="true"');
+  const items = vm.bands.map(b =>
+    `<dd><span class="lg">${sw(b.pattern)}<span class="lgn">${esc(b.glyph)} ${esc(b.name)}</span>` +
+    (b.pct != null ? `<span class="lgp">${b.pct}%</span>` : '') + '</span></dd>').join('');
+  return `<dl class="p-key"><dt>${esc(T.key)}</dt>${items}` +
+    `<dd>Every band carries its own hatch as well as its own colour, so the chart still reads in greyscale and with colour blindness.</dd></dl>`;
+}
+
+function renderTotalBreakdown(vm) {
+  const b = vm.breakdown;
+  if (!b.rows.length) {
+    return `<div class="p-empty"><p>${esc(vm.diff
+      ? 'no paired readings this day — a gauge’s first reporting day never pairs'
+      : 'no readings for this day')}</p></div>`;
   }
-  const scope = (view.diff ? 'Δ ' : '') + totalScope(state.total.overview);
-  const head = `─── ${brand} · ${scope} `;
-  if (view.level === 'all') {
-    put(g, 0, 0, head.padEnd(COLS, '─'), 'd');
-    put(g, 0, 4, brand, 'b');
+  const rows = b.rows.map(r =>
+    `<li${attr('style', `--pct:${r.pct}`)} class="${r.v < 0 ? 'down' : 'up'}">` +
+    `<span class="b-rank">${r.rank}</span>` +
+    `<span class="b-glyph" aria-hidden="true">${esc(r.glyph)}</span>` +
+    `<a class="b-name"${navAttrs('river:' + r.name)}>${esc(r.name)}</a>` +
+    (r.share != null ? `<span class="b-share">${r.share}%</span>` : '<span class="b-share"></span>') +
+    `<span class="b-rate">${esc(r.text)}</span>` +
+    `<span class="b-gauges">×${r.n}</span></li>`).join('');
+  return `<ol class="board breakdown">${rows}</ol>`;
+}
+
+function renderTotal(vm) {
+  const vh = `<p class="vh">${esc(vm.summary)}</p>`;
+  const crumbs = `<nav class="p-crumbs" aria-label="zoom"><ol>` +
+    vm.crumbs.map(c => '<li>' + (c.current
+      ? `<span aria-current="true">${esc(c.label)}</span>`
+      : navOpen(c.target) + esc(c.label) + navClose(c.target)) + '</li>').join('') +
+    '</ol></nav>';
+  const metric = `<nav class="p-tabs" aria-label="metric">` +
+    navOpen('cmd:tsum', vm.diff ? '' : 'on') + 'Σ sum' + navClose('cmd:tsum') +
+    navOpen('cmd:tdiff', vm.diff ? 'on' : '') + 'Δ change' + navClose('cmd:tdiff') + '</nav>';
+  const head = `<header class="p-head"><h1>${esc(T.totalTitle)}</h1>` +
+    `<p class="p-sub">${esc(vm.diff ? T.totalSubDiff : T.totalSubSum)}</p></header>`;
+  if (vm.level === 'missing') {
+    return `<section class="plate">${vh}${head}${metric}` +
+      `<div class="p-empty"><p>the Δ series is not built yet — the next archive rebuild adds it</p></div></section>`;
+  }
+  const note = vm.diff ? T.totalNoteDiff : T.totalNoteSum;
+  let body;
+  if (vm.level === 'day') {
+    const b = vm.breakdown;
+    const line = vm.diff
+      ? `Δ ${humanizeDiff(b.total)} vs the day before · ${b.pairs} paired ${plural(b.pairs, 'gauge')}` +
+        (b.pairs ? ` · ⌀ ${(b.total / b.pairs).toFixed(1)} cm each` : '')
+      : `Σ ${humanizeSum(b.total)} summed stage · ${b.gauges} ${plural(b.gauges, 'gauge')} reporting`;
+    body = `<p class="p-sub2">${esc(line)}${b.provisional ? ' · provisional' : ''}</p>` +
+      renderTotalBreakdown(vm);
   } else {
-    const parent = view.level === 'year' ? 'ALL'
-      : view.level === 'month' ? String(totalYear)
-      : `${MONTH_ABBR[totalMonth]} ${totalYear}`;
-    putHeadRule(g, head, brand, `[← ${parent}]`, 'cmd:tback');
+    body = totalPatternDefs() + renderTotalChart(vm) + (vm.diff ? '' : renderTotalLegend(vm));
   }
-
-  if (view.level === 'day' && view.diff) {
-    const b = view.breakdown;
-    put(g, 1, 0, `Δ ${humanizeDiff(b.total)} vs the day before · ${b.pairs} paired gauges`
-      + (b.pairs ? ` · ø ${(b.total / b.pairs).toFixed(1)}cm` : '')
-      + (b.provisional ? ' · provisional' : ''), 'd');
-    if (!b.rows.length) {
-      put(g, 3, 0, 'no paired readings this day — the first day of a year never pairs', 'd');
-      return;
-    }
-    const shown = Math.min(b.rows.length, TOTAL_DAY_ROWS());
-    const compact = isCompact();
-    const nameW = compact ? 10 : 16, barLen = compact ? 10 : 20;
-    const peak = Math.max(...b.rows.map(r => Math.abs(r.v)), 1);
-    for (let i = 0; i < shown; i++) {
-      const r = b.rows[i], row = 3 + i;
-      const fill = Math.max(1, Math.round(Math.abs(r.v) / peak * barLen));
-      const cls = r.v >= 0 ? 'w' : 'bed';
-      const bar = '█'.repeat(fill) + '░'.repeat(barLen - fill);
-      const line = `${String(i + 1).padStart(2)}${totalBandGlyph(r.name, view.top)} `
-        + `${r.name.slice(0, nameW).padEnd(nameW)} ${humanizeDiff(r.v).padStart(7)} ${bar}`
-        + (compact ? '' : ` ×${r.n}`);
-      put(g, row, 0, line);
-      put(g, row, 2, line[2], totalBandCls(r.name, view.top));
-      put(g, row, 5 + nameW + 8, '█'.repeat(fill), cls);
-      put(g, row, 5 + nameW + 8 + fill, '░'.repeat(barLen - fill), 'd');
-      linkCells(g, row, 0, line.length, 'river:' + r.name);
-    }
-    let row = 3 + shown;
-    if (b.rows.length > shown) {
-      const rest = b.rows.slice(shown);
-      put(g, row++, 0, `+ ${rest.length} more rivers · Σ ${humanizeDiff(rest.reduce((a, r) => a + r.v, 0))}`, 'd');
-    }
-    put(g, row + 1, 0, compact ? 'tap a river to open it'
-      : 'click a river to open its profile — Δ vs the previous day, paired gauges only', 'd');
-    return;
-  }
-
-  if (view.level === 'day') {
-    const b = view.breakdown;
-    put(g, 1, 0, `Σ ${humanizeSum(b.total)} summed stage · ${b.gauges} gauges reporting`
-      + (b.provisional ? ' · provisional' : ''), 'd');
-    const shown = Math.min(b.rows.length, TOTAL_DAY_ROWS());
-    const compact = isCompact();
-    const nameW = compact ? 10 : 16, barLen = compact ? 10 : 20;
-    for (let i = 0; i < shown; i++) {
-      const r = b.rows[i], row = 3 + i;
-      const share = b.total ? r.v / b.total : 0;
-      const fill = Math.round(share * barLen);
-      const cls = totalBandCls(r.name, view.top);
-      const pct = (Math.round(share * 100) + '%').padStart(4);
-      const bar = '█'.repeat(fill) + '░'.repeat(barLen - fill);
-      const line = `${String(i + 1).padStart(2)}${totalBandGlyph(r.name, view.top)} `
-        + `${r.name.slice(0, nameW).padEnd(nameW)} ${pct} ${bar} ${humanizeSum(r.v).padStart(6)}`
-        + (compact ? '' : ` ×${r.n}`);
-      put(g, row, 0, line);
-      put(g, row, 2, line[2], cls);
-      put(g, row, 5 + nameW + 5, '█'.repeat(fill), cls);
-      put(g, row, 5 + nameW + 5 + fill, '░'.repeat(barLen - fill), 'd');
-      linkCells(g, row, 0, line.length, 'river:' + r.name);
-    }
-    let row = 3 + shown;
-    if (b.rows.length > shown) {
-      const rest = b.rows.slice(shown);
-      put(g, row++, 0, `+ ${rest.length} more rivers · Σ ${humanizeSum(rest.reduce((a, r) => a + r.v, 0))}`, 'd');
-    }
-    put(g, row + 1, 0, compact ? 'tap a river to open it' : 'click a river to open its profile — every reading is cm above its own gauge zero', 'd');
-    return;
-  }
-
-  const sub = view.diff
-    ? (view.level === 'all'
-      ? (isCompact() ? 'net Δ per year · tap a year' : 'net change per year, paired gauges only · click a year to zoom in')
-      : view.level === 'year'
-        ? (isCompact() ? 'net Δ per month · tap a month' : 'net change per month · click a month to zoom in')
-        : (isCompact() ? 'daily Δ · tap a day' : 'one bar per day: how much water arrived or left · click a day for its ranked breakdown')
-          + (view.provisionalFrom != null ? ' · newest days provisional' : ''))
-    : view.level === 'all'
-      ? (isCompact() ? 'Σ of every gauge reading · tap a year' : 'every gauge reading summed, stacked by river · click a year to zoom in')
-      : view.level === 'year'
-        ? (isCompact() ? 'monthly means · tap a month' : 'monthly mean of the daily sums · click a month to zoom in')
-        : (isCompact() ? 'daily sums · tap a day' : 'one bar per day · click a day for its ranked breakdown')
-          + (view.provisionalFrom != null ? ' · newest days provisional' : '');
-  put(g, 1, 0, sub, 'd');
-  if (view.diff) drawTotalDiffBars(g, view); else drawTotalBars(g, view);
-  put(g, totalChartH() + 9, 0, view.diff
-    ? (isCompact() ? 'Δ vs the previous day, paired gauges' : 'paired day-over-day change — a gauge\'s first reporting day never counts')
-    : isCompact() ? 'tap a name for its profile'
-    : 'not a volume — gauge zeros are arbitrary · click a river name to open its profile', 'd');
+  const readout = `<p class="p-readout">${esc(note)}</p>`;
+  return `<section class="plate">${vh}${head}${metric}${crumbs}${body}${readout}</section>`;
 }
 
-// overview once per session, year shards lazily per visited year
 const totalShardCache = new Map(); // year -> {y,rivers,...} | {error} | null (in flight)
 
 async function loadTotal() {
@@ -5741,21 +5871,10 @@ function renderHistoryBar() {
     return;
   }
   if (mode === 'total') {
-    // metric first, then the breadcrumb: each crumb jumps back to its level;
-    // the deepest one is lit
-    nav.setAttribute('aria-label', 'total zoom');
-    chip('Σ SUM', !totalDiff, () => runGridCmd('tsum'), 'absolute summed stages — arbitrary gauge zeros included');
-    chip('Δ DIFF', totalDiff, () => runGridCmd('tdiff'), 'net day-over-day change, paired gauges only — how much water arrived');
-    nav.append(' zoom ');
-    chip('ALL', totalYear == null, () => runGridCmd('tall'), 'every year, one bar each');
-    if (totalYear != null) {
-      chip(String(totalYear), totalMonth == null, () => runGridCmd('ty:' + totalYear), `${totalYear}, one bar per month`);
-    }
-    if (totalMonth != null) {
-      chip(MONTH_ABBR[totalMonth], totalDay == null, () => runGridCmd(`tm:${totalYear}:${totalMonth}`),
-        `${MONTH_ABBR[totalMonth]} ${totalYear}, one bar per day`);
-    }
-    if (totalDay != null) chip(String(totalDay), true, () => {}, 'the ranked day breakdown');
+    // the metric switch and the zoom breadcrumb both live in the plate now,
+    // as real links — duplicating them here would be two sets of controls for
+    // one piece of state
+    nav.hidden = true;
     return;
   }
   nav.setAttribute('aria-label', 'history range');
@@ -6198,6 +6317,7 @@ function wreckFrame(t) {
 // targets stop being yanked out from under the pointer 8 times a second
 let lastScreen = null;
 function setScreenText(text) {
+  setScreenGridMode(); // every plain-text screen is a pre/mono one
   if (text === lastScreen) return;
   lastScreen = text;
   screen.textContent = text;
@@ -6219,6 +6339,10 @@ function setScreenPlate(html) {
   }
   setScreenHtml(html);
 }
+function setScreenGridHtml(html) {
+  setScreenGridMode();
+  setScreenHtml(html);
+}
 function setScreenGridMode() {
   if (screen.className === 'dom') {
     screen.className = '';
@@ -6236,7 +6360,7 @@ function render(t) {
   if (state.suggest) {
     const g = makeGrid(6 + Math.min(state.suggest.matches.length, SUGGEST_MAX) + (state.suggest.matches.length > SUGGEST_MAX ? 1 : 0));
     drawSuggest(g, state.suggest);
-    setScreenHtml(gridToHtml(g));
+    setScreenGridHtml(gridToHtml(g));
     return;
   }
   if (mode === 'rivers') {
@@ -6247,18 +6371,16 @@ function render(t) {
     }
     const g = makeGrid(riversGridRows(rivers));
     drawRivers(g, rivers);
-    setScreenHtml(gridToHtml(g));
+    setScreenGridHtml(gridToHtml(g));
     if (!fitted) { fitted = true; fitFont(); }
     return;
   }
   if (mode === 'rising') {
     if (state.rising && state.rising.error) {
-      setScreenGridMode();
       setScreenText(`${wreckFrame(t)}\n\nERROR\n\n${state.rising.error}`);
       return;
     }
     if (!state.rising) {
-      setScreenGridMode();
       setScreenText(`diffing every gauge against yesterday ${'·'.repeat(1 + Math.floor(t * 2) % 3)}`);
       return;
     }
@@ -6287,10 +6409,9 @@ function render(t) {
       }
       return;
     }
-    const g = makeGrid(totalGridRows(view));
-    drawTotal(g, view);
-    setScreenHtml(gridToHtml(g));
-    if (!fitted) { fitted = true; fitFont(); }
+    const vm = totalPlateModel();
+    setScreenPlate(renderTotal(vm));
+    setSourceLine(vm.source);
     return;
   }
   if (mode === 'river') {
@@ -6311,13 +6432,13 @@ function render(t) {
       }
       const g = makeGrid(waveGridRows(waveData));
       drawWave(g, waveData);
-      setScreenHtml(gridToHtml(g));
+      setScreenGridHtml(gridToHtml(g));
       if (!fitted) { fitted = true; fitFont(); }
       return;
     }
     const g = makeGrid(riverGridRows(state.riverStations));
     drawRiver(g, state.riverStations, t);
-    setScreenHtml(gridToHtml(g));
+    setScreenGridHtml(gridToHtml(g));
     if (!fitted) { fitted = true; fitFont(); }
     return;
   }
@@ -6335,7 +6456,7 @@ function render(t) {
   if (viewMode === 'years') {
     const g = makeGrid(histGridRows(histStats()));
     drawHistYears(g);
-    setScreenHtml(gridToHtml(g));
+    setScreenGridHtml(gridToHtml(g));
     if (!fitted) { fitted = true; fitFont(); }
     return;
   }
@@ -6345,7 +6466,7 @@ function render(t) {
   row = drawChart(g, row, t);
   row = drawSparkline(g, row, t);
   drawProfile(g, row + PROFILE_GAP);
-  setScreenHtml(gridToHtml(g));
+  setScreenGridHtml(gridToHtml(g));
   if (!fitted) { fitted = true; fitFont(); } // refit once the real grid exists
 }
 let fitted = false;
