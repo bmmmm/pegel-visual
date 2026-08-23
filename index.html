@@ -1569,7 +1569,7 @@ function applyStationChrome() {
 }
 
 function applyRiverChrome() {
-  document.title = 'PEGEL://' + state.river;
+  document.title = 'PEGEL://' + waterLabel(state.river);
   stationLink.textContent = '?river=' + state.river + viewSuffix();
   stationLink.href = currentModeQuery();
   permaLabel.textContent = 'river link:';
@@ -1644,7 +1644,8 @@ function renderCrumbs() {
   if (mode === 'rivers') parts.push(here(T.allWaters));
   else {
     parts.push(`<a href="?rivers" data-nav="rivers">${esc(T.allWaters)}</a>`);
-    if (water) parts.push(mode === 'river' ? here(water) : `<a${navAttrs('river:' + water)}>${esc(water)}</a>`);
+    // the crumb reads the display name; `water` stays the identity the link carries
+    if (water) parts.push(mode === 'river' ? here(waterLabel(water)) : `<a${navAttrs('river:' + water)}>${esc(waterLabel(water))}</a>`);
     if (mode === 'station') parts.push(here(station));
     else if (mode === 'rising') parts.push(here(T.risingBoard));
     else if (mode === 'total') parts.push(here(T.totalBoard));
@@ -3498,7 +3499,7 @@ function renderRiverChart(vm) {
 function renderRiver(vm) {
   const vh = `<p class="vh">${esc(vm.summary)}</p>`;
   const grad = vm.gradient != null ? ` · ${esc(T.meanFall)} ${vm.gradient.toFixed(2)} m/km` : '';
-  const head = `<header class="p-head"><h1>${esc(vm.river)}</h1>` +
+  const head = `<header class="p-head"><h1>${esc(waterLabel(vm.river))}</h1>` +
     `<p class="p-sub">${vm.gauges} ${esc(plural(vm.gauges, 'gauge'))} · ${Math.round(vm.kmSpan)} km${grad} — ${esc(T.riverSub)}</p></header>`;
   const tabs = `<nav class="p-tabs" aria-label="view">` +
     navOpen('cmd:live', 'on') + 'profile' + navClose('cmd:live') +
@@ -4126,7 +4127,7 @@ function waveViewModel(w) {
 
 function renderWave(vm) {
   const vh = `<p class="vh">${esc(vm.summary)}</p>`;
-  const head = `<header class="p-head"><h1>${esc(vm.river)} · ${esc(T.waveTitle)}</h1>` +
+  const head = `<header class="p-head"><h1>${esc(waterLabel(vm.river))} · ${esc(T.waveTitle)}</h1>` +
     `<p class="p-sub">${esc(T.waveSub)}</p></header>`;
   const tabs = `<nav class="p-tabs" aria-label="view">` +
     navOpen('cmd:live') + 'profile' + navClose('cmd:live') +
@@ -4276,7 +4277,7 @@ function placeRiverLabels(rivers, cap = mapLabelCap(), size = mapLabelUnits()) {
     const x = mapX(rv.lo), y = mapY(rv.la);
     if (x < 0 || x > MAP_W || y < 0 || y > MAP_H) { spilled.push(rv); continue; }
     const dot = mapDot(rv.n);
-    const text = `${rv.name} ${rv.n}`;
+    const text = `${waterLabel(rv.name)} ${rv.n}`;  // the label reads, rv.name still navigates
     const dotBox = { x0: x - dot.r, x1: x + dot.r, y0: y - dot.r, y1: y + dot.r };
     if (boxes.some(b => boxHit(dotBox, b))) { spilled.push(rv); continue; }
     let spot = null;
@@ -4326,7 +4327,7 @@ function riversViewModel() {
 function renderRiversMap(vm) {
   const outline = DE_OUTLINE.map(([lo, la]) => `${mapX(lo).toFixed(1)},${mapY(la).toFixed(1)}`).join(' ');
   const marks = vm.placed.map(p =>
-    `<a${navAttrs('river:' + p.name)}><title>${esc(p.name)}: ${p.n} ${esc(plural(p.n, 'gauge'))}</title>` +
+    `<a${navAttrs('river:' + p.name)}><title>${esc(waterLabel(p.name))}: ${p.n} ${esc(plural(p.n, 'gauge'))}</title>` +
     `<circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="${p.r}" class="mdot"/>` +
     `<text x="${p.lx.toFixed(1)}" y="${p.ly.toFixed(1)}" class="mlbl"${attr('text-anchor', p.anchor)}>${esc(p.text)}</text>` +
     // an invisible target keeps the dot tappable at phone scale
@@ -4341,7 +4342,7 @@ function renderRiversMap(vm) {
 
 function renderRiversList(vm) {
   const rows = vm.all.map(r =>
-    `<li><a${navAttrs('river:' + r.name)}><span class="name">${esc(r.name)}</span>` +
+    `<li><a${navAttrs('river:' + r.name)}><span class="name">${esc(waterLabel(r.name))}</span>` +
     `<span class="meta">${r.n} ${esc(plural(r.n, 'gauge'))}</span></a></li>`).join('');
   return `<ol class="a-z">${rows}</ol>`;
 }
@@ -4690,7 +4691,7 @@ function renderRisingRow(x) {
     `<span class="b-rank">${x.rank}</span>` +
     `<span class="b-dir" aria-hidden="true">${x.dir === 'up' ? '▲' : '▼'}</span>` +
     `<a class="b-name"${navAttrs(x.n)}>${esc(x.n)}</a>` +
-    (x.w ? `<a class="b-river"${navAttrs('river:' + x.w)}>${esc(x.w)}</a>` : '<span class="b-river"></span>') +
+    (x.w ? `<a class="b-river"${navAttrs('river:' + x.w)}>${esc(waterLabel(x.w))}</a>` : '<span class="b-river"></span>') +
     `<span class="b-now">${x.v} cm</span>` +
     `<span class="b-rate">${rate} cm/d${span}</span>` +
     spark + badge + '</li>';
@@ -6044,6 +6045,12 @@ const knownWaters = new Set();  // UPPERCASE river names — typing one opens ri
 const stationMeta = new Map(); // UPPERCASE shortname -> { w: water, km }
 const normMap = new Map();     // ASCII-folded name -> real shortname
 const watersNorm = new Map();  // ASCII-folded river name -> UPPERCASE river name
+// WSV hands a handful of waters through as raw tokens (NEUE_MAAS). Only those get
+// their longname for display — and it has to BE the longname, since ITTER_DIEMEL
+// is "ITTER ZUR DIEMEL", not "ITTER DIEMEL". Everything else keeps its shortname,
+// so MLK stays MLK, and the shortname stays the identity behind ?river= and nav.
+const waterLongs = new Map();  // UPPERCASE shortname -> display name, underscored waters only
+function waterLabel(short) { return waterLongs.get((short || '').toUpperCase()) || short; }
 
 // two foldings so both spellings of an umlaut resolve: KÖLN -> KOELN and KOLN
 const foldAe = s => s.toUpperCase().replace(/Ä/g, 'AE').replace(/Ö/g, 'OE').replace(/Ü/g, 'UE').replace(/ß/g, 'SS');
@@ -6081,7 +6088,8 @@ function resolveWater(raw) {
 
 // both index into the known-name sets/maps the custom typeahead and the resolvers
 // read from; the suggestion UI is rendered on demand from these, not from the DOM
-function fillWaters(list) {
+function fillWaters(list, labels) {
+  if (labels) for (const [short, long] of Object.entries(labels)) waterLongs.set(short, long);
   for (const w of list) {
     const up = (w || '').toUpperCase();
     if (!up || knownWaters.has(up)) continue;
@@ -6142,13 +6150,18 @@ async function loadStationList() {
 async function loadWaterList() {
   let cached = null;
   try { cached = JSON.parse(localStorage.getItem(WATERS_CACHE)); } catch {}
-  if (cached && Array.isArray(cached.list)) fillWaters(cached.list);
+  if (cached && Array.isArray(cached.list)) fillWaters(cached.list, cached.labels);
   if (cached && Array.isArray(cached.list) && Date.now() - cached.t < STATIONS_TTL) return;
   try {
     const waters = await getJson(`${API}/waters.json`);
     const list = [...new Set(waters.map(w => (w.shortname || '').toUpperCase()).filter(Boolean))].sort();
-    localStorage.setItem(WATERS_CACHE, JSON.stringify({ t: Date.now(), list }));
-    fillWaters(list);
+    const labels = {};
+    for (const w of waters) {
+      const short = (w.shortname || '').toUpperCase();
+      if (short.includes('_') && w.longname) labels[short] = w.longname.toUpperCase();
+    }
+    localStorage.setItem(WATERS_CACHE, JSON.stringify({ t: Date.now(), list, labels }));
+    fillWaters(list, labels);
     scheduleRender();
     // mirror the station self-correction: a first-ever visitor opening an
     // ASCII-spelled ?river= link had no cached water list to fold against
@@ -6265,7 +6278,7 @@ function finderRender() {
     if (!w) continue;
     const open = w === finderWater;
     parts.push(`<button type="button" data-water="${esc(w)}" aria-expanded="${open}">` +
-      `<span class="name">${open ? '▾' : '▸'} ${esc(w)}</span>` +
+      `<span class="name">${open ? '▾' : '▸'} ${esc(waterLabel(w))}</span>` +
       `<span class="meta">${stations.length} ${esc(T.gauges)}</span></button>`);
     if (open) {
       parts.push('<div class="sub">');
@@ -6486,7 +6499,7 @@ try {
   const c = JSON.parse(localStorage.getItem(STATIONS_CACHE));
   if (c && Array.isArray(c.list)) fillDatalist(c.list);
   const wc = JSON.parse(localStorage.getItem(WATERS_CACHE));
-  if (wc && Array.isArray(wc.list)) fillWaters(wc.list);
+  if (wc && Array.isArray(wc.list)) fillWaters(wc.list, wc.labels);
 } catch {}
 
 // ---------- infobox (feature guide dialog) ----------

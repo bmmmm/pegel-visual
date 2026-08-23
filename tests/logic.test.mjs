@@ -2434,6 +2434,30 @@ test('renderRising: the key names the sparkline and the rate bar it draws', () =
   assert.ok(key.includes(app.run('T.risingBarKey')), 'the bar is explained');
 });
 
+// WSV passes three waters through as raw tokens (NEUE_MAAS). Those read as their
+// longname — ITTER_DIEMEL is "ITTER ZUR DIEMEL", so underscore-to-space would be
+// wrong — while short codes stay codes and the shortname stays the identity.
+test('waterLabel: only underscored waters swap, and only for display', () => {
+  const app = loadApp({ now: NOON });
+  const out = app.run(`(() => {
+    fillWaters(['NEUE_MAAS', 'ITTER_DIEMEL', 'MLK'], { NEUE_MAAS: 'NEUE MAAS', ITTER_DIEMEL: 'ITTER ZUR DIEMEL' });
+    return { neue: waterLabel('NEUE_MAAS'), itter: waterLabel('ITTER_DIEMEL'),
+             mlk: waterLabel('MLK'), plain: waterLabel('RHEIN'), blank: waterLabel('') };
+  })()`);
+  assert.equal(out.neue, 'NEUE MAAS');
+  assert.equal(out.itter, 'ITTER ZUR DIEMEL', 'the longname, not underscore-to-space');
+  assert.equal(out.mlk, 'MLK', 'a short code stays a short code');
+  assert.equal(out.plain, 'RHEIN');
+  assert.equal(out.blank, '');
+
+  const iso = new Date(NOON - 864e5).toISOString();
+  const shard = shardWith(2026, 1, 31, 13, iso, { s0: 100 });
+  const raw = [bulk('s0', 'ROTTERDAM', 'NEUE_MAAS', 140, SPAN)];
+  const { html } = risingPlate(app, raw, shard, NOON);
+  assert.ok(html.includes('>NEUE MAAS<'), 'the board row reads the display name');
+  assert.ok(html.includes('data-nav="river:NEUE_MAAS"'), 'while the link still carries the identity');
+});
+
 // a quiet river is a real state, not a half-loaded view: without this the counts
 // and the key sit either side of a gap that names nothing
 test('renderRising: a baseline with nothing moving still says so', () => {
