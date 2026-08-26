@@ -355,14 +355,13 @@ export function buildManifest(stations, out) {
   return manifest;
 }
 
-// what a --current run fetches: normally the running year; in January also the
-// just-completed one, so it gets frozen into its immutable file
+// what a --current run starts at: normally the running year; in January also
+// the just-completed one, so it gets frozen into its immutable file. That is
+// the plan's whole output — the REST window is capped by the API itself, and
+// the meta.fetchedThrough claim is graduateCompletedYear's to make (the plan
+// used to carry both as fields nothing in production ever read).
 export function currentRunPlan() {
-  return {
-    startYear: now.getUTCMonth() === 0 ? CURRENT_YEAR - 1 : CURRENT_YEAR,
-    fetchedThrough: CURRENT_YEAR - 1,
-    endDate: now.toISOString().slice(0, 10),
-  };
+  return { startYear: now.getUTCMonth() === 0 ? CURRENT_YEAR - 1 : CURRENT_YEAR };
 }
 
 const readJson = path => { try { return JSON.parse(readFileSync(path, 'utf8')); } catch { return null; } };
@@ -562,7 +561,7 @@ async function main() {
     try {
       let startYear, fetchedThrough;
       if (CURRENT_ONLY) {
-        ({ startYear, fetchedThrough } = currentRunPlan());
+        ({ startYear } = currentRunPlan());
       } else {
         let meta = {};
         try { meta = JSON.parse(readFileSync(join(dir, 'meta.json'), 'utf8')); } catch {}

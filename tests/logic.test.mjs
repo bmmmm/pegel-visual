@@ -779,7 +779,9 @@ test('archive script: January --current run freezes the completed year', () => {
       { timestamp: '2027-01-02T12:00:00+01:00', value: 270 },
     ];
     const dir = mkdtempSync(join(tmpdir(), 'pegel-jan-'));
-    writeStation(dir, 'BONN', condense(measurements), plan.startYear, plan.fetchedThrough);
+    // 2026 is what graduateCompletedYear claims after a successful freeze —
+    // the plan itself no longer carries a fetchedThrough
+    writeStation(dir, 'BONN', condense(measurements), plan.startYear, 2026);
     const files = readdirSync(dir).sort();
     const closed = JSON.parse(readFileSync(join(dir, 'closed.json')));
     const frozen = closed.find(yr => yr.y === 2026);
@@ -789,8 +791,6 @@ test('archive script: January --current run freezes the completed year', () => {
       meta: JSON.parse(readFileSync(join(dir, 'meta.json'))) }));
   `);
   assert.equal(out.plan.startYear, 2026, 'January re-pulls the completed year');
-  assert.equal(out.plan.fetchedThrough, 2026);
-  assert.equal(out.plan.endDate, '2027-01-03');
   assert.deepEqual(out.files, ['closed.json', 'current.json', 'meta.json']);
   assert.deepEqual(out.bundleYears, [2026], 'completed year lands in the immutable bundle');
   assert.equal(out.frozenLastMax, 260, 'Dec 31 (MEZ) is the last slot of the frozen year');
@@ -805,8 +805,6 @@ test('archive script: mid-year --current run touches only the running year', () 
     console.log(JSON.stringify(currentRunPlan()));
   `);
   assert.equal(out.startYear, 2026);
-  assert.equal(out.fetchedThrough, 2025);
-  assert.equal(out.endDate, '2026-07-16');
 });
 
 test('archive script: a backfill folds every completed year into one closed.json bundle', async () => {
