@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mezParts, daysInMonth, emptyShard, applySnapshot, parseBulkForSnapshot, shardIsPrunable, shardName, medianDailySpan, TIDAL_SPAN_CM } from '../scripts/snapshot-wsv.mjs';
+import { mezParts, daysInMonth, emptyShard, applySnapshot, parseBulkForSnapshot, shardIsPrunable, shardName, medianDailySpan, TIDAL_SPAN_CM, plausibilityEnvelope, implausibleCapture, lastCapturedValue, ENVELOPE_FLOOR_CM } from '../scripts/snapshot-wsv.mjs';
 
 test('daysInMonth: month lengths incl. leap years', () => {
   assert.equal(daysInMonth(2026, 2), 28);
@@ -114,4 +114,61 @@ test('shardIsPrunable: strictly older than max-months, in MEZ', () => {
   assert.equal(shardIsPrunable(2026, 6, ref, 1), true);
   assert.equal(shardIsPrunable(2025, 8, ref, 12), false);
   assert.equal(shardIsPrunable(2025, 7, ref, 12), true);
+});
+
+// ---------- the plausibility gate (LOBITH 2026-08-18/19: isolated 2000+cm points) ----------
+
+// year bundle fixture: `days` entries of [min, max], null = gap
+const bundle = (y, days) => ({
+  y,
+  min: days.map(d => d && d[0]),
+  max: days.map(d => d && d[1]),
+});
+
+test('plausibilityEnvelope: observed range widened by span/range/floor, whichever is widest', () => {
+  const quiet = bundle(2026, Array(20).fill([500, 505])); // range 5, span 5
+  const env = plausibilityEnvelope([quiet]);
+  assert.deepEqual(env, { lo: 500 - ENVELOPE_FLOOR_CM, hi: 505 + ENVELOPE_FLOOR_CM },
+    'a quiet gauge gets the floor margin');
+  const tidal = bundle(2026, Array(20).fill([100, 350])); // span 250 -> margin 1000
+  assert.deepEqual(plausibilityEnvelope([tidal]), { lo: 100 - 1000, hi: 350 + 1000 });
+  const flood = bundle(2026, [...Array(19).fill([200, 210]), [1180, 1200]]); // range 1000 -> margin 250
+  assert.deepEqual(plausibilityEnvelope([flood]), { lo: 200 - 250, hi: 1200 + 250 });
+});
+
+test('plausibilityEnvelope: too thin to judge, or no record at all, is null', () => {
+  assert.equal(plausibilityEnvelope([bundle(2026, Array(13).fill([500, 505]))]), null);
+  assert.equal(plausibilityEnvelope([null, null]), null);
+  const split = [bundle(2025, Array(7).fill([500, 505])), bundle(2026, Array(7).fill([510, 515]))];
+  assert.ok(plausibilityEnvelope(split), 'days accumulate across bundles');
+});
+
+test('implausibleCapture: the isolated LOBITH spike falls, the vouched-for record flood passes', () => {
+  const envelope = { lo: -364, hi: 1697 }; // LOBITH's measured 2026 envelope
+  assert.equal(implausibleCapture({ v: 614, envelope, prev: 610, span: 15 }), false, 'a normal day');
+  assert.equal(implausibleCapture({ v: 2013, envelope, prev: 614, span: 15 }), true,
+    'the sensor artifact stands alone — yesterday was 614');
+  assert.equal(implausibleCapture({ v: 1750, envelope, prev: 1680, span: 15 }), false,
+    'a record flood arrives over days — yesterday already vouches');
+  assert.equal(implausibleCapture({ v: 2013, envelope, prev: null, span: 15 }), true,
+    'outside the envelope with no capture history, nobody vouches');
+});
+
+test('implausibleCapture: without an envelope only the sentinel bounds judge', () => {
+  assert.equal(implausibleCapture({ v: 99999, envelope: null, prev: null, span: null }), true);
+  assert.equal(implausibleCapture({ v: -0.87, envelope: null, prev: null, span: null }), false,
+    'an m+NN gauge value passes the absolute bounds');
+});
+
+test('lastCapturedValue: scans the current shard backwards, then the previous month', () => {
+  const cur = applySnapshot(emptyShard(2026, 9), {
+    dayIdx: 0, captureIso: 'x', stations: [{ uuid: 'a', n: 'A', w: 'W', v: null }],
+  });
+  const prev = applySnapshot(emptyShard(2026, 8), {
+    dayIdx: 30, captureIso: 'y', stations: [{ uuid: 'a', n: 'A', w: 'W', v: 614 }],
+  });
+  assert.equal(lastCapturedValue([cur, prev], 'a'), 614, 'day-1 runs reach into the previous month');
+  const cur2 = applySnapshot(cur, { dayIdx: 1, captureIso: 'z', stations: [{ uuid: 'a', n: 'A', w: 'W', v: 620 }] });
+  assert.equal(lastCapturedValue([cur2, prev], 'a'), 620);
+  assert.equal(lastCapturedValue([null, prev], 'b'), null, 'unknown station');
 });

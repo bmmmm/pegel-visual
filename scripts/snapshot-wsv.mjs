@@ -29,12 +29,21 @@
 // dir's parent — exactly where the CI checkout has it; without an archive
 // the flags are simply omitted.
 //
+// Captured values pass a plausibility gate before they land in the slot: the
+// raw bulk feed occasionally serves a single wild point well inside the
+// absolute sentinel bounds (LOBITH 2026-08-18/19: 2000+cm beside a real 614),
+// and a day-apart diff against such a point poisons the ?rising board. The
+// gate reads the station's own archived record (envelope) and yesterday's
+// captured value — see implausibleCapture() for the exact verdict. Without
+// an archive checkout only the absolute bounds apply.
+//
 //   node scripts/snapshot-wsv.mjs --out archive-branch/archive/snapshots
 //   node scripts/snapshot-wsv.mjs --out archive/snapshots --max-months 24
 //   node scripts/snapshot-wsv.mjs --out /tmp/snaps --archive /tmp/archive
 import { mkdirSync, writeFileSync, readFileSync, readdirSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { PLAUSIBLE_MIN_CM, PLAUSIBLE_MAX_CM } from './fetch-wsv-archive.mjs';
 
 const API = 'https://www.pegelonline.wsv.de/webservices/rest-api/v2';
 // PEGEL_NOW pins the clock for tests and local two-day rehearsals
@@ -113,15 +122,73 @@ export function medianDailySpan(bundle, minDays = 14) {
   return spans[Math.floor(spans.length / 2)];
 }
 
-function stationDailySpan(archiveDir, uuid) {
+// a station's recent archived record: the running year plus the last closed
+// one — shared substrate of the tidal flag and the plausibility envelope
+function stationRecordBundles(archiveDir, uuid) {
   const read = f => {
     try { return JSON.parse(readFileSync(join(archiveDir, uuid, f), 'utf8')); }
     catch { return null; }
   };
-  const fromCurrent = medianDailySpan(read('current.json'));
-  if (fromCurrent != null) return fromCurrent;
   const closed = read('closed.json');
-  return Array.isArray(closed) && closed.length ? medianDailySpan(closed[closed.length - 1]) : null;
+  return [read('current.json'), Array.isArray(closed) && closed.length ? closed[closed.length - 1] : null];
+}
+
+// Plausibility envelope from the station's own archived record: observed
+// min/max across the bundles, widened by a margin scaled to how this gauge
+// actually moves (4x its median daily span, a quarter of its observed range,
+// at least ENVELOPE_FLOOR_CM — whichever is widest, so quiet canal gauges,
+// tidal gauges and flood-prone rivers each get sensible headroom). Values in
+// the gauge's own unit, like the archive. Null when fewer than minDays days
+// are on record — a fresh station is not judged. Exists because the raw feed
+// occasionally serves a single wild point that is well inside the absolute
+// sentinel bounds (LOBITH 2026-08-18/19: 2000+cm next to a real 614) and
+// would poison the day slot the ?rising baseline is built from.
+export const ENVELOPE_FLOOR_CM = 100;
+export function plausibilityEnvelope(bundles, { minDays = 14 } = {}) {
+  let lo = Infinity, hi = -Infinity;
+  const spans = [];
+  for (const b of bundles) {
+    if (!b || !Array.isArray(b.min) || !Array.isArray(b.max)) continue;
+    for (let i = 0; i < b.min.length; i++) {
+      if (b.min[i] == null || b.max[i] == null) continue;
+      if (b.min[i] < lo) lo = b.min[i];
+      if (b.max[i] > hi) hi = b.max[i];
+      spans.push(b.max[i] - b.min[i]);
+    }
+  }
+  if (spans.length < minDays) return null;
+  spans.sort((a, b) => a - b);
+  const margin = Math.max(4 * spans[Math.floor(spans.length / 2)], 0.25 * (hi - lo), ENVELOPE_FLOOR_CM);
+  return { lo: lo - margin, hi: hi + margin };
+}
+
+// absolute sentinel bounds, shared with condense() and the totals build —
+// the coarse outer gate for stations too fresh to have an envelope
+export const plausibleAbs = v => v >= PLAUSIBLE_MIN_CM && v <= PLAUSIBLE_MAX_CM;
+
+// the station's most recent captured value, scanning the given shards in
+// order (current month first, then the previous one for day-1 runs)
+export function lastCapturedValue(shards, uuid) {
+  for (const shard of shards) {
+    const v = shard && shard.stations && shard.stations[uuid] && shard.stations[uuid].v;
+    if (!Array.isArray(v)) continue;
+    for (let i = v.length - 1; i >= 0; i--) if (v[i] != null) return v[i];
+  }
+  return null;
+}
+
+// The gate's verdict. Outside its own envelope a value is believed only when
+// yesterday vouches for it: a record flood arrives over days (yesterday was
+// already high, the daily jump is moderate), a sensor artifact stands alone
+// (LOBITH: 614 -> 2013 overnight). Calibrated 2026-08-27 against the real
+// archive: 0 of 10286 captured August values dropped, the LOBITH spike is.
+// No envelope (fresh station) -> only the absolute sentinel bounds; outside
+// the envelope with no previous capture at all -> dropped (nobody vouches).
+export function implausibleCapture({ v, envelope, prev, span }) {
+  if (!envelope) return !plausibleAbs(v);
+  if (v >= envelope.lo && v <= envelope.hi) return false;
+  if (prev == null) return true;
+  return Math.abs(v - prev) > Math.max(10 * (span ?? 0), 2 * ENVELOPE_FLOOR_CM);
 }
 
 export function shardIsPrunable(y, m, refDate, maxMonths) {
@@ -145,11 +212,6 @@ async function main() {
     { signal: AbortSignal.timeout(60000) });
   if (!res.ok) throw new Error('bulk stations HTTP ' + res.status);
   const stations = parseBulkForSnapshot(await res.json());
-  let flagged = 0;
-  for (const s of stations) {
-    const span = stationDailySpan(ARCHIVE_DIR, s.uuid);
-    if (span != null && span >= TIDAL_SPAN_CM) { s.t = 1; flagged++; }
-  }
 
   const { y, m, dayIdx } = mezParts(now);
   mkdirSync(OUT, { recursive: true });
@@ -167,13 +229,33 @@ async function main() {
   if (!Array.isArray(shard.days) || shard.days.length !== daysInMonth(y, m)) {
     throw new Error(`${path}: shard shape mismatch for ${y}-${m}`);
   }
+  // the previous month's shard backs the gate's "yesterday" on day-1 runs
+  const [py, pm] = m === 1 ? [y - 1, 12] : [y, m - 1];
+  let prevShard = null;
+  try { prevShard = JSON.parse(readFileSync(join(OUT, shardName(py, pm)), 'utf8')); } catch {}
+
+  let flagged = 0, dropped = 0;
+  for (const s of stations) {
+    const [current, lastClosed] = stationRecordBundles(ARCHIVE_DIR, s.uuid);
+    const span = medianDailySpan(current) ?? medianDailySpan(lastClosed);
+    if (span != null && span >= TIDAL_SPAN_CM) { s.t = 1; flagged++; }
+    if (s.v == null) continue;
+    // plausibility gate — an implausible point becomes a gap in the day
+    // slot, never the ?rising baseline
+    const envelope = plausibilityEnvelope([current, lastClosed]);
+    if (implausibleCapture({ v: s.v, envelope, span, prev: lastCapturedValue([shard, prevShard], s.uuid) })) {
+      console.log(`implausible: ${s.n} ${s.v}${envelope ? ` (envelope ${Math.round(envelope.lo)}..${Math.round(envelope.hi)})` : ' (sentinel bounds)'}`);
+      s.v = null;
+      dropped++;
+    }
+  }
 
   // the pinned clock stamps the capture too — a PEGEL_NOW rehearsal must yield
   // a slot that is old enough to serve as a baseline, not one stamped "now"
   const next = applySnapshot(shard, { dayIdx, captureIso: now.toISOString(), stations });
   writeFileSync(path, JSON.stringify(next));
   const captured = stations.filter(s => s.v != null).length;
-  console.log(`snapshot ${shardName(y, m)} day ${dayIdx + 1}: ${captured}/${stations.length} stations captured, ${flagged} tidal-flagged`);
+  console.log(`snapshot ${shardName(y, m)} day ${dayIdx + 1}: ${captured}/${stations.length} stations captured, ${flagged} tidal-flagged, ${dropped} implausible dropped`);
 
   if (MAX_MONTHS > 0) pruneOldShards(OUT, MAX_MONTHS, now);
 }
