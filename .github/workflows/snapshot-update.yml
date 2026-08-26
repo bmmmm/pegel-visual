@@ -41,6 +41,13 @@ jobs:
         # folds the fresh snapshot into the running year's per-river totals —
         # no network (reuses the persisted unit sidecar), stays cheap
         run: node scripts/build-river-totals.mjs --append --archive archive-branch/archive --out archive-branch/archive/totals
+      - name: Consistency gate
+        # content-level guard before anything is pushed: recency of the month
+        # shard (a force-push reset base stays weeks behind), totals really
+        # rebuilt this run (the append skips silently without units.json),
+        # station coverage, and no regression against the branch HEAD — the
+        # failure() step below already reports a red run to the issue
+        run: node scripts/check-archive-consistency.mjs --tree archive-branch/archive --git archive-branch
       - name: Commit and push
         id: push
         run: |

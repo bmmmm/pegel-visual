@@ -5,10 +5,14 @@ name: data-freshness
 # push to that branch cannot trigger any workflow itself — so if either job
 # silently stops running (schedule disabled, token expiry, a hung run eating
 # its timeout unnoticed) nothing else would ever say so. This runs a few
-# hours after the daily snapshot slot and checks how old the archive
-# branch's last commit is; past 36h it opens (or comments on) a single
-# tracking issue labeled data-freshness. It never closes issues itself —
-# closing the loop once the pipeline has caught up is a manual step.
+# hours after the daily snapshot slot and checks (a) how old the archive
+# branch's last commit is (past 36h = stale) and (b) whether the DEPLOYED
+# site's overview.json is more than 6h behind that commit — the branch can be
+# healthy while the pages dispatch never happened, and nothing else notices a
+# repaired branch that never reached the site. Either finding opens (or
+# comments on) a single tracking issue labeled data-freshness. It never
+# closes issues itself — closing the loop once the pipeline has caught up is
+# a manual step.
 
 on:
   schedule:
@@ -41,17 +45,42 @@ jobs:
 
           echo "archive branch last commit: $COMMIT_DATE (${AGE_HOURS}h ago)"
 
-          if [ "$AGE_HOURS" -le 36 ]; then
+          # deployed-data drift: a push to the orphan data branch cannot
+          # trigger pages.yml, so a repaired branch whose dispatch was skipped
+          # serves stale files forever. Every green daily run restamps
+          # overview.generated, so the deployed copy tracks the branch head
+          # within minutes; ?cb= busts the Pages CDN cache (max-age=600).
+          GEN=$(curl -sf "https://bmmmm.github.io/pegel-visual/archive/totals/overview.json?cb=${{ github.run_id }}" | jq -r '.generated // empty' || true)
+          # GNU date treats an empty -d as "today 00:00" — an unfetchable
+          # overview must count as infinite drift, not as fresh
+          if [ -n "$GEN" ]; then GEN_EPOCH=$(date -d "$GEN" +%s 2>/dev/null || echo 0); else GEN_EPOCH=0; fi
+          DRIFT_HOURS=$(( (COMMIT_EPOCH - GEN_EPOCH) / 3600 ))
+          echo "deployed overview.generated: ${GEN:-unfetchable} (${DRIFT_HOURS}h behind the branch head)"
+
+          NL=$'\n'
+          PROBLEMS=""
+          if [ "$AGE_HOURS" -gt 36 ]; then
+            PROBLEMS="The archive branch's last commit is ${AGE_HOURS}h old (committed $COMMIT_DATE), past the 36h freshness threshold."
+          fi
+          if [ "$DRIFT_HOURS" -gt 6 ]; then
+            PROBLEMS="$PROBLEMS${PROBLEMS:+$NL$NL}The deployed site's overview.json (generated: ${GEN:-unfetchable}) is ${DRIFT_HOURS}h behind the archive branch head — the branch was updated but the pages deploy never ran. Fix: gh workflow run pages.yml --ref main"
+          fi
+
+          if [ -z "$PROBLEMS" ]; then
             echo "fresh, nothing to do"
             exit 0
           fi
 
-          TITLE="Data pipeline stale: archive branch last updated $COMMIT_DATE"
+          if [ "$AGE_HOURS" -gt 36 ]; then
+            TITLE="Data pipeline stale: archive branch last updated $COMMIT_DATE"
+          else
+            TITLE="Data pipeline stale: deployed site behind the archive branch"
+          fi
           ISSUE_NUM=$(gh issue list --label data-freshness --state open --json number --jq '.[0].number')
 
           if [ -n "$ISSUE_NUM" ]; then
-            gh issue comment "$ISSUE_NUM" --body "Still stale: the archive branch's last commit is $COMMIT_DATE (${AGE_HOURS}h ago)."
+            gh issue comment "$ISSUE_NUM" --body "Still stale: $PROBLEMS"
           else
-            BODY="The archive branch's last commit is ${AGE_HOURS}h old (committed $COMMIT_DATE), past the 36h freshness threshold."$'\n\n'"Expected cadence: snapshot-update.yml runs daily, archive-update.yml runs monthly. Check both workflows' recent runs for failures or a disabled schedule."$'\n\n'"This issue was opened automatically by data-freshness.yml and is never closed automatically — close it once the pipeline is confirmed caught up."
+            BODY="$PROBLEMS$NL$NL""Expected cadence: snapshot-update.yml runs daily, archive-update.yml runs monthly. Check both workflows' recent runs for failures or a disabled schedule."$NL$NL"This issue was opened automatically by data-freshness.yml and is never closed automatically — close it once the pipeline is confirmed caught up."
             gh issue create --title "$TITLE" --label data-freshness --body "$BODY"
           fi

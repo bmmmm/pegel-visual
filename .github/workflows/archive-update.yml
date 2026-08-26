@@ -64,6 +64,12 @@ jobs:
         # sidecar so metre-reporting elevation gauges stay excluded. Runs last
         # so it sees the WSV refresh, the gap sweep and the RWS upsert.
         run: node scripts/build-river-totals.mjs --rebuild --archive archive-branch/archive --out archive-branch/archive/totals --fetch-units
+      - name: Consistency gate
+        # content-level guard before anything is pushed: recency, totals
+        # liveness, station coverage, and no regression against the branch
+        # HEAD (deleted files, shrunken closed.json, nulled current.json
+        # slots) — the failure() step below already reports a red run
+        run: node scripts/check-archive-consistency.mjs --tree archive-branch/archive --git archive-branch
       - name: Commit and push
         id: push
         run: |
