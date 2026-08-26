@@ -6,6 +6,9 @@
 //      prepare endpoint reads `end` as midnight — ~2076 station-years
 //   3. a station leaving the live WSV list losing its manifest entry while its
 //      data directory stays on disk — ILMENAU, 14 closed years, invisible
+//   4. (from the 2026-08-19 logic audit) a repeat January run reopening the
+//      frozen year: freezeFromZip answers false once current.json moved on,
+//      so the REST tail was folded back over the validated ZIP values
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
@@ -21,6 +24,7 @@ const CURRENT_YEAR = 2026;
 const {
   condense, daysInYear, buildManifest, freezeFromZip,
   requestEnd, lastYearOf, planChunks, dropSpillYears,
+  writeStation, graduateCompletedYear,
   PLAUSIBLE_MIN_CM, PLAUSIBLE_MAX_CM,
 } = await import('../scripts/fetch-wsv-archive.mjs');
 
@@ -226,4 +230,53 @@ test('buildManifest survives an orphan with neither meta.json nor a previous man
   const m = buildManifest([], out);
   assert.deepEqual(m.stations['uuid-bare'], { n: '', w: '', from: CURRENT_YEAR, to: CURRENT_YEAR },
     'listed with what is knowable — the data stays reachable');
+});
+
+// ---------- 4. repeat January runs must not reopen the frozen year ----------
+
+// freezeFromZip returns false both when nothing was ever accumulated AND when
+// the year already graduated, so a second January run (workflow re-run, manual
+// dispatch, the local runbook) used to skip years.delete(y) and let
+// writeStation's extreme union fold the raw REST December back over the
+// corrected ZIP values the first run had frozen into the immutable bundle.
+test('graduateCompletedYear: a repeat run drops the REST tail of an already-frozen year', async () => {
+  const dir = tmp('pegel-refreeze-');
+  const blank = () => Array(365).fill(null);
+  // state after a successful January run: 2025 frozen from the ZIP, day 340
+  // carrying the validated 81/95 rather than the raw REST spike
+  const frozen = { y: 2025, min: blank(), max: blank() };
+  frozen.min[340] = 81; frozen.max[340] = 95;
+  writeFileSync(join(dir, 'closed.json'), JSON.stringify([frozen]));
+  const cur = { y: CURRENT_YEAR, min: blank(), max: blank() };
+  cur.min[0] = 261; cur.max[0] = 265;
+  writeFileSync(join(dir, 'current.json'), JSON.stringify(cur));
+
+  // the repeat run re-pulls 2025 over REST and still holds the raw outlier
+  const rest2025 = { y: 2025, min: blank(), max: blank() };
+  rest2025.min[340] = 80; rest2025.max[340] = 300;
+  const years = new Map([[2025, rest2025], [CURRENT_YEAR, cur]]);
+
+  const calls = [];
+  const through = await graduateCompletedYear(dir, 'uuid-x', 2025, years, 'test',
+    async (...a) => { calls.push(a); return { years: new Map() }; });
+  assert.equal(through, 2025, 'the already-frozen year is still claimed as fetchedThrough');
+  assert.deepEqual(calls, [], 'the ZIP path is not re-fetched — current.json has moved on');
+  assert.ok(!years.has(2025), 'the REST tail of the frozen year left the map');
+
+  writeStation(dir, 'BONN', years, null, through);
+  const closed = JSON.parse(readFileSync(join(dir, 'closed.json')));
+  const y25 = closed.find(b => b.y === 2025);
+  assert.equal(y25.min[340], 81, 'the frozen minimum survives the repeat run');
+  assert.equal(y25.max[340], 95, 'the raw REST spike stays out of the immutable bundle');
+});
+
+test('graduateCompletedYear: a failed ZIP freeze of a never-frozen year claims nothing', async () => {
+  const dir = tmp('pegel-nofreeze-');
+  const cur = { y: 2025, min: [100], max: [110] };
+  writeFileSync(join(dir, 'current.json'), JSON.stringify(cur));
+  const years = new Map([[2025, cur]]);
+  const through = await graduateCompletedYear(dir, 'uuid-x', 2025, years, 'test',
+    async () => { throw new Error('zip down'); });
+  assert.equal(through, 0, 'no fetchedThrough claim — the gap sweep must retry');
+  assert.ok(years.has(2025), 'the REST accumulation still graduates as before');
 });

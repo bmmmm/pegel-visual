@@ -418,6 +418,35 @@ export function writeStation(dir, name, years, fetchedFrom, fetchedThrough, extr
   return touched;
 }
 
+// True once the completed year sits in the immutable bundle. freezeFromZip answers
+// false both for "never accumulated" and for "already graduated", and the caller has
+// to tell those apart: on a repeat January run the year is already frozen, so the
+// REST tail must be dropped just the same — otherwise writeStation's extreme union
+// folds raw December values back over the validated ZIP ones the first run wrote.
+export function isFrozen(dir, y) {
+  return (readJson(join(dir, 'closed.json')) || []).some(yr => yr.y === y);
+}
+
+// What a January --current run does with the year that just completed. Either the
+// ZIP freeze graduates it now, or a previous run already did — and in BOTH cases the
+// REST tail of that year has to leave `years` before writeStation sees it, or the
+// extreme union folds raw December values back over the validated ZIP ones. Missing
+// that second case meant any repeat January run (a workflow re-run, a manual
+// dispatch, the local runbook) quietly undid the first run's corrections.
+// Returns the fetchedThrough to claim: the year on success, 0 when nothing is frozen.
+export async function graduateCompletedYear(dir, uuid, y, years, tag = '', fetchYear = fetchCondensed) {
+  let froze = false;
+  try {
+    froze = await freezeFromZip(dir, uuid, y, fetchYear);
+  } catch (e) {
+    console.log(`${tag} · zip freeze failed (${e.message}) — REST accumulation graduates, gap sweep heals ${y}`);
+    return 0;
+  }
+  if (!froze && !isFrozen(dir, y)) return 0;
+  years.delete(y);
+  return y;
+}
+
 // January freeze, ZIP-first: re-backfill the completed year from the archive
 // download (the same raw series the backfill uses; measured 27/29 overlap days
 // byte-identical to REST) before the REST accumulation graduates. Where the ZIP
@@ -538,19 +567,9 @@ async function main() {
         // meta.fetchedThrough — that would cancel the gap sweep for stations
         // whose ZIP backfill is still pending. Only a successful January ZIP
         // freeze of the completed year may claim it.
-        fetchedThrough = 0;
-        if (startYear < CURRENT_YEAR) {
-          try {
-            if (await freezeFromZip(dir, s.uuid, startYear)) {
-              fetchedThrough = startYear;
-              // the ZIP spans all of December — drop the REST tail of the frozen
-              // year so writeStation's extreme-union cannot reintroduce it
-              years.delete(startYear);
-            }
-          } catch (e) {
-            console.log(`${tag} · zip freeze failed (${e.message}) — REST accumulation graduates, gap sweep heals ${startYear}`);
-          }
-        }
+        fetchedThrough = startYear < CURRENT_YEAR
+          ? await graduateCompletedYear(dir, s.uuid, startYear, years, tag)
+          : 0;
       }
       // CURRENT_ONLY has no backfill-start claim to make — passing startYear
       // (the running year) here would wrongly stamp meta.fetchedFrom with it
