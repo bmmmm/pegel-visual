@@ -53,12 +53,29 @@
 //   # the old client on reseeded data would 404 on every deleted year file.
 //   # a push to the data branch can NOT trigger pages.yml (the orphan branch
 //   # carries no workflow files — verified 2026-07-17: the force-push produced
-//   # no run), so the dispatch below is what actually deploys the new data:
-//   git push origin main
-//   git push --force origin archive
+//   # no run), so the dispatch below is what actually deploys the new data.
+//   # The archive branch lives ONLY on the GitHub remote (`github`; origin is
+//   # the Forgejo code mirror and must never carry it — a stale copy there is
+//   # what enabled the 2026-08-23 force-push reset), and since that incident
+//   # it is protected (force-push + deletion blocked, enforce_admins on).
+//   # Classic protection has no per-flag endpoint for allow_force_pushes, so
+//   # lift it for exactly the one push and restore it immediately:
+//   git push origin main && git push github main
+//   gh api -X DELETE repos/bmmmm/pegel-visual/branches/archive/protection
+//   git push --force github archive
+//   gh api -X PUT repos/bmmmm/pegel-visual/branches/archive/protection \
+//     -H "Accept: application/vnd.github+json" --input - <<'JSON'
+//   {"required_status_checks":null,"enforce_admins":true,
+//    "required_pull_request_reviews":null,"restrictions":null,
+//    "allow_force_pushes":false,"allow_deletions":false}
+//   JSON
 //   gh workflow run pages.yml --ref main   # required — deploys the reseeded data
 //   # verify live as a fresh visitor: pick 20Y, the Network panel shows exactly
 //   # 3 archive requests (manifest.json, closed.json, current.json) and fills.
+//   # The consistency gate (check-archive-consistency.mjs) compares only
+//   # against the branch's own HEAD — after a reseed its first CI run treats
+//   # the new seed as the baseline, so no gate lifting is needed; R1/R2 still
+//   # require the seed to carry a fresh snapshot day and fresh totals.
 import { mkdirSync, writeFileSync, readFileSync, readdirSync, existsSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
