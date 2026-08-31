@@ -12,12 +12,24 @@
 //       days:     [iso-capture-timestamp | null, ...],   one slot per day of month
 //       stations: { <uuid>: { n, w, v: [cm | null, ...], t?: 1 } } }
 //
-// days[i] null = no successful run on day i+1; stations[uuid].v[i] null = the
+// days[i] null = no value could be obtained for day i+1 (no run landed on it
+// and the self-heal below found no data); stations[uuid].v[i] null = the
 // station was missing from an otherwise-successful capture. Day boundaries in
 // MEZ (fixed UTC+1), the same convention as fetch-wsv-archive.mjs' condense().
 // Re-running on the same day overwrites only that day's slot (idempotent).
 // Shards accumulate forever; --max-months is the pruning lever, deliberately
 // not passed by the CI workflow.
+//
+// Self-heal: GitHub cron drift reached 3-9h in late August 2026 and twice
+// pushed the daily run past MEZ midnight — the run then lands in the NEXT
+// day's slot and the scheduled day stays null (2026-08-27 was lost this way).
+// So after the live capture, every run scans the last BACKFILL_WINDOW_DAYS
+// for null day slots and refills them from the per-station timeseries
+// endpoint (raw data is retained ~30 days), picking the measurement nearest
+// the nominal capture instant and passing it through the same plausibility
+// gate. The drifted run that skipped a day repairs it in the same breath.
+// A healed slot is stamped with the exact nominal instant (…T15:17:00.000Z) —
+// the too-round timestamp marks it as backfilled.
 //
 // A station entry gains `t: 1` when its own archived daily min/max record says
 // the tide dominates it (median daily span >= TIDAL_SPAN_CM — rivers measure
@@ -191,6 +203,94 @@ export function implausibleCapture({ v, envelope, prev, span }) {
   return Math.abs(v - prev) > Math.max(10 * (span ?? 0), 2 * ENVELOPE_FLOOR_CM);
 }
 
+// ---------- self-heal backfill (pure parts) ----------
+
+// how far back a run tries to refill null day slots; well inside the WSV
+// API's ~30-day raw retention, small enough to bound the daily retry cost
+// when a day is permanently unobtainable
+export const BACKFILL_WINDOW_DAYS = 7;
+// a healed day is only written when at least this share of the roster
+// yielded a point — a thin day would block future heal attempts while
+// serving as a worse baseline than an honest null
+export const BACKFILL_MIN_COVERAGE = 0.5;
+// the nominal capture instant of a day, mirroring the primary cron slot —
+// backfilled values stay comparable to their live-captured neighbours
+export const CAPTURE_UTC = { hour: 15, minute: 17 };
+
+const nominalCaptureIso = (y, m, dayIdx) =>
+  new Date(Date.UTC(y, m - 1, dayIdx + 1, CAPTURE_UTC.hour, CAPTURE_UTC.minute)).toISOString();
+
+// null day slots of the last windowDays MEZ days (today excluded — that is
+// the live capture's slot), oldest first so a later hole finds a healed
+// witness. Days of months without a shard on disk are pre-history, not holes.
+export function missingRecentDays(shards, refDate, windowDays = BACKFILL_WINDOW_DAYS) {
+  const out = [];
+  for (let k = windowDays; k >= 1; k--) {
+    const { y, m, dayIdx } = mezParts(new Date(refDate.getTime() - k * 864e5));
+    const shard = shards.find(s => s && s.y === y && s.m === m);
+    // a shapeless shard (the previous month loads unvalidated) cannot be
+    // healed into — treat it like pre-history
+    if (!shard || !Array.isArray(shard.days) || shard.days[dayIdx] != null) continue;
+    out.push({ y, m, dayIdx, targetIso: nominalCaptureIso(y, m, dayIdx) });
+  }
+  return out;
+}
+
+// the finite measurement closest to the target instant, taken only from the
+// target's own MEZ day — a neighbouring day's point must never impersonate a
+// missing one
+export function pickNearestMeasurement(measurements, targetIso) {
+  const target = new Date(targetIso);
+  const day = mezParts(target);
+  let best = null, bestDist = Infinity;
+  for (const p of measurements || []) {
+    if (!p || !Number.isFinite(p.value)) continue;
+    const t = new Date(p.timestamp);
+    if (Number.isNaN(t.getTime())) continue;
+    const d = mezParts(t);
+    if (d.y !== day.y || d.m !== day.m || d.dayIdx !== day.dayIdx) continue;
+    const dist = Math.abs(t - target);
+    if (dist < bestDist) { bestDist = dist; best = p.value; }
+  }
+  return best;
+}
+
+// the station's last non-null value strictly BEFORE the given day — the
+// plausibility witness for a backfilled slot (lastCapturedValue would happily
+// testify with a value from AFTER the hole)
+export function lastValueBefore(shards, uuid, { y, m, dayIdx }) {
+  const key = y * 12 + m;
+  const ordered = shards
+    .filter(s => s && s.y * 12 + s.m <= key)
+    .sort((a, b) => (b.y * 12 + b.m) - (a.y * 12 + a.m));
+  for (const shard of ordered) {
+    const v = shard.stations && shard.stations[uuid] && shard.stations[uuid].v;
+    if (!Array.isArray(v)) continue;
+    const from = (shard.y * 12 + shard.m === key ? dayIdx : v.length) - 1;
+    for (let i = from; i >= 0; i--) if (v[i] != null) return v[i];
+  }
+  return null;
+}
+
+// assemble one healed day from per-station point lists: nearest-to-nominal
+// point, gated exactly like a live capture. records maps uuid to the
+// {envelope, span} the live loop already derived from the archive.
+export function backfillDayStations(roster, points, hole, records, shards) {
+  let dropped = 0;
+  const stations = roster.map(s => {
+    let v = pickNearestMeasurement(points.get(s.uuid), hole.targetIso);
+    if (v != null) {
+      const rec = records.get(s.uuid) || {};
+      if (implausibleCapture({ v, envelope: rec.envelope, span: rec.span, prev: lastValueBefore(shards, s.uuid, hole) })) {
+        v = null;
+        dropped++;
+      }
+    }
+    return { uuid: s.uuid, n: s.n, w: s.w, v, ...(s.t ? { t: 1 } : {}) };
+  });
+  return { stations, captured: stations.filter(x => x.v != null).length, dropped };
+}
+
 export function shardIsPrunable(y, m, refDate, maxMonths) {
   const ref = mezParts(refDate);
   return (ref.y - y) * 12 + (ref.m - m) > maxMonths;
@@ -204,6 +304,63 @@ function pruneOldShards(dir, maxMonths, refDate) {
       console.log(`pruned ${f}`);
     }
   }
+}
+
+// ---------- self-heal backfill (network side) ----------
+
+async function mapPool(items, limit, fn) {
+  const out = new Array(items.length);
+  let i = 0;
+  const worker = async () => {
+    for (;;) {
+      const idx = i++;
+      if (idx >= items.length) return;
+      out[idx] = await fn(items[idx]);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return out;
+}
+
+// raw 15-min points for one station over the heal window; 404 means WSV keeps
+// no history timeseries for this gauge — an empty list, not a failure
+async function fetchStationMeasurements(uuid, startIso, endIso) {
+  const url = `${API}/stations/${uuid}/W/measurements.json`
+    + `?start=${encodeURIComponent(startIso)}&end=${encodeURIComponent(endIso)}`;
+  const res = await fetch(url, { signal: AbortSignal.timeout(30000) });
+  if (res.status === 404) return [];
+  if (!res.ok) throw new Error('measurements HTTP ' + res.status);
+  return res.json();
+}
+
+// refill recent null day slots from the raw timeseries. One request per
+// station spanning all holes; per-station failures degrade to an empty point
+// list, so a broad outage simply fails the coverage floor instead of writing
+// a thin day. Returns the (possibly replaced) shards plus which shard files
+// were healed into.
+async function healMissingDays(shards, roster, records) {
+  const holes = missingRecentDays(shards, now);
+  const healedMonths = new Set();
+  if (!holes.length) return { shards, healedMonths };
+  const first = holes[0], last = holes[holes.length - 1];
+  // a MEZ day starts at 23:00Z of the previous calendar day
+  const startIso = new Date(Date.UTC(first.y, first.m - 1, first.dayIdx + 1) - 36e5).toISOString();
+  const endIso = new Date(Date.UTC(last.y, last.m - 1, last.dayIdx + 1) - 36e5 + 864e5).toISOString();
+  const points = new Map(await mapPool(roster, 10, async s =>
+    [s.uuid, await fetchStationMeasurements(s.uuid, startIso, endIso).catch(() => [])]));
+  for (const hole of holes) {
+    const label = hole.targetIso.slice(0, 10);
+    const { stations, captured, dropped } = backfillDayStations(roster, points, hole, records, shards);
+    if (captured < BACKFILL_MIN_COVERAGE * roster.length) {
+      console.log(`backfill ${label} skipped: ${captured}/${roster.length} stations below coverage floor`);
+      continue;
+    }
+    const i = shards.findIndex(s => s && s.y === hole.y && s.m === hole.m);
+    shards[i] = applySnapshot(shards[i], { dayIdx: hole.dayIdx, captureIso: hole.targetIso, stations });
+    healedMonths.add(shardName(hole.y, hole.m));
+    console.log(`backfill ${label}: ${captured}/${roster.length} stations, ${dropped} implausible dropped`);
+  }
+  return { shards, healedMonths };
 }
 
 async function main() {
@@ -235,14 +392,16 @@ async function main() {
   try { prevShard = JSON.parse(readFileSync(join(OUT, shardName(py, pm)), 'utf8')); } catch {}
 
   let flagged = 0, dropped = 0;
+  const records = new Map(); // uuid -> {envelope, span}, reused by the self-heal
   for (const s of stations) {
     const [current, lastClosed] = stationRecordBundles(ARCHIVE_DIR, s.uuid);
     const span = medianDailySpan(current) ?? medianDailySpan(lastClosed);
+    const envelope = plausibilityEnvelope([current, lastClosed]);
+    records.set(s.uuid, { envelope, span });
     if (span != null && span >= TIDAL_SPAN_CM) { s.t = 1; flagged++; }
     if (s.v == null) continue;
     // plausibility gate — an implausible point becomes a gap in the day
     // slot, never the ?rising baseline
-    const envelope = plausibilityEnvelope([current, lastClosed]);
     if (implausibleCapture({ v: s.v, envelope, span, prev: lastCapturedValue([shard, prevShard], s.uuid) })) {
       console.log(`implausible: ${s.n} ${s.v}${envelope ? ` (envelope ${Math.round(envelope.lo)}..${Math.round(envelope.hi)})` : ' (sentinel bounds)'}`);
       s.v = null;
@@ -253,7 +412,13 @@ async function main() {
   // the pinned clock stamps the capture too — a PEGEL_NOW rehearsal must yield
   // a slot that is old enough to serve as a baseline, not one stamped "now"
   const next = applySnapshot(shard, { dayIdx, captureIso: now.toISOString(), stations });
-  writeFileSync(path, JSON.stringify(next));
+  // self-heal AFTER the live capture: the very run whose drift skipped a day
+  // repairs it in the same breath, and a later hole sees the healed witness
+  const { shards: healed, healedMonths } = await healMissingDays([next, prevShard], stations, records);
+  writeFileSync(path, JSON.stringify(healed[0]));
+  if (healed[1] && healedMonths.has(shardName(py, pm))) {
+    writeFileSync(join(OUT, shardName(py, pm)), JSON.stringify(healed[1]));
+  }
   const captured = stations.filter(s => s.v != null).length;
   console.log(`snapshot ${shardName(y, m)} day ${dayIdx + 1}: ${captured}/${stations.length} stations captured, ${flagged} tidal-flagged, ${dropped} implausible dropped`);
 

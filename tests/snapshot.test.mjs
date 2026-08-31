@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mezParts, daysInMonth, emptyShard, applySnapshot, parseBulkForSnapshot, shardIsPrunable, shardName, medianDailySpan, TIDAL_SPAN_CM, plausibilityEnvelope, implausibleCapture, lastCapturedValue, ENVELOPE_FLOOR_CM } from '../scripts/snapshot-wsv.mjs';
+import { mezParts, daysInMonth, emptyShard, applySnapshot, parseBulkForSnapshot, shardIsPrunable, shardName, medianDailySpan, TIDAL_SPAN_CM, plausibilityEnvelope, implausibleCapture, lastCapturedValue, ENVELOPE_FLOOR_CM, missingRecentDays, pickNearestMeasurement, lastValueBefore, backfillDayStations, BACKFILL_WINDOW_DAYS, BACKFILL_MIN_COVERAGE } from '../scripts/snapshot-wsv.mjs';
 
 test('daysInMonth: month lengths incl. leap years', () => {
   assert.equal(daysInMonth(2026, 2), 28);
@@ -158,6 +158,98 @@ test('implausibleCapture: without an envelope only the sentinel bounds judge', (
   assert.equal(implausibleCapture({ v: 99999, envelope: null, prev: null, span: null }), true);
   assert.equal(implausibleCapture({ v: -0.87, envelope: null, prev: null, span: null }), false,
     'an m+NN gauge value passes the absolute bounds');
+});
+
+// ---------- the self-heal backfill (2026-08-27: cron drift past MEZ midnight lost the day) ----------
+
+// shard fixture: fill the given dayIdx -> value slots for one station
+const shardWith = (y, m, filled, uuid = 'a') => {
+  let s = emptyShard(y, m);
+  for (const [dayIdx, v] of filled) {
+    s = applySnapshot(s, { dayIdx, captureIso: `run-${dayIdx}`, stations: [{ uuid, n: 'A', w: 'W', v }] });
+  }
+  return s;
+};
+
+test('missingRecentDays: finds the drifted-run hole, ignores old nulls and today', () => {
+  // the real 2026-08 shape: days 13-30 captured except the 27th, 1-12 pre-history
+  const aug = shardWith(2026, 8, Array.from({ length: 18 }, (_, i) => [12 + i, 100]).filter(([d]) => d !== 26));
+  const holes = missingRecentDays([aug], new Date('2026-08-31T14:30:00Z'));
+  assert.deepEqual(holes, [{ y: 2026, m: 8, dayIdx: 26, targetIso: '2026-08-27T15:17:00.000Z' }]);
+  // today's own null slot belongs to the live capture, never the backfill
+  assert.ok(!holes.some(h => h.dayIdx === 30));
+});
+
+test('missingRecentDays: reaches across the month boundary, oldest first, absent months are pre-history', () => {
+  const aug = shardWith(2026, 8, [[25, 100], [26, 100], [27, 100], [28, 100], [29, 100]]); // Aug 31 (idx 30) missing
+  const sep = shardWith(2026, 9, []); // Sep 1 (idx 0) missing too
+  const holes = missingRecentDays([sep, aug], new Date('2026-09-02T12:00:00Z'));
+  assert.deepEqual(holes.map(h => h.targetIso), ['2026-08-31T15:17:00.000Z', '2026-09-01T15:17:00.000Z']);
+  // without the August shard on disk its days are pre-history, not holes
+  assert.deepEqual(missingRecentDays([sep], new Date('2026-09-02T12:00:00Z')).map(h => h.targetIso),
+    ['2026-09-01T15:17:00.000Z']);
+});
+
+test('pickNearestMeasurement: nearest point, but only from the target MEZ day', () => {
+  const target = '2026-08-27T15:17:00.000Z';
+  assert.equal(pickNearestMeasurement([
+    { timestamp: '2026-08-27T15:00:00+02:00', value: 243 }, // 13:00Z, 2h17m off
+    { timestamp: '2026-08-27T16:00:00+02:00', value: 242 }, // 14:00Z, 1h17m off -> nearest
+    { timestamp: '2026-08-27T20:00:00Z', value: 241 },
+  ], target), 242);
+  // MEZ bucketing on both edges: 23:30Z of the 26th IS day 27, 23:30Z of the 27th is NOT
+  assert.equal(pickNearestMeasurement([{ timestamp: '2026-08-26T23:30:00Z', value: 400 }], target), 400);
+  assert.equal(pickNearestMeasurement([{ timestamp: '2026-08-27T23:30:00Z', value: 500 }], target), null);
+  // non-finite values and junk never win; no data is null, not 0
+  assert.equal(pickNearestMeasurement([{ timestamp: '2026-08-27T15:17:00Z', value: NaN }], target), null);
+  assert.equal(pickNearestMeasurement([], target), null);
+  assert.equal(pickNearestMeasurement(undefined, target), null);
+});
+
+test('lastValueBefore: the witness comes strictly from before the hole', () => {
+  // day 28 was captured by the drifted run — it must not vouch for day 27
+  const aug = shardWith(2026, 8, [[25, 614], [27, 700]]);
+  const hole = { y: 2026, m: 8, dayIdx: 26 };
+  assert.equal(lastValueBefore([aug], 'a', hole), 614);
+  assert.equal(lastCapturedValue([aug], 'a'), 700, 'lastCapturedValue would testify with the later value');
+  // consecutive holes reach further back; the previous month backs day-1 holes
+  assert.equal(lastValueBefore([shardWith(2026, 8, [[24, 610]])], 'a', hole), 610);
+  const sep = shardWith(2026, 9, []);
+  assert.equal(lastValueBefore([sep, aug], 'a', { y: 2026, m: 9, dayIdx: 0 }), 700);
+  assert.equal(lastValueBefore([sep, aug], 'unknown', hole), null);
+});
+
+test('backfillDayStations: gated like a live capture, missing points stay null', () => {
+  const roster = [
+    { uuid: 'lobith', n: 'LOBITH', w: 'RIJN', v: 610, t: 1 },
+    { uuid: 'b', n: 'BONN', w: 'RHEIN', v: 140 },
+    { uuid: 'c', n: 'CELLE', w: 'ALLER', v: 120 },
+  ];
+  const hole = { y: 2026, m: 8, dayIdx: 26, targetIso: '2026-08-27T15:17:00.000Z' };
+  const points = new Map([
+    ['lobith', [{ timestamp: '2026-08-27T15:17:00Z', value: 2013 }]], // the isolated spike
+    ['b', [{ timestamp: '2026-08-27T14:00:00Z', value: 142 }]],
+    ['c', []], // WSV keeps no history for this gauge
+  ]);
+  const records = new Map([
+    ['lobith', { envelope: { lo: -364, hi: 1697 }, span: 15 }],
+    ['b', { envelope: null, span: null }], // fresh station: sentinel bounds only
+  ]);
+  const witness = shardWith(2026, 8, [[25, 614]], 'lobith');
+  const out = backfillDayStations(roster, points, hole, records, [witness]);
+  assert.equal(out.stations.find(s => s.uuid === 'lobith').v, null, 'the spike stands alone — yesterday said 614');
+  assert.equal(out.stations.find(s => s.uuid === 'lobith').t, 1, 'the tidal flag rides along');
+  assert.equal(out.stations.find(s => s.uuid === 'b').v, 142);
+  assert.equal(out.stations.find(s => s.uuid === 'c').v, null);
+  assert.deepEqual({ captured: out.captured, dropped: out.dropped }, { captured: 1, dropped: 1 });
+  // the same jump WITH a vouching yesterday passes
+  const vouched = backfillDayStations(roster, points, hole, records, [shardWith(2026, 8, [[25, 1950]], 'lobith')]);
+  assert.equal(vouched.stations.find(s => s.uuid === 'lobith').v, 2013);
+});
+
+test('backfill constants: a sane window and coverage floor are exported', () => {
+  assert.ok(BACKFILL_WINDOW_DAYS >= 1 && BACKFILL_WINDOW_DAYS <= 30, 'inside the WSV raw retention');
+  assert.ok(BACKFILL_MIN_COVERAGE > 0 && BACKFILL_MIN_COVERAGE <= 1);
 });
 
 test('lastCapturedValue: scans the current shard backwards, then the previous month', () => {

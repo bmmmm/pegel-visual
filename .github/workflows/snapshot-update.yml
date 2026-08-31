@@ -10,6 +10,13 @@ name: snapshot-update
 # same branch, and a queued data commit must never be cancelled.
 on:
   schedule:
+    # two slots per day: scheduler drift reached 3-9h in late August 2026 and
+    # twice pushed the 15:17 run past MEZ midnight, losing that day's slot
+    # (2026-08-27). The morning run guarantees a same-day capture; the
+    # afternoon run overwrites it with the canonical instant (the snapshot
+    # script's same-day upsert is idempotent), and the script's self-heal
+    # backfills any day both slots still missed.
+    - cron: '17 5 * * *'
     - cron: '17 15 * * *'
   workflow_dispatch:
 
