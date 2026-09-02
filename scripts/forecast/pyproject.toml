@@ -9,8 +9,14 @@ dependencies = [
   "numpy>=1.26.4",
 ]
 
-[project.optional-dependencies]
-# The model is optional so the tests (and CI) run without 2.5 GB of torch.
+[dependency-groups]
+dev = [
+  "pytest>=8.3",
+]
+# The model is its own group so CI can opt OUT of 2.5 GB of torch
+# (`uv sync --no-group model` in test.yml) while a plain `uv run python
+# backtest.py …` on a laptop syncs everything it needs on first use — no
+# separate bootstrap step to remember (default-groups below).
 #
 # timesfm is pinned EXACTLY to 2.0.2 — the last release before the 3.0 line.
 # 3.0.0 (2026-08-28) adds a second package for the 3.0 model whose weights are
@@ -29,14 +35,17 @@ model = [
   "torch>=2.4",
 ]
 
-[dependency-groups]
-dev = [
-  "pytest>=8.3",
-]
-
 [tool.uv]
 # a directory of scripts, not an installable package
 package = false
+# `uv run` / `uv sync` install both groups unless told otherwise — the laptop
+# gets the working tool, CI opts out of the model
+default-groups = ["dev", "model"]
+# A repo-local cache (gitignored via tmp-*): the default ~/.cache/uv is not
+# writable inside the Claude Code sandbox, which made every uv call need a
+# bypass. CI is unaffected — setup-uv exports UV_CACHE_DIR, and the env var
+# outranks this file.
+cache-dir = "../../tmp-forecast/uv-cache"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -457,27 +457,24 @@ dependencies = [
     { name = "numpy" },
 ]
 
-[package.optional-dependencies]
+[package.dev-dependencies]
+dev = [
+    { name = "pytest" },
+]
 model = [
     { name = "timesfm", extra = ["torch"] },
     { name = "torch" },
 ]
 
-[package.dev-dependencies]
-dev = [
-    { name = "pytest" },
-]
-
 [package.metadata]
-requires-dist = [
-    { name = "numpy", specifier = ">=1.26.4" },
-    { name = "timesfm", extras = ["torch"], marker = "extra == 'model'", specifier = "==2.0.2" },
-    { name = "torch", marker = "extra == 'model'", specifier = ">=2.4" },
-]
-provides-extras = ["model"]
+requires-dist = [{ name = "numpy", specifier = ">=1.26.4" }]
 
 [package.metadata.requires-dev]
 dev = [{ name = "pytest", specifier = ">=8.3" }]
+model = [
+    { name = "timesfm", extras = ["torch"], specifier = "==2.0.2" },
+    { name = "torch", specifier = ">=2.4" },
+]
 
 [[package]]
 name = "pluggy"

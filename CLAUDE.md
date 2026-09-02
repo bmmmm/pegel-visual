@@ -112,11 +112,13 @@
   weights are non-commercial and GPL-incompatible; `tests/test_license.py`
   greps the whole repo for the 3.0 package, class and checkpoint names, so do
   not spell them out even in comments. Dependabot is told to ignore `>=3`.
-- **`uv run` fails inside the sandbox** (its cache under `~/.cache/uv` is not
-  writable there): call `scripts/forecast/.venv/bin/python <script>` directly;
-  only `uv sync`/`uv lock` need the bypass. Weights cache under
-  `tmp-forecast/hf` — pass `--tmp` and `--archive` with the MAIN checkout's
-  paths from a worktree, or the download lands in the worktree and dies with it.
+- **`uv run python <script>` is the whole bootstrap.** `[tool.uv]` points the
+  cache at `tmp-forecast/uv-cache` (the default `~/.cache/uv` is not writable in
+  the sandbox) and makes `model` a default group, so the first `uv run` syncs
+  torch + timesfm by itself, no bypass, no separate `uv sync`. CI opts out with
+  `--no-group model`. Weights cache under `tmp-forecast/hf` — pass `--tmp` and
+  `--archive` with the MAIN checkout's paths from a worktree, or the download
+  lands in the worktree and dies with it.
 - **The model's point forecast is the median channel (index 5), not channel 0.**
   Measured on 2.0.2; `tfm.forecast_batch` asserts it. Horizon ≤ 128 steps is one
   decode step — the 2.0.2/3.0.1 flip-quantile difference never applies.
