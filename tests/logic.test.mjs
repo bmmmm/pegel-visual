@@ -3002,11 +3002,21 @@ test('renderTotal diff: diverging bars around a labelled zero, rivers linked', (
   assert.ok(all.vm.bars.every(b => b.frac > 0), 'the fixture rises in both years');
   assert.ok(all.html.includes('class="db rose"'), 'rising bars are marked as risen');
   assert.ok(all.html.includes('>0</text>'), 'the zero line is labelled');
+  // The class is only a colour. What makes the direction survive greyscale is
+  // the pattern fill on THE BAR — this test used to pass on the class name alone
+  // while no hatch existed at all, and a plain includes() would now pass on the
+  // legend's own swatch instead, so match the rect and read its fill.
+  assert.ok(/<rect[^>]*fill="url\(#tb-rose\)"[^>]*class="db rose"/.test(all.html), 'the rising BAR carries the hatch');
+  assert.ok(all.html.includes('id="tb-rose"'), 'and that pattern is defined on the plate');
+  assert.ok(all.html.includes('the summed stage rose that day'), 'the Δ view names its rise mark');
+  assert.ok(all.html.includes('>it fell<'), 'and its fall mark');
 
   const month = seedTotalDiff(loadApp({ search: '?total&diff' }), '2025, 4, null');
   assert.equal(month.level, 'month');
   assert.ok(month.html.includes('href="?total&amp;diff&amp;y=2025&amp;d=2025-05-12"'), 'a day bar deep-links');
-  assert.ok(month.html.includes('class="db fell"'), 'falling days are hatched, not only coloured');
+  assert.ok(month.html.includes('class="db fell"'), 'falling days are marked as fallen');
+  assert.ok(/<rect[^>]*fill="url\(#tb-fell\)"[^>]*class="db fell"/.test(month.html), 'the falling BAR is hatched the other way');
+  assert.ok(month.html.includes('id="tb-fell"'), 'and that pattern is defined too');
 
   const day = seedTotalDiff(loadApp({ search: '?total&diff' }), '2025, 4, 12');
   assert.equal(day.level, 'day');
@@ -3265,4 +3275,115 @@ test('stepNeighbour: [ and ] walk the river without leaving the keyboard', () =>
   seed('KÖLN');
   app.run('stepNeighbour(-1)');
   assert.equal(app.run('station'), 'KÖLN', 'the end of the list is a stop, not a wrap');
+});
+
+// ---------- the legend gate: a plate names every mark it draws ----------
+
+// Mechanical, so it cannot go stale the way prose can: pull the classes out of
+// the drawing, pull them out of that plate's <dl class="p-key"> blocks, and
+// demand the second set covers the first. A renderer that gains a mark without
+// gaining a legend entry turns this red.
+const classesIn = html => {
+  const out = new Set();
+  for (const m of html.matchAll(/class="([^"]+)"/g)) {
+    for (const c of m[1].split(/\s+/)) if (c) out.add(c);
+  }
+  return out;
+};
+const keyClasses = html => classesIn([...html.matchAll(/<dl class="p-key">[\s\S]*?<\/dl>/g)]
+  .map(m => m[0]).join(''));
+const svgAt = (html, from = 0) => {
+  const a = html.indexOf('<svg', from);
+  return a < 0 ? '' : html.slice(a, html.indexOf('</svg>', a));
+};
+
+// Not marks: the drawing's own container class, invisible hit targets, text
+// labels, and the two boat states the key spells out in words instead.
+const NOT_A_MARK = new Set(['scene', 'chart', 'profile', 'hit', 'craft-lbl', 'stuck', 'aground']);
+
+const assertNamed = (drawing, key, what) => {
+  const missing = [...classesIn(drawing)].filter(c => !NOT_A_MARK.has(c) && !key.has(c));
+  assert.deepEqual(missing, [], `${what}: every mark drawn is named in the key`);
+};
+
+test('the scene names every mark it draws, in every weather it draws', () => {
+  const seed = (app, value, extra) => app.run(`(() => {
+    station = 'BONN';
+    state.info = { water: { shortname: 'RHEIN' }, km: 654.8, latitude: 50.736, longitude: 7.108 };
+    state.gauge = { currentMeasurement: { value: ${value}, timestamp: ${NOON}, stateMnwMhw: 'low' },
+      characteristicValues: [
+        { shortname: 'HHW', value: 1013, occurrences: ['1993-12-23'] },
+        { shortname: 'NNW', value: 81, occurrences: ['2018-10-22'] },
+        { shortname: 'MNW', value: 121 }, { shortname: 'MW', value: 290 }, { shortname: 'MHW', value: 680 },
+      ] };
+    state.archive = []; state.neighbors = [];
+    ${extra}
+    const vm = stationViewModel();
+    return { html: renderStation(vm), flags: vm.scene.flags, moon: vm.scene.moon };
+  })()`);
+
+  // 1. a clear winter night over a drought: stars, the moon, the dry bank
+  const night = seed(loadApp({ now: Date.UTC(2026, 0, 15, 20) }), 100,
+    'state.weather = { cloud_cover: 5, precipitation: 0, snowfall: 0, wind_speed_10m: 4 };');
+  assert.equal(night.flags.night, true, 'the fixture really is a night');
+  assert.equal(night.flags.drought, true, 'and really is below mean low water');
+  assert.ok(night.moon != null, 'so the moon is drawn');
+  assertNamed(svgAt(night.html), keyClasses(night.html), 'clear night, low water');
+
+  // 2. a bright dry noon: the sun instead of the sky
+  const sun = seed(loadApp({ now: NOON }), 100,
+    'state.weather = { cloud_cover: 5, precipitation: 0, snowfall: 0, wind_speed_10m: 4 };');
+  assert.equal(sun.flags.night, false);
+  assert.ok(sun.html.includes('class="sun"'), 'the sun is on the drawing');
+  assertNamed(svgAt(sun.html), keyClasses(sun.html), 'clear dry noon');
+
+  // 3. a flood in the rain, blowing hard: clouds, rain, waves, a boat
+  const flood = seed(loadApp({ now: NOON }), 900,
+    'state.weather = { cloud_cover: 90, precipitation: 3, snowfall: 0, wind_speed_10m: 40 };');
+  assert.equal(flood.flags.flood, true);
+  assert.equal(flood.flags.windy, true);
+  assertNamed(svgAt(flood.html), keyClasses(flood.html), 'windy flood');
+
+  // 4. a frozen river under snow: floes instead of waves
+  const ice = seed(loadApp({ now: NOON }), 300,
+    'state.wt = 0.2; state.weather = { cloud_cover: 70, precipitation: 0, snowfall: 2, wind_speed_10m: 10 };');
+  assert.equal(ice.flags.icy, true);
+  assert.equal(ice.flags.snow, true);
+  assert.ok(ice.html.includes('class="floe"'), 'floes are on the drawing');
+  assertNamed(svgAt(ice.html), keyClasses(ice.html), 'iced over, snowing');
+
+  // and the key does not invent marks the drawing never made: no sun at night
+  assert.equal(night.html.includes('class="sun"'), false, 'no sun in the night key');
+  assert.equal(sun.html.includes('class="star"'), false, 'no stars at noon');
+});
+
+test('the neighbours profile names its marks and owns up to its axes', () => {
+  const html = loadApp({ now: NOON }).run(`(() => {
+    station = 'BONN';
+    state.info = { water: { shortname: 'RHEIN' }, km: 654.8 };
+    state.neighbors = [
+      { name: 'ANDERNACH', km: 613.8, elev: 55.2 },
+      { name: 'BONN', km: 654.8, elev: 44.1 },
+      { name: 'KÖLN', km: 688.0, elev: 36.4 },
+    ];
+    return renderProfile(profileViewModel());
+  })()`);
+  const key = keyClasses(html);
+  for (const c of ['pf-line', 'pf-dot', 'self']) {
+    assert.ok(key.has(c), `${c} is named in the key`);
+  }
+  assert.ok(html.includes('neither starts at zero'), 'and the stretched axes are admitted to');
+});
+
+test('the year-against-climate chart gives its outliers a shape, not just a hue', () => {
+  const app = loadApp({ now: NOON });
+  const marks = app.run(`[climMark('', 6, 6), climMark('above', 6, 6), climMark('below', 6, 6)]`);
+  assert.ok(marks[0].startsWith('<circle'), 'an ordinary month is a dot');
+  assert.ok(marks[1].startsWith('<path'), 'above the range is a shape of its own');
+  assert.ok(marks[2].startsWith('<path'), 'below it too');
+  assert.notEqual(marks[1], marks[2], 'and the two point opposite ways');
+  // the apex is what distinguishes them: up for above, down for below
+  const apexY = d => Number(d.match(/d="M[\d.]+ ([\d.]+)/)[1]);
+  assert.ok(apexY(marks[1]) < 6, 'the above mark points up');
+  assert.ok(apexY(marks[2]) > 6, 'the below mark points down');
 });
