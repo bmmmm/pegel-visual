@@ -1948,9 +1948,9 @@ function screenSummary() {
   const unusualTxt = !u ? ''
     : ` Against ${u.years} archived years this level ranks ${ordinal(u.pct)} percentile` +
       (u.climMean == null ? '.'
-        : `; the ${MONTH_ABBR[u.month]} mean is ${u.climMean} cm, ` +
+        : `; the ${MONTH_ABBR[u.month]} mean is ${levelWithUnit(u.climMean)}, ` +
           `${Math.abs(u.z).toFixed(1)} sigma ${u.z >= 0 ? 'above' : 'below'} it.`);
-  return `${station} on ${state.info.water.shortname}${km}: water level ${Math.round(cur.value)} cm${trendTxt}${wtTxt}. State ${cur.stateMnwMhw || 'unknown'}.${unusualTxt}`;
+  return `${station} on ${state.info.water.shortname}${km}: water level ${levelWithUnit(cur.value)}${trendTxt}${wtTxt}. State ${cur.stateMnwMhw || 'unknown'}.${unusualTxt}`;
 }
 
 // while --help is shown, the screen holds a man page instead of the live grid,
@@ -1972,7 +1972,7 @@ function applyLiveChrome() {
   if (!cur) return;
   const trend = trendPerHour();
   const arrow = trend === null ? '' : ' ' + trendArrow(trend);
-  document.title = `PEGEL://${station} · ${Math.round(cur.value)}cm${arrow}`;
+  document.title = `PEGEL://${station} · ${fmtLevel(cur.value)}${gaugeUnit()}${arrow}`;
   updateFavicon(cur.value);
 }
 
@@ -2155,11 +2155,12 @@ async function loadNeighbors(info) {
   const enriched = await Promise.all(picks.map(async s => {
     const g = s.uuid === info.uuid ? state.gauge :
       await getJson(`${API}/stations/${encodeURIComponent(s.shortname)}/W.json?includeCurrentMeasurement=true`).catch(() => null);
-    if (!g || !g.gaugeZero || !g.currentMeasurement) return null;
+    const elev = g && elevOf(g, g.currentMeasurement);
+    if (elev == null) return null;
     return {
       name: s.shortname, km: s.km,
       lat: s.latitude, lon: s.longitude,
-      elev: g.gaugeZero.value + g.currentMeasurement.value / 100,
+      elev,
     };
   }));
   if (!state.info || state.info.uuid !== info.uuid) return; // switched away — discard
@@ -2191,14 +2192,15 @@ function prepareRiverStations(raw) {
     if (!w) continue;
     const cur = w.currentMeasurement;
     const kind = troubleKind(cur && cur.stateMnwMhw);
-    const hasElev = w.gaugeZero && w.gaugeZero.value != null && cur && cur.value != null;
-    if (!hasElev && kind === 'normal') continue; // nothing to plot, nothing to flag
+    const elev = elevOf(w, cur);
+    if (elev == null && kind === 'normal') continue; // nothing to plot, nothing to flag
     out.push({
       name: s.shortname,
       uuid: s.uuid, // the wave view fetches each station's hosted archive by uuid
       km: s.km,
       value: cur && cur.value != null ? cur.value : null,
-      elev: hasElev ? w.gaugeZero.value + cur.value / 100 : null,
+      unit: gaugeUnit(w),
+      elev,
       kind,
     });
   }
@@ -2307,35 +2309,35 @@ const coverageDays = (first, last) => Math.max(1, Math.round((last - first) / 86
 // 90 min for the newest 16 days (15-min live + 1 h thinned), 9 h beyond a year
 // (6-hourly thinning) — so only real outages/offline stretches count
 const GAP_MIN_MS = 90 * 60000;
-const GAP_OLD_MS = 9 * 36e5;
-// This is the archive's own bookkeeping, measured against the cadence
-// mergeIntoArchive thins to, so it can afford to flag anything coarser.
-const ageGapLimit = ts => ts < Date.now() - 365 * 864e5 ? GAP_OLD_MS : GAP_MIN_MS;
-function countGaps(pts) {
-  let gaps = 0, maxGap = 0;
-  for (let i = 1; i < pts.length; i++) {
-    const d = pts[i][0] - pts[i - 1][0];
-    if (d > ageGapLimit(pts[i - 1][0])) { gaps++; if (d > maxGap) maxGap = d; }
-  }
-  return { gaps, maxGapH: maxGap / 36e5 };
-}
-
-// The history chart needs the same judgement but must not get it wrong in the
-// same direction: a miscounted gap is one number in the local-archive line, a
-// broken sparkline is the picture itself. And the clock alone cannot decide it
-// — 24 h is an outage at a 15-minutely gauge and the ordinary cadence at a
-// daily one, and one window holds both, because mergeIntoArchive thins with age
-// and plenty of gauges never reported that often to begin with. So the
-// threshold comes from the readings in the window: the 90th percentile of their
-// spacing, which survives a stretch of thinner data, times four — floored at
-// the 90 minutes above, so a gauge that really does report every quarter hour
-// still shows its outages.
+// What "the gauge was silent" means cannot be read off the clock: 24 h is an
+// outage at a 15-minutely gauge and the ordinary cadence at a daily one, and a
+// single archive holds both — mergeIntoArchive thins with age, the hosted
+// bundle stores exactly two points a day at EVERY age, and plenty of gauges
+// never reported often to begin with. Age-based thresholds got this loudly
+// wrong: against 9 h for anything past a year, BONN's gapless 26-year bundle
+// reported 3999 gaps in its first 4000 points, one per night.
+//
+// So the threshold comes from the readings themselves: the 90th percentile of
+// their spacing, which survives a stretch of thinner data, times four — floored
+// at the live cadence's 90 minutes, so a gauge that really does report every
+// quarter hour still shows its outages. One definition, used by the sparkline's
+// line breaks and by the local-archive line alike.
 function windowGapLimit(pts) {
   if (pts.length < 3) return GAP_MIN_MS;
   const d = [];
   for (let i = 1; i < pts.length; i++) d.push(pts[i][0] - pts[i - 1][0]);
   d.sort((a, b) => a - b);
   return Math.max(GAP_MIN_MS, d[Math.floor((d.length - 1) * 0.9)] * 4);
+}
+
+function countGaps(pts) {
+  const limit = windowGapLimit(pts);
+  let gaps = 0, maxGap = 0;
+  for (let i = 1; i < pts.length; i++) {
+    const d = pts[i][0] - pts[i - 1][0];
+    if (d > limit) { gaps++; if (d > maxGap) maxGap = d; }
+  }
+  return { gaps, maxGapH: maxGap / 36e5 };
 }
 
 function updateLocalBar() {
@@ -2736,6 +2738,10 @@ const T = {
   riversCentreNote: 'Each water sits at the centre of its own gauges, so a long river lands mid-course.',
   now: 'NOW',
   aboveZero: 'above this gauge’s own zero mark',
+  // a metre gauge reports an absolute elevation, so the cm caption below the
+  // hero reading was the same lie as printing it in centimetres
+  aboveNN: 'metres above sea level — an absolute elevation, not a height above this gauge’s zero',
+  abovePNP: 'metres above the Pegelnullpunkt datum, not above this gauge’s zero',
   sceneTitle: 'THE RIVER RIGHT NOW',
   history: 'HISTORY',
   showLabel: 'show',
@@ -2809,7 +2815,7 @@ const T = {
   riverProfile: 'LONGITUDINAL PROFILE',
   riverSub: 'every gauge at its live water-surface elevation',
   riverElevAxis: 'water surface elevation in metres above sea level (m NHN), against river kilometre',
-  riverElevNote: 'Elevation is the gauge zero plus the current reading, so gauges on one river can be compared directly.',
+  riverElevNote: 'Elevation is the gauge zero plus the current reading — or the reading itself where a gauge already reports metres above sea level. Either way the gauges on one river compare directly.',
   meanFall: 'mean fall',
   kindNormal: 'inside MNW…MHW',
   kindLow: 'below mean low water',
@@ -3002,12 +3008,66 @@ function trendPerHour() {
   }
   const span = tLast - ref[0];
   if (span < TREND_MIN_SPAN_MS) return null;
-  return (vLast - ref[1]) / (span / 36e5);
+  // The walk stops at the newest point at or BEFORE the window edge — after a
+  // three-day silence that point is three days old, and the "6 h trend" became
+  // the slope across the hole. Nine genuinely rising readings printed as a
+  // falling arrow, in the header, the tab title and the aria line alike. Past
+  // twice the window there is no six-hour trend to report, and "—" is a state
+  // the renderer already has.
+  if (span > 2 * TREND_WINDOW_MS) return null;
+  // in centimetres per hour whatever the gauge reports in, because TREND_FLAT
+  // is a noise floor for a gauge that ticks in whole centimetres — the same
+  // half-unit read as metres would be a 50 cm/h flood
+  return toCm(vLast - ref[1]) / (span / 36e5);
 }
 
 // -0.04 cm/h is steady, and printing it as "-0.0" reads like a broken minus sign
 const fmtTrend = t => Math.abs(t) < 0.05 ? '0.0' : (t > 0 ? '+' : '') + t.toFixed(1);
 const trendArrow = t => t === null ? '▬' : t >= TREND_FLAT ? '▲' : t <= -TREND_FLAT ? '▼' : '▬';
+
+// ---------- the gauge's own unit ----------
+
+// PEGELONLINE reports 668 of its 737 water-level series in centimetres above a
+// local gauge zero and 69 as an absolute elevation in metres — 67 m+NN and
+// 2 m+PNP, measured 2026-09-02 against the live station list. The page printed
+// "cm" for every one of them, so WALTROP's 56.54 m+NN was drawn, titled and
+// read out as "57 cm". The unit travels with the reading (it is in the same
+// W.json the client already fetches); this names it the way the pipeline's
+// isExcludedUnit does, so the client and the build speak about it alike.
+const CM = 'cm';
+const isCmUnit = u => u === CM;
+function gaugeUnit(g) {
+  const u = (g || state.gauge || {}).unit;
+  return typeof u === 'string' && u ? u : CM;
+}
+// A cm gauge reports whole centimetres, so rounding is the honest form there.
+// A metre gauge moves in hundredths of its unit — rounding it the same way
+// throws the entire reading away, which is exactly what "57 cm" was.
+function fmtLevel(v, unit = gaugeUnit()) {
+  return v == null ? '—' : isCmUnit(unit) ? String(Math.round(v)) : v.toFixed(2);
+}
+const levelWithUnit = (v, unit = gaugeUnit()) => `${fmtLevel(v, unit)} ${unit}`;
+// what the number is measured FROM, which the unit is the only clue to
+const heroNote = unit => isCmUnit(unit) ? T.aboveZero
+  : unit === 'm+PNP' ? T.abovePNP : T.aboveNN;
+
+// The water surface elevation the river and neighbour profiles plot. A cm gauge
+// reports a height above its own zero, so it needs that zero and the /100 that
+// converts it; a metre gauge reports the elevation itself and needs neither.
+// Demanding a gaugeZero from both threw away every metre gauge that publishes
+// none — all eleven on the Dortmund-Ems-Kanal, so ?river=DEK drew "fewer than
+// 2 usable stations" over a canal with eleven of them.
+function elevOf(w, cur) {
+  if (!w || !cur || cur.value == null) return null;
+  const zero = w.gaugeZero && w.gaugeZero.value != null ? w.gaugeZero.value : null;
+  if (!isCmUnit(gaugeUnit(w))) return cur.value + (zero ?? 0);
+  return zero == null ? null : zero + cur.value / 100;
+}
+// Thresholds and gauge-zero arithmetic are written in centimetres because that
+// is what 90 % of the network speaks. This is the factor that brings a reading
+// into those terms — never the other way round, so a printed number always
+// carries the gauge's own unit.
+const toCm = (v, unit = gaugeUnit()) => (v == null ? null : isCmUnit(unit) ? v : v * 100);
 
 // ---------- history range (adjustable sparkline window) ----------
 
@@ -3249,9 +3309,17 @@ function sceneCraft(surface) {
   const n = state.neighbors;
   const out = { aircraft: [], ships: [] };
   if (n.length < 2) return out;
+  // PEGELONLINE omits lat/lon for 57 of its 786 gauges (measured 2026-09-02).
+  // Taking the axis from the outermost neighbours regardless meant one of those
+  // made every coordinate NaN, and NaN fails every comparison — so `frac < 0 ||
+  // frac > 1` waved every ship through to be drawn at x = NaN. Build the reach
+  // from the neighbours that actually have a position, and treat a non-finite
+  // projection as off the reach rather than as inside it.
+  const located = n.filter(p => Number.isFinite(p.lat) && Number.isFinite(p.lon));
+  if (located.length < 2) return out;
   const lowKmDown = flowLowKm(n);
-  const L = lowKmDown ? n[n.length - 1] : n[0];
-  const R = lowKmDown ? n[0] : n[n.length - 1];
+  const L = lowKmDown ? located[located.length - 1] : located[0];
+  const R = lowKmDown ? located[0] : located[located.length - 1];
   const kx = Math.cos((L.lat * Math.PI) / 180);
   const ax = (R.lon - L.lon) * kx, ay = R.lat - L.lat;
   const len2 = ax * ax + ay * ay;
@@ -3268,7 +3336,7 @@ function sceneCraft(surface) {
   if (state.adsbOk !== null) {
     for (const a of state.aircraft) {
       const { frac, lateralKm } = project(a.lon, a.lat);
-      if (frac < 0 || frac > 1 || lateralKm > 50) continue;
+      if (!Number.isFinite(frac) || frac < 0 || frac > 1 || lateralKm > 50) continue;
       const alt = a.alt_baro === 'ground' ? 0 : (a.alt_baro || 0);
       out.aircraft.push({
         x: frac, y: Math.max(0.04, (1 - Math.min(alt, 42000) / 42000) * (surface - 0.14)),
@@ -3282,7 +3350,7 @@ function sceneCraft(surface) {
     for (const s of state.ships) {
       const { frac, lateralKm } = project(s.lon, s.lat);
       // much tighter than the aircraft cutoff: ships are ON the river
-      if (frac < 0 || frac > 1 || lateralKm > 2) continue;
+      if (!Number.isFinite(frac) || frac < 0 || frac > 1 || lateralKm > 2) continue;
       out.ships.push({
         x: frac,
         right: heads(s.cog ?? s.heading ?? 0),
@@ -3435,7 +3503,7 @@ function renderSceneGutter(vm) {
   const s = vm.scene;
   const row = (frac, key, cm, year, cls) =>
     `<li class="${cls}"${attr('style', `top:${(Math.max(0, Math.min(1, frac)) * 100).toFixed(2)}%`)}>` +
-    `<b>${esc(key)}</b> <span class="cm">${Math.round(cm)}</span>` +
+    `<b>${esc(key)}</b> <span class="cm">${esc(fmtLevel(cm))}</span>` +
     (year ? ` <span class="yr">${year}</span>` : '') + '</li>';
   const items = [
     ...s.above.map(m => row(m.frac, '↑ ' + m.key, m.cm, m.year, 'off')),
@@ -3677,13 +3745,15 @@ function renderHistory(h) {
   }
   const chart = svgWrap(`0 0 ${HIST_W} ${HIST_H}`, parts.join(''),
     ' class="chart hist" preserveAspectRatio="none" role="img"' +
-    attr('aria-label', `${h.label} history, ${min} to ${max} centimetres over ${h.points} readings` +
+    attr('aria-label', `${h.label} history, ${levelWithUnit(min)} to ${levelWithUnit(max)} over ${h.points} readings` +
       (h.gaps ? `, broken by ${h.gaps} ${plural(h.gaps, 'gap')} in the record` : '')));
   const axis = `<div class="h-axis">` +
     h.ticks.map(t => `<span${attr('style', `left:${(t.frac * 100).toFixed(2)}%`)}>${esc(t.text)}</span>`).join('') +
     '</div>';
-  const scale = `<div class="h-scale"><span class="hi">${max} cm</span><span class="lo">${min} cm</span></div>`;
-  const refs = h.marks.map(m => `<b>${esc(m.key)}</b> ${m.cm}`).join(' · ');
+  const unit = gaugeUnit();
+  const scale = `<div class="h-scale"><span class="hi">${esc(levelWithUnit(max, unit))}</span>` +
+    `<span class="lo">${esc(levelWithUnit(min, unit))}</span></div>`;
+  const refs = h.marks.map(m => `<b>${esc(m.key)}</b> ${esc(fmtLevel(m.cm, unit))}`).join(' · ');
   const key = plateKey([
     { sw: keySw('<polyline class="h-line" points="0,9 4,4 8,6 12,2"/>'), label: T.histDaily },
     h.banded && { sw: keySw('<polygon class="h-band" points="0,3 12,1 12,8 0,10"/>'), label: T.histBand },
@@ -3759,7 +3829,8 @@ function stationViewModel() {
     station,
     water: (state.info.water && state.info.water.shortname) || '',
     km: state.info.km,
-    value: Math.round(cur.value),
+    value: cur.value,
+    unit: gaugeUnit(),
     stateName: cur.stateMnwMhw || null,
     ts: cur.timestamp,
     trend,
@@ -3781,13 +3852,16 @@ function insightSentence(u, value) {
   // say it from whichever end is the short one: "higher than 1 %" is true of a
   // record low but reads like good news, where "lower than 99 %" lands
   const since = u.fromYear ?? u.years;
+  const unit = gaugeUnit();
+  const lvl = esc(levelWithUnit(value, unit));
   const parts = [u.pct >= 50
-    ? `<b>${value} cm</b> — higher than <b>${u.pct} %</b> of all days recorded here since <b>${since}</b>.`
-    : `<b>${value} cm</b> — lower than <b>${100 - u.pct} %</b> of all days recorded here since <b>${since}</b>.`];
+    ? `<b>${lvl}</b> — higher than <b>${u.pct} %</b> of all days recorded here since <b>${since}</b>.`
+    : `<b>${lvl}</b> — lower than <b>${100 - u.pct} %</b> of all days recorded here since <b>${since}</b>.`];
   if (u.climMean != null) {
-    const d = Math.round(value - u.climMean);
+    const d = value - u.climMean;
     const dir = d >= 0 ? 'above' : 'below';
-    parts.push(`For ${MONTH_NAME[u.month]} that is <b>${Math.abs(d)} cm</b> ${dir} the usual <b>${u.climMean} cm</b>` +
+    parts.push(`For ${MONTH_NAME[u.month]} that is <b>${esc(levelWithUnit(Math.abs(d), unit))}</b> ${dir} ` +
+      `the usual <b>${esc(levelWithUnit(u.climMean, unit))}</b>` +
       (Math.abs(u.z) >= 1 ? ` — ${u.z > 0 ? 'clearly wet' : 'clearly dry'} for the season.` : '.'));
   }
   return parts.join(' ');
@@ -3804,8 +3878,9 @@ function renderStation(vm) {
   if (vm.wt != null) facts.push(['water', `${vm.wt.toFixed(1)} °C`, '']);
   if (vm.q != null) facts.push(['flow', `${Math.round(vm.q)} m³/s`, '']);
   const head = `<header class="p-head station-head">` +
-    `<div class="hero"><span class="hero-n">${vm.value}</span><span class="hero-u">cm</span>` +
-    `<span class="hero-note">${esc(T.aboveZero)}</span></div>` +
+    `<div class="hero"><span class="hero-n">${esc(fmtLevel(vm.value, vm.unit))}</span>` +
+    `<span class="hero-u">${esc(vm.unit)}</span>` +
+    `<span class="hero-note">${esc(heroNote(vm.unit))}</span></div>` +
     `<dl class="facts">` + facts.map(([k, v, note]) =>
       `<div><dt>${esc(k)}</dt><dd${note ? attr('title', note) : ''}>${esc(v)}</dd></div>`).join('') +
     '</dl>' +
@@ -3855,7 +3930,7 @@ function riverViewModel(stations) {
   const eMin = elevs.length ? Math.min(...elevs) : 0;
   const eSpan = elevs.length ? Math.max(Math.max(...elevs) - eMin, 0.1) : 1;
   const pts = usable.map(s => ({
-    name: s.name, km: s.km, elev: s.elev, value: s.value, kind: s.kind,
+    name: s.name, km: s.km, elev: s.elev, value: s.value, unit: s.unit, kind: s.kind,
     x: flowFrac(s.km, kmMin, kmSpan, lowKmDown),
     y: 1 - (s.elev - eMin) / eSpan,
   })).sort((a, b) => a.x - b.x);
@@ -3883,11 +3958,11 @@ function riverViewModel(stations) {
     // neighbour list, so it is one component, not a second one.
     // upstream first, the way the drawing above reads left to right
     index: [...stations].sort((a, b) => (lowKmDown ? -1 : 1) * (a.km - b.km)).map(s => ({
-      name: s.name, km: s.km, elev: s.elev, value: s.value, kind: s.kind,
+      name: s.name, km: s.km, elev: s.elev, value: s.value, unit: s.unit, kind: s.kind,
     })),
     gradient: drop != null && kmSpan > 0 ? drop / kmSpan : null,
     troubled: troubled.map(s => ({
-      name: s.name, km: s.km, kind: s.kind, value: s.value,
+      name: s.name, km: s.km, kind: s.kind, value: s.value, unit: s.unit,
       elev: s.elev,
       glyph: RIVER_GLYPH[s.kind],
       text: s.kind === 'low' ? T.belowLow : T.aboveHigh,
@@ -3927,7 +4002,7 @@ function renderRiverChart(vm) {
   }
   for (const p of vm.pts) {
     const label = `${p.name}: ${p.elev.toFixed(2)} m NHN, km ${fmtKm(p.km)}` +
-      (p.value != null ? `, ${Math.round(p.value)} cm` : '') + `, ${p.kind}`;
+      (p.value != null ? `, ${levelWithUnit(p.value, p.unit)}` : '') + `, ${p.kind}`;
     parts.push(`<a${navAttrs(p.name)}><title>${esc(label)}</title>` +
       rvMark(p.kind, X(p.x), Y(p.y)) +
       `<rect class="hit" x="${(X(p.x) - 11).toFixed(1)}" y="${(Y(p.y) - 11).toFixed(1)}" width="22" height="22"/></a>`);
@@ -3957,7 +4032,7 @@ function renderRiver(vm) {
         `<li class="${s.kind === 'low' ? 'down' : 'up'}"><span class="b-rank">${i + 1}</span>` +
         `<span class="b-dir" aria-hidden="true">${esc(s.glyph)}</span>` +
         `<a class="b-name"${navAttrs(s.name)}>${esc(s.name)}</a>` +
-        `<span class="b-now">${s.value != null ? Math.round(s.value) + ' cm' : '—'}</span>` +
+        `<span class="b-now">${s.value != null ? esc(levelWithUnit(s.value, s.unit)) : '—'}</span>` +
         `<span class="b-rate">${esc(s.text)}</span>` +
         `<span class="b-badge">km ${esc(fmtKm(s.km))}</span></li>`).join('') +
       '</ol></section>'
@@ -3975,7 +4050,7 @@ function renderRiver(vm) {
     // the drawing's own mark, so the key above already names it
     keySw(rvMark(s.kind, 6, 6), 'river') +
     `<span class="name">${esc(s.name)}</span>` +
-    `<span class="elev">${s.value != null ? Math.round(s.value) + ' cm' : '—'}</span>` +
+    `<span class="elev">${s.value != null ? esc(levelWithUnit(s.value, s.unit)) : '—'}</span>` +
     `<span class="km">km ${esc(fmtKm(s.km))}</span></a></li>`).join('') + '</ol>';
   // on a phone the trouble list is the answer to "is anything wrong here?",
   // so it comes first; the profile follows for anyone who wants the shape
@@ -4239,7 +4314,7 @@ function yearsViewModel() {
         : { bin: heatBinAbs(v, st.lo, st.hi), dir: 0 };
       cells.push({
         m, v: Math.round(v), z, bin: heat.bin, dir: heat.dir,
-        label: `${MONTH_NAME[m]} ${y}: ${Math.round(v)} cm` +
+        label: `${MONTH_NAME[m]} ${y}: ${levelWithUnit(v)}` +
           (z != null ? `, ${Math.abs(z).toFixed(1)} sigma ${z >= 0 ? 'above' : 'below'} the long-term ${MONTH_NAME[m]} mean` : ''),
       });
     }
@@ -4559,7 +4634,7 @@ async function loadWave() {
         }
         // a station with under 30% coverage is a hole, not a row
         if (vals.filter(v => v != null).length >= WAVE_FETCH_DAYS * 0.3) {
-          rows.push({ name: s.name, km: s.km, kind: s.kind, vals });
+          rows.push({ name: s.name, km: s.km, kind: s.kind, unit: s.unit, vals });
         }
       } catch { /* skip this station's row */ } }));
       if (mode !== 'river' || state.river !== forRiver) return; // switched away mid-fetch
@@ -4595,9 +4670,11 @@ function waveViewModel(w) {
     const lo = Math.min(...present), hi = Math.max(...present);
     return {
       name: row.name, kind: row.kind,
+      // each row is scaled to its own gauge anyway, so a metre gauge only needs
+      // its readout to say what it is
       cells: vals.map((v, i) => Number.isFinite(v)
         ? { bin: hi > lo ? heatBinAbs(v, lo, hi) : 1, v: Math.round(v),
-            label: `${row.name}, ${isoDay(dayAt(i))}: ${Math.round(v)} cm` }
+            label: `${row.name}, ${isoDay(dayAt(i))}: ${levelWithUnit(v, row.unit)}` }
         : { bin: -1, v: null, label: `${row.name}, ${isoDay(dayAt(i))}: no reading` }),
     };
   });
@@ -4902,6 +4979,10 @@ function parseBulkStations(raw) {
     out.push({
       uuid: s.uuid, n: s.shortname, w: (s.water && s.water.shortname) || '',
       v: w.currentMeasurement.value,
+      // 69 of these gauges report metres, not centimetres. The board ranks
+      // every gauge against every other one, so the RANKING converts; the
+      // reading itself stays in the unit the gauge published it in.
+      unit: gaugeUnit(w),
       tidal: cv.some(c => c.shortname === 'MThw'),
       mnw: find('MNW'), mhw: find('MHW'),
       kind: troubleKind(w.currentMeasurement.stateMnwMhw),
@@ -4976,11 +5057,11 @@ function risingBadge(r) {
     return days >= 1 && days <= 99 ? days : null;
   };
   if (r.cmPerDay > 0 && r.v < r.mhw) {
-    const days = eta(r.mhw - r.v, r.cmPerDay);
+    const days = eta(toCm(r.mhw - r.v, r.unit), r.cmPerDay);
     return days ? { text: `→MHW ~${days}d`, cls: 'd' } : null;
   }
   if (r.cmPerDay < 0 && r.v > r.mnw) {
-    const days = eta(r.v - r.mnw, -r.cmPerDay);
+    const days = eta(toCm(r.v - r.mnw, r.unit), -r.cmPerDay);
     return days ? { text: `→MNW ~${days}d`, cls: 'd' } : null;
   }
   return null;
@@ -5014,11 +5095,13 @@ function risingOverview(nowStations, snapshot, nowTs, lookbackDays = 1) {
     // no value in that slot: a station that only started reporting since, or a
     // capture that missed it. Skipped either way — silently, as in the 1-day view
     if (base == null) continue;
-    const cmPerDay = (s.v - base) / elapsedDays;
+    // the snapshot stores the gauge's own unit, like the archive, so both
+    // ends of this subtraction are converted the same way
+    const cmPerDay = (toCm(s.v, s.unit) - toCm(base, s.unit)) / elapsedDays;
     if (cmPerDay >= RISING_FLAT) counts.rising++;
     else if (cmPerDay <= -RISING_FLAT) counts.falling++;
     else { counts.steady++; continue; } // steady never makes either list
-    ranked.push({ ...s, cmPerDay, deltaCm: s.v - base });
+    ranked.push({ ...s, cmPerDay, deltaCm: toCm(s.v, s.unit) - toCm(base, s.unit) });
   }
   ranked.sort((a, b) => b.cmPerDay - a.cmPerDay);
   const risers = ranked.filter(r => r.cmPerDay > 0).slice(0, RISING_TOP_N);
@@ -5151,7 +5234,8 @@ function risingViewModel() {
     dir,
     n: x.n,
     w: x.w,
-    v: Math.round(x.v),
+    v: x.v,
+    unit: x.unit,
     cmPerDay: x.cmPerDay,
     deltaCm: d.lookbackDays > 1 && x.deltaCm != null ? Math.round(x.deltaCm) : null,
     badge: x.badge,
@@ -5180,7 +5264,7 @@ function renderRisingRow(x) {
     `<span class="b-dir" aria-hidden="true">${x.dir === 'up' ? '▲' : '▼'}</span>` +
     `<a class="b-name"${navAttrs(x.n)}>${esc(x.n)}</a>` +
     (x.w ? `<a class="b-river"${navAttrs('river:' + x.w)}>${esc(waterLabel(x.w))}</a>` : '<span class="b-river"></span>') +
-    `<span class="b-now">${x.v} cm</span>` +
+    `<span class="b-now">${esc(levelWithUnit(x.v, x.unit))}</span>` +
     `<span class="b-rate">${rate} cm/d${span}</span>` +
     spark + badge + '</li>';
 }
@@ -6567,7 +6651,10 @@ window.addEventListener('popstate', () => {
   else if (p.has('rivers')) switchRivers(false);
   else if (p.has('total')) { totalSyncFromUrl(p); switchTotal(false); }
   else if (p.get('river')) switchRiver(p.get('river'), false);
-  else switchStation(p.get('station') || 'BONN', p.get('adsb') || '', false);
+  // NOT `|| ''` — switchStation reads an empty string as the documented
+  // "clear my receiver" gesture, so stepping back onto any entry without
+  // ?adsb= used to delete a stored receiver URL for good
+  else switchStation(p.get('station') || 'BONN', p.get('adsb') ?? adsbInput.value, false);
   // restore the sub-view AFTER the mode is back, so its mode-guard sees the truth
   const v = (p.get('view') || 'live').toLowerCase();
   if (VIEW_KEYS.includes(v)) setView(v, false);
@@ -6927,7 +7014,7 @@ async function loadRepoArchive() {
   }
   if (!jobs.length) return;
   const results = (await Promise.all(jobs)).filter(Boolean);
-  if (station !== forStation || !results.length) return;
+  if (!results.length) return;
   // closed.json is an array of years, current.json a single year — flatten both;
   // the file's own y wins, so a not-yet-frozen current.json maps to its real year
   const years = results.flatMap(r => (Array.isArray(r) ? r : [r]));
@@ -6941,9 +7028,15 @@ async function loadRepoArchive() {
       measurements.push({ timestamp: new Date(base + d * 864e5 + 18 * 36e5).toISOString(), value: yr.max[d] });
     }
   }
+  // The archive is keyed by station NAME, so a reader who moved on mid-fetch
+  // still keeps what arrived for the gauge they left. Discarding it here while
+  // repoArchiveTried stayed set meant coming back fetched nothing and 1Y…ALL
+  // silently collapsed onto the live days until a reload; the guard now means
+  // what it says — this file was fetched AND used.
   mergeIntoArchive(forStation, measurements);
-  state.archive = loadArchive(forStation);
   updateLocalBar();
+  if (station !== forStation) return; // …only the on-screen state follows them
+  state.archive = loadArchive(forStation);
   scheduleRender();
 }
 
@@ -6952,7 +7045,13 @@ async function ensureHistoryCoverage(days) {
   if (days > API_MAX_DAYS) return loadRepoArchive(); // beyond the API's 30-day reach
   const forStation = station;
   const cutoff = Date.now() - days * 864e5;
-  if (state.archive.length && state.archive[0][0] <= cutoff) return; // already covered
+  // Reaching far enough back is not the same as being complete. Judging by the
+  // oldest point alone made the backfill unreachable in exactly the case it
+  // exists for: a deep archive with a hole inside the window.
+  const inWindow = state.archive.filter(p => p[0] >= cutoff);
+  const covered = state.archive.length && state.archive[0][0] <= cutoff &&
+    countGaps(inWindow).maxGapH < 24;
+  if (covered) return;
   try {
     const enc = encodeURIComponent(forStation);
     const measurements = await getJson(`${API}/stations/${enc}/W/measurements.json?start=${encodeURIComponent('P' + days + 'D')}`);
@@ -7104,7 +7203,7 @@ function buildReportSections(note) {
   if (state.error) diagnostics.push(`- error: ${state.error}`);
 
   const live = [
-    `- W: ${cur ? cur.value + ' cm' : 'n/a'}`,
+    `- W: ${cur ? levelWithUnit(cur.value) : 'n/a'}`,
     `- WT: ${state.wt != null ? state.wt.toFixed(1) + ' °C' : 'n/a'}`,
     `- Q: ${state.q != null ? Math.round(state.q) + ' m³/s' : 'n/a'}`,
     `- trend: ${trend != null ? trend.toFixed(1) + ' cm/h' : 'n/a'}`,
