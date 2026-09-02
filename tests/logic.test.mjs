@@ -987,9 +987,61 @@ test('historyViewModel: the time axis is labelled from real timestamps', () => {
   assert.equal(h.ticks[0].text, '2024-01', 'the first tick sits at the two-years-ago start (NOON is 2026-01-15)');
   assert.equal(h.ticks.at(-1).text, '2026-01', 'the last tick is the now end');
   assert.ok(h.ticks.every(t => t.frac >= 0 && t.frac <= 1), 'ticks are positioned as fractions, not columns');
-  // ticks read their own column's timestamp: gaps compress, so a linear time
-  // axis would misplace them
   assert.ok(h.ticks[0].frac < h.ticks.at(-1).frac, 'and run left to right');
+  // The assurance the whole change exists for: frac IS elapsed time. Every tick
+  // must sit where its own instant sits in the window, whatever the reading
+  // density happens to be on either side of it.
+  const span = h.to - h.from;
+  for (const t of h.ticks) {
+    const at = new Date(h.from + t.frac * span).toISOString().slice(0, 7);
+    assert.equal(t.text, at, `the tick at ${(t.frac * 100).toFixed(0)}% of the window is labelled with that instant`);
+  }
+});
+
+// The archive changes cadence inside a window — 15-minutely for 16 days, hourly
+// to a year, 6-hourly beyond — and by index that dense stretch claimed as many
+// columns as a sparse one, so the same days were drawn at different slopes
+// depending on which window you opened them in.
+test('historyViewModel: the same days keep their slope in a wider window', () => {
+  const app = loadApp({ now: NOON });
+  // 40 days: the last 8 sampled 16× as often as the first 32, one straight
+  // ramp of 4 cm a day throughout, so every honest drawing of it is a straight
+  // line no matter where the readings bunch up
+  const pts = app.run(`(() => {
+    const pts = [];
+    const level = ts => 100 + (ts - (${NOON} - 40 * 864e5)) / 864e5 * 4;
+    for (let d = 0; d < 32; d++) {
+      const ts = ${NOON} - (40 - d) * 864e5;
+      pts.push([ts, level(ts)]);
+    }
+    for (let q = 0; q < 8 * 16; q++) {
+      const ts = ${NOON} - 8 * 864e5 + q * (864e5 / 16);
+      pts.push([ts, level(ts)]);
+    }
+    state.archive = pts;
+    return pts.length;
+  })()`);
+  assert.equal(pts, 32 + 128, 'the fixture really is lopsided: 128 readings in the last fifth');
+
+  const at = key => app.run(`(() => { historyKey = '${key}'; const h = historyViewModel();
+    return { lo: h.series.lo, from: h.from, to: h.to, gaps: h.gaps }; })()`);
+  const all = at('all');
+  assert.equal(all.gaps, 0, 'daily readings are never an outage');
+
+  // a straight ramp drawn on a time axis has a constant rise per column
+  const cols = all.lo.filter(v => v != null);
+  const steps = cols.slice(1).map((v, i) => v - cols[i]);
+  const lo = Math.min(...steps), hi = Math.max(...steps);
+  assert.ok(hi - lo < 0.5,
+    `a constant ramp rises by a constant amount per column, got ${lo.toFixed(2)}..${hi.toFixed(2)}`);
+
+  // and the 7-day window through the dense end has the same real slope
+  const week = at('7d');
+  const wCols = week.lo.filter(v => v != null);
+  const allPerDay = (cols.at(-1) - cols[0]) / ((all.to - all.from) / 864e5);
+  const weekPerDay = (wCols.at(-1) - wCols[0]) / ((week.to - week.from) / 864e5);
+  assert.ok(Math.abs(allPerDay - 4) < 0.3, `the 40-day window reads ~4 cm/day, got ${allPerDay.toFixed(2)}`);
+  assert.ok(Math.abs(weekPerDay - 4) < 0.3, `and so does the 7-day one, got ${weekPerDay.toFixed(2)}`);
 });
 
 test('history presets: 1Y/5Y exist, API backfill stays within its 30-day reach', () => {
@@ -1649,30 +1701,60 @@ test('renderHistory: a flat series draws at half height, not as an empty chart',
   assert.ok(/48\.0|48 /.test(html), 'the surface sits at half of the 96-unit box');
 });
 
-test('bucketSeries: buckets tile the window, extremes come from every point', () => {
-  const app = loadApp();
-  // 12 points into 4 columns: three per bucket, nothing dropped
-  const b = app.run('bucketSeries([5, 1, 9, 4, 4, 4, 7, 2, 8, 0, 6, 3], 4)');
+test('bucketSeries: columns tile TIME, not the point array', () => {
+  const app = loadApp({ now: NOON });
+  const H = 36e5;
+  const run = (pts, cols, t0, t1) =>
+    app.run(`bucketSeries(${JSON.stringify(pts)}, ${cols}, ${t0}, ${t1})`);
+
+  // 12 readings, evenly spaced over 12 h, into 4 columns: three each
+  const even = Array.from({ length: 12 }, (_, i) => [NOON + i * H, [5, 1, 9, 4, 4, 4, 7, 2, 8, 0, 6, 3][i]]);
+  const b = run(even, 4, NOON, NOON + 11 * H);
   assert.deepEqual(b.lo, [1, 4, 2, 0]);
   assert.deepEqual(b.hi, [9, 4, 8, 6]);
-  assert.equal(b.min, 0, 'window min is the smallest point, not the smallest sampled one');
+  assert.equal(b.min, 0, 'window min is the smallest reading, not the smallest sampled one');
   assert.equal(b.max, 9);
+  assert.equal(b.gaps, 0);
 
-  // fewer points than columns: every bucket holds at most one point, so lo === hi
-  // and both equal series[floor(x * step)] — exactly what the old renderer drew
-  const series = [10, 40, 20, 30];
-  const s = app.run(`bucketSeries(${JSON.stringify(series)}, 9)`);
-  const old = Array.from({ length: 9 }, (_, x) => series[Math.min(3, Math.floor(x * (4 / 9)))]);
-  assert.deepEqual(s.lo, old, 'degrades to the old one-point-per-column sampling');
-  assert.deepEqual(s.hi, old);
-  assert.deepEqual(s.lo, s.hi, 'no band at all when a bucket holds one point');
-  assert.equal(s.min, 10);
-  assert.equal(s.max, 40);
+  // THE POINT OF THE CHANGE: half the readings crammed into a tenth of the
+  // window. By index those eleven would have claimed half the width; by time
+  // they may claim only the tenth they actually happened in.
+  const skewed = [];
+  for (let i = 0; i < 11; i++) skewed.push([NOON + i * 5 * 60000, 100]);   // 11 inside the first hour
+  for (let i = 1; i <= 10; i++) skewed.push([NOON + i * H, 200]);          // 10 over ten hours
+  const s = run(skewed, 10, NOON, NOON + 10 * H);
+  assert.equal(s.lo[0], 100, 'the dense hour is the first column');
+  assert.deepEqual(s.lo.slice(1), [200, 200, 200, 200, 200, 200, 200, 200, 200],
+    'and it gets exactly the one column its hour is worth');
 
-  // exactly as many points as columns: still one per bucket
-  const e = app.run('bucketSeries([3, 1, 2], 3)');
-  assert.deepEqual(e.lo, [3, 1, 2]);
-  assert.deepEqual(e.hi, [3, 1, 2]);
+  // a silence longer than the live cadence allows (90 min) breaks the columns,
+  // and counts ONCE however many columns it blanks — the real BONN archive has
+  // a single eight-month hole that empties 71 of 121 columns, and "71 breaks"
+  // in the key would be a lie about what happened
+  const silent = [[NOON, 50], [NOON + 10 * 60000, 55], [NOON + 6 * H, 60], [NOON + 6.1 * H, 62]];
+  const g = run(silent, 12, NOON, NOON + 6.1 * H);
+  assert.equal(g.gaps, 1, 'one silence is one gap, not one per blanked column');
+  assert.ok(g.lo.filter(v => v == null).length > 1, 'even though it blanks several columns');
+  assert.equal(g.lo[0], 50, 'the readings on either side still land');
+  assert.equal(g.lo.at(-1), 60, 'both of them');
+
+  // two separate silences are two gaps: a quarter-hourly day with two three-hour
+  // holes punched in it
+  const twice = [];
+  for (let q = 0; q <= 96; q++) {
+    const t = NOON + q * 15 * 60000;
+    if ((q > 20 && q < 32) || (q > 60 && q < 72)) continue;
+    twice.push([t, 100 + q]);
+  }
+  assert.equal(run(twice, 60, NOON, NOON + 24 * H).gaps, 2, 'two outages, two gaps');
+
+  // a column merely finer than the data is NOT a gap: 30 min apart is well
+  // inside the cadence, so the empty columns are drawn through
+  const fine = [[NOON, 10], [NOON + 30 * 60000, 40]];
+  const f = run(fine, 6, NOON, NOON + 30 * 60000);
+  assert.equal(f.gaps, 0, 'no outage here — the chart is just finer than the readings');
+  assert.equal(f.lo.includes(null), false, 'so every column carries a value');
+  assert.ok(f.lo[2] > 10 && f.lo[2] < 40, 'interpolated between the two readings');
 });
 
 // the hosted archive merges as two synthetic points per day (min 06:00, max

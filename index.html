@@ -2254,15 +2254,34 @@ const coverageDays = (first, last) => Math.max(1, Math.round((last - first) / 86
 // (6-hourly thinning) — so only real outages/offline stretches count
 const GAP_MIN_MS = 90 * 60000;
 const GAP_OLD_MS = 9 * 36e5;
+// This is the archive's own bookkeeping, measured against the cadence
+// mergeIntoArchive thins to, so it can afford to flag anything coarser.
+const ageGapLimit = ts => ts < Date.now() - 365 * 864e5 ? GAP_OLD_MS : GAP_MIN_MS;
 function countGaps(pts) {
-  const yearCutoff = Date.now() - 365 * 864e5;
   let gaps = 0, maxGap = 0;
   for (let i = 1; i < pts.length; i++) {
     const d = pts[i][0] - pts[i - 1][0];
-    const limit = pts[i - 1][0] < yearCutoff ? GAP_OLD_MS : GAP_MIN_MS;
-    if (d > limit) { gaps++; if (d > maxGap) maxGap = d; }
+    if (d > ageGapLimit(pts[i - 1][0])) { gaps++; if (d > maxGap) maxGap = d; }
   }
   return { gaps, maxGapH: maxGap / 36e5 };
+}
+
+// The history chart needs the same judgement but must not get it wrong in the
+// same direction: a miscounted gap is one number in the local-archive line, a
+// broken sparkline is the picture itself. And the clock alone cannot decide it
+// — 24 h is an outage at a 15-minutely gauge and the ordinary cadence at a
+// daily one, and one window holds both, because mergeIntoArchive thins with age
+// and plenty of gauges never reported that often to begin with. So the
+// threshold comes from the readings in the window: the 90th percentile of their
+// spacing, which survives a stretch of thinner data, times four — floored at
+// the 90 minutes above, so a gauge that really does report every quarter hour
+// still shows its outages.
+function windowGapLimit(pts) {
+  if (pts.length < 3) return GAP_MIN_MS;
+  const d = [];
+  for (let i = 1; i < pts.length; i++) d.push(pts[i][0] - pts[i - 1][0]);
+  d.sort((a, b) => a - b);
+  return Math.max(GAP_MIN_MS, d[Math.floor((d.length - 1) * 0.9)] * 4);
 }
 
 function updateLocalBar() {
@@ -2673,6 +2692,7 @@ const T = {
   historyThin: 'Not enough readings yet for this window — the local archive grows with every visit.',
   histDaily: 'the reading over time',
   histBand: 'min–max inside one pixel column',
+  histGapKey: 'the gauge reported nothing here, so the line stops rather than guess across it',
   neighbours: 'NEIGHBOURS',
   neighboursSub: 'water surface elevation between the gauges up- and downstream, in metres above sea level (m NHN)',
   neighboursAria: 'elevation profile of the neighbouring gauges',
@@ -2972,32 +2992,58 @@ const historyPreset = () => HISTORY_PRESETS.find(p => p.k === historyKey);
 // whenever there isn't enough data, so a new dataset snaps in instead of springing from junk
 let sparkDisplay = null, sparkVelocity = null, sparkLastT = null;
 
-// One min–max band per column, bucketed by index RANGE — not one sampled point
-// per column. The hosted archive merges in as two synthetic points per day (the
-// daily min at 06:00, the daily max at 18:00), so the default ALL window carries
-// ~19k points across ~72 columns and picking series[floor(x * step)] was a coin
-// flip between each day's low and its high. Buckets tile the window exactly, so
-// no point is dropped and the caption can describe the whole window. With fewer
-// points than columns (24H, 3D) every bucket holds at most one point and
-// lo === hi === the point the old code sampled — those windows render unchanged.
-function bucketSeries(series, cols) {
-  const step = series.length / cols;
-  const lo = new Array(cols), hi = new Array(cols);
+// One min–max band per column, and the columns tile TIME — not the point array.
+// Index columns were wrong wherever the archive changes cadence inside one
+// window: 15-minutely for the newest 16 days, hourly out to a year, 6-hourly
+// beyond (mergeIntoArchive). The dense stretch then claimed as many columns as
+// the sparse one, so every window past 16 days was drawn skewed — a week of
+// live readings occupying the same width as half a year of thinned ones.
+//
+// A column with no reading in it is one of two very different things, and
+// windowGapLimit tells them apart: if the readings on either side are closer
+// together than this gauge's own cadence in this window, the column is merely
+// finer than the data and a straight line is drawn through it; if they are
+// further apart, the gauge really was silent, and the column stays null so the
+// chart breaks the line instead of inventing readings across an outage.
+function bucketSeries(pts, cols, t0, t1) {
+  const span = Math.max(1, t1 - t0);
+  const limit = windowGapLimit(pts);
+  const lo = new Array(cols).fill(null), hi = new Array(cols).fill(null);
+  const colOf = t => Math.max(0, Math.min(cols - 1, Math.floor((t - t0) / span * cols)));
+  for (const p of pts) {
+    const x = colOf(p[0]), v = p[1];
+    if (lo[x] == null || v < lo[x]) lo[x] = v;
+    if (hi[x] == null || v > hi[x]) hi[x] = v;
+  }
+  // the last reading at or before each column start, found in one walk
+  const prev = new Array(cols);
+  let j = 0;
   for (let x = 0; x < cols; x++) {
-    const a = Math.floor(x * step), b = Math.floor((x + 1) * step);
-    if (b <= a) { lo[x] = hi[x] = series[Math.min(series.length - 1, a)]; continue; }
-    let mn = Infinity, mx = -Infinity;
-    for (let i = a; i < b; i++) {
-      const v = series[i];
-      if (v < mn) mn = v;
-      if (v > mx) mx = v;
+    const colStart = t0 + (x / cols) * span;
+    while (j < pts.length && pts[j][0] < colStart) j++;
+    prev[x] = j - 1;
+  }
+  // gaps counts silences, not columns: one eight-month outage is one gap, even
+  // though it blanks most of the chart
+  let gaps = 0, inGap = false;
+  for (let x = 0; x < cols; x++) {
+    if (lo[x] != null) { inGap = false; continue; }
+    const a = prev[x] >= 0 ? pts[prev[x]] : null;
+    const b = prev[x] + 1 < pts.length ? pts[prev[x] + 1] : null;
+    if (!a || !b) continue;                                 // past either end
+    if (b[0] - a[0] > limit) {                              // a real silence
+      if (!inGap) { gaps++; inGap = true; }
+      continue;
     }
-    lo[x] = mn; hi[x] = mx;
+    const mid = t0 + ((x + 0.5) / cols) * span;
+    const f = (mid - a[0]) / Math.max(1, b[0] - a[0]);
+    lo[x] = hi[x] = a[1] + (b[1] - a[1]) * f;
+    inGap = false;
   }
   // window extremes, not the extremes of whatever the columns happened to hit
   let min = Infinity, max = -Infinity;
-  for (const v of series) { if (v < min) min = v; if (v > max) max = v; }
-  return { lo, hi, min, max, step };
+  for (const p of pts) { if (p[1] < min) min = p[1]; if (p[1] > max) max = p[1]; }
+  return { lo, hi, min, max, gaps };
 }
 
 // Feed this the widest sample there is (see loadNeighbors): over a few adjacent
@@ -3417,12 +3463,12 @@ function historyViewModel() {
   const wd = preset.d;
   const cutoff = wd ? Date.now() - wd * 864e5 : 0;
   const arch = wd ? state.archive.filter(p => p[0] >= cutoff) : state.archive;
-  const series = arch.map(p => p[1]);
-  if (series.length < 2) return { empty: true, label: preset.label };
-  const spanDays = Math.max(1, Math.round((arch[arch.length - 1][0] - arch[0][0]) / 864e5));
+  if (arch.length < 2) return { empty: true, label: preset.label };
+  const t0 = arch[0][0], t1 = arch[arch.length - 1][0];
+  const spanDays = Math.max(1, Math.round((t1 - t0) / 864e5));
   const cols = bucketCols();
-  const b = bucketSeries(series, cols);
-  const banded = b.lo.some((v, x) => v < b.hi[x]);
+  const b = bucketSeries(arch, cols, t0, t1);
+  const banded = b.lo.some((v, x) => v != null && v < b.hi[x]);
   const coveredDays = (Date.now() - arch[0][0]) / 864e5;
   let note = null;
   if (wd && coveredDays < wd * 0.8 && state.repoArchive === 'none') {
@@ -3432,8 +3478,10 @@ function historyViewModel() {
   } else if ((wd || spanDays) > API_MAX_DAYS) {
     note = { kind: 'raw', text: `unvalidated raw data (${archiveSource()})` };
   }
-  // ticks read their own column's real timestamp: columns sample by index, so
-  // gaps compress and a linear time axis would lie
+  // The axis is time now, so a tick sits where its instant sits: frac is the
+  // share of the window that had elapsed, nothing to do with how many readings
+  // fell before it. That is what makes two windows over the same days show the
+  // same slope.
   const nTicks = plateDensity() === 'narrow' ? 3 : 6;
   const fmt = ts => {
     const iso = new Date(ts).toISOString();
@@ -3445,18 +3493,17 @@ function historyViewModel() {
   const ticks = [];
   let lastLbl = '';
   for (let i = 0; i < nTicks; i++) {
-    const x = Math.round((i * (cols - 1)) / (nTicks - 1));
-    const ts = arch[Math.min(arch.length - 1, Math.floor(x * b.step))][0];
-    const text = fmt(ts);
+    const frac = i / (nTicks - 1);
+    const text = fmt(t0 + frac * (t1 - t0));
     if (text === lastLbl) continue;
     lastLbl = text;
-    ticks.push({ frac: cols > 1 ? x / (cols - 1) : 0, text });
+    ticks.push({ frac, text });
   }
   return {
     empty: false,
     label: wd ? preset.label : spanDays > 730 ? (spanDays / 365.25).toFixed(1) + 'Y' : spanDays + 'D',
-    windowDays: wd, spanDays, points: series.length,
-    series: b, banded, ticks, note,
+    windowDays: wd, spanDays, points: arch.length, from: t0, to: t1,
+    series: b, banded, ticks, note, gaps: b.gaps,
     marks: historyRefMarks(b.min, b.max),
     insight: unusualNow(),
   };
@@ -3553,20 +3600,35 @@ function renderHistory(h) {
   const span = Math.max(max - min, 1);
   const X = i => (n > 1 ? (i / (n - 1)) * HIST_W : 0);
   const Y = v => max === min ? HIST_H / 2 : (1 - (v - min) / span) * HIST_H;
-  const top = [], bottom = [];
-  for (let i = 0; i < n; i++) { top.push(`${X(i).toFixed(1)},${Y(hi[i]).toFixed(1)}`); }
-  for (let i = n - 1; i >= 0; i--) { bottom.push(`${X(i).toFixed(1)},${Y(lo[i]).toFixed(1)}`); }
+  // Contiguous runs of columns that carry a reading. A column the gauge was
+  // silent through ends the run, so the line stops before the outage and picks
+  // up after it — one unbroken stroke across a four-day silence would be a
+  // drawing of readings that do not exist.
+  const runs = [];
+  for (let i = 0, cur = null; i < n; i++) {
+    if (lo[i] == null) { cur = null; continue; }
+    if (!cur) runs.push(cur = []);
+    cur.push(i);
+  }
   const parts = [];
   for (const m of h.marks) {
     parts.push(`<line class="href-line" x1="0" y1="${Y(m.cm).toFixed(1)}" x2="${HIST_W}" y2="${Y(m.cm).toFixed(1)}"/>`);
   }
-  // the band is the honest shape: every point in the window, not a subsample
-  if (h.banded) parts.push(`<polygon class="h-band" points="${top.join(' ')} ${bottom.join(' ')}"/>`);
-  parts.push(`<polygon class="h-fill" points="0,${HIST_H} ${top.join(' ')} ${HIST_W},${HIST_H}"/>`);
-  parts.push(`<polyline class="h-line" points="${top.join(' ')}"/>`);
+  for (const run of runs) {
+    // a lone column is half a column wide either way, so it is still a mark
+    const xs = run.length > 1 ? run.map(X) : [X(run[0]) - 0.5, X(run[0]) + 0.5];
+    const vals = run.length > 1 ? run : [run[0], run[0]];
+    const top = vals.map((i, k) => `${xs[k].toFixed(1)},${Y(hi[i]).toFixed(1)}`);
+    const bottom = vals.map((i, k) => `${xs[k].toFixed(1)},${Y(lo[i]).toFixed(1)}`).reverse();
+    // the band is the honest shape: every point in the window, not a subsample
+    if (h.banded) parts.push(`<polygon class="h-band" points="${top.join(' ')} ${bottom.join(' ')}"/>`);
+    parts.push(`<polygon class="h-fill" points="${xs[0].toFixed(1)},${HIST_H} ${top.join(' ')} ${xs[xs.length - 1].toFixed(1)},${HIST_H}"/>`);
+    parts.push(`<polyline class="h-line" points="${top.join(' ')}"/>`);
+  }
   const chart = svgWrap(`0 0 ${HIST_W} ${HIST_H}`, parts.join(''),
     ' class="chart hist" preserveAspectRatio="none" role="img"' +
-    attr('aria-label', `${h.label} history, ${min} to ${max} centimetres over ${h.points} readings`));
+    attr('aria-label', `${h.label} history, ${min} to ${max} centimetres over ${h.points} readings` +
+      (h.gaps ? `, broken by ${h.gaps} ${plural(h.gaps, 'gap')} in the record` : '')));
   const axis = `<div class="h-axis">` +
     h.ticks.map(t => `<span${attr('style', `left:${(t.frac * 100).toFixed(2)}%`)}>${esc(t.text)}</span>`).join('') +
     '</div>';
@@ -3576,6 +3638,8 @@ function renderHistory(h) {
     { sw: keySw('<polyline class="h-line" points="0,9 4,4 8,6 12,2"/>'), label: T.histDaily },
     h.banded && { sw: keySw('<polygon class="h-band" points="0,3 12,1 12,8 0,10"/>'), label: T.histBand },
     refs && { sw: keySw('<line class="href-line" x1="0" y1="6" x2="12" y2="6"/>'), html: refs },
+    h.gaps > 0 && { sw: keySw('<polyline class="h-line" points="0,8 3,5"/><polyline class="h-line" points="9,6 12,3"/>'),
+      label: `${h.gaps} ${plural(h.gaps, 'break')} — ${T.histGapKey}` },
     { note: `${h.points} readings` },
     h.note && { note: h.note.text, warn: true },
   ]);
