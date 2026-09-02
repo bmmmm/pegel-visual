@@ -83,7 +83,7 @@
 import { mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { condense, writeStation } from './fetch-wsv-archive.mjs';
+import { condense, writeStation, reportRunOutcome } from './fetch-wsv-archive.mjs';
 
 const RWS = 'https://ddapi20-waterwebservices.rijkswaterstaat.nl';
 const OPHALEN = RWS + '/ONLINEWAARNEMINGENSERVICES/OphalenWaarnemingen';
@@ -267,7 +267,13 @@ async function main() {
         { source: SOURCE, datumOffsetCm: st.offsetCm, water: st.water });
       const ys = [...years.keys()].sort((a, b) => a - b);
       console.log(`${tag} · ${pts} pts -> ${touched} year(s)${ys.length ? ` (${ys[0]}-${ys[ys.length - 1]})` : ''}${badYears ? ` · ${badYears} year(s) skipped` : ''}`);
-      ok++;
+      // A station counts as fetched only if it actually produced data.
+      // fetchStation isolates errors per (code, year) on purpose — one bad year
+      // must not discard a whole backfill — but that also meant a station whose
+      // every year failed still landed in `ok`. Measured with the network cut:
+      // 10 of 10 stations "fetched", 0 points, exit code 0. Asked for, errored,
+      // nothing back: that is a failure, whatever the exception did.
+      if (pts === 0 && badYears) failed++; else ok++;
     } catch (e) {
       console.log(`${tag} · FAILED: ${e.message}`);
       failed++;
@@ -275,4 +281,5 @@ async function main() {
   }
   updateManifest(OUT, stations);
   console.log(`done · ${ok} fetched · ${failed} failed${failed ? ' (re-run to retry)' : ''} · manifest upserted`);
+  reportRunOutcome('RWS archive fetch', ok, failed);
 }

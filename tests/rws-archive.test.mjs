@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { fetchYear } from '../scripts/fetch-rws-archive.mjs';
+import { fetchYear, fetchStation } from '../scripts/fetch-rws-archive.mjs';
 
 // The DD-API returns tide FORECASTS for future timestamps (notably the 4 tidal
 // gauges VUREN, DORDRECHT, KRIMPEN, ROTTERDAM). fetchYear must never request or
@@ -98,4 +98,28 @@ test('rws archive: fetchYear under the real clock still caps the current running
   // the real clock at all (recent, not Dec 31, not epoch) with a window wide
   // enough that scheduling can never flake it.
   assert.ok(capped >= before - 300000 && capped <= after, 'capped instant tracks the real clock (within minutes)');
+});
+
+// fetchStation isolates a transient error per (code, year) so one bad year
+// cannot discard a whole backfill. The cost of that isolation: the caller sees
+// no exception, so a station whose every year failed used to be counted as
+// fetched. Measured with the network cut before this was fixed: "10 fetched,
+// 0 failed", exit code 0, on a run that imported nothing at all.
+test('fetchStation reports the failed years it swallowed', async () => {
+  const st = { name: 'LOBITH', code: 'lobith.bovenrijn', uuid: 'u-lobith' };
+
+  const dead = await fetchStation(st, 2026, 2026, async () => { throw new Error('fetch failed'); });
+  assert.equal(dead.pts, 0, 'nothing came back');
+  assert.equal(dead.failed, 1, 'the swallowed year is still reported to the caller');
+  assert.equal(dead.years.size, 0);
+  // this pair — no points, and a year that explicitly failed — is what the
+  // caller now classifies as a failed station rather than a fetched one
+  assert.ok(dead.pts === 0 && dead.failed > 0, 'asked for, errored, nothing back');
+
+  // an empty-but-healthy answer is NOT a failure: nothing errored, so a silent
+  // gauge must not turn a run red
+  const quiet = await fetchStation(st, 2026, 2026, async () => ({ status: 204 }));
+  assert.equal(quiet.pts, 0);
+  assert.equal(quiet.failed, 0, 'a 204 is an answer, not an error');
+  assert.ok(!(quiet.pts === 0 && quiet.failed > 0), 'a quiet gauge stays green');
 });
