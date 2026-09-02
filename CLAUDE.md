@@ -17,6 +17,21 @@
   connects to it. Each chip carries a real `href` via `navHref` (`cmd:h:30d`,
   `cmd:rd:7`, `cmd:years`, …), so the state it sets is shareable and the Back
   button works; only genuinely URL-less toggles (`cmd:abs`) stay buttons.
+- **Legends are built, not spelled out.** A key is one `plateKey([…])` call —
+  `ctlRow`'s sibling — fed `{ sw, label }` marks, `{ note }` caveats and
+  `{ dd }` for markup the caller already escaped; swatches come from `keySw()`
+  or `keyChip()`. A swatch reuses the drawing's own classes, so a mark that
+  changes changes in both places at once. `tests/logic.test.mjs` pulls the
+  classes out of the drawing and out of its `<dl class="p-key">` and demands
+  the second set covers the first, so a new mark without a legend entry is red.
+- **A swatch is a still, and it must not be positioned by `transform`.** Sharing
+  the drawing's classes also inherits its CSS: the scene's `drift` carries a
+  wave 320 units — a full scene width — clear of a 12 px box, and `bob`'s
+  keyframe on `transform` silently beats a `transform=` attribute on the same
+  element. So give an off-origin mark **its own `viewBox`** (third argument of
+  `keySw`) instead of scaling it, and switch its animation off for `.sw` at a
+  specificity that actually wins. Neither failure is visible to the tests —
+  only a real browser catches an empty swatch.
 - **Conventions the test harness depends on:** every `*ViewModel()` and
   `render*()` is a **top-level `function` declaration** (a `const` arrow inside
   a block is unreachable from `app.run`), and no renderer may ever emit the

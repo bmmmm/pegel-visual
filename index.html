@@ -696,9 +696,13 @@
   .chart a { cursor: pointer; }
   .chart a:hover .seg, .chart a:hover .db { opacity: 0.72; }
   .chart a:focus-visible { outline: 2px solid var(--ink); outline-offset: 1px; }
-  .chart .db.rose { fill: var(--water); stroke: var(--water-line); stroke-width: 0.6; }
-  /* fell is hatched as well as coloured — direction never rides on hue alone */
-  .chart .db.fell { fill: var(--dry); stroke: var(--dry-line); stroke-width: 0.6; }
+  /* The diff bars take their fill from a pattern, exactly as the Σ bands do, so
+     the hatch leans one way for a rise and the other for a fall — direction
+     never rides on hue alone. No `fill` here: a CSS fill beats the element's own
+     fill="url(…)" and would silently paint the pattern out again. */
+  .chart .db { stroke-width: 0.6; }
+  .chart .db.rose { stroke: var(--water-line); }
+  .chart .db.fell { stroke: var(--dry-line); }
   /* band pattern fills: the rect carries the colour, the strokes the texture */
   .bf { fill: var(--paper); }
   .bf-solid { fill: color-mix(in oklab, var(--ink) 14%, var(--paper)); }
@@ -707,6 +711,8 @@
   .bf-dots { fill: var(--dry); }
   .bf-cross { fill: var(--bed); }
   .bf-none { fill: var(--paper); }
+  .bf-rose { fill: var(--water); }
+  .bf-fell { fill: var(--dry); }
   .bh { stroke: color-mix(in oklab, var(--ink) 55%, transparent); }
   .bh-f { fill: color-mix(in oklab, var(--ink) 55%, transparent); }
   .defs-only { position: absolute; width: 0; height: 0; }
@@ -841,6 +847,9 @@
   .scene .boat .mast { fill: var(--paper); }
   .scene .plane path { fill: none; stroke: var(--ink); stroke-width: 1.3; stroke-linejoin: round; }
   .scene .craft-lbl { font-family: var(--font-data); font-size: 7px; fill: var(--mid); }
+  /* the cloud, boat and plane swatches are the drawing's own paths scaled down
+     to 12 px; without this their hairlines scale with them and vanish */
+  .sw.scene * { vector-effect: non-scaling-stroke; }
   /* ---- history chart ---- */
   .hist-wrap { display: grid; grid-template-columns: var(--axis-gutter) 1fr; align-items: stretch; }
   .hist { height: 6.5rem; border-bottom: 1px solid var(--ink); }
@@ -921,6 +930,13 @@
     .scene .snow circle { animation: flake 6s linear infinite; animation-delay: var(--d, 0s); }
     .scene .boat:not(.stuck):not(.aground) { animation: bob var(--bob, 3.4s) ease-in-out infinite; }
     .scene .ice .floe { animation: floe 40s linear infinite; }
+    /* The key's swatches share the drawing's `.scene` vocabulary, and its motion
+       came with it: these keyframes travel in scene units, so inside a 12 px
+       swatch drift alone carried the wave 320 px clear of the frame and the key
+       showed an empty box. A swatch is a still. */
+    .sw.scene .waves, .sw.scene .star, .sw.scene .rain line,
+    .sw.scene .snow circle, .sw.scene .boat:not(.stuck):not(.aground),
+    .sw.scene .ice .floe { animation: none; }
   }
   @keyframes drift { to { transform: translateX(-320px); } }
   @keyframes twinkle { 0%, 100% { opacity: 0.2; } 50% { opacity: 0.75; } }
@@ -2630,9 +2646,21 @@ const T = {
     'also grows with every gauge that joins the archive — for trends use Δ change.',
   totalNoteDiff: 'Net day-over-day change, counting only gauges that reported on both days — ' +
     'a gauge’s first reporting day never counts, so coverage changes cancel out.',
+  totalHatchNote: 'Every band carries its own hatch as well as its own colour, so the chart still reads in greyscale and with colour blindness.',
+  totalHatchNoteDiff: 'A rise leans one way and a fall the other, so the direction still reads in greyscale and with colour blindness.',
+  totalKeyRose: 'the summed stage rose that day',
+  totalKeyFell: 'it fell',
+  totalKeyGlyph: 'the five biggest waters, each carrying the same glyph its band has in the chart one level up',
+  totalKeyOther: 'every other water, pooled as OTHER in the chart',
+  totalKeyShare: 'its share of the day’s summed stage',
+  totalKeyStage: 'its own summed stage that day',
+  totalKeyRate: 'its net change against the day before',
+  totalKeyGauges: 'gauges of that water that reported',
+  totalKeyProvisional: 'This day is provisional: the gauges can still revise it.',
   riversTitle: 'ALL WATERS',
   riversSub: 'every water PEGELONLINE serves, placed at the centre of its own gauges',
   riversPick: 'Pick a water to walk it gauge by gauge, or open the A–Z index for the full list.',
+  riversCentreNote: 'Each water sits at the centre of its own gauges, so a long river lands mid-course.',
   now: 'NOW',
   aboveZero: 'above this gauge’s own zero mark',
   sceneTitle: 'THE RIVER RIGHT NOW',
@@ -2648,6 +2676,10 @@ const T = {
   neighbours: 'NEIGHBOURS',
   neighboursSub: 'water surface elevation between the gauges up- and downstream, in metres above sea level (m NHN)',
   neighboursAria: 'elevation profile of the neighbouring gauges',
+  keyProfileSelf: 'this gauge — the larger, filled dot',
+  keyProfileOther: 'a neighbouring gauge; tap one to open it',
+  keyProfileLine: 'the water surface falling downstream',
+  keyProfileNote: 'Both axes are stretched to these gauges’ own span and neither starts at zero: a fall of 20 cm is drawn as steeply as one of 20 m. The list below carries the real numbers.',
   downstream: 'downstream',
   upstream: 'upstream',
   profileLoading: 'locating the neighbouring gauges…',
@@ -2658,6 +2690,23 @@ const T = {
   keyMeans: 'long-term mean low / mean / high water (MNW · MW · MHW)',
   keyRecords: 'the highest and lowest ever recorded here (HHW · NNW)',
   keyBand: 'the normal range — inside it, the river is behaving',
+  keyWater: 'the water in the channel, filled to the current level',
+  keyBed: 'the riverbed under it',
+  keyDry: 'bank the water has left dry',
+  keyWaves: 'the moving surface',
+  keyWavesWind: 'the moving surface — drifting faster because it is windy here',
+  keyIce: 'ice cover and floes: the river is at or below 0.5 °C',
+  keyStars: 'a clear night sky',
+  keyMoon: 'the moon at tonight’s real phase',
+  keySun: 'clear daytime sky over a river below its mean low water',
+  keyCloud: 'overcast — 60 % cloud cover or more',
+  keyRain: 'rain falling right now',
+  keySnow: 'snow falling right now',
+  keyShip: 'a vessel your AIS receiver can see, placed along the reach',
+  keyPlane: 'an aircraft your ADS-B receiver can see, at its real altitude',
+  keyBoat: 'a stand-in boat, drawn whenever there is water enough to float it',
+  keyBoatAground: 'the stand-in boat, aground on the bed in this drought',
+  keyBoatStuck: 'the stand-in boat, iced in',
   noData: 'no reading',
   yearsTitle: 'YEARS',
   yearsSub: 'every month of every archived year, compared',
@@ -2672,6 +2721,7 @@ const T = {
   yearsOverlay: 'EVERY YEAR BY DAY OF YEAR',
   overlayPick: 'Pick a year in the heatmap to bring it to the front.',
   sigmaNote: 'σ is the standard deviation: ±1 σ covers roughly two years in three.',
+  divergeHatchNote: 'Dry months are hatched one way and wet months the other, so direction survives greyscale and colour blindness.',
   waveTitle: 'WAVE',
   waveSub: 'one row per gauge, top is upstream · one column per day — a flood wave shows up as a diagonal ridge rolling down the screen',
   waveRamp: 'low → high',
@@ -3300,6 +3350,63 @@ function renderSceneGutter(vm) {
   return `<div class="gutter"><ul class="gut-lines">${items.join('')}</ul></div>`;
 }
 
+// The scene's key, and it lives here rather than in renderStation: it has to
+// name exactly the marks renderScene just drew, so the two must be read side by
+// side. Every entry mirrors one of that function's conditions — a mark the sky
+// or the water level kept off the drawing is not in the key either.
+// The swatches carry `class="sw scene"`, so a single CSS rule paints the
+// drawing and its key; scaled-down copies keep their hairlines via the
+// non-scaling-stroke rule on `.sw.scene`.
+function renderSceneKey(vm) {
+  const s = vm.scene, f = s.flags;
+  const sw = (body, viewBox) => keySw(body, 'scene', viewBox);
+  const line = cls => sw(`<line class="${cls}" x1="0" y1="6" x2="12" y2="6"/>`);
+  const starry = f.night && !f.overcastNight;
+  const kinds = new Set([...s.marks, ...s.above, ...s.below].map(m => m.kind));
+  // the boat's own condition in renderScene, in scene units
+  const boat = s.craft.ships.length === 0 && s.surface * SCENE_H > 26;
+  return plateKey([
+    { sw: line('surface'), label: T.keyNow },
+    kinds.has('mean') && { sw: line('mark mean'), label: T.keyMeans },
+    kinds.has('record') && { sw: line('mark record'), label: T.keyRecords },
+    // the band is a pale fill bounded by its own hairlines in the drawing, so
+    // the swatch shows both marks — a 4 % fill alone is invisible at 12 px
+    s.band && { sw: sw('<rect class="band" x="0" y="2" width="12" height="8"/>' +
+      '<line class="band-edge" x1="0" y1="2" x2="12" y2="2"/>' +
+      '<line class="band-edge" x1="0" y1="10" x2="12" y2="10"/>'), label: T.keyBand },
+    { sw: sw('<rect class="water" x="0" y="4" width="12" height="8"/>' +
+      '<line class="surface" x1="0" y1="4" x2="12" y2="4"/>'), label: T.keyWater },
+    { sw: sw('<polygon class="bed" points="0,12 0,8 3,7 6,9 9,6 12,8 12,12"/>'), label: T.keyBed },
+    f.drought && { sw: sw('<rect class="dry-bank" x="0" y="3" width="12" height="6"/>'), label: T.keyDry },
+    f.icy
+      ? { sw: sw('<g class="ice"><rect x="0" y="5" width="12" height="4"/>' +
+          '<rect class="floe" x="1" y="4" width="5" height="4" rx="1"/>' +
+          '<rect class="floe" x="7" y="4.5" width="4" height="3.5" rx="1"/></g>'), label: T.keyIce }
+      : { sw: sw('<g class="waves"><path class="w-far" d="M0 5 q1.5 -1.5 3 0 t3 0 t3 0 t3 0"/>' +
+          '<path class="w-near" d="M0 8 q1.5 -1.5 3 0 t3 0 t3 0 t3 0"/></g>'), label: f.windy ? T.keyWavesWind : T.keyWaves },
+    starry && { sw: sw('<circle class="star" cx="3" cy="4" r="0.9"/><circle class="star" cx="8" cy="2.5" r="0.9"/>' +
+      '<circle class="star" cx="6" cy="8" r="0.9"/><circle class="star" cx="10.5" cy="7" r="0.9"/>'), label: T.keyStars },
+    starry && s.moon != null && { sw: sw(renderMoon(6, 6, 4.6, s.moon)), label: T.keyMoon },
+    (f.drought && !f.night && !f.icy) && { sw: sw('<g class="sun"><circle cx="6" cy="6" r="3"/>' +
+      '<line x1="6" y1="0.5" x2="6" y2="2"/><line x1="6" y1="10" x2="6" y2="11.5"/>' +
+      '<line x1="0.5" y1="6" x2="2" y2="6"/><line x1="10" y1="6" x2="11.5" y2="6"/></g>'), label: T.keySun },
+    (f.clouds || f.flood) && { sw: sw('<g class="cloud">' +
+      '<path d="M-26 8 a9 9 0 0 1 2-17 a13 13 0 0 1 24-5 a10 10 0 0 1 14 12 a8 8 0 0 1-6 10 Z"/></g>',
+      '-32 -22 48 32'), label: T.keyCloud },
+    (f.rain || f.flood) && { sw: sw('<g class="rain"><line x1="3" y1="1" x2="1.5" y2="6"/>' +
+      '<line x1="7" y1="2" x2="5.5" y2="7"/><line x1="11" y1="1" x2="9.5" y2="6"/></g>'), label: T.keyRain },
+    f.snow && { sw: sw('<g class="snow"><circle cx="3" cy="3" r="1.4"/><circle cx="8" cy="6" r="1.4"/>' +
+      '<circle cx="5" cy="9.5" r="1.4"/></g>'), label: T.keySnow },
+    s.craft.ships.length && { sw: sw('<g class="boat"><path d="M-11 0 l3 5 h16 l3 -5 Z"/></g>',
+      '-13 -2 26 9'), label: T.keyShip },
+    boat && { sw: sw('<g class="boat"><path d="M-11 0 l3 5 h16 l3 -5 Z"/>' +
+      '<path class="mast" d="M0 0 V-11 l7 4 l-7 3"/></g>', '-13 -13 26 20'),
+      label: f.drought ? T.keyBoatAground : f.icy ? T.keyBoatStuck : T.keyBoat },
+    s.craft.aircraft.length && { sw: sw('<g class="plane"><path d="M-5 0 h8 l3 -3 v6 l-3 -3 M-1 -3 v6"/></g>',
+      '-7 -5 15 10'), label: T.keyPlane },
+  ]);
+}
+
 // ---------- history chart ----------
 
 const HIST_W = 320, HIST_H = 96;
@@ -3390,6 +3497,39 @@ function ctlRow(label, items, aria) {
     '</nav>';
 }
 
+// ---------- plate legends ----------
+
+// Every plate owes a legend for every mark it draws, and eleven renderers used
+// to spell the same <dl> out by hand, each with its own swatch closure. This is
+// ctlRow's sibling: one helper, so a key that gains an entry gains it in the
+// same shape everywhere.
+// items, in order: { sw, label } is a mark — a swatch and the name it answers
+// to, with an optional { pct } readout; { note } is a prose caveat below the
+// marks, { note, warn: true } a warning one. { dd } and { html } take markup the
+// caller has already built and escaped (a <b> reference line, the σ scale bar) —
+// everything else goes through esc(). A falsy entry is skipped.
+function plateKey(items) {
+  return `<dl class="p-key"><dt>${esc(T.key)}</dt>` +
+    items.filter(Boolean).map(it =>
+      it.dd != null ? `<dd${it.cls ? attr('class', it.cls) : ''}>${it.dd}</dd>` :
+      it.note != null ? `<dd${it.warn ? ' class="warn"' : ''}>${esc(String(it.note))}</dd>` :
+      `<dd><span class="lg">${it.sw || ''}` +
+      `<span class="lgn">${it.html != null ? it.html : esc(String(it.label))}</span>` +
+      (it.pct != null ? `<span class="lgp">${esc(String(it.pct))}%</span>` : '') +
+      '</span></dd>').join('') +
+    '</dl>';
+}
+
+// the two swatch shapes the keys share: a 12×12 drawing that reuses the chart's
+// own classes, and the flat colour chip the heat ramps are built from.
+// A mark that is drawn around its own origin passes its own viewBox instead of
+// being scaled with a transform attribute: a CSS keyframe on `transform` (the
+// scene's bob and drift) silently wins over that attribute and drops the mark
+// out of frame.
+const keySw = (body, cls, viewBox = '0 0 12 12') =>
+  `<svg class="sw${cls ? ' ' + cls : ''}" viewBox="${viewBox}" aria-hidden="true">${body}</svg>`;
+const keyChip = cls => `<span class="hsw ${cls}"></span>`;
+
 // the sparkline window + the way into the multi-year view, right under the
 // chart's own heading
 function historyCtl() {
@@ -3432,13 +3572,13 @@ function renderHistory(h) {
     '</div>';
   const scale = `<div class="h-scale"><span class="hi">${max} cm</span><span class="lo">${min} cm</span></div>`;
   const refs = h.marks.map(m => `<b>${esc(m.key)}</b> ${m.cm}`).join(' · ');
-  const key = `<dl class="p-key"><dt>${esc(T.key)}</dt>` +
-    `<dd><span class="lg"><svg class="sw" viewBox="0 0 12 12" aria-hidden="true"><polyline class="h-line" points="0,9 4,4 8,6 12,2"/></svg>` +
-    `<span class="lgn">${esc(T.histDaily)}</span></span></dd>` +
-    (h.banded ? `<dd><span class="lg"><svg class="sw" viewBox="0 0 12 12" aria-hidden="true"><polygon class="h-band" points="0,3 12,1 12,8 0,10"/></svg><span class="lgn">${esc(T.histBand)}</span></span></dd>` : '') +
-    (refs ? `<dd><span class="lg"><svg class="sw" viewBox="0 0 12 12" aria-hidden="true"><line class="href-line" x1="0" y1="6" x2="12" y2="6"/></svg><span class="lgn">${refs}</span></span></dd>` : '') +
-    `<dd>${h.points} readings${h.note ? '' : ''}</dd>` +
-    (h.note ? `<dd class="warn">${esc(h.note.text)}</dd>` : '') + '</dl>';
+  const key = plateKey([
+    { sw: keySw('<polyline class="h-line" points="0,9 4,4 8,6 12,2"/>'), label: T.histDaily },
+    h.banded && { sw: keySw('<polygon class="h-band" points="0,3 12,1 12,8 0,10"/>'), label: T.histBand },
+    refs && { sw: keySw('<line class="href-line" x1="0" y1="6" x2="12" y2="6"/>'), html: refs },
+    { note: `${h.points} readings` },
+    h.note && { note: h.note.text, warn: true },
+  ]);
   return `<section class="p-block"><h2 class="p-h2">${esc(T.history)} · ${esc(h.label)}</h2>` +
     historyCtl() +
     `<div class="hist-wrap">${scale}${chart}</div>${axis}${key}</section>`;
@@ -3483,10 +3623,16 @@ function renderProfile(pr) {
     `<li class="${p.self ? 'self' : ''}"><a${navAttrs(p.self ? 'river:' + state.info.water.shortname : p.name)}>` +
     `<span class="name">${esc(p.name)}</span><span class="elev">${p.elev.toFixed(2)} m</span>` +
     `<span class="km">km ${p.km}</span></a></li>`).join('');
+  const key = plateKey([
+    { sw: keySw('<circle class="pf-dot self" cx="6" cy="6" r="4"/>', 'profile'), label: T.keyProfileSelf },
+    { sw: keySw('<circle class="pf-dot" cx="6" cy="6" r="3"/>', 'profile'), label: T.keyProfileOther },
+    { sw: keySw('<polyline class="pf-line" points="0,9 4,7 8,4 12,2"/>', 'profile'), label: T.keyProfileLine },
+    { note: T.keyProfileNote },
+  ]);
   return `<section class="p-block"><h2 class="p-h2">${esc(T.neighbours)}</h2>` +
     `<p class="p-sub2">${esc(T.neighboursSub)}</p>${chart}` +
     `<div class="pf-flow"><span>← ${esc(T.upstream)}</span><span>${esc(T.downstream)} →</span></div>` +
-    `<ol class="pf-list">${rows}</ol></section>`;
+    `<ol class="pf-list">${rows}</ol>${key}</section>`;
 }
 
 // ---------- the station plate ----------
@@ -3556,16 +3702,7 @@ function renderStation(vm) {
     `<p class="scene-cap">${esc(vm.scene.caption)}` +
     vm.scene.receivers.map(r => `<span class="rcv ${r.ok ? 'on' : 'off'}">${esc(r.text)}</span>`).join('') +
     '</p>' +
-    `<dl class="p-key"><dt>${esc(T.key)}</dt>` +
-    `<dd><span class="lg"><svg class="sw scene" viewBox="0 0 12 12" aria-hidden="true"><line class="surface" x1="0" y1="6" x2="12" y2="6"/></svg><span class="lgn">${esc(T.keyNow)}</span></span></dd>` +
-    `<dd><span class="lg"><svg class="sw scene" viewBox="0 0 12 12" aria-hidden="true"><line class="mark mean" x1="0" y1="6" x2="12" y2="6"/></svg><span class="lgn">${esc(T.keyMeans)}</span></span></dd>` +
-    `<dd><span class="lg"><svg class="sw scene" viewBox="0 0 12 12" aria-hidden="true"><line class="mark record" x1="0" y1="6" x2="12" y2="6"/></svg><span class="lgn">${esc(T.keyRecords)}</span></span></dd>` +
-    // the band is a pale fill bounded by its own hairlines in the drawing, so the
-    // swatch shows both marks — a 4 % fill alone is invisible at 12 px
-    (vm.scene.band ? `<dd><span class="lg"><svg class="sw scene" viewBox="0 0 12 12" aria-hidden="true"><rect class="band" x="0" y="2" width="12" height="8"/>` +
-      `<line class="band-edge" x1="0" y1="2" x2="12" y2="2"/><line class="band-edge" x1="0" y1="10" x2="12" y2="10"/>` +
-      `</svg><span class="lgn">${esc(T.keyBand)}</span></span></dd>` : '') +
-    '</dl></section>';
+    renderSceneKey(vm) + '</section>';
   const u = vm.history.empty ? null : vm.history.insight;
   const readout = u
     ? `<section class="p-block readout"><p class="say">${insightSentence(u, vm.value)}</p>` +
@@ -3702,11 +3839,11 @@ function renderRiver(vm) {
         `<span class="b-badge">km ${esc(fmtKm(s.km))}</span></li>`).join('') +
       '</ol></section>'
     : `<section class="p-block"><h2 class="p-h2">${esc(T.trouble)}</h2><p class="p-dim">${esc(T.allNormal)}</p></section>`;
-  const key = `<dl class="p-key"><dt>${esc(T.key)}</dt>` +
-    [['normal', T.kindNormal], ['low', T.kindLow], ['high', T.kindHigh]].map(([k, label]) =>
-      `<dd><span class="lg"><svg class="sw river" viewBox="0 0 12 12" aria-hidden="true">${rvMark(k, 6, 6)}</svg>` +
-      `<span class="lgn">${esc(label)}</span></span></dd>`).join('') +
-    `<dd>${esc(T.riverElevNote)}</dd></dl>`;
+  const key = plateKey([
+    ...[['normal', T.kindNormal], ['low', T.kindLow], ['high', T.kindHigh]].map(([k, label]) =>
+      ({ sw: keySw(rvMark(k, 6, 6), 'river'), label })),
+    { note: T.riverElevNote },
+  ]);
   // on a phone the trouble list is the answer to "is anything wrong here?",
   // so it comes first; the profile follows for anyone who wants the shape
   return `<section class="plate river-plate">${vh}${head}${tabs}${trouble}` +
@@ -4033,27 +4170,42 @@ function renderYearsHeat(vm) {
 }
 
 function renderYearsLegend(vm) {
-  const sw = cls => `<span class="hsw ${cls}"></span>`;
+  const sw = keyChip;
   if (vm.mode === 'abs') {
-    return `<dl class="p-key"><dt>${esc(T.key)}</dt>` +
-      `<dd><span class="lg">${[0, 1, 2, 3].map(b => sw('b' + b)).join('')}` +
-      `<span class="lgn">${vm.lo} cm → ${vm.hi} cm — darker is higher water</span></span></dd>` +
+    return plateKey([
+      { sw: [0, 1, 2, 3].map(b => sw('b' + b)).join(''),
+        label: `${vm.lo} cm → ${vm.hi} cm — darker is higher water` },
       // the hint is not a mark: it belongs to the readout panel's empty state,
       // which already carries it — the key names marks only
-      `<dd><span class="lg">${sw('nd')}<span class="lgn">${esc(T.noData)}</span></span></dd></dl>`;
+      { sw: sw('nd'), label: T.noData },
+    ]);
   }
-  return `<dl class="p-key"><dt>${esc(T.key)}</dt>` +
-    `<dd><span class="lg diverge">` +
-    [3, 2, 1, 0].map(b => sw('b' + b + ' dry')).join('') + sw('z') +
-    [0, 1, 2, 3].map(b => sw('b' + b + ' wet')).join('') +
-    '</span></dd>' +
-    `<dd class="scalebar"><span>−2 σ</span><span>0</span><span>+2 σ</span></dd>` +
-    `<dd>← drier than usual · normal · wetter than usual →</dd>` +
-    `<dd>${esc(T.sigmaNote)}</dd>` +
-    `<dd>Dry months are hatched one way and wet months the other, so direction survives greyscale and colour blindness.</dd></dl>`;
+  return plateKey([
+    { dd: `<span class="lg diverge">` +
+      [3, 2, 1, 0].map(b => sw('b' + b + ' dry')).join('') + sw('z') +
+      [0, 1, 2, 3].map(b => sw('b' + b + ' wet')).join('') + '</span>' },
+    { dd: '<span>−2 σ</span><span>0</span><span>+2 σ</span>', cls: 'scalebar' },
+    { note: '← drier than usual · normal · wetter than usual →' },
+    { note: T.sigmaNote },
+    { note: T.divergeHatchNote },
+  ]);
 }
 
 const CLIM_W = 320, CLIM_H = 110;
+
+// The current year's monthly mark. A month that broke out of the long-term
+// range used to differ from an ordinary one by hue alone — blue above, brown
+// below — so it also carries the direction as a shape now. The legend calls
+// this very function, so the drawing and its key cannot drift.
+function climMark(cls, cx, cy, r = 3) {
+  const x = +cx, y = +cy;
+  const tri = up => `<path class="cl-dot ${cls}" d="M${x.toFixed(1)} ${(y + (up ? -1 : 1) * r * 1.35).toFixed(1)} ` +
+    `L${(x + r * 1.25).toFixed(1)} ${(y - (up ? -1 : 1) * r * 0.85).toFixed(1)} ` +
+    `L${(x - r * 1.25).toFixed(1)} ${(y - (up ? -1 : 1) * r * 0.85).toFixed(1)} Z"/>`;
+  if (cls === 'above') return tri(true);
+  if (cls === 'below') return tri(false);
+  return `<circle class="cl-dot" cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${r}"/>`;
+}
 
 function renderYearsClim(vm) {
   if (!vm.climYears) {
@@ -4072,11 +4224,13 @@ function renderYearsClim(vm) {
     parts.push(`<line class="cl-bar" x1="${X(c.m).toFixed(1)}" y1="${Y(c.max).toFixed(1)}" x2="${X(c.m).toFixed(1)}" y2="${Y(c.min).toFixed(1)}"/>`);
     parts.push(`<line class="cl-med" x1="${(X(c.m) - 4).toFixed(1)}" y1="${Y(c.med).toFixed(1)}" x2="${(X(c.m) + 4).toFixed(1)}" y2="${Y(c.med).toFixed(1)}"/>`);
   }
+  const seen = new Set();
   vm.curMonthly.forEach((v, m) => {
     if (v == null) return;
     const c = vm.clim[m];
     const cls = c && v > c.max ? 'above' : c && v < c.min ? 'below' : '';
-    parts.push(`<circle class="cl-dot ${cls}" cx="${X(m).toFixed(1)}" cy="${Y(v).toFixed(1)}" r="3"/>`);
+    seen.add(cls);
+    parts.push(climMark(cls, X(m), Y(v)));
   });
   const svg = svgWrap(`0 0 ${CLIM_W} ${CLIM_H}`, parts.join(''),
     ' class="chart clim" preserveAspectRatio="none" role="img"' + attr('aria-label', T.yearsRangeAria));
@@ -4084,10 +4238,14 @@ function renderYearsClim(vm) {
     `<div class="v-scale"><span>${Math.round(vmax)}</span><span>${Math.round(vmin)}</span></div>${svg}</div>` +
     '<div class="x-axis months">' + MONTH_ABBR.map((mn, m) =>
       `<span${attr('style', `left:${(X(m) / CLIM_W * 100).toFixed(2)}%`)}>${esc(mn[0])}</span>`).join('') + '</div>';
-  const key = `<dl class="p-key"><dt>${esc(T.key)}</dt>` +
-    `<dd><span class="lg"><svg class="sw" viewBox="0 0 12 12" aria-hidden="true"><line class="cl-bar" x1="6" y1="1" x2="6" y2="11"/></svg><span class="lgn">${vm.years[0]}–${vm.curYear - 1} min–max for that month</span></span></dd>` +
-    `<dd><span class="lg"><svg class="sw" viewBox="0 0 12 12" aria-hidden="true"><line class="cl-med" x1="2" y1="6" x2="10" y2="6"/></svg><span class="lgn">its median</span></span></dd>` +
-    `<dd><span class="lg"><svg class="sw" viewBox="0 0 12 12" aria-hidden="true"><circle class="cl-dot" cx="6" cy="6" r="3"/></svg><span class="lgn">${vm.curYear}</span></span></dd></dl>`;
+  const key = plateKey([
+    { sw: keySw('<line class="cl-bar" x1="6" y1="1" x2="6" y2="11"/>'),
+      label: `${vm.years[0]}–${vm.curYear - 1} min–max for that month` },
+    { sw: keySw('<line class="cl-med" x1="2" y1="6" x2="10" y2="6"/>'), label: 'its median' },
+    seen.has('') && { sw: keySw(climMark('', 6, 6)), label: `${vm.curYear}, inside that range` },
+    seen.has('above') && { sw: keySw(climMark('above', 6, 6)), label: `${vm.curYear}, above every earlier year’s maximum for that month` },
+    seen.has('below') && { sw: keySw(climMark('below', 6, 6)), label: `${vm.curYear}, below every earlier year’s minimum for that month` },
+  ]);
   return `<section class="p-block"><h2 class="p-h2">${esc(T.yearsRange)}</h2>${chart}${key}</section>`;
 }
 
@@ -4130,14 +4288,13 @@ function renderYearsOverlay(vm) {
     `<div class="v-scale"><span>${Math.round(o.max)}</span><span>${Math.round(o.min)}</span></div>${svg}</div>` +
     '<div class="x-axis months">' + MONTH_ABBR.map((mn, m) =>
       `<span${attr('style', `left:${(X(monthDoy(2001, m)) / OVER_W * 100).toFixed(2)}%`)}>${esc(mn[0])}</span>`).join('') + '</div>';
-  const key = `<dl class="p-key"><dt>${esc(T.key)}</dt>` +
-    `<dd><span class="lg"><svg class="sw" viewBox="0 0 12 12" aria-hidden="true"><polyline class="ov-sel" points="0,9 4,3 8,7 12,2"/></svg><span class="lgn">${vm.selYear}</span></span></dd>` +
-    `<dd><span class="lg"><svg class="sw" viewBox="0 0 12 12" aria-hidden="true"><polyline class="ov-year" points="0,7 4,5 8,9 12,4"/></svg><span class="lgn">every other archived year</span></span></dd>` +
-    (o.marks.length
-      ? `<dd><span class="lg"><svg class="sw" viewBox="0 0 12 12" aria-hidden="true"><line class="href-line" x1="0" y1="6" x2="12" y2="6"/></svg>` +
-        `<span class="lgn">${o.marks.map(m => `${esc(m.k)} ${Math.round(m.cm)}`).join(' · ')}</span></span></dd>`
-      : '') +
-    `<dd>${esc(T.overlayPick)}</dd></dl>`;
+  const key = plateKey([
+    { sw: keySw('<polyline class="ov-sel" points="0,9 4,3 8,7 12,2"/>'), label: String(vm.selYear) },
+    { sw: keySw('<polyline class="ov-year" points="0,7 4,5 8,9 12,4"/>'), label: 'every other archived year' },
+    o.marks.length && { sw: keySw('<line class="href-line" x1="0" y1="6" x2="12" y2="6"/>'),
+      html: o.marks.map(m => `${esc(m.k)} ${Math.round(m.cm)}`).join(' · ') },
+    { note: T.overlayPick },
+  ]);
   return `<section class="p-block"><h2 class="p-h2">${esc(T.yearsOverlay)}</h2>${chart}${key}</section>`;
 }
 
@@ -4339,15 +4496,14 @@ function renderWave(vm) {
     '</tr>').join('');
   // every row is prefixed with its state glyph, so the key names all three
   const glyphs = [['low', T.kindLow], ['normal', T.kindNormal], ['high', T.kindHigh]].map(([k, label]) =>
-    `<dd><span class="lg"><span class="k-${k}"><span class="wg" aria-hidden="true">${esc(RIVER_GLYPH[k])}</span></span>` +
-    `<span class="lgn">${esc(label)}</span></span></dd>`).join('');
-  const key = `<dl class="p-key"><dt>${esc(T.key)}</dt>` +
-    `<dd><span class="lg">${[0, 1, 2, 3].map(b => `<span class="hsw b${b}"></span>`).join('')}` +
-    `<span class="lgn">${esc(T.waveRamp)}</span></span></dd>` +
-    `<dd><span class="lg"><span class="hsw nd"></span><span class="lgn">${esc(T.noData)}</span></span></dd>` +
-    glyphs +
-    `<dd>${esc(T.waveScaled)}</dd>` +
-    `<dd>${esc(vm.from)} → ${esc(vm.to)}${vm.shown < vm.total ? ` · ${vm.shown} of ${vm.total} gauges sampled` : ''}</dd></dl>`;
+    ({ sw: `<span class="k-${k}"><span class="wg" aria-hidden="true">${esc(RIVER_GLYPH[k])}</span></span>`, label }));
+  const key = plateKey([
+    { sw: [0, 1, 2, 3].map(b => keyChip('b' + b)).join(''), label: T.waveRamp },
+    { sw: keyChip('nd'), label: T.noData },
+    ...glyphs,
+    { note: T.waveScaled },
+    { note: `${vm.from} → ${vm.to}${vm.shown < vm.total ? ` · ${vm.shown} of ${vm.total} gauges sampled` : ''}` },
+  ]);
   return `<section class="plate">${vh}${head}${tabs}` +
     `<div class="wave-wrap"><div class="wave-months">${cols}</div>` +
     `<table class="heat wave"><caption class="vh">${esc(T.waveTitle)}</caption>` +
@@ -4554,17 +4710,15 @@ function renderRivers(vm) {
   if (vm.tab === 'list') {
     return `<section class="plate">${vh}${head}${tabs}${renderRiversList(vm)}</section>`;
   }
-  const swatch = s => `<svg class="sw" viewBox="0 0 12 12" aria-hidden="true"><circle cx="6" cy="6"${attr('r', s.r)} class="mdot"/></svg>`;
-  const key = `<dl class="p-key"><dt>${esc(T.key)}</dt>` +
-    MAP_DOT_STEPS.slice().reverse().map(s =>
-      `<dd><span class="lg">${swatch(s)}<span class="lgn">${esc(s.label)} ${esc(T.gauges)}</span></span></dd>`).join('') +
-    `<dd>Each water sits at the centre of its own gauges, so a long river lands mid-course.</dd>` +
-    (vm.spilled.length
-      ? `<dd>${vm.spilled.length} ${esc(plural(vm.spilled.length, 'water'))} ${vm.spilled.length === 1 ? 'is' : 'are'} not drawn` +
-        (vm.unplaced ? ` — ${vm.unplaced} of them carry no coordinates at all (the Austrian Donau, the Czech Elbe, the Dutch Rhine)` : '') +
-        `. They are counted above and listed in the A–Z index.</dd>`
-      : '') +
-    '</dl>';
+  const swatch = s => keySw(`<circle cx="6" cy="6"${attr('r', s.r)} class="mdot"/>`);
+  const key = plateKey([
+    ...MAP_DOT_STEPS.slice().reverse().map(s => ({ sw: swatch(s), label: `${s.label} ${T.gauges}` })),
+    { note: T.riversCentreNote },
+    vm.spilled.length && { note: `${vm.spilled.length} ${plural(vm.spilled.length, 'water')} ` +
+      `${vm.spilled.length === 1 ? 'is' : 'are'} not drawn` +
+      (vm.unplaced ? ` — ${vm.unplaced} of them carry no coordinates at all (the Austrian Donau, the Czech Elbe, the Dutch Rhine)` : '') +
+      '. They are counted above and listed in the A–Z index.' },
+  ]);
   return `<section class="plate">${vh}${head}${tabs}${renderRiversMap(vm)}${key}` +
     `<p class="p-readout">${esc(T.riversPick)}</p></section>`;
 }
@@ -4921,19 +5075,18 @@ function renderRising(vm) {
     ? `<h2 class="p-h2">${esc(title)}</h2><ol class="board">${rows.map(renderRisingRow).join('')}</ol>` +
       (more ? `<p class="p-dim p-more">… ${more} more ${title.toLowerCase()}</p>` : '')
     : '';
-  const key = `<dl class="p-key"><dt>${esc(T.key)}</dt>` +
-    `<dd><b>Δ/day</b> — change since the daily snapshot, normalised to the real elapsed time</dd>` +
-    `<dd><b>▲</b> rising ≥ ${RISING_FLAT} cm/d · <b>▬</b> steady · <b>▼</b> falling ≤ −${RISING_FLAT} cm/d</dd>` +
-    `<dd><b>→MHW ~4d</b> — ${esc(T.etaNote)}</dd>` +
+  const key = plateKey([
+    { dd: '<b>Δ/day</b> — change since the daily snapshot, normalised to the real elapsed time' },
+    { dd: `<b>▲</b> rising ≥ ${RISING_FLAT} cm/d · <b>▬</b> steady · <b>▼</b> falling ≤ −${RISING_FLAT} cm/d` },
+    { dd: `<b>→MHW ~4d</b> — ${esc(T.etaNote)}` },
     // the two marks the board draws but never named: the row sparkline and the
     // pastel bar behind each rate
-    `<dd><span class="lg">` +
-      `<svg class="b-spark lg-spark" viewBox="0 0 60 14" aria-hidden="true"><path d="M0 12L15 8L30 9L45 4L60 2"/></svg>` +
-      `<span class="down"><svg class="b-spark lg-spark" viewBox="0 0 60 14" aria-hidden="true"><path d="M0 2L15 5L30 4L45 9L60 12"/></svg></span>` +
-      `<span class="lgn">${esc(T.risingSparkKey)}</span></span></dd>` +
-    `<dd><span class="lg"><span class="lg-bar up"></span><span class="lg-bar down"></span>` +
-      `<span class="lgn">${esc(T.risingBarKey)}</span></span></dd>` +
-    `<dd>${c.tidal} tidal gauges are excluded: a day apart the tide has moved ~50 minutes, so their day diff would measure the tide, not the river</dd></dl>`;
+    { sw: `<svg class="b-spark lg-spark" viewBox="0 0 60 14" aria-hidden="true"><path d="M0 12L15 8L30 9L45 4L60 2"/></svg>` +
+      `<span class="down"><svg class="b-spark lg-spark" viewBox="0 0 60 14" aria-hidden="true"><path d="M0 2L15 5L30 4L45 9L60 12"/></svg></span>`,
+      label: T.risingSparkKey },
+    { sw: '<span class="lg-bar up"></span><span class="lg-bar down"></span>', label: T.risingBarKey },
+    { note: `${c.tidal} tidal gauges are excluded: a day apart the tide has moved ~50 minutes, so their day diff would measure the tide, not the river` },
+  ]);
   // a baseline with nothing above the flat band still owes the reader a sentence:
   // an unnamed gap between the counts and the key reads as a half-loaded view
   const boards = board('RISING', vm.risers, vm.moreRising) + board('FALLING', vm.fallers, vm.moreFalling);
@@ -5189,6 +5342,10 @@ function totalPatternDefs() {
     p('dots', '<circle cx="2" cy="2" r="1.1" class="bh-f"/><circle cx="5.5" cy="5.5" r="1.1" class="bh-f"/>') +
     p('cross', `<path d="M-1 8 L8 -1 M-1 -1 L8 8" fill="none" ${hatch}/>`) +
     p('none', '') +
+    // the Δ view's two bars: same machinery, so a rise and a fall differ in
+    // texture as well as in colour
+    p('rose', `<path d="M-1 8 L8 -1" fill="none" ${hatch}/>`) +
+    p('fell', `<path d="M-1 -1 L8 8" fill="none" ${hatch}/>`) +
     '</defs>';
   return svgWrap('0 0 0 0', defs, ' class="defs-only" aria-hidden="true" focusable="false"');
 }
@@ -5320,7 +5477,9 @@ function renderTotalChart(vm) {
       if (b.v != null && b.v !== 0) {
         const h = Math.abs(b.frac) * (plotH / 2);
         const y = b.v > 0 ? zeroY - h : zeroY;
-        inner.push(`<rect x="${x.toFixed(2)}" y="${y.toFixed(2)}" width="${barW.toFixed(2)}" height="${Math.max(0.8, h).toFixed(2)}" class="db ${b.v > 0 ? 'rose' : 'fell'}"/>`);
+        const dir = b.v > 0 ? 'rose' : 'fell';
+        inner.push(`<rect x="${x.toFixed(2)}" y="${y.toFixed(2)}" width="${barW.toFixed(2)}" height="${Math.max(0.8, h).toFixed(2)}"` +
+          attr('fill', `url(#tb-${dir})`) + ` class="db ${dir}"/>`);
       }
     } else {
       for (const s of b.segments) {
@@ -5341,15 +5500,39 @@ function renderTotalChart(vm) {
     ' class="chart" role="group"' + attr('aria-label', vm.summary));
 }
 
+function totalBandSw(p) {
+  return keySw(`<rect width="12" height="12" fill="url(#tb-${p})" class="swr"/>`);
+}
+
 function renderTotalLegend(vm) {
-  const sw = p => svgWrap('0 0 12 12',
-    `<rect width="12" height="12" fill="url(#tb-${p})" class="swr"/>`,
-    ' class="sw" aria-hidden="true"');
-  const items = vm.bands.map(b =>
-    `<dd><span class="lg">${sw(b.pattern)}<span class="lgn">${esc(b.glyph)} ${esc(b.name)}</span>` +
-    (b.pct != null ? `<span class="lgp">${b.pct}%</span>` : '') + '</span></dd>').join('');
-  return `<dl class="p-key"><dt>${esc(T.key)}</dt>${items}` +
-    `<dd>Every band carries its own hatch as well as its own colour, so the chart still reads in greyscale and with colour blindness.</dd></dl>`;
+  // the Δ view draws two marks, not six, but it owes the reader a key just the
+  // same — it used to draw the pattern defs and then name nothing
+  if (vm.diff) {
+    return plateKey([
+      { sw: totalBandSw('rose'), label: T.totalKeyRose },
+      { sw: totalBandSw('fell'), label: T.totalKeyFell },
+      { note: T.totalHatchNoteDiff },
+    ]);
+  }
+  return plateKey([
+    ...vm.bands.map(b => ({ sw: totalBandSw(b.pattern), label: `${b.glyph} ${b.name}`, pct: b.pct })),
+    { note: T.totalHatchNote },
+  ]);
+}
+
+// The day view is a board, not a chart, and it carried no key at all: every
+// column it prints — the band glyph, the share, the rate, the gauge count —
+// went unnamed on every zoom level.
+function renderBreakdownKey(vm) {
+  const b = vm.breakdown;
+  return plateKey([
+    { dd: `<b>${esc(TOTAL_BAND_GLYPH.join(' '))}</b> — ${esc(T.totalKeyGlyph)}` },
+    { dd: `<b>·</b> — ${esc(T.totalKeyOther)}` },
+    b.rows.some(r => r.share != null) && { dd: `<b>%</b> — ${esc(T.totalKeyShare)}` },
+    { dd: `<b>${esc(vm.diff ? '+cm' : 'cm')}</b> — ${esc(vm.diff ? T.totalKeyRate : T.totalKeyStage)}` },
+    { dd: `<b>×n</b> — ${esc(T.totalKeyGauges)}` },
+    b.provisional && { note: T.totalKeyProvisional, warn: true },
+  ]);
 }
 
 function renderTotalBreakdown(vm) {
@@ -5396,9 +5579,9 @@ function renderTotal(vm) {
         (b.pairs ? ` · ⌀ ${(b.total / b.pairs).toFixed(1)} cm each` : '')
       : `Σ ${humanizeSum(b.total)} summed stage · ${b.gauges} ${plural(b.gauges, 'gauge')} reporting`;
     body = `<p class="p-sub2">${esc(line)}${b.provisional ? ' · provisional' : ''}</p>` +
-      renderTotalBreakdown(vm);
+      renderTotalBreakdown(vm) + (b.rows.length ? renderBreakdownKey(vm) : '');
   } else {
-    body = totalPatternDefs() + renderTotalChart(vm) + (vm.diff ? '' : renderTotalLegend(vm));
+    body = totalPatternDefs() + renderTotalChart(vm) + renderTotalLegend(vm);
   }
   const readout = `<p class="p-readout">${esc(note)}</p>`;
   return `<section class="plate">${vh}${head}${metric}${crumbs}${body}${readout}</section>`;
