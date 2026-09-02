@@ -102,12 +102,18 @@
 
 ## Forecast gate (`scripts/forecast/`, Python via uv)
 
-- **The verdict is on file, not in memory.** `results/seasonal-mid/report.md`
+- **The verdict is on file, not in memory.** `gate/seasonal-mid/report.md`
   is the 2026-09-02 gate run of TimesFM 2.5 against the persistence/climatology
   blend: **NO-SHIP** (pooled skill 0.07 at h1–14, nothing at h15–30, −0.04 at
   h31–90; calibration fine). Re-running the gate consumes the test set — read
   the report and the plan (`~/.claude/plans/mache-den-plan-wie-linked-puddle.md`)
   before touching a threshold, and list every tried variant in the header.
+- **`gate/` is deployed** (`pages.yml` excludes only `scripts/`, `tests/`,
+  `.github/`): `gate/index.html` + `gate.js` render the committed `report.json`
+  files as an interactive plate at `/pegel-visual/gate/`. `gate.py` writes there
+  by default. `gate.js` is pure at import — `tests/gate-page.test.mjs` runs
+  `buildModel`/`renderPage` against the real reports and applies the same
+  legend gate as the app: every mark class must appear in its section's key.
 - **`timesfm` is pinned to 2.0.2 and the pin is load-bearing.** The 3.0 line's
   weights are non-commercial and GPL-incompatible; `tests/test_license.py`
   greps the whole repo for the 3.0 package, class and checkpoint names, so do

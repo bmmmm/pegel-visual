@@ -1,0 +1,251 @@
+/* The forecast gate as a survey plate — the same tokens, rules and components
+   as index.html, trimmed to what this sheet draws. Marks are HTML/CSS spans
+   positioned in percent inside a track, so the geometry scales with the plate
+   while the text stays text; every mark class here is also a legend swatch. */
+:root {
+  color-scheme: light dark;
+  --paper: light-dark(#fbfbf9, #121417);
+  --ink: light-dark(#141414, #e8e6e1);
+  --dim: light-dark(#737373, #7d848a);
+  --mid: light-dark(#5c5c5c, #9aa0a4);
+  --water: light-dark(#a8cede, #5b8aa3);
+  --dry: light-dark(#f0dcae, #4a3d1c);
+  --water-line: light-dark(#2f6d8f, #9fd4ec);
+  --dry-line: light-dark(#8f6410, #e3bb63);
+  --rule: color-mix(in oklab, var(--ink) 22%, transparent);
+  --font-text: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --font-data: ui-monospace, 'SF Mono', Monaco, 'Cascadia Mono', monospace;
+  --lbl: 11rem;
+  --val: 5.5rem;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+body {
+  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  font-family: var(--font-text);
+  background: var(--paper);
+  color: var(--ink);
+  line-height: 1.45;
+}
+a { color: var(--ink); }
+:where(a, button, [tabindex]):focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+main {
+  margin: 5vh auto 4vh;
+  padding: 1.6em 1.8em;
+  border: 2px solid var(--ink);
+  width: min(76rem, 100% - 1.5rem);
+  max-width: 100%;
+  container-type: inline-size;
+  container-name: plate;
+}
+.vh {
+  position: absolute;
+  width: 1px; height: 1px;
+  margin: -1px; padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+.p-head h1 { font-family: var(--font-data); font-size: 1.25em; letter-spacing: 0.04em; margin: 0; }
+.p-head a { text-decoration: none; }
+.p-head a:hover { text-decoration: underline; }
+.p-sub { margin: 0.2em 0 0; color: var(--mid); font-size: 0.85em; }
+.p-h2 {
+  font-size: 0.8em;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  margin: 1.3em 0 0.4em;
+  border-bottom: 1px solid var(--rule);
+  padding-bottom: 0.25em;
+}
+.p-block { margin-top: 1.8em; }
+.p-dim { color: var(--mid); }
+.p-empty { margin: 1.4em 0; line-height: 1.65; }
+.p-key {
+  margin: 1.4em 0 0;
+  padding-top: 0.7em;
+  border-top: 1px solid var(--rule);
+  font-size: 0.78em;
+  color: var(--mid);
+}
+.p-key dt {
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: 0.9em;
+  color: var(--dim);
+  float: left;
+  margin-right: 1.4ch;
+}
+.p-key dd { display: inline-block; margin: 0 1.6em 0.3em 0; }
+.p-key .lg { display: inline-flex; align-items: center; gap: 0.5ch; }
+.p-key .lgn { font-family: var(--font-data); color: var(--ink); }
+.p-key .note { display: block; margin-right: 0; }
+.p-key .warn { color: var(--dry-line); }
+.p-key b { color: var(--ink); font-weight: 600; font-family: var(--font-data); }
+
+/* ---- the verdict: one word, then the seven clauses as marked chips ---- */
+.verdict { margin: 1.4em 0 0; display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.4em 1.2ch; }
+.verdict .word { font-family: var(--font-data); font-size: 2.4em; font-weight: 700; letter-spacing: 0.06em; line-height: 1; }
+.verdict .why { font-size: 0.95em; max-width: 46rem; }
+.clauses { list-style: none; margin: 1em 0 0; padding: 0; display: flex; flex-wrap: wrap; gap: 0.4em 0.5ch; }
+.clauses button {
+  font: inherit;
+  font-family: var(--font-data);
+  font-size: 0.85em;
+  color: var(--ink);
+  background: none;
+  border: 1px solid var(--ink);
+  padding: 0.15em 0.8ch;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.6ch;
+}
+.clauses button[aria-pressed="true"], .clauses button:hover { background: var(--ink); color: var(--paper); }
+.clauses .g { font-weight: 700; }
+.clauses .fail .g { color: var(--dry-line); }
+.clauses .pass .g { color: var(--water-line); }
+.clauses button[aria-pressed="true"] .g { color: inherit; }
+
+/* ---- the one filter row every chart reads ---- */
+.p-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35em 0.5ch;
+  margin: 0.7em 0 0.9em;
+  font-family: var(--font-data);
+  font-size: 0.85em;
+}
+.p-tabs-lbl { font-size: 0.8em; text-transform: uppercase; letter-spacing: 0.07em; color: var(--dim); margin-right: 0.4ch; }
+.p-tabs-lbl:not(:first-child) { margin-left: 0.8ch; }
+.p-tabs a {
+  font: inherit;
+  display: inline-flex;
+  align-items: center;
+  color: var(--ink);
+  background: none;
+  border: 1px solid var(--ink);
+  padding: 0.15em 0.8ch;
+  text-decoration: none;
+  white-space: nowrap;
+}
+.p-tabs .on, .p-tabs a:hover { background: var(--ink); color: var(--paper); }
+@media (pointer: coarse) {
+  .p-tabs a, .clauses button { min-block-size: 2.4rem; }
+  .row { min-block-size: 2.4rem; }
+}
+
+/* ---- rows: label · track · value. The track is the drawing. ---- */
+.rows { margin: 0.6em 0 0; }
+.row {
+  display: grid;
+  grid-template-columns: var(--lbl) 1fr var(--val);
+  align-items: center;
+  gap: 0 1ch;
+  padding: 0.18em 0;
+  cursor: default;
+}
+.row[tabindex] { cursor: pointer; }
+.row:hover, .row:focus-visible { background: color-mix(in oklab, var(--ink) 6%, transparent); outline-offset: -2px; }
+.row.head { color: var(--dim); font-size: 0.72em; text-transform: uppercase; letter-spacing: 0.06em; }
+.row.pooled { border-bottom: 1px solid var(--rule); margin-bottom: 0.3em; padding-bottom: 0.4em; }
+.row.pooled .lbl { font-weight: 700; }
+.lbl { font-family: var(--font-data); font-size: 0.85em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lbl .rg { display: block; color: var(--dim); font-size: 0.75em; letter-spacing: 0.04em; }
+.val { font-family: var(--font-data); font-size: 0.85em; text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.val .sig { color: var(--water-line); }
+.track { position: relative; height: 1.15em; }
+.track > * { position: absolute; top: 0; height: 100%; }
+/* reference lines: solid hairline for zero / the blend, dashed for a threshold */
+.zero, .one { width: 0; border-left: 1px solid var(--ink); }
+.thr { width: 0; border-left: 1px dashed var(--ink); opacity: 0.55; }
+/* skill bars: direction by hue AND hatch, so the sign survives greyscale */
+.bar { top: 15%; height: 70%; border: 1px solid var(--ink); forced-color-adjust: none; }
+.bar.pos { background: repeating-linear-gradient(45deg, var(--water) 0 3px, var(--water-line) 3px 4px); }
+.bar.neg { background: repeating-linear-gradient(135deg, var(--dry) 0 3px, var(--dry-line) 3px 4px); }
+.bar.tie { background: color-mix(in oklab, var(--ink) 14%, var(--paper)); border-style: dashed; }
+.ci { top: 48%; height: 0; border-top: 2px solid var(--ink); }
+.ci::before, .ci::after { content: ''; position: absolute; top: -4px; width: 0; height: 9px; border-left: 2px solid var(--ink); }
+.ci::before { left: -1px; } .ci::after { right: -1px; }
+.clip { width: 0; height: 100%; }
+.clip::after { content: '▸'; position: absolute; right: -0.2em; top: -0.15em; font-size: 0.8em; color: var(--ink); }
+.clip.lo::after { content: '◂'; right: auto; left: -0.2em; }
+/* the shaded acceptance band (calibration): a fill, bounded, hatched */
+.band { top: 10%; height: 80%; background: repeating-linear-gradient(45deg, transparent 0 3px, var(--rule) 3px 4px); border-inline: 1px solid var(--rule); }
+.link { top: 50%; height: 0; border-top: 1px solid var(--ink); opacity: 0.5; }
+/* point marks: one shape per method, centred on their value */
+.mk { width: 12px; height: 12px; top: 50%; transform: translate(-50%, -50%); }
+.mk svg { display: block; width: 12px; height: 12px; overflow: visible; }
+.mk-tfm { fill: var(--water-line); stroke: var(--ink); stroke-width: 1; }
+.mk-blend { fill: var(--ink); stroke: none; }
+.mk-persist { fill: var(--paper); stroke: var(--ink); stroke-width: 1.2; }
+.mk-clim { fill: var(--dry); stroke: var(--dry-line); stroke-width: 1.2; }
+.mk-snaive { fill: var(--paper); stroke: var(--dry-line); stroke-width: 1.2; }
+.mk-up { fill: var(--paper); stroke: var(--water-line); stroke-width: 1.2; }
+.mk-picp-t { fill: var(--water-line); stroke: var(--ink); stroke-width: 1; }
+.mk-picp-b { fill: var(--paper); stroke: var(--ink); stroke-width: 1.2; }
+.axis { display: grid; grid-template-columns: var(--lbl) 1fr var(--val); gap: 0 1ch; font-family: var(--font-data); font-size: 0.66rem; color: var(--mid); }
+.axis .ticks { position: relative; height: 1.3em; }
+.axis .ticks span { position: absolute; transform: translateX(-50%); white-space: nowrap; }
+.p-readout {
+  margin: 0.9em 0 0;
+  padding-top: 0.6em;
+  border-top: 1px solid var(--rule);
+  font-size: 0.85em;
+  min-height: 2.6em;
+}
+.p-readout .hint { color: var(--dim); }
+.p-readout b { font-family: var(--font-data); font-weight: 600; }
+
+/* ---- PIT small multiples: ten bins, the flat line is calibration ---- */
+.pits { display: grid; grid-template-columns: repeat(auto-fill, minmax(9rem, 1fr)); gap: 0.8em 1.2em; margin-top: 0.6em; }
+.pit { font-family: var(--font-data); font-size: 0.72em; }
+.pit .nm { display: block; color: var(--mid); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pit svg { display: block; width: 100%; height: 3.6rem; }
+/* unscoped on purpose: the key's swatch draws the same two classes */
+.pb { fill: var(--water); stroke: var(--ink); stroke-width: 0.5; vector-effect: non-scaling-stroke; }
+.pu { stroke: var(--ink); stroke-width: 1; stroke-dasharray: 3 3; vector-effect: non-scaling-stroke; }
+.sw { width: 12px; height: 12px; flex: none; display: inline-block; vertical-align: middle; }
+.sw svg { display: block; width: 12px; height: 12px; overflow: visible; }
+.sw.bar { position: static; height: 10px; }
+
+/* ---- the collection meter for the short horizon ---- */
+.meter { position: relative; height: 0.9em; border: 1px solid var(--ink); }
+.meter > span { position: absolute; inset: 0 auto 0 0; background: repeating-linear-gradient(45deg, var(--water) 0 3px, var(--water-line) 3px 4px); }
+
+/* ---- tables: the accessible twin of every chart ---- */
+details.tbl { margin-top: 0.8em; font-size: 0.8em; }
+details.tbl summary { cursor: pointer; color: var(--mid); font-family: var(--font-data); }
+table { border-collapse: collapse; margin-top: 0.5em; font-family: var(--font-data); font-variant-numeric: tabular-nums; }
+th, td { text-align: right; padding: 0.15em 0.9ch; border-bottom: 1px solid var(--rule); white-space: nowrap; }
+th:first-child, td:first-child { text-align: left; }
+.tblwrap { overflow-x: auto; }
+
+#plate-foot {
+  margin-top: 1.2em;
+  padding-top: 0.8em;
+  border-top: 2px solid var(--ink);
+  font-size: 0.75em;
+  color: var(--mid);
+  font-family: var(--font-data);
+}
+#plate-foot p { margin: 0; }
+#plate-foot p + p { margin-top: 0.35em; }
+#plate-foot .lbl { font-family: var(--font-text); text-transform: uppercase; letter-spacing: 0.06em; font-size: 0.9em; display: inline-block; min-width: 9ch; }
+#plate-foot a { overflow-wrap: anywhere; }
+.prose { max-width: 52rem; }
+.prose p { margin: 0.5em 0; }
+.prose ul { margin: 0.4em 0; padding-left: 1.2em; }
+
+/* a container cannot query itself, so the narrow tokens land on the rows */
+@container plate (max-width: 40rem) {
+  .rows, .axis { --lbl: 6.5rem; --val: 4.5rem; }
+  .verdict .word { font-size: 1.9em; }
+}
+@media (max-width: 40rem) {
+  main { padding: 1.1em 0.9em; }
+}

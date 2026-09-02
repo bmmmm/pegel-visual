@@ -4,6 +4,7 @@
   "private": true,
   "description": "Live water level survey plates for German rivers",
   "license": "GPL-3.0-only",
+  "type": "module",
   "scripts": {
     "test": "node --test"
   }

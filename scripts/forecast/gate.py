@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 """Reads a backtest directory and prints one word: SHIP, NO-SHIP, VOID or PROVISIONAL.
 
-    uv run python gate.py --results ../../tmp-forecast/results/seasonal-mid \
-        --report results/seasonal-mid
+    uv run python gate.py --results ../../tmp-forecast/results/seasonal-mid
+
+The report (report.md + report.json) lands in the repo's top-level `gate/`
+directory — deployed with the site, where gate/index.html renders the JSON
+as an interactive plate at https://bmmmm.github.io/pegel-visual/gate/.
 
 Every threshold below was fixed before the first model run. There is no
 "promising": the seasonal verdict is SHIP only when A1..A7 all pass; the
@@ -29,6 +32,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import metrics  # noqa: E402
 import stations as st  # noqa: E402
 import tfm  # noqa: E402
+
+REPO = Path(__file__).resolve().parents[2]
 
 # ---------- pre-registered thresholds (plan §1d) ----------
 THRESHOLDS = {
@@ -414,7 +419,7 @@ def render_short(rep: dict) -> str:
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--results", required=True)
-    ap.add_argument("--report", default=None, help="directory for report.md + report.json")
+    ap.add_argument("--report", default=None, help="directory for report.md + report.json (default: <repo>/gate/<horizon>-<target>)")
     ap.add_argument("--compare", default=None, help="a second results directory that must reproduce the first")
     args = ap.parse_args(argv)
     warnings.filterwarnings("ignore", category=RuntimeWarning)  # empty slices in a baselines-only run are reported as VOID, not as noise
@@ -434,11 +439,11 @@ def main(argv=None) -> int:
         rep = short_report(header, data, th)
         text = render_short(rep)
     print(text)
-    if args.report:
-        out = Path(args.report)
-        out.mkdir(parents=True, exist_ok=True)
-        (out / "report.md").write_text(text + "\n", encoding="utf-8")
-        (out / "report.json").write_text(json.dumps(_clean(rep), indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
+    out = Path(args.report) if args.report else REPO / "gate" / f"{header['horizon_kind']}-{header['target']}"
+    out.mkdir(parents=True, exist_ok=True)
+    (out / "report.md").write_text(text + "\n", encoding="utf-8")
+    (out / "report.json").write_text(json.dumps(_clean(rep), indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
+    print(f"report: {out}")
     return {"SHIP": 0, "NO-SHIP": 1, "VOID": 2, "PROVISIONAL": 3}[rep["verdict"]]
 
 
