@@ -57,6 +57,11 @@ function makeEl(tag = 'div') {
 }
 
 export function loadApp({ width = 1200, search = '', now = null, storage = null } = {}) {
+  // window/document listeners are collected rather than dropped: keydown and
+  // popstate are real behaviour (the manual's key, Back restoring the range and
+  // the year) and a no-op stub made them untestable
+  const listeners = { keydown: [], popstate: [] };
+  const collect = (type, fn) => { (listeners[type] ||= []).push(fn); };
   const els = new Map();
   const elById = id => {
     if (!els.has(id)) els.set(id, makeEl(id));
@@ -71,7 +76,7 @@ export function loadApp({ width = 1200, search = '', now = null, storage = null 
     querySelector: sel => (sel === 'main' ? mainEl : makeEl(sel)),
     createElement: tag => makeEl(tag),
     createDocumentFragment: () => makeEl('#fragment'),
-    addEventListener() {},
+    addEventListener: collect,
     removeEventListener() {},
   };
 
@@ -98,7 +103,7 @@ export function loadApp({ width = 1200, search = '', now = null, storage = null 
   };
 
   const params = {
-    window: { addEventListener() {}, removeEventListener() {} },
+    window: { addEventListener: collect, removeEventListener() {} },
     document: documentStub,
     localStorage: localStorageStub,
     location: { search, origin: 'http://localhost', pathname: '/', href: 'http://localhost/' + search },
@@ -127,5 +132,13 @@ export function loadApp({ width = 1200, search = '', now = null, storage = null 
     el: elById,
     document: documentStub,
     localStorage: localStorageStub,
+    location: params.location,
+    // fire('keydown', { key: 'h' }) / fire('popstate') — preventDefault is
+    // filled in, so a test only names what it is actually asserting about
+    fire(type, ev = {}) {
+      const full = { preventDefault() {}, metaKey: false, ctrlKey: false, altKey: false, ...ev };
+      for (const fn of listeners[type] || []) fn(full);
+    },
+    source,
   };
 }

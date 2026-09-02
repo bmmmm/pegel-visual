@@ -154,20 +154,6 @@
   form .cont { padding-left: 8ch; } /* lines up under --station, like a wrapped shell command */
   /* fixed-width flag so the station and river inputs start at the same column */
   form .flag { display: inline-block; min-width: 9ch; }
-  /* --rivers is a control, not a typed flag: dressed like its neighbours but
-     underlined, so the one way out of a single station reads as clickable */
-  form .flag-btn {
-    font: inherit;
-    color: var(--ink);
-    background: none;
-    border: none;
-    padding: 0 0.2ch;
-    margin-left: 1ch;
-    text-decoration: underline;
-    cursor: pointer;
-  }
-  form .flag-btn:hover,
-  form .flag-btn.on { background: var(--ink); color: var(--paper); }
   form .hint { color: var(--mid); }
   /* the receiver flags: one folded line by default, so the prompt is the two
      fields that navigate. Opened, each flag gets its own line — two URL inputs
@@ -1402,9 +1388,9 @@
     <div id="local-actions">
       <button id="export-btn" type="button">export</button>
       · <button id="import-btn" type="button">import</button>
-      · <button id="clear-btn" type="button">clear</button>
+      · <button id="clear-btn" type="button">clear</button><span id="wsv-archive-item">
       · <a id="wsv-archive-link" href="https://www.pegelonline.wsv.de" target="_blank" rel="noopener"
-        title="download the multi-year raw archive (ZIP, data since 2000) at PEGELONLINE, then feed it to import">full archive (2000→)</a>
+        title="download the multi-year raw archive (ZIP, data since 2000) at PEGELONLINE, then feed it to import">full archive (2000→)</a></span>
     </div>
     <input id="import-file" type="file" accept="application/json,application/zip,.json,.zip" hidden>
     <div id="local-detail" hidden></div>
@@ -1519,7 +1505,7 @@
       transparent reading of the network, not a volume — and the handful of
       gauges reporting elevation in metres are excluded before summing. The
       absolute sum also grows with every gauge that joins the archive, so for
-      trends switch to <b>Δ DIFF</b> (or <b>?total&amp;diff</b>): the net
+      trends switch to <b>Δ change</b> (or <b>?total&amp;diff</b>): the net
       day-over-day change, counting only gauges that reported on both days —
       how much water actually arrived or left, immune to coverage changes.
       Built daily by this site's data pipeline from the same hosted archive
@@ -1529,8 +1515,8 @@
       <b>--station</b>, <b>--river</b>, <b>--rivers</b>, <b>--rising</b>,
       <b>--total</b>, <b>--adsb</b>, <b>--ais</b>, <b>--history 24h…all</b>,
       <b>--view</b>, <b>--export</b>, <b>--clear</b>, <b>--info</b>,
-      <b>--help</b>. Press <b>/</b> to open the finder from anywhere; <b>Esc</b>
-      dismisses help.</dd>
+      <b>--help</b>. Press <b>/</b> to open the finder from anywhere, <b>h</b>
+      for the manual page without typing; <b>Esc</b> dismisses help.</dd>
     <dt>keyboard</dt>
     <dd id="keymap"></dd>
     <dt>extras</dt>
@@ -1741,7 +1727,12 @@ function applyTotalChrome() {
 // steers the drawing itself now rides on the plate, next to what it changes.
 function applyModeChrome() {
   const perStation = mode === 'station';
-  document.getElementById('localbar').hidden = !perStation;
+  // The archive bar stays: export / import / clear act on the WHOLE local
+  // archive, not on the station in front of you, so hiding it in the map and
+  // the boards left the only way to move your own data behind a typed flag.
+  // The one item in it that IS per-station — the WSV download link, which
+  // points at one gauge's page — goes away with the recent-gauge chips.
+  document.getElementById('wsv-archive-item').hidden = !perStation;
   if (!perStation) document.getElementById('recent').hidden = true;
   else renderRecent();
   // The app bar's station item doubles as the way back: neither the map nor the
@@ -2819,15 +2810,11 @@ function navHref(target) {
     if (c === 'wave') return viewHref('wave');
     if (c === 'years') return viewHref('years');
     if (c.startsWith('h:')) return historyHref(c.slice(2));
+    if (c.startsWith('hy:')) return histYearHref(+c.slice(3));
     if (c.startsWith('rd:')) return risingHref(+c.slice(3));
     if (c === 'tall') return totalHref(null, null, null);
     if (c === 'tsum') return totalHref(totalYear, totalMonth, totalDay, false);
     if (c === 'tdiff') return totalHref(totalYear, totalMonth, totalDay, true);
-    if (c === 'tback') {
-      return totalDay != null ? totalHref(totalYear, totalMonth, null)
-        : totalMonth != null ? totalHref(totalYear, null, null)
-        : totalHref(null, null, null);
-    }
     if (c.startsWith('ty:')) return totalHref(+c.slice(3), null, null);
     if (c.startsWith('tm:')) { const [y, m] = c.slice(3).split(':').map(Number); return totalHref(y, m, null); }
     if (c.startsWith('td:')) { const [y, m, d] = c.slice(3).split(':').map(Number); return totalHref(y, m, d); }
@@ -4040,7 +4027,11 @@ function histStats() {
 // which return bins the CSS turns into a lightness ramp plus a hatch)
 
 let histMode = 'abs';  // 'abs' | 'anom' — heatmap toggle (D lives inside A)
-let histYear = null;   // overlay year picked by clicking a heatmap row; null = current
+// overlay year picked by clicking a heatmap row; null = current. It rides in
+// the URL as ?year=, because picking a year is the same act as picking a range
+// and that has always been shareable — ?total names its year in the URL too.
+let histYear = (y => /^\d{4}$/.test(y || '') ? +y : null)(
+  new URLSearchParams(location.search).get('year'));
 let histFocus = null;  // { y, m } — heatmap month cell picked for the numbers readout
 
 // the year the overlay draws bold: the picked one if its data exists, else the
@@ -4050,18 +4041,19 @@ function histSelYear(st) {
     : st.byYear.has(st.curYear) ? st.curYear : st.years[st.years.length - 1];
 }
 
-function setHistYear(y) {
-  histYear = y;
-  if (histFocus) histFocus = { y, m: histFocus.m }; // the readout follows the year
-  scheduleRender();
+function histYearHref(y) {
+  const q = new URLSearchParams(location.search);
+  if (y == null) q.delete('year'); else q.set('year', String(y));
+  const s = q.toString();
+  return s ? '?' + s : location.pathname;
 }
 
-// page through the archived years with the ◂ ▸ chips, clamped at both ends
-function stepHistYear(d) {
-  const st = histStats();
-  if (!st.years.length) return;
-  const i = st.years.indexOf(histSelYear(st));
-  setHistYear(st.years[Math.max(0, Math.min(st.years.length - 1, i + d))]);
+function setHistYear(y, push = true) {
+  if (y === histYear) return;
+  histYear = y;
+  if (histFocus) histFocus = { y, m: histFocus.m }; // the readout follows the year
+  if (push) history.replaceState(null, '', histYearHref(y));
+  scheduleRender();
 }
 
 const HIST_MIN_DAYS = 45; // below this the sections are noise — show a note instead
@@ -5761,8 +5753,7 @@ function runGridCmd(c) {
   } else if (c.startsWith('td:')) {
     const [y, m, d] = c.slice(3).split(':').map(Number);
     totalSetZoom(y, m, d);
-  } else if (c === 'tback') totalZoomOut();
-  else if (c === 'tall') totalSetZoom(null, null, null);
+  } else if (c === 'tall') totalSetZoom(null, null, null);
   else if (c === 'tsum') totalSetDiff(false);
   else if (c === 'tdiff') totalSetDiff(true);
 }
@@ -6421,6 +6412,7 @@ screen.addEventListener('pointerup', e => {
 const KEYMAP = [
   ['/', 'focus the search prompt'],
   ['?', 'this list'],
+  ['h', 'the manual page (same as --help)'],
   ['Esc', 'close a dialog · zoom out of ?total · leave a sub-view'],
   ['1…0', 'history range, 24H through ALL'],
   ['[  ]', 'the next gauge downstream / upstream on this river'],
@@ -6459,6 +6451,15 @@ document.addEventListener('keydown', e => {
   const k = e.key;
   if (k === '/') { e.preventDefault(); finderShow(); return; }
   if (k === '?') { e.preventDefault(); infobox.showModal(); return; }
+  // the manual had exactly one way in — typing `--help` — which is the one way
+  // nobody finds. `?` is the guided tour, `h` the reference page.
+  if (k === 'h') {
+    e.preventDefault();
+    state.help = helpText();
+    scheduleRender();
+    setScreenAria();
+    return;
+  }
   if (k >= '1' && k <= '9') {
     const p = HISTORY_PRESETS[+k - 1];
     if (p && mode === 'station') { e.preventDefault(); setHistory(p.k); }
@@ -6488,6 +6489,13 @@ window.addEventListener('popstate', () => {
   // restore the sub-view AFTER the mode is back, so its mode-guard sees the truth
   const v = (p.get('view') || 'live').toLowerCase();
   if (VIEW_KEYS.includes(v)) setView(v, false);
+  // …and the two plate controls that also live in the URL. Without these,
+  // going back to an entry whose link says 30D on 2019 landed on the page's
+  // current range and year instead: the address bar and the drawing disagreed.
+  const hk = (p.get('history') || '').toLowerCase();
+  setHistory(HISTORY_PRESETS.some(x => x.k === hk) ? hk : HISTORY_DEFAULT, false);
+  const hy = p.get('year');
+  setHistYear(/^\d{4}$/.test(hy || '') ? +hy : null, false);
 });
 
 // ---------- station suggestions (cached names, not the 255 KB full list) ----------
@@ -6883,12 +6891,14 @@ function historyHref(k) {
   return s ? '?' + s : location.pathname;
 }
 
-function setHistory(k) {
+// push=false when the URL is already what it should be — going Back is the
+// address bar telling US the range, not the other way round
+function setHistory(k, push = true) {
   if (k === historyKey) return;
   historyKey = k;
   localStorage.setItem(HISTORY_KEY, k);
   // keep shared links reproducing the visible range (the default → no param)
-  history.replaceState(null, '', historyHref(k));
+  if (push) history.replaceState(null, '', historyHref(k));
   ensureHistoryCoverage(historyPreset().d);
   scheduleRender();
 }
