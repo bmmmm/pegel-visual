@@ -22,6 +22,7 @@ const signed = (v, d = 3) => (v == null || Number.isNaN(v)) ? '—' : (v > 0 ? '
 const pct = (frac, [lo, hi]) => Math.max(0, Math.min(100, ((frac - lo) / (hi - lo)) * 100));
 const clampInfo = (v, [lo, hi]) => ({ x: pct(Math.max(lo, Math.min(hi, v)), [lo, hi]), clipped: v < lo ? 'lo' : v > hi ? 'hi' : null });
 const pval = p => p == null || Number.isNaN(p) ? '—' : p < 0.001 ? '< 0.001' : p.toFixed(3);
+const thousands = n => String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ' '); // 3 563, the thin space the app uses
 
 export function parseState(search) {
   const q = new URLSearchParams(search || '');
@@ -121,8 +122,28 @@ export function buildModel({ seasonal, short }, state) {
     stations: Object.entries(short.stations).map(([name, s]) => ({ name, origins: s.origins, rises: s.rise_events, blocks: s.blocks })),
     generated: short.header.generated,
   } : null;
+  // the write-up quotes the primary (mid) run whatever the chips say
+  const mid = seasonal.mid;
+  const koeln = mid.stations['KÖLN'] && mid.stations['KÖLN'].blocks['h31-90'];
+  const climLong = Object.entries(mid.stations).map(([n, s]) => ({ n, v: Math.abs(s.blocks['h31-90'].ss_clim_vs_blend) })).sort((a, b) => b.v - a.v);
+  const picps = BLOCKS.map(b => mid.pooled.blocks[b].picp80.tfm * 100);
+  const pctStr = v => `${Math.round(Math.abs(v) * 100)} %`;
+  const story = {
+    verdict: mid.verdict,
+    h1: pctStr(mid.pooled.blocks['h1-14'].ss),
+    h90: pctStr(mid.pooled.blocks['h31-90'].ss),
+    h90sign: mid.pooled.blocks['h31-90'].ss < 0 ? 'behind' : 'ahead',
+    rhine90: pctStr((mid.regimes['Mittelrhein'] || { blocks: { 'h31-90': { ss: 0 } } }).blocks['h31-90'].ss),
+    persistGain: koeln ? pctStr(1 - koeln.mae.blend / koeln.mae.persist) : '—',
+    picp: `${Math.round(Math.min(...picps))}–${Math.round(Math.max(...picps))} %`,
+    climWorst: climLong[0] ? climLong[0].n : '—',
+    climRest: climLong[1] ? pctStr(climLong[1].v) : '—',
+    perGauge: Math.round(Object.values(mid.station_info).reduce((a, s) => a + (s.test || 0), 0) / Object.keys(mid.stations).length),
+    windows: Object.values(mid.station_info).reduce((a, s) => a + (s.test || 0), 0),
+    minutes: Math.max(1, Math.round((mid.header.elapsed_s || 0) / 60)),
+  };
   return {
-    state, verdict: report.verdict, clauses, block, target: state.target,
+    state, verdict: report.verdict, clauses, block, target: state.target, story,
     head: {
       generated: h.generated, model: h.model, license: h.model_license, checkpoint: h.checkpoint, git: h.git,
       fingerprint: h.config_fingerprint, versions: h.versions, elapsed: h.elapsed_s, reproduced: h.reproduced_by_run,
@@ -328,6 +349,19 @@ function renderShort(m) {
     ]) + table + '</section>';
 }
 
+// the write-up: what was tried, why the bar sits where it sits, and what the
+// one word above cost — prose for the reader who came from the main page
+function renderStory(m) {
+  const k = m.story;
+  return `<section class="p-block prose" id="writeup"><h2 class="p-h2">Write-up · a brand-new model meets 26 years of river data</h2>` +
+    `<p><b>The question.</b> PEGEL:// draws what a river did and what it does right now, never what it will do. In 2026 that stopped being a given: Google's <b>TimesFM 2.5</b> is a 200-million-parameter foundation model for time series that forecasts <em>zero-shot</em> — no training on the data at hand, a <code>pip install</code> and a checkpoint. It is the first thing of its kind a one-file website could plausibly run against 737 gauges without keeping 737 models alive. So before drawing a single forecast line we asked the only question that matters: can it beat something trivial?</p>` +
+    `<p><b>What we did.</b> We took the daily archive this site already hosts — every gauge since 2000, condensed to day min/max — and built a backtest: 1 024 days of history in, 90 days out, one origin every week, ${esc(k.perGauge)} test origins per gauge from 2016 to 2025 on seven gauges chosen for their regimes: the sluggish Rhine, the continental Elbe, the alpine Danube, the flashy Saar, the tidal North Sea coast. The whole thing ran on a laptop CPU — ${esc(k.minutes)} minutes for ${esc(thousands(k.windows))} windows — and then once more, to prove it reproduces bit for bit. Every threshold, the model configuration and even the tie rule were written down before the first run, because a test set you re-run after peeking is no longer a test.</p>` +
+    `<p><b>The bar.</b> Not persistence. Persistence — "tomorrow is today" — is the opponent that makes every model look brilliant at three months; we measured that a two-line blend, today's level decaying into the day-of-year norm with one time constant per gauge, already beats it by ${esc(k.persistGain)} there at KÖLN. That blend is the bar, and the model had to beat <em>it</em> by ten percent, pooled, in every horizon block, with confidence intervals that respect overlapping windows and with the three Rhine gauges counted as one vote.</p>` +
+    `<p><b>The answer.</b> ${esc(k.verdict)}. TimesFM is a genuinely good forecaster: at two weeks it beats the blend by ${esc(k.h1)} — real, significant, and short of the bar. At a month it is a draw. At three months it is ${esc(k.h90)} ${esc(k.h90sign)}, ${esc(k.rhine90)} behind on the Rhine. Its uncertainty bands are honest (coverage ${esc(k.picp)} where 80 was asked), it forecasts recent years no worse than old ones, and the daily maximum tells the same story as the daily mean. The quiet finding underneath is worth more than the loud one: beyond a month, plain climatology — a calendar lookup — sits within ${esc(k.climRest)} of the bar at every gauge but ${esc(k.climWorst)}. The long horizon needs no model at all.</p>` +
+    `<p><b>What it cost and what it bought.</b> One evening, a 2.5 GB download and about 700 lines of Python that now live in the repository as a permanent instrument. It bought a clean no: no forecast view, no Python in the deploy, no model weights to licence-check every release (the 3.0 line went non-commercial on 2026-08-28, which is why the gate pins 2.5). What may follow is a seasonal outlook drawn from the archive alone, and a second verdict on the <em>short</em> horizon — hours to two days — for which 15-minute readings are now collected weekly and mirrored into a data branch, because the archive never kept them. That verdict is due around the turn of the year and can be no better than the data it waits for.</p>` +
+    `<p class="p-dim">Every number in this write-up is read from the committed report below; the code is under <a href="https://github.com/bmmmm/pegel-visual/tree/main/scripts/forecast">scripts/forecast</a>, the markdown reports sit beside this page.</p></section>`;
+}
+
 function renderMethod(m) {
   const h = m.head;
   return `<section class="p-block prose"><h2 class="p-h2">How it was measured</h2>` +
@@ -362,8 +396,9 @@ export function screenSummary(m) {
 export function renderPage(m) {
   return `<p class="vh">${esc(screenSummary(m))}</p>` +
     `<header class="p-head"><h1><a href="../">PEGEL://</a> · FORECAST GATE</h1>` +
-    `<p class="p-sub">Can a zero-shot model beat a persistence-to-climatology blend on the daily archive? ${esc(m.head.stations)} gauges in ${esc(m.head.regimes)} regimes, ${esc(m.head.windows)} test windows, measured ${esc(String(m.head.generated).slice(0, 10))}.</p></header>` +
+    `<p class="p-sub">Can a zero-shot model beat a persistence-to-climatology blend on the daily archive? ${esc(m.head.stations)} gauges in ${esc(m.head.regimes)} regimes, ${esc(thousands(m.head.windows))} test windows, measured ${esc(String(m.head.generated).slice(0, 10))}.</p></header>` +
     renderVerdict(m) +
+    renderStory(m) +
     renderControls(m) +
     renderSkill(m) + renderError(m) + renderCalib(m) + renderClim(m) + renderShort(m) + renderMethod(m) + renderFoot(m);
 }

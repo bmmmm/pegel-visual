@@ -109,6 +109,25 @@ test('the summary spoken to screen readers names verdict, target, block and the 
   assert.match(s, /95 % interval from -0\.\d+ to \+?0\.\d+/);
 });
 
+test('the write-up quotes the report, not a remembered number, and the main page links to it', () => {
+  const m = buildModel(reports, { target: 'max', block: 'h31-90' });
+  const html = renderPage(m);
+  const story = (html.match(/<section class="p-block prose" id="writeup">[\s\S]*?<\/section>/) || [''])[0];
+  assert.ok(story, 'a write-up section with an anchor');
+  const mid = reports.seasonal.mid;
+  assert.equal(m.story.verdict, mid.verdict, 'the story tells the primary run whatever the chips say');
+  assert.equal(m.story.h1, `${Math.round(mid.pooled.blocks['h1-14'].ss * 100)} %`);
+  assert.ok(story.includes(`beats the blend by ${m.story.h1}`));
+  assert.ok(story.includes(`${m.story.rhine90} behind on the Rhine`));
+  assert.equal(m.story.climWorst, 'DRESDEN', 'the one gauge where climatology is not a near-tie');
+  assert.ok(story.includes('TimesFM 2.5') && story.includes('zero-shot') && story.includes('2026-08-28'));
+  assert.ok(html.indexOf('id="writeup"') < html.indexOf('<nav class="p-tabs"'), 'the write-up sits before the filter row');
+  const page = readFileSync(join(ROOT, '..', 'index.html'), 'utf8');
+  assert.ok(page.includes('<a href="gate/" id="gate-link"'), 'the site footer links the gate');
+  assert.ok(page.includes('<dt>forecast gate</dt>'), 'the feature guide explains it');
+  assert.equal((page.match(/href="gate\/"/g) || []).length, 2, 'footer and guide, relative — the site lives on a subpath');
+});
+
 test('nothing the deploy stamps appears here, and no closing script tag is ever emitted', () => {
   const html = renderPage(buildModel(reports, { target: 'mid', block: 'h1-14' }));
   assert.ok(!html.includes('__COMMIT__') && !html.includes('__LASTMOD__'));
