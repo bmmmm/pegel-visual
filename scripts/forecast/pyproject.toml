@@ -1,0 +1,42 @@
+[project]
+name = "pegel-forecast"
+version = "0.0.0"
+description = "Forecast gate for pegel-visual: does TimesFM 2.5 beat a persistence/climatology blend on the daily archive?"
+# 3.14 is the system Python here and has no torch wheels; uv downloads 3.12.
+requires-python = "==3.12.*"
+license = "GPL-3.0-only"
+dependencies = [
+  "numpy>=1.26.4",
+]
+
+[project.optional-dependencies]
+# The model is optional so the tests (and CI) run without 2.5 GB of torch.
+#
+# timesfm is pinned EXACTLY to 2.0.2 — the last release before the 3.0 line.
+# 3.0.0 (2026-08-28) adds a second package for the 3.0 model whose weights are
+# under Google's non-commercial licence, which is incompatible with this
+# repo's GPL-3.0. 3.0.x still exports the 2.5 class, but only through
+# try/except blocks that can silently drop it, and a bare `pip install timesfm`
+# today resolves to 3.0.x. 2.0.2 contains only the 2.5 model code (Apache-2.0
+# code, Apache-2.0 weights). The one code change between 2.0.2 and 3.0.1 in the
+# 2.5 path (flipping the quantile channels of autoregressive output patches
+# under force_flip_invariance) only applies to horizons > 128 steps and is
+# neutralised anyway by use_continuous_quantile_head, which overwrites those
+# channels — see tfm.py. tests/test_license.py greps the repo for the 3.0
+# package, class and checkpoint names, so they are not spelled out here either.
+model = [
+  "timesfm[torch]==2.0.2",
+  "torch>=2.4",
+]
+
+[dependency-groups]
+dev = [
+  "pytest>=8.3",
+]
+
+[tool.uv]
+# a directory of scripts, not an installable package
+package = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

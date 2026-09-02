@@ -99,3 +99,29 @@
   A second trap: with browser zoom on, the extension's screenshot is a crop in
   device pixels, so image coordinates are `css * devicePixelRatio` — click by
   element `ref`, not by pixels read off the picture.
+
+## Forecast gate (`scripts/forecast/`, Python via uv)
+
+- **The verdict is on file, not in memory.** `results/seasonal-mid/report.md`
+  is the 2026-09-02 gate run of TimesFM 2.5 against the persistence/climatology
+  blend: **NO-SHIP** (pooled skill 0.07 at h1–14, nothing at h15–30, −0.04 at
+  h31–90; calibration fine). Re-running the gate consumes the test set — read
+  the report and the plan (`~/.claude/plans/mache-den-plan-wie-linked-puddle.md`)
+  before touching a threshold, and list every tried variant in the header.
+- **`timesfm` is pinned to 2.0.2 and the pin is load-bearing.** The 3.0 line's
+  weights are non-commercial and GPL-incompatible; `tests/test_license.py`
+  greps the whole repo for the 3.0 package, class and checkpoint names, so do
+  not spell them out even in comments. Dependabot is told to ignore `>=3`.
+- **`uv run` fails inside the sandbox** (its cache under `~/.cache/uv` is not
+  writable there): call `scripts/forecast/.venv/bin/python <script>` directly;
+  only `uv sync`/`uv lock` need the bypass. Weights cache under
+  `tmp-forecast/hf` — pass `--tmp` and `--archive` with the MAIN checkout's
+  paths from a worktree, or the download lands in the worktree and dies with it.
+- **The model's point forecast is the median channel (index 5), not channel 0.**
+  Measured on 2.0.2; `tfm.forecast_batch` asserts it. Horizon ≤ 128 steps is one
+  decode step — the 2.0.2/3.0.1 flip-quantile difference never applies.
+- **`collect-hires.mjs` is the only source of 15-minute data.** Weekly via the
+  LaunchAgent `de.6bm.pegel-hires` (wrapper `collect-hires.sh`, heartbeat
+  `cron:pegel-hires`), into `tmp-forecast/hires/` on this Mac — the short-horizon
+  gate stays PROVISIONAL until ~16 weeks have accumulated. The server clamps
+  `P35D` to ~31 days; merges are idempotent by timestamp.

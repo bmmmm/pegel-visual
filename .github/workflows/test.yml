@@ -21,3 +21,22 @@ jobs:
         with:
           node-version: 24
       - run: node --test
+
+  # the forecast gate's own tests (scripts/forecast): window logic, baselines,
+  # the DM/bootstrap statistics, the clause logic on synthetic results and the
+  # licence grep. numpy + pytest only — the model extra (torch, timesfm) is not
+  # installed here; nothing in the suite loads the weights.
+  forecast-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: scripts/forecast
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10
+        with:
+          enable-cache: true
+          cache-dependency-glob: scripts/forecast/uv.lock
+      - run: uv sync --locked --group dev
+      - run: uv run pytest -q

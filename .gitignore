@@ -3,3 +3,7 @@
 /archive/
 /tmp/
 tmp-*
+# scripts/forecast — uv environment and Python caches
+.venv/
+__pycache__/
+.pytest_cache/

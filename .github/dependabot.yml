@@ -17,3 +17,18 @@ updates:
       prefix: chore(deps)
     labels:
       - dependencies
+
+  # the forecast gate (scripts/forecast, uv-managed). timesfm stays below 3:
+  # the 3.0 line's weights are non-commercial and GPL-incompatible, see
+  # scripts/forecast/pyproject.toml — a bump PR there would be the wrong bump.
+  - package-ecosystem: uv
+    directory: /scripts/forecast
+    schedule:
+      interval: monthly
+    commit-message:
+      prefix: chore(deps)
+    labels:
+      - dependencies
+    ignore:
+      - dependency-name: timesfm
+        versions: [">=3"]

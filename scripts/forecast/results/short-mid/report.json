@@ -1,0 +1,456 @@
+{
+ "verdict": "PROVISIONAL",
+ "provisional_reasons": [
+  "KÖLN: 10/60 origins",
+  "BONN: 10/60 origins",
+  "KOBLENZ: 10/60 origins",
+  "DRESDEN: 10/60 origins",
+  "PASSAU ILZSTADT: 10/60 origins",
+  "FREMERSDORF: 10/60 origins",
+  "CUXHAVEN STEUBENHÖFT: 10/60 origins"
+ ],
+ "void": [],
+ "stations": {
+  "KÖLN": {
+   "origins": 10,
+   "rise_events": 3,
+   "blocks": {
+    "h1-6h": {
+     "mae": {
+      "persist": 1.1854166666666666,
+      "snaive": 4.439583333333333,
+      "drift": 0.9420452816884644,
+      "tidal": null,
+      "tfm_point": 1.0062517960866293
+     },
+     "best_baseline": "drift",
+     "ss_vs_best": -0.06815650547400987
+    },
+    "h6-24h": {
+     "mae": {
+      "persist": 5.373611111111111,
+      "snaive": 5.938888888888889,
+      "drift": 4.819753265116397,
+      "tidal": null,
+      "tfm_point": 5.016324864493476
+     },
+     "best_baseline": "drift",
+     "ss_vs_best": -0.04078457725207474
+    },
+    "h24-48h": {
+     "mae": {
+      "persist": 11.536458333333334,
+      "snaive": 11.694791666666667,
+      "drift": 10.973960468133006,
+      "tidal": null,
+      "tfm_point": 10.799687774976094
+     },
+     "best_baseline": "drift",
+     "ss_vs_best": 0.01588056505789115
+    }
+   }
+  },
+  "BONN": {
+   "origins": 10,
+   "rise_events": 3,
+   "blocks": {
+    "h1-6h": {
+     "mae": {
+      "persist": 1.0541666666666667,
+      "snaive": 3.9166666666666665,
+      "drift": 0.8238692347459652,
+      "tidal": null,
+      "tfm_point": 0.8989759604136149
+     },
+     "best_baseline": "drift",
+     "ss_vs_best": -0.09116340615729923
+    },
+    "h6-24h": {
+     "mae": {
+      "persist": 4.648611111111111,
+      "snaive": 6.709722222222222,
+      "drift": 4.002787066950765,
+      "tidal": null,
+      "tfm_point": 4.562052747938368
+     },
+     "best_baseline": "drift",
+     "ss_vs_best": -0.13971906864724626
+    },
+    "h24-48h": {
+     "mae": {
+      "persist": 8.13125,
+      "snaive": 10.390625,
+      "drift": 7.360940466662604,
+      "tidal": null,
+      "tfm_point": 7.2444317976633705
+     },
+     "best_baseline": "drift",
+     "ss_vs_best": 0.0158279596916856
+    }
+   }
+  },
+  "KOBLENZ": {
+   "origins": 10,
+   "rise_events": 4,
+   "blocks": {
+    "h1-6h": {
+     "mae": {
+      "persist": 2.3958333333333335,
+      "snaive": 10.041666666666666,
+      "drift": 2.9234860097190416,
+      "tidal": null,
+      "tfm_point": 2.3683099349339805
+     },
+     "best_baseline": "persist",
+     "ss_vs_best": 0.011488027157990799
+    },
+    "h6-24h": {
+     "mae": {
+      "persist": 4.030555555555556,
+      "snaive": 7.481944444444444,
+      "drift": 4.980247011909767,
+      "tidal": null,
+      "tfm_point": 3.8489689734246997
+     },
+     "best_baseline": "persist",
+     "ss_vs_best": 0.04505249453281068
+    },
+    "h24-48h": {
+     "mae": {
+      "persist": 5.196875,
+      "snaive": 10.046875,
+      "drift": 5.038798435526515,
+      "tidal": null,
+      "tfm_point": 5.205662636955579
+     },
+     "best_baseline": "drift",
+     "ss_vs_best": -0.03311587148487072
+    }
+   }
+  },
+  "DRESDEN": {
+   "origins": 10,
+   "rise_events": 4,
+   "blocks": {
+    "h1-6h": {
+     "mae": {
+      "persist": 3.683333333333333,
+      "snaive": 13.245833333333334,
+      "drift": 2.5702633606901846,
+      "tidal": null,
+      "tfm_point": 3.053259579340617
+     },
+     "best_baseline": "drift",
+     "ss_vs_best": -0.1879170150566729
+    },
+    "h6-24h": {
+     "mae": {
+      "persist": 8.841666666666667,
+      "snaive": 11.370833333333334,
+      "drift": 7.116968715679201,
+      "tidal": null,
+      "tfm_point": 8.774470371670192
+     },
+     "best_baseline": "drift",
+     "ss_vs_best": -0.23289432934268683
+    },
+    "h24-48h": {
+     "mae": {
+      "persist": 11.347916666666666,
+      "snaive": 14.945833333333333,
+      "drift": 10.59401452412795,
+      "tidal": null,
+      "tfm_point": 11.91328050295512
+     },
+     "best_baseline": "drift",
+     "ss_vs_best": -0.12452937230004091
+    }
+   }
+  },
+  "PASSAU ILZSTADT": {
+   "origins": 10,
+   "rise_events": 3,
+   "blocks": {
+    "h1-6h": {
+     "mae": {
+      "persist": 4.925,
+      "snaive": 5.133333333333334,
+      "drift": 6.853124501441443,
+      "tidal": null,
+      "tfm_point": 3.1127875010172525
+     },
+     "best_baseline": "persist",
+     "ss_vs_best": 0.36796192872746136
+    },
+    "h6-24h": {
+     "mae": {
+      "persist": 8.584722222222222,
+      "snaive": 6.054166666666666,
+      "drift": 11.361907945350064,
+      "tidal": null,
+      "tfm_point": 7.054220030042861
+     },
+     "best_baseline": "snaive",
+     "ss_vs_best": -0.16518431328994265
+    },
+    "h24-48h": {
+     "mae": {
+      "persist": 10.429166666666667,
+      "snaive": 8.38125,
+      "drift": 13.0432187298443,
+      "tidal": null,
+      "tfm_point": 9.986736170450847
+     },
+     "best_baseline": "snaive",
+     "ss_vs_best": -0.19155688834611162
+    }
+   }
+  },
+  "FREMERSDORF": {
+   "origins": 10,
+   "rise_events": 10,
+   "blocks": {
+    "h1-6h": {
+     "mae": {
+      "persist": 2.404166666666667,
+      "snaive": 3.6,
+      "drift": 3.2509301261581025,
+      "tidal": null,
+      "tfm_point": 2.376816749572754
+     },
+     "best_baseline": "persist",
+     "ss_vs_best": 0.01137604870457376
+    },
+    "h6-24h": {
+     "mae": {
+      "persist": 3.7958333333333334,
+      "snaive": 3.2916666666666665,
+      "drift": 5.401523844802008,
+      "tidal": null,
+      "tfm_point": 2.4277534908718534
+     },
+     "best_baseline": "snaive",
+     "ss_vs_best": 0.2624546356845002
+    },
+    "h24-48h": {
+     "mae": {
+      "persist": 4.270833333333333,
+      "snaive": 3.8979166666666667,
+      "drift": 5.744004163108314,
+      "tidal": null,
+      "tfm_point": 2.87185107866923
+     },
+     "best_baseline": "snaive",
+     "ss_vs_best": 0.2632343571559431
+    }
+   }
+  },
+  "CUXHAVEN STEUBENHÖFT": {
+   "origins": 10,
+   "rise_events": 5,
+   "blocks": {
+    "h1-6h": {
+     "mae": {
+      "persist": 115.44583333333334,
+      "snaive": 39.4125,
+      "drift": 106.00511287486123,
+      "tidal": 27.947524647378906,
+      "tfm_point": 12.24388313293457
+     },
+     "best_baseline": "tidal",
+     "ss_vs_best": 0.5618974028140671
+    },
+    "h6-24h": {
+     "mae": {
+      "persist": 110.47083333333333,
+      "snaive": 35.88055555555555,
+      "drift": 171.76093772709754,
+      "tidal": 27.610107033961786,
+      "tfm_point": 20.352082146538628
+     },
+     "best_baseline": "tidal",
+     "ss_vs_best": 0.26287565196670304
+    },
+    "h24-48h": {
+     "mae": {
+      "persist": 112.040625,
+      "snaive": 68.36458333333333,
+      "drift": 163.81349886050987,
+      "tidal": 30.296388907660532,
+      "tfm_point": 26.66860958735148
+     },
+     "best_baseline": "tidal",
+     "ss_vs_best": 0.11974296116167682
+    }
+   }
+  }
+ },
+ "thresholds": {
+  "A1_pooled_ss_min": 0.1,
+  "A2_regimes_positive_min": 4,
+  "A2_regime_ss_floor": -0.05,
+  "A3_ci_lower_min": 0.03,
+  "A4_dm_p_max": 0.1,
+  "A4_regimes_significant_min": 4,
+  "A4_stouffer_z_min": 2.5,
+  "A5_picp80_range": [
+   0.72,
+   0.88
+  ],
+  "A5_picp80_slack_vs_baseline": 0.03,
+  "A6_ss_crps_min": 0.05,
+  "A7_recent_vs_old_ratio_min": 0.5,
+  "tie_cm": 2.0,
+  "coverage_min": 0.95,
+  "bootstrap_B": 2000,
+  "bootstrap_block": 26,
+  "newey_west_lag": 13,
+  "short_origins_min": 60,
+  "short_rise_events_min": 3,
+  "short_ss_min": 0.15
+ },
+ "header": {
+  "horizon_kind": "short",
+  "target": "mid",
+  "protocol": {
+   "context": 1024,
+   "horizon": 192,
+   "step": 192,
+   "blocks": {
+    "h1-6h": [
+     1,
+     24
+    ],
+    "h6-24h": [
+     25,
+     96
+    ],
+    "h24-48h": [
+     97,
+     192
+    ]
+   }
+  },
+  "forecast_config": {
+   "max_context": 1024,
+   "max_horizon": 192,
+   "normalize_inputs": true,
+   "use_continuous_quantile_head": true,
+   "force_flip_invariance": true,
+   "infer_is_positive": false,
+   "fix_quantile_crossing": true,
+   "per_core_batch_size": 32
+  },
+  "config_fingerprint": "8b66814738659343",
+  "checkpoint": "google/timesfm-2.5-200m-pytorch",
+  "model": "timesfm-2.5-200m",
+  "model_license": "Apache-2.0",
+  "torch_threads": 8,
+  "versions": {
+   "python": "3.12.13",
+   "timesfm": "2.0.2",
+   "torch": "2.14.0",
+   "numpy": "2.5.2"
+  },
+  "git": "2247d9c",
+  "generated": "2026-09-02T19:41:20Z",
+  "elapsed_s": 24.3,
+  "model_ran": true,
+  "limit": null,
+  "repeat_identical": true,
+  "tfm_sha256": "26399568c043a4ccb7b3e243542008bd835a9ce692bd09feb679532564fc5619"
+ },
+ "station_info": {
+  "a6ee8177-107b-47dd-bcfd-30960ccc6e9c": {
+   "name": "KÖLN",
+   "collected_steps": 3058,
+   "grid": 10,
+   "kept": 10,
+   "pairs_expected": 1920,
+   "pairs_scored": 1920,
+   "span": [
+    "2026-08-01T23:15",
+    "2026-09-02T19:30"
+   ],
+   "rise_events": 3
+  },
+  "593647aa-9fea-43ec-a7d6-6476a76ae868": {
+   "name": "BONN",
+   "collected_steps": 3058,
+   "grid": 10,
+   "kept": 10,
+   "pairs_expected": 1920,
+   "pairs_scored": 1920,
+   "span": [
+    "2026-08-01T23:15",
+    "2026-09-02T19:30"
+   ],
+   "rise_events": 3
+  },
+  "4c7d796a-39f2-4f26-97a9-3aad01713e29": {
+   "name": "KOBLENZ",
+   "collected_steps": 3058,
+   "grid": 10,
+   "kept": 10,
+   "pairs_expected": 1920,
+   "pairs_scored": 1920,
+   "span": [
+    "2026-08-01T23:15",
+    "2026-09-02T19:30"
+   ],
+   "rise_events": 4
+  },
+  "70272185-b2b3-4178-96b8-43bea330dcae": {
+   "name": "DRESDEN",
+   "collected_steps": 3058,
+   "grid": 10,
+   "kept": 10,
+   "pairs_expected": 1920,
+   "pairs_scored": 1920,
+   "span": [
+    "2026-08-01T23:15",
+    "2026-09-02T19:30"
+   ],
+   "rise_events": 4
+  },
+  "33ceb441-23bc-4ca6-9fcd-ac35d41ef117": {
+   "name": "PASSAU ILZSTADT",
+   "collected_steps": 3058,
+   "grid": 10,
+   "kept": 10,
+   "pairs_expected": 1920,
+   "pairs_scored": 1920,
+   "span": [
+    "2026-08-01T23:15",
+    "2026-09-02T19:30"
+   ],
+   "rise_events": 3
+  },
+  "fe72ee98-88e9-4d19-aba1-f97f61b7d4de": {
+   "name": "FREMERSDORF",
+   "collected_steps": 3058,
+   "grid": 10,
+   "kept": 10,
+   "pairs_expected": 1920,
+   "pairs_scored": 1920,
+   "span": [
+    "2026-08-01T23:15",
+    "2026-09-02T19:30"
+   ],
+   "rise_events": 10
+  },
+  "aad49293-242a-43ad-a8b1-e91d7792c4b2": {
+   "name": "CUXHAVEN STEUBENHÖFT",
+   "collected_steps": 3058,
+   "grid": 10,
+   "kept": 10,
+   "pairs_expected": 1920,
+   "pairs_scored": 1920,
+   "span": [
+    "2026-08-01T23:15",
+    "2026-09-02T19:30"
+   ],
+   "rise_events": 5
+  }
+ }
+}
