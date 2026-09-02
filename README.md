@@ -35,14 +35,14 @@ _      _      _      _      _      _      _      _
   [open-meteo](https://open-meteo.com), refreshed every 15 min
 - automatic dark mode (`light-dark()`, follows your system), tab title and
   favicon carry the live level — the buddy's waterline tracks MNW…MHW
-- history sparkline — starts with the API's 15 days and grows: every visit
+- history sparkline — starts with the API's 30 days and grows: every visit
   merges the data into a local archive (localStorage, per station), so over
   time your sparkline covers more than the API can serve. Points older than
   16 days are thinned to hourly, older than a year to 6-hourly. `export`
   downloads the archive as JSON, `import` restores a previously exported
   file (e.g. after switching devices) and merges it with what is already
   there, `clear` (click twice) deletes it. Nothing ever leaves your browser.
-  Fetching is API-friendly: the 15-day history is requested once as a seed,
+  Fetching is API-friendly: the 30-day history is requested once as a seed,
   afterwards only the delta since the newest archived point is pulled.
 - **years, not days:** WSV publishes each station's raw archive back to
   2000-01-01 ([DL-DE→Zero-2.0](https://www.govdata.de/dl-de/zero-2-0)).
@@ -79,8 +79,8 @@ _      _      _      _      _      _      _      _
   attribution
 - **years view** (`▦ YEARS` chip or `?view=years`) — the station as a
   multi-year statistics terminal, built from the same daily archive:
-  a heatmap of every year by month (`ABS` shades the level itself,
-  `ANOM` the deviation from that month's long-term mean — dry months in
+  a heatmap of every year by month (`absolute` shades the level itself,
+  `anomaly` the deviation from that month's long-term mean — dry months in
   the drought accent, wet months in the flood accent, `·` for normal),
   the long-term monthly min–max band with median against the current
   year, and a day-of-year overlay of all years with one year bold —
@@ -119,19 +119,20 @@ The prompt is a tiny REPL: type a bare name to switch station, or a
 flag command (flags are matched case-insensitively) to do more in one go:
 
 - `--station NAME` — switch to station NAME (same as typing a bare name)
-- `--rivers` — open the rivers map (same as the `--rivers` button or `?rivers`)
+- `--rivers` — open the rivers map (same as the `map` item in the top bar or `?rivers`)
 - `--rising` — open the rising board: every gauge ranked by cm/day vs yesterday
-  (same as the `--rising` button or `?rising`)
+  (same as the `rising` item in the top bar or `?rising`)
 - `--total` — open the total overview: every river's summed gauge readings
   stacked over the years, zoomable down to a single day (same as the
-  `--total` button or `?total`)
+  `totals` item in the top bar or `?total`)
 - `--adsb URL` — set your ADS-B receiver URL; `--adsb` with no value clears it
 - `--ais URL` — set your AIS receiver URL; `--ais` with no value clears it
 - `--history RANGE` — set the sparkline window (`24h`, `3d`, `7d`, `15d`, `30d`,
   `1y`, `5y`, `10y`, `20y`, `all`); the choice also lands in the URL, so shared
   links reproduce it
 - `--view MODE` — switch the sub-view: `years` (station statistics), `wave`
-  (river heatmap) or `live`; also lands in the URL, so shared links reproduce it
+  (river heatmap), `list` (the waters A–Z, with `--rivers`) or `live`; also
+  lands in the URL, so shared links reproduce it
 - `--export` — download the whole local archive as JSON
 - `--clear` — delete the local archive (no confirmation — you typed it)
 - `--info` — open the feature guide dialog (also linked as `info` in the footer):
@@ -151,7 +152,7 @@ an app from the browser menu.
 
 ## The rivers map
 
-`--rivers` (the button next to the river field, or `?rivers`) puts every water
+`--rivers` (the `map` item in the top bar, or `?rivers`) puts every water
 PEGELONLINE serves on one screen — a schematic outline of Germany with
 each river anchored at the centroid of its own gauges and labelled with how
 many it has. Click a name to open that river's profile.
@@ -182,8 +183,9 @@ list header names how many are missing and why.
 
 ## The rising board
 
-`--rising` (or `?rising`, or the `▲ who's rising right now` link on the rivers
-map) ranks every gauge by how fast it moved since yesterday, in cm per day:
+`--rising` (or `?rising`, the `rising` item in the top bar, or the
+`who's rising` link in the finder) ranks every gauge by how fast it moved
+since yesterday, in cm per day:
 the top 20 risers, the steepest fallers below, and every row a click away
 from its station.
 
@@ -291,8 +293,8 @@ the browser restores whichever view the URL held.
 
 ### Wave view
 
-The `PROFILE / ▦ WAVE` chips under the prompt, `[▦ WAVE]` in the river
-header or `?river=RHEIN&view=wave` redraw the whole
+The `profile / wave` chips on the river plate or `?river=RHEIN&view=wave`
+redraw the whole
 river as a station × day heatmap: rows run downstream (top = upstream), columns
 are the last ~2.5 months, and darker cells mean higher water — each row scaled
 to its own station's range. A flood wave shows up as a diagonal ridge rolling
@@ -344,16 +346,26 @@ PEGEL_NOW=$(date -u -v-1d +%Y-%m-%dT03:00:00Z) node scripts/snapshot-wsv.mjs --o
 
 ## Tests
 
-The inline logic is covered by a dependency-free `node:test` suite:
-`tests/extract.mjs` pulls the script out of `index.html` and evaluates it
-against a minimal hand-rolled browser stub (no jsdom, no network, an
-injectable clock for the astronomy). Run it with:
+A dependency-free `node:test` suite — 251 tests across six files, plus
+`tests/extract.mjs`, which is the harness rather than a test: it pulls the
+script out of `index.html` and evaluates it against a minimal hand-rolled
+browser stub (no jsdom, no network, an injectable clock for the astronomy),
+so `app.run('<expr>')` reaches any top-level function in the page.
+
+- `logic.test.mjs` — the page itself: parsing, view models, every renderer
+- `snapshot.test.mjs`, `archive-consistency.test.mjs` — the daily snapshots
+  and the archive they accumulate into
+- `wsv-archive.test.mjs`, `rws-archive.test.mjs` — the two backfill pipelines
+- `river-totals.test.mjs` — the summed-stage build
+
+Run them with:
 
 ```
 node --test
 ```
 
-CI runs the same suite on every push and pull request.
+CI runs the same suite on every push and pull request, and a deploy only
+follows a green run — see `.github/workflows/pages.yml`.
 
 Data: © Wasserstraßen- und Schifffahrtsverwaltung des Bundes (WSV),
 [PEGELONLINE](https://www.pegelonline.wsv.de), refreshed every 5 minutes.

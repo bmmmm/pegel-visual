@@ -1,7 +1,7 @@
 {
   "name": "PEGEL:// live river gauges",
   "short_name": "PEGEL://",
-  "description": "Live ASCII water level terminal for German rivers, powered by PEGELONLINE (WSV).",
+  "description": "Live water level survey plates for German rivers — drawings that name every mark they use, powered by PEGELONLINE (WSV).",
   "start_url": ".",
   "display": "standalone",
   "background_color": "#fbfbf9",
