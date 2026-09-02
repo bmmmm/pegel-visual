@@ -1620,15 +1620,18 @@ test('setScreenHtml: the screen only swaps when the content changed', () => {
 test('year paging + month readout: chips step and clamp, cells report numbers', () => {
   const app = loadApp({ width: 1200, now: JULY });
   seedArchive(app);
-  // the year pager steps back through archived years and clamps at the oldest
-  assert.equal(app.run(`(stepHistYear(-1), histSelYear(histStats()))`), 2025);
-  assert.equal(app.run(`(stepHistYear(-1), stepHistYear(-1), stepHistYear(-1), histSelYear(histStats()))`), 2024, 'clamped at the oldest year');
-  assert.equal(app.run(`(stepHistYear(1), histSelYear(histStats()))`), 2025);
+  // the pager does not step blindly: each chip names the year it lands on, so
+  // clamping is a chip that is simply not drawn at the end of the list
+  assert.equal(app.run(`(runGridCmd('hy:2024'), histSelYear(histStats()))`), 2024);
+  assert.equal(app.run(`(runGridCmd('hy:2025'), histSelYear(histStats()))`), 2025);
   // the pager sits in the heat block's own control row, beside ABSOLUTE/ANOMALY
   const pager = app.run(`(viewMode = 'years', renderYears(yearsViewModel()))`);
-  assert.ok(pager.includes('>◂<') && pager.includes('>▸<') && pager.includes('>2025<'), 'year pager chips present');
-  assert.ok(pager.includes('data-nav="cmd:hy:2024"'), 'and each step names the year it lands on');
+  assert.ok(pager.includes('>◂<') && pager.includes('>▸<'), 'year pager chips present');
+  assert.ok(pager.includes('data-nav="cmd:hy:2025"'), 'and each step names the year it lands on');
   assert.ok(pager.indexOf('cmd:abs') < pager.indexOf('cmd:hy:'), 'one row: shading mode, then the year');
+  // and it is a real link, so the picked year is shareable and Back works
+  assert.match(pager, /<a[^>]*href="[^"]*year=2025[^"]*"[^>]*data-nav="cmd:hy:2025"/,
+    'the year chip carries its own URL');
   // picking a heatmap cell focuses the month AND puts its year on top
   app.run(`runGridCmd('hm:2024:3')`);
   assert.deepEqual(app.run('histFocus'), { y: 2024, m: 3 });
@@ -1646,7 +1649,7 @@ test('year paging + month readout: chips step and clamp, cells report numbers', 
   assert.ok(html.includes(vm.readout.say.slice(0, 20)), 'and it reaches the plate');
   assert.ok(html.includes('data-nav="cmd:hm:2025:0"'), 'month cells are pick targets');
   // paging the year drags the readout month along
-  app.run(`stepHistYear(1)`);
+  app.run(`runGridCmd('hy:2025')`);
   assert.deepEqual(app.run('histFocus'), { y: 2025, m: 3 });
 });
 
@@ -3468,4 +3471,58 @@ test('the year-against-climate chart gives its outliers a shape, not just a hue'
   const apexY = d => Number(d.match(/d="M[\d.]+ ([\d.]+)/)[1]);
   assert.ok(apexY(marks[1]) < 6, 'the above mark points up');
   assert.ok(apexY(marks[2]) > 6, 'the below mark points down');
+});
+
+// ---------- reachability: nothing steers the page by typing alone ----------
+
+test('the manual has a key, not only a typed flag', () => {
+  const app = loadApp({ now: NOON });
+  assert.ok(app.run(`KEYMAP.some(([k]) => k === 'h')`), 'h is documented in the key list');
+  app.fire('keydown', { key: 'h' });
+  const shown = app.run('state.help');
+  assert.ok(shown && shown.includes('PEGEL(1)'), 'and it opens the manual page');
+});
+
+test('the archive bar is reachable from every mode, its per-station link is not', () => {
+  const app = loadApp({ search: '?rivers' });
+  const state = app.run(`(() => {
+    applyModeChrome();
+    return { bar: !!document.getElementById('localbar').hidden,
+             wsv: !!document.getElementById('wsv-archive-item').hidden,
+             recent: !!document.getElementById('recent').hidden };
+  })()`);
+  assert.equal(state.bar, false, 'export/import/clear act on the whole archive, so they stay');
+  assert.equal(state.wsv, true, 'the one-gauge WSV download link does not');
+  assert.equal(state.recent, true, 'nor do the per-station recent chips');
+});
+
+test('a year chip and a range chip are both real links, and Back restores both', () => {
+  const app = loadApp({ search: '?station=BONN&history=7d&year=2019', now: NOON });
+  assert.equal(app.run('historyKey'), '7d', 'the range comes out of the URL');
+  assert.equal(app.run('histYear'), 2019, 'and so does the picked year');
+  assert.match(app.run(`navHref('cmd:hy:2021')`), /year=2021/, 'a year chip has a URL');
+  assert.match(app.run(`navHref('cmd:h:1y')`), /history=1y/, 'and so does a range chip');
+  // the default range is the absence of the param, not the param spelled out
+  assert.equal(/history=/.test(app.run(`navHref('cmd:h:' + HISTORY_DEFAULT)`)), false);
+
+  // Back onto an entry whose URL says 30D/2021 must move the drawing too — the
+  // popstate handler used to restore mode and view and leave these two behind
+  app.location.search = '?station=BONN&history=30d&year=2021';
+  app.fire('popstate');
+  assert.equal(app.run('historyKey'), '30d', 'the range follows the address bar');
+  assert.equal(app.run('histYear'), 2021, 'and so does the year');
+});
+
+test('no dead command targets: every cmd: the dispatcher knows is emitted somewhere', () => {
+  const app = loadApp({ now: NOON });
+  const src = app.source;
+  // the strings the dispatcher and navHref branch on
+  const handled = new Set();
+  for (const m of src.matchAll(/c === '([a-z]+)'/g)) handled.add(m[1]);
+  for (const m of src.matchAll(/c\.startsWith\('([a-z]+):'\)/g)) handled.add(m[1] + ':');
+  const emitted = new Set();
+  for (const m of src.matchAll(/'cmd:([a-z]+):?/g)) emitted.add(m[1]);
+  for (const m of src.matchAll(/`cmd:([a-z]+):?/g)) emitted.add(m[1]);
+  const dead = [...handled].map(h => h.replace(':', '')).filter(h => !emitted.has(h));
+  assert.deepEqual(dead, [], `handled but never emitted: ${dead.join(', ')}`);
 });
