@@ -45,11 +45,17 @@ jobs:
         run: |
           mkdir /tmp/site
           rsync -a --exclude .git --exclude .github --exclude tests --exclude scripts ./ /tmp/site/
-      - name: Stamp the deployed commit (report-issue payload)
+      - name: Stamp the deployed commit and date
         # main's own HEAD, not $GITHUB_SHA — a push to the `archive` branch also
         # triggers this workflow, and GITHUB_SHA would then be the archive
-        # branch's commit even though `ref: main` is what's actually deployed
-        run: sed -i "s/__COMMIT__/$(git rev-parse --short HEAD)/" /tmp/site/index.html
+        # branch's commit even though `ref: main` is what's actually deployed.
+        # The sitemap's lastmod is the same idea: every URL in it is this one
+        # page in a different mode, so its date is simply the deploy's.
+        run: |
+          set -euo pipefail
+          sed -i "s/__COMMIT__/$(git rev-parse --short HEAD)/" /tmp/site/index.html
+          sed -i "s/__LASTMOD__/$(date -u +%Y-%m-%d)/g" /tmp/site/sitemap.xml
+          ! grep -q '__COMMIT__\|__LASTMOD__' /tmp/site/index.html /tmp/site/sitemap.xml
       - name: Add archive data (when the archive branch exists)
         # "the branch is absent" and "the fetch broke" are different answers and
         # used to share one silent `if git fetch`: a transient failure deployed

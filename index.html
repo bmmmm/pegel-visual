@@ -1463,8 +1463,8 @@
       from the long-term month mean in σ. Built from the same daily WSV archive
       the 1Y/5Y/ALL ranges use.</dd>
     <dt>wave view</dt>
-    <dd>In river mode, the <b>profile / wave</b> chips under the river’s name,
-      <b>[▦ WAVE]</b> in the header or <b>?view=wave</b> draw the whole
+    <dd>In river mode, the <b>profile / wave</b> chips under the river’s name
+      or <b>?view=wave</b> draw the whole
       river as a station × day heatmap: rows run downstream, columns are days,
       dark cells are high water — a flood wave shows up as a diagonal ridge
       rolling down the screen. Each row is scaled to its own station. Data:
@@ -2177,7 +2177,7 @@ async function loadRiver() {
   setScreenAria();
 }
 
-// ---------- local archive (accumulates beyond the API's 15-day window) ----------
+// ---------- local archive (accumulates beyond the API's 30-day window) ----------
 
 const ARCHIVE_PREFIX = 'pegel.archive.';
 

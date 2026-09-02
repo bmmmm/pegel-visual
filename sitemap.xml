@@ -1,15 +1,27 @@
 <?xml version="1.0" encoding="UTF-8"?>
+<!-- Every URL here is the same single page in a different mode, so they all
+     change when it does: `lastmod` is stamped with the deploy date by
+     .github/workflows/pages.yml, the way index.html's commit is. Hand-written
+     dates drifted months behind the site. -->
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
   <url>
     <loc>https://bmmmm.github.io/pegel-visual/</loc>
-    <lastmod>2026-07-05</lastmod>
+    <lastmod>__LASTMOD__</lastmod>
+  </url>
+  <url>
+    <loc>https://bmmmm.github.io/pegel-visual/?rivers</loc>
+    <lastmod>__LASTMOD__</lastmod>
   </url>
   <url>
     <loc>https://bmmmm.github.io/pegel-visual/?river=RHEIN</loc>
-    <lastmod>2026-07-16</lastmod>
+    <lastmod>__LASTMOD__</lastmod>
   </url>
   <url>
     <loc>https://bmmmm.github.io/pegel-visual/?rising</loc>
-    <lastmod>2026-08-20</lastmod>
+    <lastmod>__LASTMOD__</lastmod>
+  </url>
+  <url>
+    <loc>https://bmmmm.github.io/pegel-visual/?total</loc>
+    <lastmod>__LASTMOD__</lastmod>
   </url>
 </urlset>
