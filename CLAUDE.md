@@ -32,6 +32,16 @@
   `keySw`) instead of scaling it, and switch its animation off for `.sw` at a
   specificity that actually wins. Neither failure is visible to the tests —
   only a real browser catches an empty swatch.
+- **A test that greps the whole page proves less than it looks.** `renderTotal:
+  falling days are hatched` passed for months on the class name while no hatch
+  existed; rewritten as `includes('fill="url(#tb-fell)"')` it would then have
+  passed on the legend's own swatch. Anchor an assertion to the element it is
+  about — `/<rect[^>]*fill="url\(#tb-fell\)"[^>]*class="db fell"/` — and put
+  the fix back OUT to watch it go red before believing it.
+- **`app.fire('keydown', {key})` / `app.fire('popstate')`** reach the real
+  handlers: the harness collects window/document listeners, and `app.source`
+  hands you the script text for structural checks (the dead-`cmd:`-target
+  guard reads the dispatcher's own branches out of it).
 - **Conventions the test harness depends on:** every `*ViewModel()` and
   `render*()` is a **top-level `function` declaration** (a `const` arrow inside
   a block is unreachable from `app.run`), and no renderer may ever emit the
@@ -44,6 +54,20 @@
   measured ≥4.5:1 on paper. Never give a mark only a fill token.
 - **Meaning never rides on hue alone** — bands carry a hatch, states carry a
   glyph, directions carry both. The heat ramp stays a lightness ramp.
+- **A gauge does not necessarily report centimetres.** 69 of 737 W series are
+  metres above a datum (`m+NN`, `m+PNP`); the unit rides in the same `W.json`
+  the client fetches. Print a level with `fmtLevel`/`levelWithUnit` in the
+  gauge's OWN unit, and convert with `toCm()` only where a threshold is
+  involved — `TREND_FLAT` and `RISING_FLAT` are noise floors for a gauge that
+  ticks in whole centimetres. Elevation goes through `elevOf()`: a metre gauge
+  IS the elevation and often carries no `gaugeZero` at all.
+- **The history chart's x axis is TIME.** `bucketSeries` tiles the window by
+  timestamp, not by array index, because the archive changes cadence inside a
+  window (15-minutely for 16 days, hourly to a year, 6-hourly beyond). An
+  empty column is either a resolution gap (drawn through) or a real silence
+  (left null, the line breaks) — `windowGapLimit` decides, from the readings'
+  own 90th-percentile spacing rather than from the clock, because 24 h is an
+  outage at one gauge and the cadence at another.
 - **Sizing:** container queries and SVG `viewBox`es, never a column count.
   `aspect-ratio` plus `min-height` on the same box derives a WIDTH from the
   height and overflows its track — use one or the other.
@@ -51,11 +75,19 @@
   acts: every loader must end in `scheduleRender()`. A loader that forgets it
   simply never appears (this bit `loadStationList` during the migration).
   All motion is CSS on `transform`/`opacity`, off under reduced motion.
-- **Verify in a real browser**, not only via tests: headless Chrome works —
-  `--headless=new --screenshot --window-size=W,H`. Its layout viewport is
-  pinned around 485px regardless of `--window-size`, so for a true phone
-  layout render the app inside a fixed-width `<iframe>` on a wrapper page
-  (media queries then evaluate against the iframe).
+- **Verify in a real browser**, not only via tests — and `--headless=new
+  --screenshot` alone does NOT do it: `scheduleRender()` rides on rAF, which a
+  headless page never serves, so every data-driven view screenshots as
+  `loading…`. What works: a `python3 -m http.server` plus Chrome with
+  `--remote-debugging-port=9222 --remote-allow-origins='*'` (both need the
+  sandbox bypass — socket bind and loopback connect), then a ~40-line CDP
+  client over the global `WebSocket`: `Page.navigate`, sleep, evaluate
+  `renderNow()`, `Page.captureScreenshot`.
+  `Emulation.setDeviceMetricsOverride {mobile:true}` gives a true phone
+  viewport, `setEmulatedMedia` a real `pointer: coarse`, and a `clip` at
+  `scale: 4` is how you read a 12 px swatch. Measure through
+  `Runtime.evaluate` in the same run — a `getBoundingClientRect()` sweep
+  catches what a screenshot only hints at.
 - **Driving the live browser: the tab has to be VISIBLE.** A tab that is
   minimised, on another Space or fully covered by another window reports
   `document.visibilityState === 'hidden'`, and Chrome then stops serving
