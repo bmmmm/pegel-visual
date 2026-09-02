@@ -106,6 +106,61 @@ test('adsbEndpoint / aisEndpoint: URL normalization', () => {
   assert.equal(app.run(`aisEndpoint('')`), '');
 });
 
+test('receiver polling only runs where the scene is drawn', async () => {
+  // Both loaders sit on their own interval (2.5 s and 5 s) and end in an
+  // unconditional scheduleRender(). Only the station scene draws their marks,
+  // so outside it a tick has to cost neither a request nor a repaint.
+  const poll = (view, payload) => {
+    const app = loadApp();
+    app.run(`mode = '${view}'; adsbRaw = '10.0.0.5:8080'; aisRaw = '10.0.0.5:8080'`);
+    return app.run(`(async () => {
+      let hits = 0;
+      getJson = async () => { hits++; return ${payload}; };
+      await loadAircraft();
+      await loadShips();
+      return { hits, adsbOk: state.adsbOk, aisOk: state.aisOk,
+        craft: state.aircraft.length, ships: state.ships.length };
+    })()`);
+  };
+
+  for (const view of ['total', 'rising', 'rivers', 'river']) {
+    const r = await poll(view, '{ aircraft: [], ships: [] }');
+    assert.equal(r.hits, 0, `${view} must not poll a receiver`);
+    assert.equal(r.adsbOk, null, `${view} must not claim a receiver status`);
+    assert.equal(r.aisOk, null, `${view} must not claim a receiver status`);
+  }
+
+  // the station plate still polls both, so the guard cannot be a silent kill
+  const st = await poll('station', `{
+    aircraft: [{ lat: 50.7, lon: 7.1, alt_baro: 3000 }],
+    ships: [{ lat: 50.7, lon: 7.1, last_signal: 5 }] }`);
+  assert.equal(st.hits, 2, 'the station scene polls both receivers');
+  assert.equal(st.adsbOk, true);
+  assert.equal(st.aisOk, true);
+  assert.equal(st.craft, 1);
+  assert.equal(st.ships, 1);
+});
+
+test('loadWeather skips the request outside the station plate', async () => {
+  // state.info survives a switch away, so the 15-minute tick used to fire an
+  // open-meteo request from ?total and discard the answer on arrival
+  const ask = view => {
+    const app = loadApp();
+    app.run(`mode = '${view}'; state.info = { latitude: 50.7, longitude: 7.1 }`);
+    return app.run(`(async () => {
+      let hits = 0;
+      getJson = async () => { hits++; return { current: { precipitation: 0 } }; };
+      await loadWeather();
+      return { hits, weather: state.weather };
+    })()`);
+  };
+
+  assert.equal((await ask('total')).hits, 0, 'no weather request outside the station plate');
+  const at = await ask('station');
+  assert.equal(at.hits, 1, 'the station plate still fetches weather');
+  assert.ok(at.weather !== null);
+});
+
 // ---------- archive: merge, thin, dedupe, import ----------
 
 test('mergeIntoArchive: dedupes, sorts, thins old points to hourly', () => {

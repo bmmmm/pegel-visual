@@ -4,11 +4,18 @@ name: pages
 # branch (data never lives on main — local pushes to main and CI commits to
 # the data branch stay out of each other's way).
 on:
-  push:
+  # Deploys run AFTER the test suite, not beside it. On `push` the two raced,
+  # so a push with failing tests still went live — the tests were a report, not
+  # a gate. `workflow_run` fires once `tests` has finished on main; the job's
+  # `if` below is what actually refuses a red run.
+  workflow_run:
+    workflows: [tests]
+    types: [completed]
     branches: [main]
     # a push to the `archive` data branch cannot trigger this workflow — the
     # orphan branch carries no workflow files, GitHub evaluates triggers from
-    # the pushed commit. archive-update dispatches the deploy explicitly.
+    # the pushed commit. archive-update dispatches the deploy explicitly, and
+    # that dispatch path is why workflow_dispatch has to stay.
   workflow_dispatch:
 
 permissions:
@@ -22,7 +29,11 @@ concurrency:
 
 jobs:
   deploy:
+    # a manual or data-pipeline dispatch always deploys; a test run only when
+    # it went green
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
@@ -40,10 +51,19 @@ jobs:
         # branch's commit even though `ref: main` is what's actually deployed
         run: sed -i "s/__COMMIT__/$(git rev-parse --short HEAD)/" /tmp/site/index.html
       - name: Add archive data (when the archive branch exists)
+        # "the branch is absent" and "the fetch broke" are different answers and
+        # used to share one silent `if git fetch`: a transient failure deployed
+        # a site with no data at all, and only data-freshness noticed, hours
+        # later. ls-remote answers the first question; once the branch is known
+        # to exist, a failed fetch has to stop the deploy.
         run: |
-          if git fetch origin archive --depth 1; then
+          set -euo pipefail
+          if git ls-remote --exit-code --heads origin archive >/dev/null; then
+            git fetch origin archive --depth 1
             git worktree add /tmp/archive-branch FETCH_HEAD
             cp -R /tmp/archive-branch/archive /tmp/site/archive
+          else
+            echo "no archive branch on this remote — deploying the site without data"
           fi
       - uses: actions/upload-pages-artifact@v5
         with:

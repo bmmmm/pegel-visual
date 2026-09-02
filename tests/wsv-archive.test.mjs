@@ -26,6 +26,7 @@ const {
   requestEnd, lastYearOf, planChunks, dropSpillYears,
   writeStation, graduateCompletedYear,
   PLAUSIBLE_MIN_CM, PLAUSIBLE_MAX_CM,
+  failureVerdict, reportRunOutcome,
 } = await import('../scripts/fetch-wsv-archive.mjs');
 
 const tmp = prefix => mkdtempSync(join(tmpdir(), prefix));
@@ -279,4 +280,49 @@ test('graduateCompletedYear: a failed ZIP freeze of a never-frozen year claims n
     async () => { throw new Error('zip down'); });
   assert.equal(through, 0, 'no fetchedThrough claim — the gap sweep must retry');
   assert.ok(years.has(2025), 'the REST accumulation still graduates as before');
+});
+
+// ---------- 5. a run that fetched nothing must not read as a success ----------
+
+test('failureVerdict: a WSV outage is red, a handful of bad stations is not', () => {
+  // the shape that used to go green: every attempted station failed, the
+  // manifest and totals were rebuilt off untouched files, the gate passed
+  assert.equal(failureVerdict(0, 737).red, true, 'a total outage is red');
+  assert.equal(failureVerdict(90, 10).red, true, 'exactly at the 10% limit is red');
+  assert.equal(failureVerdict(91, 9).red, false, 'just under the limit stays green');
+  assert.equal(failureVerdict(700, 37).red, false, '37 of 737 is 5%, still green');
+  assert.equal(failureVerdict(700, 3).red, false, 'three flaky stations stay green');
+  assert.equal(failureVerdict(737, 0).red, false, 'a clean run is green');
+
+  // `skipped` is not in the denominator, so an almost-complete archive cannot
+  // dilute a bad run: 2 of 4 actually attempted is still half
+  const v = failureVerdict(2, 2);
+  assert.equal(v.attempted, 4);
+  assert.equal(v.rate, 0.5);
+  assert.equal(v.red, true);
+
+  // a run with nothing to do is not a failure
+  assert.equal(failureVerdict(0, 0).red, false);
+  assert.equal(failureVerdict(0, 0).rate, 0);
+
+  // --station runs are small on purpose: one requested station, one failure
+  assert.equal(failureVerdict(0, 1).red, true, 'the only station you asked for failed');
+
+  // the limit is a knob, not a constant
+  assert.equal(failureVerdict(90, 10, 0.5).red, false);
+  assert.equal(failureVerdict(40, 60, 0.5).red, true);
+});
+
+test('reportRunOutcome sets a non-zero exit code exactly when the verdict is red', () => {
+  const before = process.exitCode;
+  try {
+    process.exitCode = 0;
+    reportRunOutcome('test', 700, 3);
+    assert.equal(process.exitCode, 0, 'a tolerable failure rate leaves the run green');
+
+    reportRunOutcome('test', 0, 737);
+    assert.equal(process.exitCode, 1, 'a wiped-out run exits non-zero');
+  } finally {
+    process.exitCode = before;
+  }
 });

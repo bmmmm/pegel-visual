@@ -153,6 +153,32 @@ export const daysInYear = y => ((y % 4 === 0 && y % 100 !== 0) || y % 400 === 0)
 // physical range (widest real stages are canal gauges around 5600 cm). The
 // filter is unit-agnostic on purpose: gauges reporting m+NN send tiny
 // magnitudes like -0.87, which these bounds leave untouched.
+// A run that fetched nothing must not read like a run that had nothing to do.
+// Per-station failures used to be counted and printed and that was all: with
+// WSV down for the monthly refresh, every station failed, the manifest and the
+// totals were still rebuilt off the untouched files, `generated` got a fresh
+// stamp, the consistency gate was satisfied, and the job pushed and went
+// green. `skipped` stations are excluded from the denominator — they were
+// never attempted, so a mostly-complete archive cannot dilute the rate.
+export const FAIL_RATE_LIMIT = Number(process.env.PEGEL_FAIL_RATE_LIMIT ?? 0.1);
+
+export function failureVerdict(ok, failed, limit = FAIL_RATE_LIMIT) {
+  const attempted = ok + failed;
+  const rate = attempted ? failed / attempted : 0;
+  return { attempted, rate, red: failed > 0 && rate >= limit };
+}
+
+// Prints the tally and, past the limit, refuses to call the run a success.
+export function reportRunOutcome(label, ok, failed, limit = FAIL_RATE_LIMIT) {
+  const v = failureVerdict(ok, failed, limit);
+  if (v.red) {
+    console.error(`error: ${label}: ${failed} of ${v.attempted} attempted station(s) failed ` +
+      `(${Math.round(v.rate * 100)}%, limit ${Math.round(limit * 100)}%) — not calling this run a success`);
+    process.exitCode = 1;
+  }
+  return v;
+}
+
 export const PLAUSIBLE_MIN_CM = -2000;
 export const PLAUSIBLE_MAX_CM = 20000;
 
@@ -616,4 +642,5 @@ async function main() {
     console.log(`manifest: ${stations.length} stations, ${stations.length - none} archived, ${none} without WSV archive`);
   }
   console.log(`done · ${ok} fetched · ${skipped} already complete · ${failed} failed${failed ? ' (re-run to retry)' : ''}`);
+  reportRunOutcome('WSV archive fetch', ok, failed);
 }
