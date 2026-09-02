@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { deflateRawSync } from 'node:zlib';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { readFileSync, existsSync } from 'node:fs';
 import { loadApp } from './extract.mjs';
 
 // builds a real (minimal) ZIP: local headers + central directory + EOCD —
@@ -3525,4 +3526,65 @@ test('no dead command targets: every cmd: the dispatcher knows is emitted somewh
   for (const m of src.matchAll(/`cmd:([a-z]+):?/g)) emitted.add(m[1]);
   const dead = [...handled].map(h => h.replace(':', '')).filter(h => !emitted.has(h));
   assert.deepEqual(dead, [], `handled but never emitted: ${dead.join(', ')}`);
+});
+
+// ---------- the phone-width work ----------
+
+test('the river profile carries a browsable index, in flow order', () => {
+  const app = loadApp({ search: '?river=RHEIN', width: 390 });
+  const { vm, html } = app.run(`(() => {
+    // km rises downstream here, so upstream is the low km — the drawing reads
+    // left to right and the list must agree with it
+    const stations = [
+      { name: 'BASEL', km: 164, elev: 245, value: 489, kind: 'normal' },
+      { name: 'MAXAU', km: 362, elev: 98, value: 340, kind: 'low' },
+      { name: 'BONN', km: 654, elev: 44, value: 122, kind: 'normal' },
+      { name: 'EMMERICH', km: 851, elev: 10, value: 47, kind: 'high' },
+    ];
+    const vm = riverViewModel(stations);
+    return { vm, html: renderRiver(vm) };
+  })()`);
+  assert.deepEqual(vm.index.map(s => s.name), ['BASEL', 'MAXAU', 'BONN', 'EMMERICH'],
+    'upstream first, the way the chart reads');
+  assert.equal(vm.index.length, 4, 'every gauge, not only the flagged ones');
+  for (const n of ['BASEL', 'MAXAU', 'BONN', 'EMMERICH']) {
+    assert.ok(html.includes(`>${n}<`), `${n} is a row`);
+    assert.ok(html.includes(`data-nav="${n}"`), `and ${n} is tappable`);
+  }
+  // the rows carry the drawing's own state marks, so the key above names them
+  assert.ok(html.includes('class="sw river"'), 'rows use the chart mark, not a second vocabulary');
+  assert.ok(html.includes('rv-dot k-low') && html.includes('rv-dot k-high'),
+    'and low/high keep their own shapes in the list');
+});
+
+// The stub has no CSSOM, so these read the stylesheet as text. Weaker than a
+// rendered measurement (which is why both were verified in a real browser at
+// 390 px) but strong enough to catch a deletion.
+test('the wave grid keeps its name column when it scrolls to the newest day', () => {
+  const page = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
+  assert.match(page, /\.heat\.wave th\[scope="row"\]\s*\{[^}]*position: sticky/s,
+    'the row labels are sticky, or scrolling right leaves a wall of colour');
+  assert.match(page, /@container plate \(max-width: 34rem\)[^}]*--wave-name: 5rem/s,
+    'and the name column narrows on a phone');
+  assert.match(page, /wave\.scrollLeft = wave\.scrollWidth/,
+    'and the grid opens on its newest day');
+});
+
+test('the PWA declares what an install prompt looks for, and the shell is honest', () => {
+  const dir = new URL('../', import.meta.url);
+  const mf = JSON.parse(readFileSync(new URL('manifest.webmanifest', dir), 'utf8'));
+  const sizes = new Set(mf.icons.map(i => i.sizes));
+  assert.ok(sizes.has('192x192') && sizes.has('512x512'), 'Android looks for 192 and 512');
+  assert.ok(mf.icons.some(i => i.purpose === 'maskable'), 'and a maskable one for its own mask');
+  for (const i of mf.icons) {
+    assert.ok(existsSync(new URL(i.src, dir)), `${i.src} exists`);
+  }
+  const sw = readFileSync(new URL('sw.js', dir), 'utf8');
+  // network-first is the whole design: a cache-first worker pins readers to
+  // the build they installed, on a page whose readings move every five minutes
+  assert.ok(sw.indexOf('fetch(req)') < sw.indexOf('caches.match(req)'),
+    'the network is tried before the cache');
+  assert.match(sw, /includes\('\/archive\/'\)\) return/, 'and readings are never cached as shell');
+  assert.match(readFileSync(new URL('index.html', dir), 'utf8'),
+    /navigator\.serviceWorker\.register\('sw\.js'\)/, 'the page registers it');
 });
