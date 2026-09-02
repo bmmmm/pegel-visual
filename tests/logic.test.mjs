@@ -260,13 +260,19 @@ test('importWsvArchive: unpacks the WSV historical ZIP into the right station', 
   await assert.rejects(() => importWsvArchive(new Uint8Array([0x50, 0x4b, 1, 2, 3])), /zip/);
 });
 
-test('countGaps: only jumps beyond 90 min count (recent points)', () => {
+test('countGaps: a quarter-hourly gauge shows its outages', () => {
   const app = loadApp({ now: NOON });
-  const base = NOON - 500 * 60000; // recent: the 90-min threshold applies
-  const pts = [[base, 1], [base + 30 * 60000, 1], [base + 120 * 60000, 1], [base + 121 * 60000, 1], [base + 400 * 60000, 1]];
+  // 15-minutely across ten hours, with q 8..24 missing — a 4.5 h hole
+  const pts = [];
+  for (let q = 0; q <= 40; q++) {
+    if (q >= 8 && q <= 24) continue;
+    pts.push([NOON - 10 * 36e5 + q * 15 * 60000, 1]);
+  }
   const g = app.run(`countGaps(${JSON.stringify(pts)})`);
-  assert.equal(g.gaps, 1, '90 min exactly is tolerated (thinned cadence), 279 min is a gap');
-  assert.ok(Math.abs(g.maxGapH - 4.65) < 0.01);
+  assert.equal(g.gaps, 1, 'the hole, and only the hole');
+  assert.ok(Math.abs(g.maxGapH - 4.5) < 0.01, `and it names how long it was, got ${'${g.maxGapH}'}`);
+  // the floor still holds: even at this cadence nothing under 90 min counts
+  assert.equal(app.run(`windowGapLimit(${JSON.stringify(pts)})`), 90 * 60000);
 });
 
 // ---------- astronomy ----------
@@ -1677,15 +1683,25 @@ test('mergeIntoArchive rejects non-numeric values instead of poisoning min/max',
   assert.deepEqual(app.run(`loadArchive('BONN').map(p => p[1])`), [100, 110]);
 });
 
-test('countGaps tolerates the 6-hourly thinned cadence of multi-year points', () => {
+// The hosted bundle stores two points a day, 12 h apart, at EVERY age. Judged
+// against a fixed 9 h for anything past a year, BONN's gapless 26-year archive
+// reported 3999 gaps in its first 4000 points — one per night, on data with no
+// hole in it at all. The threshold is the archive's own cadence now.
+test('countGaps reads the archive cadence instead of the clock', () => {
   const app = loadApp({ now: NOON });
-  const old = NOON - 400 * 864e5; // beyond the 1-year thinning cutoff
-  const sixHourly = Array.from({ length: 5 }, (_, i) => [old + i * 6 * 36e5, 100]);
-  assert.equal(app.run(`countGaps(${JSON.stringify(sixHourly)})`).gaps, 0, '6h cadence is not a gap for old points');
-  const twelveHourly = [[old, 100], [old + 12 * 36e5, 100]];
-  assert.equal(app.run(`countGaps(${JSON.stringify(twelveHourly)})`).gaps, 1, '12h IS a gap even for old points');
-  const recent = [[NOON - 4 * 36e5, 100], [NOON - 36e5, 100]];
-  assert.equal(app.run(`countGaps(${JSON.stringify(recent)})`).gaps, 1, '3h stays a gap for recent points');
+  const old = NOON - 400 * 864e5;
+  // the real shape of the hosted archive: min at 06:00, max at 18:00, forever
+  const daily = [];
+  for (let d = 0; d < 60; d++) {
+    daily.push([old + d * 864e5 + 6 * 36e5, 100], [old + d * 864e5 + 18 * 36e5, 140]);
+  }
+  assert.equal(app.run(`countGaps(${JSON.stringify(daily)})`).gaps, 0,
+    'a gapless daily bundle has no gaps, whatever its age');
+  // punch one week out of it and that IS a gap
+  const holed = daily.filter(p => p[0] < old + 20 * 864e5 || p[0] > old + 27 * 864e5);
+  const g = app.run(`countGaps(${JSON.stringify(holed)})`);
+  assert.equal(g.gaps, 1, 'a week of silence is one gap');
+  assert.ok(g.maxGapH > 24 * 7, `and it is a week long, got ${g.maxGapH}h`);
 });
 
 test('renderHistory: a flat series draws at half height, not as an empty chart', () => {
@@ -2444,7 +2460,7 @@ test('parseBulkStations: keeps live W stations with tidal flag, span and kind', 
   ];
   const out = app.run(`parseBulkStations(${JSON.stringify(raw)})`);
   assert.equal(out.length, 2, 'stations without a live W value are dropped');
-  assert.deepEqual(out[0], { uuid: 'a', n: 'BONN', w: 'RHEIN', v: 76, tidal: false, mnw: 121, mhw: 680, kind: 'low' });
+  assert.deepEqual(out[0], { uuid: 'a', n: 'BONN', w: 'RHEIN', v: 76, unit: 'cm', tidal: false, mnw: 121, mhw: 680, kind: 'low' });
   assert.equal(out[1].tidal, true, 'MThw marks the tidal gauge');
   assert.equal(out[1].mnw, null, 'a tidal gauge has no MNW span');
 });
@@ -3587,4 +3603,105 @@ test('the PWA declares what an install prompt looks for, and the shell is honest
   assert.match(sw, /includes\('\/archive\/'\)\) return/, 'and readings are never cached as shell');
   assert.match(readFileSync(new URL('index.html', dir), 'utf8'),
     /navigator\.serviceWorker\.register\('sw\.js'\)/, 'the page registers it');
+});
+
+// ---------- the gauge's own unit ----------
+
+// 69 of PEGELONLINE's 737 water-level series report metres above a datum
+// (67 m+NN, 2 m+PNP, measured 2026-09-02). The page printed "cm" for all of
+// them, so WALTROP's real 56.54 m+NN was drawn, titled and read out as "57 cm".
+test('a metre gauge is printed in metres, everywhere it is printed', () => {
+  const app = loadApp({ now: NOON });
+  const out = app.run(`(() => {
+    station = 'WALTROP';
+    state.info = { water: { shortname: 'DHK' }, km: 2.144, latitude: 51.64, longitude: 7.38 };
+    state.gauge = {
+      unit: 'm+NN',
+      currentMeasurement: { value: 56.54, timestamp: ${NOON}, stateMnwMhw: 'unknown' },
+      characteristicValues: [],
+    };
+    state.archive = [[${NOON} - 2 * 36e5, 56.5], [${NOON}, 56.54]];
+    state.neighbors = [];
+    const vm = stationViewModel();
+    applyLiveChrome();
+    return { vm, html: renderStation(vm), title: document.title, aria: screenSummary() };
+  })()`);
+
+  assert.equal(out.vm.unit, 'm+NN', 'the view model carries the unit off the W series');
+  assert.match(out.html, />56\.54</, 'the hero reading keeps its hundredths');
+  assert.match(out.html, />m\+NN</, 'and names the unit it is in');
+  assert.equal(out.html.includes('>57<'), false, 'not rounded to a centimetre count');
+  assert.match(out.title, /56\.54m\+NN/, 'the tab title agrees');
+  assert.match(out.html, /absolute elevation/, 'and the caption stops calling it a height above the gauge zero');
+  assert.equal(out.html.includes('own zero mark'), false);
+  assert.match(out.aria, /56\.54 m\+NN/, 'and so does the screen-reader line');
+  // The RATE stays centimetres per hour on purpose: TREND_FLAT is a noise floor
+  // for a gauge that ticks in whole centimetres, and "0.02 m/h" tells nobody
+  // anything. A level is a level, a rate is a rate.
+  assert.match(out.aria, /rising 2\.0 cm per hour/, 'the rate is comparable across gauges');
+  assert.equal(/level [\d.]+ cm/.test(out.aria), false, `no level in cm: ${out.aria}`);
+});
+
+test('a centimetre gauge is unchanged by any of it', () => {
+  const app = loadApp({ now: NOON });
+  const out = app.run(`(() => {
+    station = 'BONN';
+    state.info = { water: { shortname: 'RHEIN' }, km: 654.8, latitude: 50.7, longitude: 7.1 };
+    state.gauge = {
+      unit: 'cm',
+      currentMeasurement: { value: 122.4, timestamp: ${NOON}, stateMnwMhw: 'low' },
+      characteristicValues: [{ shortname: 'MNW', value: 121 }, { shortname: 'MHW', value: 680 }],
+    };
+    state.archive = [[${NOON} - 2 * 36e5, 120], [${NOON}, 122.4]];
+    state.neighbors = [];
+    const vm = stationViewModel();
+    applyLiveChrome();
+    return { vm, html: renderStation(vm), title: document.title };
+  })()`);
+  assert.match(out.html, />122</, 'whole centimetres, as gauges report them');
+  assert.match(out.html, />cm</);
+  assert.match(out.title, /122cm/);
+});
+
+test('the rising board ranks metre gauges on the same scale it prints cm on', () => {
+  const app = loadApp({ now: NOON });
+  const iso = new Date(NOON - 864e5).toISOString();
+  const out = app.run(`(() => {
+    const raw = [
+      { uuid: 'a', shortname: 'CM-GAUGE', water: { shortname: 'X' }, timeseries: [{ shortname: 'W', unit: 'cm',
+        currentMeasurement: { value: 120, stateMnwMhw: 'normal' }, characteristicValues: [] }] },
+      { uuid: 'b', shortname: 'M-GAUGE', water: { shortname: 'X' }, timeseries: [{ shortname: 'W', unit: 'm+NN',
+        currentMeasurement: { value: 57.2, stateMnwMhw: 'normal' }, characteristicValues: [] }] },
+    ];
+    const shard = { days: ['${'${iso}'}'], stations: { a: { v: [100] }, b: { v: [57.0] } } };
+    const d = risingOverview(parseBulkStations(raw), shard, ${NOON});
+    state.rising = { data: d, snapshot: shard, error: null };
+    return { d, html: renderRising(risingViewModel()) };
+  })()`.replace('${iso}', iso));
+
+  const byName = Object.fromEntries(out.d.risers.map(r => [r.n, r]));
+  assert.ok(byName['CM-GAUGE'], 'the cm gauge rose 20 cm in a day');
+  assert.ok(byName['M-GAUGE'], 'and the metre gauge rose 0.2 m — which is 20 cm, not 0.2');
+  assert.ok(Math.abs(byName['CM-GAUGE'].cmPerDay - 20) < 0.5);
+  assert.ok(Math.abs(byName['M-GAUGE'].cmPerDay - 20) < 0.5,
+    `the metre gauge must rank at 20 cm/day, got ${'${byName["M-GAUGE"].cmPerDay}'}`);
+  // …while the reading itself is still printed in the unit it was published in
+  assert.match(out.html, /57\.20 m\+NN/, 'the row prints metres');
+  assert.match(out.html, /120 cm/, 'and the cm row prints centimetres');
+});
+
+test('elevOf: a metre gauge needs no gauge zero to have an elevation', () => {
+  const app = loadApp({});
+  const elev = (w, v) => app.run(`elevOf(${JSON.stringify(w)}, ${JSON.stringify({ value: v })})`);
+  // a cm gauge is a height above its own zero — both halves required
+  assert.equal(elev({ unit: 'cm', gaugeZero: { value: 44.0 } }, 122), 45.22);
+  assert.equal(elev({ unit: 'cm' }, 122), null, 'no zero, no elevation');
+  // a metre gauge IS the elevation. The eleven Dortmund-Ems-Kanal gauges publish
+  // m+NN and no gaugeZero at all, and demanding one discarded every one of them:
+  // ?river=DEK drew "fewer than 2 usable stations" over a canal with eleven.
+  assert.equal(elev({ unit: 'm+NN' }, 56.54), 56.54);
+  assert.equal(elev({ unit: 'm+NN', gaugeZero: { value: 0 } }, 56.54), 56.54);
+  // m+PNP carries a small datum offset, which does add on
+  assert.ok(Math.abs(elev({ unit: 'm+PNP', gaugeZero: { value: 0.041 } }, 240.1) - 240.141) < 1e-9);
+  assert.equal(elev({ unit: 'm+NN' }, null), null);
 });
