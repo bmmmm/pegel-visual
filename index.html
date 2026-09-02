@@ -110,6 +110,14 @@
     /* a chip row is a dozen targets side by side — 44 px each would push the
        chart it steers off the first screen. 36 px still clears WCAG 2.2 AA. */
     #screen .p-tabs a, #screen .p-tabs button { min-block-size: 2.25rem; }
+    /* A heat cell is one square in a grid, not a row in a list. The blanket
+       rule above is an id selector and beat `.heat td a`, so every month cell
+       came out 44 px: measured, the years plate grew 585 -> 1233 px and the
+       wave's diagonal — the whole point of that drawing — no longer fit one
+       screen. 24 px is the WCAG 2.5.8 floor and keeps a grid readable as a
+       grid. */
+    #screen .heat td a, #screen .heat td button,
+    #screen .heat th a, #screen .heat th button { min-block-size: 1.5rem; }
   }
   ::view-transition-old(screen), ::view-transition-new(screen) { animation-duration: 0.35s; }
   form {
@@ -1108,13 +1116,18 @@
   /* `.river` is the mark vocabulary the chart and its swatches share; only the
      chart itself takes the height */
   .chart.river { height: 11rem; }
-  .trouble li {
+  /* `.board.trouble`, not `.trouble`: the phone rule for `.board li` sits
+     LATER in the sheet at equal specificity, so it won the cascade and dressed
+     every trouble row in the rising board's three-row grid. Trouble rows carry
+     no `b-river` and no `b-spark`, so those areas came out empty — one blank
+     line per row, with the reading and the km sign pushed two rows down. */
+  .board.trouble li {
     grid-template-columns: 2.4ch 1.6ch minmax(11ch, 1fr) 7ch minmax(14ch, auto) max-content;
     grid-template-areas: "rank dir name now rate badge";
   }
   .trouble .b-rate { background: none; color: var(--mid); }
   @container plate (max-width: 34rem) {
-    .trouble li {
+    .board.trouble li {
       grid-template-columns: 2.4ch 1.6ch 1fr max-content;
       grid-template-areas:
         "rank dir name now"
@@ -1271,8 +1284,12 @@
      the plate was drawn for a mouse — single glyphs and 0.75 em text links came
      out 10–19 px tall under a fingertip. */
   @media (pointer: coarse) {
+    /* #mode-nav and #recent were missed when this list was written: the four
+       view links measured 23 px and the recent-station chips 17 px under a
+       fingertip — the app bar is the primary navigation on a phone. */
     #brand, #appbar-info, #finder-btn, #perma-copy, #local-stats,
     #localbar a, #export-btn, #import-btn, #clear-btn,
+    #mode-nav a, #recent button,
     #plate-foot a, #footer-nav a, #crumbs a {
       display: inline-flex;
       align-items: center;
@@ -1281,6 +1298,13 @@
     }
     /* a lone glyph needs the width too; the text links keep their own */
     #appbar-info, #finder-btn { min-inline-size: 2.25rem; }
+    /* iOS zooms the page whenever a focused field is under 16 px and never
+       zooms back out on its own, leaving the plate cropped behind the keyboard.
+       Measured before this rule: 14.4 px in the prompt, 15.2 px in the finder.
+       It has to live down here — `form input` and `#finder-input` both carry
+       `font: inherit`, and that shorthand resets font-size from further down
+       the sheet no matter how the media queries are nested. */
+    #prompt input, #finder-input, #reportbox textarea { font-size: max(1em, 16px); }
     /* the caret stays small on purpose: the whole stats line toggles the
        breakdown, so the big target is already there next to it */
   }

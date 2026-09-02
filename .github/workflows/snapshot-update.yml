@@ -77,8 +77,12 @@ jobs:
         # the timeout above turns a hang into a red run instead of a silent
         # wait — surface it the same way data-freshness.yml would, so a
         # broken daily snapshot is visible without waiting for the 36h
-        # staleness check to catch up
-        if: failure()
+        # staleness check to catch up.
+        # `cancelled()` is load-bearing: a timeout ends the run as CANCELLED,
+        # not failed, so `failure()` alone never fired for the exact hang this
+        # step was written for. The cost is a report on a manual cancel too —
+        # GitHub gives both the same conclusion, and a missed hang is worse.
+        if: failure() || cancelled()
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
