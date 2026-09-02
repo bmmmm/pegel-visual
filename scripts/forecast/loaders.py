@@ -186,16 +186,18 @@ STEP_15MIN = np.timedelta64(15, "m")
 
 
 def load_hires(hires_dir: Path, uuid: str):
-    """The collector's `<uuid>.json` on a regular 15-minute grid (NaN = missing).
+    """The collector's month shards `<uuid>/<YYYY-MM>.json` on a regular
+    15-minute grid (NaN = missing).
 
     Returns (times datetime64[m], values) or (None, None) when nothing was
-    collected yet. Timestamps are the collector's normalised UTC instants.
+    collected yet. Timestamps are the collector's normalised UTC instants; a
+    gauge that publishes every minute (CUXHAVEN) is thinned to the grid here.
     """
-    path = Path(hires_dir) / f"{uuid}.json"
-    if not path.exists():
-        return None, None
-    doc = json.loads(path.read_text(encoding="utf-8"))
-    pts = doc.get("points") or []
+    station = Path(hires_dir) / uuid
+    pts = []
+    for shard in sorted(station.glob("????-??.json")) if station.is_dir() else []:
+        doc = json.loads(shard.read_text(encoding="utf-8"))
+        pts.extend(doc.get("points") or [])
     if not pts:
         return None, None
     ts = np.array([np.datetime64(p[0].replace("Z", "")) for p in pts]).astype("datetime64[m]")

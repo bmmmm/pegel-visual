@@ -116,11 +116,17 @@ def test_windows_context_ends_exactly_at_the_origin():
     assert np.array_equal(y[:, 0], x[kept + 1]), "the first target is x[o+1]"
 
 
-def test_load_hires_puts_points_on_a_15_minute_grid(tmp_path):
-    doc = {"name": "X", "points": [["2026-09-01T00:00:00.000Z", 1], ["2026-09-01T00:15:00.000Z", 2],
-                                   ["2026-09-01T00:45:00.000Z", 4], ["2026-09-01T00:52:00.000Z", 9]]}
-    (tmp_path / "u.json").write_text(json.dumps(doc))
+def test_load_hires_reads_month_shards_onto_a_15_minute_grid(tmp_path):
+    (tmp_path / "u").mkdir()
+    aug = {"month": "2026-08", "points": [["2026-08-31T23:45:00.000Z", 0]]}
+    sep = {"month": "2026-09", "points": [["2026-09-01T00:00:00.000Z", 1], ["2026-09-01T00:15:00.000Z", 2],
+                                          ["2026-09-01T00:45:00.000Z", 4], ["2026-09-01T00:52:00.000Z", 9]]}
+    (tmp_path / "u" / "2026-09.json").write_text(json.dumps(sep))
+    (tmp_path / "u" / "2026-08.json").write_text(json.dumps(aug))
+    (tmp_path / "u" / "runs.json").write_text(json.dumps({"runs": []}))
     grid, vals = loaders.load_hires(tmp_path, "u")
-    assert len(grid) == 4 and str(grid[0]) == "2026-09-01T00:00"
-    assert vals[0] == 1 and vals[1] == 2 and np.isnan(vals[2]) and vals[3] == 4, "off-grid stamps are ignored"
+    assert len(grid) == 5 and str(grid[0]) == "2026-08-31T23:45", "shards concatenate in month order"
+    assert vals[0] == 0 and vals[1] == 1 and vals[2] == 2 and np.isnan(vals[3]) and vals[4] == 4, "off-grid stamps are ignored"
     assert loaders.load_hires(tmp_path, "missing") == (None, None)
+    (tmp_path / "e").mkdir()
+    assert loaders.load_hires(tmp_path, "e") == (None, None)

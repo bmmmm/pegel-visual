@@ -122,6 +122,10 @@
   decode step — the 2.0.2/3.0.1 flip-quantile difference never applies.
 - **`collect-hires.mjs` is the only source of 15-minute data.** Weekly via the
   LaunchAgent `de.6bm.pegel-hires` (wrapper `collect-hires.sh`, heartbeat
-  `cron:pegel-hires`), into `tmp-forecast/hires/` on this Mac — the short-horizon
-  gate stays PROVISIONAL until ~16 weeks have accumulated. The server clamps
-  `P35D` to ~31 days; merges are idempotent by timestamp.
+  `cron:pegel-hires`, on the recap roster at 192 h), into
+  `tmp-forecast/hires/<uuid>/<YYYY-MM>.json` on this Mac and from there into the
+  GitHub-only, protected `hires` data branch (clone under
+  `tmp-forecast/hires-branch/`, fast-forward only, never `origin`) — the
+  short-horizon gate stays PROVISIONAL until ~16 weeks have accumulated. Month
+  shards, not one file per gauge, so the weekly mirror commit stays small. The
+  server clamps `P35D` to ~31 days; merges are idempotent by timestamp.

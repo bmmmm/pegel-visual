@@ -11,16 +11,23 @@
 // merged idempotently by timestamp, for roughly 16 weeks before gate.py can say
 // anything but PROVISIONAL.
 //
-// Output: <out>/<uuid>.json
-//   { name, updated, runs: [{ at, fetched, added }...], points: [[isoUtc, value], ...] }
-// under tmp-forecast/hires/ (gitignored) — never under archive/: that bundle
-// has a published contract and check-archive-consistency.mjs guards it.
+// Output, one directory per gauge, one file per UTC month:
+//   <out>/<uuid>/<YYYY-MM>.json   { uuid, name, month, updated, points: [[isoUtc, value], ...] }
+//   <out>/<uuid>/runs.json        { uuid, name, runs: [{ at, fetched, added }, ...] }
+// Month shards, not one file per gauge, because the launchd wrapper mirrors the
+// directory into the GitHub-only `hires` data branch after every run: a weekly
+// rewrite of one ever-growing file would add its whole size to the branch
+// history every week (CUXHAVEN publishes at 1-minute resolution, ~46k points a
+// month), a month shard only changes while its month is running. Nothing is
+// ever thinned or deleted here — accumulate, the pruning lever does not exist.
+// Never under archive/: that bundle has a published contract and
+// check-archive-consistency.mjs guards it.
 //
 //   node scripts/forecast/collect-hires.mjs [--out tmp-forecast/hires] [--stations uuid,uuid]
 //
 // Sandbox note: Node's fetch ignores HTTP_PROXY, so a manual run from a sandboxed
 // session needs the bypass; launchd runs it unsandboxed (collect-hires.sh).
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { PLAUSIBLE_MAX_CM, PLAUSIBLE_MIN_CM } from '../fetch-wsv-archive.mjs';
@@ -28,6 +35,7 @@ import { PLAUSIBLE_MAX_CM, PLAUSIBLE_MIN_CM } from '../fetch-wsv-archive.mjs';
 const API = 'https://www.pegelonline.wsv.de/webservices/rest-api/v2';
 const REPO = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 export const STEP_MS = 15 * 60 * 1000;
+const RUNS_KEPT = 120;
 
 // mirrors COLLECTED in scripts/forecast/stations.py: the measured set, the
 // delivered set and the upstream reference (MAXAU for KÖLN). By UUID, never by
@@ -44,6 +52,8 @@ export const STATIONS = {
   'b6c6d5c8-e2d5-4469-8dd8-fa972ef7eaea': 'MAXAU',
 };
 
+const byIso = (a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0);
+
 // raw REST measurements -> sorted, de-duplicated [isoUtc, value] pairs; sentinels
 // and unparsable stamps dropped, a repeated stamp keeps the LAST reading
 export function normalize(measurements) {
@@ -55,7 +65,7 @@ export function normalize(measurements) {
     if (v < PLAUSIBLE_MIN_CM || v > PLAUSIBLE_MAX_CM) continue; // sentinel, not water
     byTs.set(new Date(t).toISOString(), v);
   }
-  return [...byTs.entries()].sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
+  return [...byTs.entries()].sort(byIso);
 }
 
 // idempotent union by timestamp; a fresh reading for a known stamp wins (WSV
@@ -63,7 +73,20 @@ export function normalize(measurements) {
 export function merge(existing, fresh) {
   const byTs = new Map(existing || []);
   for (const [ts, v] of fresh || []) byTs.set(ts, v);
-  return [...byTs.entries()].sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
+  return [...byTs.entries()].sort(byIso);
+}
+
+// the UTC month a stamp belongs to — the shard key
+export const monthOf = iso => iso.slice(0, 7);
+
+export function byMonth(points) {
+  const months = new Map();
+  for (const p of points) {
+    const m = monthOf(p[0]);
+    if (!months.has(m)) months.set(m, []);
+    months.get(m).push(p);
+  }
+  return months;
 }
 
 // how many holes wider than one step the series has — the collector's own
@@ -81,25 +104,62 @@ export function readDoc(path) {
   try { return JSON.parse(readFileSync(path, 'utf8')); } catch { return null; }
 }
 
+export const isShardName = name => /^\d{4}-\d{2}\.json$/.test(name);
+
+// every stored point of one gauge, across all month shards, chronological
+export function readAllPoints(dir) {
+  if (!existsSync(dir)) return [];
+  const all = [];
+  for (const name of readdirSync(dir).filter(isShardName).sort()) {
+    const doc = readDoc(join(dir, name));
+    if (doc && Array.isArray(doc.points)) all.push(...doc.points);
+  }
+  return all;
+}
+
+// the first two runs (2026-09-02) wrote one <uuid>.json per gauge; fold such a
+// file into the month shards once and drop it, so no reading is lost
+export function foldLegacy(out, uuid) {
+  const legacy = join(out, `${uuid}.json`);
+  const doc = readDoc(legacy);
+  if (!doc) return 0;
+  const n = writeShards(out, uuid, doc.name, doc.points || [], new Date(doc.updated || Date.now()));
+  unlinkSync(legacy);
+  return n;
+}
+
+// merge points into their month shards; returns how many were new
+export function writeShards(out, uuid, name, points, now) {
+  const dir = join(out, uuid);
+  mkdirSync(dir, { recursive: true });
+  let added = 0;
+  for (const [month, fresh] of byMonth(points)) {
+    const path = join(dir, `${month}.json`);
+    const prev = readDoc(path);
+    const before = prev && Array.isArray(prev.points) ? prev.points : [];
+    const merged = merge(before, fresh);
+    if (prev && JSON.stringify(merged) === JSON.stringify(before)) continue; // untouched shard: no rewrite, no branch churn
+    added += merged.length - before.length;
+    writeFileSync(path, JSON.stringify({ uuid, name, month, updated: now.toISOString(), points: merged }));
+  }
+  return added;
+}
+
 export async function collectStation(uuid, { out, fetchImpl = fetch, now = new Date() } = {}) {
   const url = `${API}/stations/${uuid}/W/measurements.json?start=P35D`;
   const res = await fetchImpl(url, { signal: AbortSignal.timeout(120000) });
   if (!res.ok) throw new Error(`HTTP ${res.status} for ${STATIONS[uuid] || uuid}`);
   const fresh = normalize(await res.json());
-  const path = join(out, `${uuid}.json`);
-  const prev = readDoc(path);
-  const before = prev && Array.isArray(prev.points) ? prev.points : [];
-  const points = merge(before, fresh);
-  const run = { at: now.toISOString(), fetched: fresh.length, added: points.length - before.length };
-  const doc = {
-    name: STATIONS[uuid] || (prev && prev.name) || uuid,
-    updated: now.toISOString(),
-    runs: [...((prev && prev.runs) || []), run].slice(-60),
-    points,
-  };
-  mkdirSync(out, { recursive: true });
-  writeFileSync(path, JSON.stringify(doc));
-  return { uuid, name: doc.name, ...run, total: points.length, gaps: gapCount(points) };
+  const name = STATIONS[uuid] || uuid;
+  foldLegacy(out, uuid);
+  const added = writeShards(out, uuid, name, fresh, now);
+  const run = { at: now.toISOString(), fetched: fresh.length, added };
+  const runsPath = join(out, uuid, 'runs.json');
+  const prevRuns = readDoc(runsPath);
+  const runs = [...((prevRuns && prevRuns.runs) || []), run].slice(-RUNS_KEPT);
+  writeFileSync(runsPath, JSON.stringify({ uuid, name, runs }));
+  const all = readAllPoints(join(out, uuid));
+  return { uuid, name, ...run, total: all.length, gaps: gapCount(all) };
 }
 
 export async function main(argv = process.argv.slice(2)) {
