@@ -34,7 +34,9 @@ jobs:
         working-directory: scripts/forecast
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v10
+      # exact tag: setup-uv stopped publishing floating major tags after v7,
+      # `@v10` does not resolve (measured 2026-09-02); Dependabot bumps it
+      - uses: astral-sh/setup-uv@v10.0.1
         with:
           enable-cache: true
           cache-dependency-glob: scripts/forecast/uv.lock
