@@ -2044,7 +2044,10 @@ const WEATHER_REFRESH_MS = 15 * 60 * 1000;
 
 async function loadWeather() {
   const info = state.info;
-  if (!info || info.latitude == null || info.longitude == null) return;
+  // `mode` is checked here as well as after the fetch: `state.info` survives a
+  // switch away from the station, so without this the 15-minute tick fired an
+  // open-meteo request from ?total and threw the answer away on arrival.
+  if (mode !== 'station' || !info || info.latitude == null || info.longitude == null) return;
   const forStation = station; // guard against a mid-flight station switch
   try {
     const d = await getJson(`https://api.open-meteo.com/v1/forecast?latitude=${info.latitude}&longitude=${info.longitude}&current=precipitation,snowfall,cloud_cover,wind_speed_10m`);
@@ -2516,7 +2519,12 @@ function adsbEndpoint(raw) {
 
 async function loadAircraft() {
   const url = adsbEndpoint(adsbRaw);
-  if (!url) { state.aircraft = []; state.adsbOk = null; return; }
+  // Only the station scene draws aircraft (`sceneCraft`, `sceneReceivers`), so
+  // polling a receiver every 2.5 s from ?total, ?rising or the map spent a
+  // request and a full repaint on a mark nothing renders — the render loop the
+  // display contract rules out. The interval keeps ticking, so walking back
+  // into a station picks the traffic up on the next tick.
+  if (!url || mode !== 'station') { state.aircraft = []; state.adsbOk = null; return; }
   try {
     const d = await getJson(url);
     state.aircraft = (d.aircraft || []).filter(a => a.lat != null && a.lon != null);
@@ -2546,7 +2554,9 @@ function aisEndpoint(raw) {
 
 async function loadShips() {
   const url = aisEndpoint(aisRaw);
-  if (!url) { state.ships = []; state.aisOk = null; return; }
+  // station-scene only, same as loadAircraft above — and at 5 s this was the
+  // second unconditional repaint riding on every view
+  if (!url || mode !== 'station') { state.ships = []; state.aisOk = null; return; }
   try {
     const d = await getJson(url);
     // lat/lon are null until a position report came in; last_signal is seconds ago
