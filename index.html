@@ -65,7 +65,7 @@
   * { box-sizing: border-box; }
   html, body { margin: 0; padding: 0; }
   body {
-    min-height: 100vh;
+    min-height: 100dvh;
     display: flex;
     flex-direction: column;
     align-items: center;
@@ -171,6 +171,23 @@
   .cmd-more input { width: 26ch; max-width: calc(100% - 10ch); }
   /* live typeahead: a custom dropdown (the native datalist can't fold umlauts,
      rank, or carry the km/water context) positioned under the active input */
+  /* The prompt, the recent chips and the archive bar are one block of tools
+     under the drawing. On a wide screen they are simply there — the summary is
+     hidden and the details is open. Under 640 px they cost roughly a third of
+     the viewport under EVERY plate while the finder (⌕) is the switcher people
+     actually reach for, so there they fold. */
+  #tools-fold > summary {
+    display: none;
+    cursor: pointer;
+    color: var(--mid);
+    font-family: var(--font-data);
+    min-block-size: 2.2em;
+    align-content: center;
+  }
+  #tools-fold > summary:hover { color: var(--ink); }
+  @media (max-width: 640px) {
+    #tools-fold > summary { display: list-item; }
+  }
   #prompt { position: relative; }
   #ac {
     position: absolute;
@@ -333,7 +350,9 @@
     font-size: 0.85em;
     line-height: 1.55;
     max-width: min(66ch, calc(100vw - 3em));
-    max-height: calc(100vh - 4em);
+    /* dvh, not vh: on a phone the browser's own chrome is part of vh, so a
+       dialog sized against it hides its last lines behind the URL bar */
+    max-height: calc(100dvh - 4em);
     overflow: auto;
     overscroll-behavior: contain; /* keep wheel momentum from scrolling the page behind */
   }
@@ -396,6 +415,9 @@
   }
   #reportbox-actions button:hover { background: var(--ink); color: var(--paper); }
   /* ---- app bar: the plate's head row — wordmark, view nav, finder, info ---- */
+  /* `flex-wrap: wrap` is the intent, not a bug to chase: below ~370 px the bar
+     takes a second row rather than shrinking its tap targets or dropping an
+     item. Measured at 360 px: two rows, 90 px, no horizontal overflow. */
   #appbar {
     display: flex;
     align-items: baseline;
@@ -491,7 +513,7 @@
     border: 2px solid var(--ink);
     padding: 0;
     width: min(52ch, calc(100vw - 2em));
-    max-height: min(34em, calc(100vh - 4em));
+    max-height: min(34em, calc(100dvh - 4em));
     font-size: 0.95em;
   }
   #finder::backdrop {
@@ -959,6 +981,12 @@
   }
   .heat tbody th a { color: inherit; text-decoration: none; }
   .heat tr.sel th[scope="row"] { color: var(--ink); font-weight: 700; }
+  /* Measured and left alone on purpose: at a 390 px viewport a month cell is
+     24 px tall but only ~20 px wide, under the WCAG 2.5.8 target box. Twelve
+     months plus two label columns cannot make 24 px each without a horizontal
+     scroll, and a heatmap you have to scroll sideways stops being a heatmap.
+     The readout line under the table is the accessible route to the same
+     numbers, and every cell is also reachable from the year pager. */
   .heat td { border: 1px solid var(--paper); height: 1.05rem; }
   .heat td a, .heat td button {
     display: block;
@@ -1007,6 +1035,12 @@
      containing block is the page escapes this scroller and drags the whole
      document sideways (measured: 556 px of scroll width at a 390 px viewport). */
   .wave-wrap { position: relative; overflow-x: auto; --wave-name: 8rem; --wave-min: 34rem; }
+  /* On a phone an 8rem name column eats a fifth of a 34rem grid before the
+     first day is drawn — about 7 px per day at 390 px. Names ellipsise anyway,
+     so 5rem loses nothing and buys three more days of chart. */
+  @container plate (max-width: 34rem) {
+    .wave-wrap { --wave-name: 5rem; }
+  }
   .wave-months {
     position: relative;
     height: 1.1em;
@@ -1022,7 +1056,18 @@
   .heat.wave { table-layout: fixed; min-width: var(--wave-min); }
   .heat.wave td { height: 0.85rem; }
   .heat.wave .c-name { width: var(--wave-name); }
-  .heat.wave th[scope="row"] { overflow: hidden; text-align: left; }
+  /* The name column rides along: the grid starts scrolled to its newest day,
+     and a heatmap whose row labels have scrolled off the left is a wall of
+     colour. Its own background is load-bearing — a transparent sticky cell
+     lets the day cells slide underneath it. */
+  .heat.wave th[scope="row"] {
+    overflow: hidden;
+    text-align: left;
+    position: sticky;
+    left: 0;
+    z-index: 1;
+    background: var(--paper);
+  }
   .heat.wave th a { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .wg { color: var(--mid); margin-right: 0.6ch; }
   .k-low .wg { color: var(--dry-line); }
@@ -1358,6 +1403,8 @@
   </header>
   <nav id="crumbs" aria-label="you are here"></nav>
   <div id="screen">loading…</div>
+  <details id="tools-fold" open>
+    <summary>&gt; pegel <span class="hint">· the prompt, your recent gauges and your archive</span></summary>
   <form id="prompt" autocomplete="off">
     <div class="cmd">&gt; pegel <span class="flag">--station</span> <input id="station-input" name="station" spellcheck="false" placeholder="station" autocomplete="off" role="combobox" aria-expanded="false" aria-controls="ac" aria-autocomplete="list" aria-label="station name"><span class="cmd-deco"> --refresh 300s</span>
     </div>
@@ -1395,6 +1442,7 @@
     <input id="import-file" type="file" accept="application/json,application/zip,.json,.zip" hidden>
     <div id="local-detail" hidden></div>
   </div>
+  </details>
   <div id="plate-foot">
     <p id="plate-source"><span class="lbl">source</span> <span id="source-line">PEGELONLINE (WSV) · refreshes every 5 min</span></p>
     <p id="footer-perma"><span id="footer-perma-label" class="lbl">station link:</span> <a id="station-link" href="?station=BONN">?station=BONN</a> <button id="perma-copy" type="button">copy</button></p>
@@ -1597,6 +1645,21 @@ const MONTH_NAME = ['January', 'February', 'March', 'April', 'May', 'June',
 
 const screen = document.getElementById('screen');
 const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)');
+
+// The tools block folds on a phone and stays open on a wide screen. CSS alone
+// cannot do this — `open` is an attribute, not a style — so one media query
+// listener sets it, and stops the moment the reader touches the control
+// themselves: after that the fold is theirs, not the viewport's.
+const narrowTools = matchMedia('(max-width: 640px)');
+{
+  const fold = document.getElementById('tools-fold');
+  let touched = false;
+  const summary = fold.querySelector('summary');
+  if (summary) summary.addEventListener('click', () => { touched = true; });
+  const sync = () => { if (!touched) fold.open = !narrowTools.matches; };
+  sync();
+  narrowTools.addEventListener('change', sync);
+}
 let station = (new URLSearchParams(location.search).get('station') || 'BONN').toUpperCase();
 // five mutually exclusive views: the single-station terminal, a whole-river
 // longitudinal profile, the rivers map listing every water at once, the
@@ -3813,6 +3876,15 @@ function riverViewModel(stations) {
       km: k, x: flowFrac(k, kmMin, kmSpan, lowKmDown), label: fmtKm(k),
     })),
     counts,
+    // Every gauge, in flow order, as a browsable index. On a phone a gauge that
+    // is neither low nor high was an 18×26 px marker in the SVG and nothing
+    // else: TROUBLE lists the flagged ones and the wave view lists rows, but
+    // the profile itself had no way in. Same shape as the station plate's
+    // neighbour list, so it is one component, not a second one.
+    // upstream first, the way the drawing above reads left to right
+    index: [...stations].sort((a, b) => (lowKmDown ? -1 : 1) * (a.km - b.km)).map(s => ({
+      name: s.name, km: s.km, elev: s.elev, value: s.value, kind: s.kind,
+    })),
     gradient: drop != null && kmSpan > 0 ? drop / kmSpan : null,
     troubled: troubled.map(s => ({
       name: s.name, km: s.km, kind: s.kind, value: s.value,
@@ -3895,13 +3967,23 @@ function renderRiver(vm) {
       ({ sw: keySw(rvMark(k, 6, 6), 'river'), label })),
     { note: T.riverElevNote },
   ]);
+  // every gauge as a row, in flow order — the drawing answers "what shape is
+  // this river", the list answers "which gauges are on it", and on a phone only
+  // the list is actually tappable
+  const index = `<ol class="pf-list">` + vm.index.map(s =>
+    `<li><a${navAttrs(s.name)}>` +
+    // the drawing's own mark, so the key above already names it
+    keySw(rvMark(s.kind, 6, 6), 'river') +
+    `<span class="name">${esc(s.name)}</span>` +
+    `<span class="elev">${s.value != null ? Math.round(s.value) + ' cm' : '—'}</span>` +
+    `<span class="km">km ${esc(fmtKm(s.km))}</span></a></li>`).join('') + '</ol>';
   // on a phone the trouble list is the answer to "is anything wrong here?",
   // so it comes first; the profile follows for anyone who wants the shape
   return `<section class="plate river-plate">${vh}${head}${tabs}${trouble}` +
     `<section class="p-block"><h2 class="p-h2">${esc(T.riverProfile)}</h2>` +
     `<p class="p-sub2">${esc(T.riverElevAxis)}</p>${renderRiverChart(vm)}` +
     `<div class="pf-flow"><span>← ${esc(T.upstream)}</span><span>${esc(T.downstream)} →</span></div>` +
-    key + '</section></section>';
+    index + key + '</section></section>';
 }
 
 // ---------- the buddy: every empty, loading and error state ----------
@@ -7128,6 +7210,11 @@ function setScreenHtml(html) {
   if (html === lastScreen) return;
   lastScreen = html;
   screen.innerHTML = html;
+  // The wave grid is wider than a phone and its newest days are on the right,
+  // which is the end nobody scrolls to. Start it there: "what is the river
+  // doing now" is the question, and the past is one swipe back.
+  const wave = screen.querySelector && screen.querySelector('.wave-wrap');
+  if (wave && wave.scrollWidth > wave.clientWidth) wave.scrollLeft = wave.scrollWidth;
 }
 // Coexistence scaffolding while views migrate off the character grid: a plate
 // view flips #screen out of pre/mono mode (and drops fitFont's inline font
@@ -7289,6 +7376,13 @@ document.addEventListener('visibilitychange', () => {
   else if (mode === 'river') loadRiver();
   else if (mode === 'rising') loadRising();
 });
+
+// The offline shell. It is network-first (see sw.js), so this can never pin a
+// reader to an old build — and a browser without service workers, or a page
+// opened over file://, simply carries on without one.
+if (navigator.serviceWorker && location.protocol.startsWith('http')) {
+  navigator.serviceWorker.register('sw.js').catch(() => { /* offline shell is a bonus, never a requirement */ });
+}
 </script>
 </body>
 </html>
