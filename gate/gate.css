@@ -391,7 +391,12 @@ th:first-child, td:first-child { text-align: left; }
 /* the half of the frame that means "better than the blend". A flat tint, not a
    hatch: it lies under everything and must never compete with the block hatch
    crossing it, let alone with a curve. */
-.better { position: absolute; left: 0; right: 0; bottom: 0; background: color-mix(in oklab, var(--water) 30%, transparent); pointer-events: none; }
+/* not one percentage for both themes: the same 30 % of --water is a whisper on
+   paper and a slab on dark ground, where it swallowed half the frame */
+.better {
+  position: absolute; left: 0; right: 0; bottom: 0; pointer-events: none;
+  background: light-dark(color-mix(in oklab, #a8cede 34%, transparent), color-mix(in oklab, #5b8aa3 16%, transparent));
+}
 /* the zone says what it is inside itself, bottom left, where no curve of this
    sheet has ever run — the picture then needs no key to state its sign */
 .better i {
@@ -475,6 +480,30 @@ th:first-child, td:first-child { text-align: left; }
 /* the commands, in the same fold the tables use */
 .tblwrap pre { margin: 0.2em 0 0.6em; overflow-x: auto; }
 .tblwrap code { font-family: var(--font-data); font-size: 0.85em; line-height: 1.6; white-space: pre; }
+
+/* ---- folds: one line that says what it holds and what state it is in ----
+   Lighter than a panel lid on purpose: a panel is a section of the sheet, a fold
+   is a drawer beside the drawing. The state on the lid is the load-bearing part
+   — shut, it is the only place the sheet still says which target and horizon the
+   picture above it is drawn for. */
+details.fold { margin: 0.5em 0 0.7em; }
+details.fold > summary {
+  list-style: none;
+  cursor: pointer;
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 0.9ch;
+  padding: 0.25em 0;
+  font-size: 0.78em;
+}
+details.fold > summary::-webkit-details-marker { display: none; }
+details.fold > summary::before { content: '▸'; font-family: var(--font-data); color: var(--ink); flex: none; }
+details.fold[open] > summary::before { content: '▾'; }
+details.fold > summary .fl { color: var(--mid); }
+details.fold > summary .fs { font-family: var(--font-data); color: var(--ink); font-weight: 600; }
+details.fold > summary:hover .fl, details.fold > summary:focus-visible .fl { color: var(--ink); }
+details.fold > .foldbody { padding: 0.1em 0 0.3em; border-left: 2px solid var(--rule); padding-left: 1ch; margin-left: 0.2ch; }
+details.fold > .foldbody > .p-tabs:first-child { margin-top: 0.3em; }
+details.fold > .foldbody > .p-key { margin-top: 0.6em; }
+@media (pointer: coarse) { details.fold > summary { min-block-size: 2.4rem; align-items: center; } }
 
 /* ---- panels: closed sheets with a heading for a lid ---- */
 details.panel { margin-top: 1.2em; }

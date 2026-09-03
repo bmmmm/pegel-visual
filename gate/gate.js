@@ -468,11 +468,20 @@ function renderVerdict(m) {
     `<span class="vw ${v.verdict === 'SHIP' ? 'pass' : 'fail'}">${esc(v.verdict)}</span>` +
     `<span class="vn">${esc(v.passed)} of ${esc(v.total)} clauses</span></li>`).join('') + `</ul>` : '';
   return `<div class="verdict"><span class="word">${esc(m.verdict)}</span><span class="why">${esc(why)}</span></div>` + others +
-    (m.void.length ? `<ul class="p-empty">${m.void.map(v => `<li>${esc(v)}</li>`).join('')}</ul>` : '') +
+    (m.void.length ? `<ul class="p-empty">${m.void.map(v => `<li>${esc(v)}</li>`).join('')}</ul>` : '');
+}
+
+// The clauses are the verdict's evidence, not the verdict: seven chips is a lot
+// of sheet to walk past on the way to the drawing, and nobody reads them until
+// they want to know WHY. Folded, with the count on the lid.
+function renderClauses(m) {
+  const passed = m.clauses.filter(c => c.pass).length;
+  return fold('clauses', 'the seven clauses, one by one',
     `<ul class="clauses" aria-label="clauses">` + m.clauses.map(c =>
       `<li class="${c.pass ? 'pass' : 'fail'}"><button type="button" aria-pressed="false"${attr('data-say', `${c.id} ${c.pass ? 'passed' : 'failed'} — ${c.text}`)}>` +
       `<span class="g" aria-hidden="true">${c.pass ? '✓' : '✗'}</span><span class="vh">${c.pass ? 'passed' : 'failed'}</span>${esc(c.id)} ${esc(c.name)}</button></li>`).join('') +
-    `</ul><p class="p-readout" id="clause-readout"><span class="hint">Pick a clause for what it demanded and what was measured.</span></p>`;
+    `</ul><p class="p-readout" id="clause-readout"><span class="hint">Pick a clause for what it demanded and what was measured.</span></p>`,
+    `${passed} of ${m.clauses.length} held`);
 }
 
 // the curve: x is the lead day, y the error relative to the blend on a log axis
@@ -561,9 +570,16 @@ function renderLead(m) {
       L.curves.map(c => `<td>×${r2(c.ratios[i])}</td>`).join('') +
       `<td>×${r2(L.series.clim[i])}</td><td>×${r2(L.series.persist[i])}</td><td>${num(L.blendCm[i], 1)}</td></tr>`).join('') +
     `</tbody></table></div></details>`;
+  const keyBody = `<p class="p-dim">Each method's error divided by the blend's, day by day out to ${esc(L.H)}: below the line is better than the blend. The model wins early and hands over to the calendar; persistence never recovers. The hatched band is the horizon block in view — the band labels switch it, as does the settings fold above the chart; the vertical rule is a cursor — drag it, or use the arrow keys.</p>`;
+  // the settings sit directly above the drawing they relabel, folded shut with
+  // their state on the lid: a control a screen away from its chart is a control
+  // nobody connects to it, and a shut fold that does not say "daily max, days
+  // 31–90" is a sheet keeping its own state secret
+  const settingsState = [m.models.filter(mo => mo.on).map(mo => mo.label).join(' + '),
+    TARGETS[s.target], BLOCK_LABEL[s.block],
+    L.station === 'pooled' ? 'five regimes' : L.station].filter(Boolean).join(' · ');
   return `<section id="lead" class="p-block">${head}` +
-    `<p class="p-dim">Each method's error divided by the blend's, day by day out to ${esc(L.H)}: below the line is better than the blend. The model wins early and hands over to the calendar; persistence never recovers. The hatched band is the horizon block in view — the band labels switch it, as does the row above the chart; the vertical rule is a cursor — drag it, or use the arrow keys.</p>` +
-    chips +
+    fold('settings', 'model, target, horizon and gauge', renderControls(m) + chips, settingsState) +
     // the half of the frame that means "better than the blend" is shaded, so the
     // sign of the whole picture is readable before a single number is
     `<div class="plot"><div class="lead-bands">${bandLabels}</div><div class="vscale" aria-hidden="true">${vscale}</div>` +
@@ -571,7 +587,7 @@ function renderLead(m) {
     `<div class="ends" aria-hidden="true">${ends}</div>` +
     `<div class="ticks lead-ticks" aria-hidden="true">${ticks}</div></div>` +
     `<p class="p-readout" data-readout><b>${esc(say)}</b></p>` +
-    plateKey([
+    fold('leadkey', 'what each line is, and what this picture cannot prove', keyBody + plateKey([
       ...L.curves.map(c => ({
         sw: swLine(`ln ln-${c.mark}`),
         label: `${c.label}${c.shippable === false ? ` ${NC_GLYPH} — measured here, never shipped: its weights are non-commercial` : ''}`,
@@ -586,7 +602,8 @@ function renderLead(m) {
       { note: `The y axis is logarithmic, ×${LEAD_DOMAIN[0]} to ×${LEAD_DOMAIN[1]}; a ▴ or ▾ marks days a curve runs above or below the frame (climatology in its first days).` },
       L.curves.length > 1 && L.gap ? { note: `Both candidates are drawn here, and they lie on each other: their widest daily gap is ${(L.gap.d * 100).toFixed(1)} points of the blend's own error, on day ${L.gap.day}, where ${L.gap.ahead} is the lower of the two. That closeness IS the finding — a hue and a dash each tell you WHICH curve you are on, but nothing separates them by value, and the skill panel's numbers barely can. The band labels print ${m.primary ? m.primary.label : 'the first curve'}'s skill, and the panels below — which carry one number per gauge — speak for it too; switch the others off to read this sheet for one of them alone.` } : null,
       L.station === 'pooled' ? { note: 'Pooled here means the median of the five regime gauges — of their day-by-day ratios in the curve and of their block skills in the band labels — so the Rhine and the Elbe do not outvote the Saar by their centimetres. Clause A1 in the facts pools centimetres instead; the blend MAE in the readout is that cm-pooled figure.' } : null,
-    ]) + table + '</section>';
+      { note: 'The names on the right sit at the end of their own line, spread apart where two would otherwise print on top of each other — so a name points at a line, it does not read a value off the scale.' },
+    ]) + table) + '</section>';
 }
 
 function renderFacts(m) {
@@ -647,6 +664,17 @@ function renderControls(m) {
     { lbl: '· every chart on this sheet' },
     ...(m.models.length < 2 ? [] : ncLabel),
   ], m.models.length < 2 ? 'target and horizon block' : 'model, target and horizon block');
+}
+
+// A fold, closed, whose lid states what is inside it. This is how the sheet keeps
+// its first look to a verdict and a drawing: a reader who wants the seven clauses
+// or the whole control row opens the one that says so, and a reader who does not
+// is never asked to walk past them. The lid must always name the CURRENT state —
+// a shut fold hiding "daily max, days 31–90" while the drawing shows them would
+// be a sheet lying about itself.
+function fold(id, lid, body, state = '') {
+  return `<details class="fold"${attr('id', id)}><summary><span class="fl">${esc(lid)}</span>` +
+    (state ? `<span class="fs">${esc(state)}</span>` : '') + `</summary><div class="foldbody">${body}</div></details>`;
 }
 
 // a panel: the summary is the focus and click target; the visually hidden h2
@@ -875,14 +903,20 @@ export function screenSummary(m) {
     `${m.clauses.filter(c => c.pass).length} of ${m.clauses.length} clauses passed.`;
 }
 
+// The first look is a verdict and a drawing. Everything that used to stand
+// between them — seven clause chips, three rows of controls, three lines of
+// prose, a 250-word key — is still here, one fold away, each lid naming what it
+// holds and the state it is in. Measured before this order: on a 390 px phone
+// the chart started 1 213 px down, so the picture the sheet is FOR was not on
+// the first screen at all, and on a 900 px desktop it was cut off at 661 px.
 export function renderPage(m) {
   return `<p class="vh">${esc(screenSummary(m))}</p>` +
     renderBack() +
     `<header class="p-head"><h1 tabindex="-1"><a href="../">PEGEL://</a> · FORECAST GATE</h1>` +
     `<p class="p-sub">${esc(m.gist)}</p></header>` +
     renderVerdict(m) +
-    renderControls(m) +
     renderLead(m) +
+    renderClauses(m) +
     renderFacts(m) +
     renderIndex(m) +
     m.panels.map(p => renderPanel(p, m)).join('') +
@@ -1051,7 +1085,10 @@ function draw(opts = {}) {
   const m = buildModel(reports, state);
   // what the reader had open stays open: the panels, and the table twins inside them (by position)
   const open = [...root.querySelectorAll('details[open]')].map(d => {
-    if (d.classList.contains('panel')) return { id: d.id };
+    // folds too, and for the same reason: the settings fold IS the control row,
+    // so a chip inside it that closed its own fold on every click would be a
+    // control you can use exactly once
+    if (d.classList.contains('panel') || d.classList.contains('fold')) return { id: d.id };
     const panel = d.closest('details.panel, #lead');  // the panel, or the curve's section — not the id-less <section> inside a panel
     return panel ? { id: panel.id, tbl: [...panel.querySelectorAll('details.tbl')].indexOf(d) } : null;
   }).filter(Boolean);

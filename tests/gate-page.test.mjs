@@ -111,7 +111,10 @@ test('the curve draws three lines, the bands, the bar and a cursor, each named i
   // data-core is what focusTo measures before deciding to scroll: the drawing, not the section
   assert.equal((lead.match(/data-core/g) || []).length, 1, 'exactly one part of the curve claims to be the one that must stay in view');
   assert.ok(lead.includes('<h2 class="p-h2" tabindex="-1">Error by lead day · DRESDEN</h2>'));
-  const gaugeRow = (lead.match(/<nav class="p-tabs"[\s\S]*?<\/nav>/) || [''])[0];
+  // the settings fold holds two rows — the sheet-wide one and the gauge chips;
+  // the gauge row is the second, and its own chip is the one that is current
+  const gaugeRow = (lead.match(/<nav class="p-tabs"[\s\S]*?<\/nav>/g) || []).pop() || '';
+  assert.match(gaugeRow, /aria-label="gauge drawn in the curve"/, 'the last row in the fold is the gauge row');
   assert.equal((gaugeRow.match(/<a href="[^"]*#lead" class="on" aria-current="true"/g) || []).length, 1, 'the DRESDEN chip is on');
   const bands = (lead.match(/<div class="lead-bands">[\s\S]*?<\/div>/) || [''])[0];
   assert.equal((bands.match(/<a href="[^"]*#lead"/g) || []).length, 3, 'the three band labels are the block links of this chart');
@@ -133,10 +136,19 @@ test('the curve draws three lines, the bands, the bar and a cursor, each named i
 // set covers the first. A renderer that gains a mark without a legend entry — a
 // fourth curve, a new bar state — turns this red without anyone editing a list.
 const classesIn = html => { const out = new Set(); for (const m of html.matchAll(/class="([^"]+)"/g)) for (const c of m[1].split(/\s+/)) if (c) out.add(c); return out; };
+// What counts as the DRAWING of a section: everything before its key, minus the
+// table twin and minus any control row. A control row is not a drawing — it has
+// lived inside the section since the settings moved into a fold, and its chips
+// wear the model hues, which the key already explains under the class the CURVE
+// carries. Cutting it structurally beats growing NOT_A_MARK a name per model.
+const drawingOf = s => s.slice(0, s.indexOf('<dl class="p-key">'))
+  .replace(/<details class="tbl">[\s\S]*?<\/details>/g, '')
+  .replace(/<nav class="p-tabs"[\s\S]*?<\/nav>/g, '');
 // not marks: layout, text, hit targets and states the key spells out in words (▸ ◂ ▴ ▾ are glyphs in the notes)
 const NOT_A_MARK = new Set(['p-block', 'row', 'pooled', 'head', 'lbl', 'rg', 'track', 'val', 'axis', 'ticks', 'mk', 'sw', 'hint', 'p-readout', 'p-dim', 'p-tabs', 'p-tabs-lbl', 'on', 'off', 'rows', 'pits', 'pit', 'nm',
   'plot', 'vscale', 'plot-box', 'lead-bands', 'lbn', 'lead-ticks', 'clip', 'lo', 'hi', 'up', 'dn', 'vh', 'p-h2',
   'ends', 'end',   // the direct labels: containers for a swatch whose OWN class is a mark and is in the key
+  'fold', 'fl', 'fs', 'foldbody',   // a drawer and its lid, not something the drawing draws
   'prose', 'flow', 'fn']);  // prose/flow/fn are the model chain's containers; its four node kinds ARE marks
 test('every mark a section draws is named in that section’s key — mechanically', () => {
   let drawings = 0;
@@ -147,7 +159,7 @@ test('every mark a section draws is named in that section’s key — mechanical
     for (const s of sections) {
       const key = (s.match(/<dl class="p-key">[\s\S]*?<\/dl>/) || [''])[0];
       assert.ok(key, 'a section with a drawing has a key');
-      const drawing = s.slice(0, s.indexOf('<dl class="p-key">')).replace(/<details class="tbl">[\s\S]*?<\/details>/g, '');
+      const drawing = drawingOf(s);
       const named = classesIn(key);
       const missing = [...classesIn(drawing)].filter(c => !NOT_A_MARK.has(c) && !named.has(c));
       assert.deepEqual(missing, [], `drawn but not in the key of: ${s.slice(0, 50)}`);
@@ -158,7 +170,7 @@ test('every mark a section draws is named in that section’s key — mechanical
   // and it can go red: a mark class the key does not know
   const html = renderPage(buildModel(reports, parseState(''))).replace('<path class="ln ln-tfm"', '<path class="ln ln-ghost"');
   const lead = html.split('<section id="lead"')[1];
-  const missing = [...classesIn(lead.slice(0, lead.indexOf('<dl class="p-key">')))].filter(c => !NOT_A_MARK.has(c) && !classesIn(lead.match(/<dl class="p-key">[\s\S]*?<\/dl>/)[0]).has(c));
+  const missing = [...classesIn(drawingOf(lead))].filter(c => !NOT_A_MARK.has(c) && !classesIn(lead.match(/<dl class="p-key">[\s\S]*?<\/dl>/)[0]).has(c));
   assert.deepEqual(missing, ['ln-ghost']);
 });
 
@@ -234,14 +246,19 @@ test('the panels come closed, in the order of the index, every summary a link ta
   }
   const at = needle => html.indexOf(needle);
   const filterRow = 'aria-label="model, target and horizon block"';
-  assert.ok(at('class="verdict"') < at(filterRow), 'the verdict comes first');
-  assert.ok(at(filterRow) < at('id="lead"'), 'the filter row sits ABOVE the curve it relabels, not a screen below it');
+  assert.ok(at('class="verdict"') < at('id="lead"'), 'the verdict comes first');
+  // the controls live inside the settings fold, and that fold sits above the
+  // drawing it relabels — folded, but never below it
+  assert.ok(at('id="settings"') < at(filterRow), 'the filter row is inside the settings fold');
+  assert.ok(at(filterRow) < at('class="plot"'), 'and the fold sits ABOVE the curve it relabels, not a screen below it');
   // and the words agree with the layout: nothing may send the reader downwards for it
   const curveText = html.slice(at('id="lead"'), at('class="facts"'));
   assert.ok(!/filter row (further )?(down|below)/.test(curveText), 'the curve does not send the reader down to a row that is above it');
-  assert.match(curveText, /the row above the chart/, 'it names where the row actually is');
-  assert.ok(at('id="lead"') < at('class="facts"') && at('class="facts"') < at('class="index"') && at('class="index"') < at('<details class="panel"'),
-    'verdict · filter row · curve · in brief · index · panels');
+  assert.match(curveText, /the settings fold above the chart/, 'it names where the row actually is');
+  // the clauses now come AFTER the drawing: the first screen is a verdict and a picture
+  assert.ok(at('id="lead"') < at('id="clauses"'), 'the drawing comes before its evidence');
+  assert.ok(at('id="clauses"') < at('class="facts"') && at('class="facts"') < at('class="index"') && at('class="index"') < at('<details class="panel"'),
+    'verdict · curve · clauses · in brief · index · panels');
 });
 
 test('a hostile station name never reaches the markup unescaped', () => {
