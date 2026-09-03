@@ -379,7 +379,7 @@ function renderLead(m) {
   const clips = paths.flatMap(p => p.clips.map(c => `<span class="clip ${c.dir} ln-${p.k}"${attr('style', `left:${leadXpct(c.day, L.H)}%`)}${attr('title', `${p.k === 'tfm' ? 'TimesFM' : p.k === 'clim' ? 'climatology' : 'persistence'} beyond ×${LEAD_DOMAIN[c.dir === 'up' ? 1 : 0]} on ${c.from === c.to ? `day ${c.from}` : `days ${c.from}–${c.to}`}`)}></span>`)).join('');
   const cx = leadX(L.cursor, L.H).toFixed(2);
   const say = leadSay(L, L.cursor);
-  const svg = `<svg viewBox="0 0 ${LEAD_W} ${LEAD_HGT}" preserveAspectRatio="none" tabindex="0" role="slider" data-lead` +
+  const svg = `<svg viewBox="0 0 ${LEAD_W} ${LEAD_HGT}" preserveAspectRatio="none" tabindex="0" role="slider" data-lead data-core` +
     ` aria-valuemin="1"${attr('aria-valuemax', L.H)}${attr('aria-valuenow', L.cursor)}${attr('aria-valuetext', say)}${attr('aria-label', leadAria(L))}>` +
     `<line class="ln-blend" x1="0"${attr('y1', leadY(1).toFixed(2))} x2="${LEAD_W}"${attr('y2', leadY(1).toFixed(2))}/>` + lines +
     `<line class="ln-cur" data-cur${attr('x1', cx)} y1="0"${attr('x2', cx)} y2="${LEAD_HGT}"/></svg>`;
@@ -689,6 +689,23 @@ function announce(text) {
   setTimeout(() => { box.textContent = text; }, 30);
 }
 
+// "already in view" is about the SECTION, not the heading: the reader watching
+// the curve is watching the drawing, and its heading may well have scrolled off
+// the top. A section counts as in view when it starts above the lower third of
+// the window and still has 80 px of itself below the top edge.
+// Is the part that matters already on screen? Measured as overlap, not as a
+// threshold on its top edge: the curve's drawing begins 606 px down a 900 px
+// window and ends at 846 — wholly visible, yet a rule about its top edge called
+// it hidden and scrolled the page 415 px for a click that changed one line.
+// [data-core] names that part — a section may open with prose and a chip row,
+// and on a phone the drawing starts ~380 px below the section's own top edge.
+// Without a [data-core] the whole section counts, which is right for a panel.
+function inView(el) {
+  const r = (el.querySelector('[data-core]') || el).getBoundingClientRect();
+  const shown = Math.min(r.bottom, innerHeight) - Math.max(r.top, 0);
+  return shown > 0 && shown >= Math.min(r.height, innerHeight) * 0.8;
+}
+
 // after a full re-render the focus would be nowhere: put it on what was asked
 // for — a panel's summary (opened), the curve's heading, or the h1 as a fallback
 function focusTo(id, scroll) {
@@ -705,7 +722,13 @@ function focusTo(id, scroll) {
   if (!target) { target = root.querySelector('h1'); label = 'top of the gate'; }
   if (!target) return;
   target.focus({ preventScroll: true });
-  if (scroll) target.scrollIntoView({ block: 'start', behavior: reducedMotion() ? 'auto' : 'smooth' });
+  // Scroll only towards something the reader cannot already see. A gauge chip
+  // sits ON the curve it changes, so pulling that curve's heading to the top of
+  // the window moved the page 415 px on desktop and up to 299 on a phone for a
+  // click that changed nothing but the line — the drawing jumped away from under
+  // the thumb that picked it. An index link to a panel further down still gets
+  // the panel laid at the top, because that section really is out of view.
+  if (scroll && !inView(el || target)) target.scrollIntoView({ block: 'start', behavior: reducedMotion() ? 'auto' : 'smooth' });
   announce(label);
 }
 

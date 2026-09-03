@@ -133,8 +133,22 @@ async function run(cdp, url, { name, width, height, mobile }) {
   check(await s.evaluate('getComputedStyle(document.activeElement).outlineStyle === "solid"'), 'the focus ring is drawn', await s.evaluate('getComputedStyle(document.activeElement).outline'));
   await s.send('Page.captureScreenshot', {}).then(r => writeFileSync(join(shots, `${name}-block.png`), Buffer.from(r.data, 'base64')));
 
-  // 3. a gauge chip on the curve: focus on the curve's heading, panel stays open
-  await click('#lead .p-tabs a[href*="DRESDEN"]');
+  // 3. a gauge chip on the curve: focus on the curve's heading, panel stays open,
+  //    and — the chip sits ON its drawing — the page does not move under the reader.
+  //    (Before that rule it travelled 415 px on desktop and 239 on a phone, per click.)
+  await s.evaluate('scrollTo({ top: Math.round(document.querySelector("#lead .p-tabs").getBoundingClientRect().top + scrollY) - 20, behavior: "instant" })');
+  await sleep(300);
+  const parked = await s.evaluate('Math.round(scrollY)');
+  // NOT through click(): that helper scrollIntoViews its target first, which is
+  // the very movement being measured here. Dispatch where the chip already sits.
+  const chip = await rect('#lead .p-tabs a[href*="DRESDEN"]');
+  for (const type of ['mouseMoved', 'mousePressed', 'mouseReleased']) {
+    await s.send('Input.dispatchMouseEvent', { type, x: chip.x + chip.w / 2, y: chip.y + chip.h / 2, button: 'left', clickCount: 1 });
+  }
+  await sleep(900);
+  const moved = Math.abs((await s.evaluate('Math.round(scrollY)')) - parked);
+  check(moved <= 2, 'a gauge chip does not move the page it is standing on', `${moved} px, parked at ${parked}`);
+  check(await s.evaluate('!!document.querySelector("#lead svg[data-lead][data-core]")'), 'the drawing is the part marked as having to stay in view');
   check((await s.evaluate('location.search + location.hash')) === '?block=h31-90&lead=DRESDEN#lead', 'the URL carries the gauge', await s.evaluate('location.search + location.hash'));
   check((await active()) === 'h2 in section#lead', 'focus sits on the curve heading', await active());
   await s.evaluate('document.querySelector("#lead details.tbl").open = true');
@@ -182,6 +196,11 @@ async function run(cdp, url, { name, width, height, mobile }) {
   // 5. an index link opens its panel and focuses it; the others stay as they were
   await click('.index a[data-focus="calib"]');
   check(await s.evaluate('document.querySelector("details#calib").open'), 'the index link opened calibration');
+  // the other half of the rule: a section that really IS out of view still gets
+  // pulled to the top, or "don't scroll when it's visible" would have become
+  // "never scroll" — and the index would stop working
+  const calibTop = await s.evaluate('document.querySelector("details#calib summary").getBoundingClientRect().top');
+  check(calibTop >= -2 && calibTop <= 60, 'and scrolled it to the top of the window', `summary top ${Math.round(calibTop)} px`);
   check((await active()) === 'summary in details#calib', 'focus sits on the calibration summary', await active());
   check((await s.evaluate('location.hash')) === '#calib', 'the hash names the panel');
 

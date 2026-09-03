@@ -84,7 +84,9 @@ test('the curve draws three lines, the bands, the bar and a cursor, each named i
   assert.ok(lead.includes('<line class="ln-blend"'), 'the blend is a line at ×1');
   assert.ok(lead.includes('<line class="ln-cur" data-cur'), 'the cursor');
   assert.match(lead, /<span class="clip up ln-clim" style="left:[\d.]+%" title="climatology beyond ×4 on days 1–\d+">/, 'the clipped first days of climatology are marked');
-  assert.match(lead, /<svg viewBox="0 0 320 120" preserveAspectRatio="none" tabindex="0" role="slider" data-lead aria-valuemin="1" aria-valuemax="90" aria-valuenow="14" aria-valuetext="day 14: /);
+  assert.match(lead, /<svg viewBox="0 0 320 120" preserveAspectRatio="none" tabindex="0" role="slider" data-lead data-core aria-valuemin="1" aria-valuemax="90" aria-valuenow="14" aria-valuetext="day 14: /);
+  // data-core is what focusTo measures before deciding to scroll: the drawing, not the section
+  assert.equal((lead.match(/data-core/g) || []).length, 1, 'exactly one part of the curve claims to be the one that must stay in view');
   assert.ok(lead.includes('<h2 class="p-h2" tabindex="-1">Error by lead day · DRESDEN</h2>'));
   const gaugeRow = (lead.match(/<nav class="p-tabs"[\s\S]*?<\/nav>/) || [''])[0];
   assert.equal((gaugeRow.match(/<a href="[^"]*#lead" class="on" aria-current="true"/g) || []).length, 1, 'the DRESDEN chip is on');
