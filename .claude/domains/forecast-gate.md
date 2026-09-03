@@ -40,6 +40,33 @@ own script tree, needed when working on it and not before. Moved verbatim.
   loopback) is the gate for all of this — run it before every deploy of the
   page. `(pointer: coarse)` comes from `Emulation.setTouchEmulationEnabled`;
   `setEmulatedMedia` cannot override it.
+- **A control belongs against the drawing it changes, and must not move it.**
+  The target/horizon row renders directly above the curve and focuses `lead`:
+  measured before that, it sat 1 121 px below the curve's head (2 173 on a
+  phone) and a click scrolled the curve 1 166 px off the top. And `focusTo`
+  scrolls only towards what the reader cannot see — a chip sits ON its own
+  drawing, so pulling that drawing's heading to the top moved the page 415 px
+  per click. Two traps in writing that rule: "visible" has to be the visible
+  OVERLAP (the drawing spans 606–846 px of a 900 px window — wholly visible,
+  yet a threshold on its top edge called it hidden), and the question is about
+  the part that matters, marked `[data-core]`, because a section opens with
+  prose and a chip row and on a phone the drawing starts ~380 px lower. An
+  index link to a section really out of view still lays it at the top — the
+  gate checks BOTH halves, or the rule silently becomes "never scroll".
+- **The URL follows what is unfolded**, so a link can be sent as it stands:
+  opening a panel by hand writes its anchor with `replaceState` (no history
+  entry per fold, the chips keep their own back button). `toggle` does NOT
+  bubble (hence a capture-phase listener) and fires in a task of its own — so a
+  time flag cannot separate the reader's click from `draw()`'s restore pass:
+  the element is marked (`silentToggles`), not the moment. With a flag, a chip
+  clicked while two panels were open wrote `#method` into the URL instead of
+  the drawing it had just changed.
+- **Two gate-check habits.** Its `click()` helper `scrollIntoView`s the target
+  first, so it can never measure whether the PAGE moved — dispatch the mouse
+  events where the element already sits. And checks that use `replaceState` go
+  LAST in the sequence: replaceState edits the current history entry, so
+  folding panels mid-chain rewrites the very entries the back/forward checks
+  walk.
 - **Two lines are registered in `tfm.py`, and only one may ship.** `2p5` is
   Apache-2.0 and is `SHIPPED`; `3p0` carries non-commercial weights that forbid
   redistribution and production use, so it is measured and named but can never
