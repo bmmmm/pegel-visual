@@ -116,15 +116,20 @@ async function run(cdp, url, { name, width, height, mobile }) {
   check(plot && plot.h >= 90, 'the curve has height', `${Math.round(plot.w)}×${Math.round(plot.h)} px`);
   await s.send('Page.captureScreenshot', {}).then(r => writeFileSync(join(shots, `${name}-load.png`), Buffer.from(r.data, 'base64')));
 
-  // 2. a block chip: re-render, then focus on the opened panel's summary, scrolled to it
+  // 2. the filter row sits against the curve, and a chip keeps the reader on it.
+  //    (Before this order: the chips were 1 121 px below the curve's head on desktop,
+  //    2 173 on a phone, and a click scrolled the curve clean off the top.)
+  const rowY = await rect('nav[aria-label="target and horizon block"]');
+  check(rowY.y < plot.y, 'the filter row is above the curve it relabels', `row ${Math.round(rowY.y)} px, curve ${Math.round(plot.y)} px`);
   await click('nav[aria-label="target and horizon block"] a[href*="block=h31-90"]');
-  check((await s.evaluate('location.search + location.hash')) === '?block=h31-90#skill', 'the URL carries block and panel', await s.evaluate('location.search + location.hash'));
-  check(await s.evaluate('document.querySelector("details#skill").open'), 'the skill panel opened');
-  check((await active()) === 'summary in details#skill', 'focus sits on the skill summary', await active());
-  const top = await s.evaluate('document.querySelector("details#skill summary").getBoundingClientRect().top');
-  check(top >= -2 && top <= 60, 'the page scrolled so the summary sits at the top', `summary top ${Math.round(top)} px`);
-  check(await s.evaluate('document.querySelector("details#skill summary").textContent.includes("days 31–90")'), 'the summary names the new block');
+  check((await s.evaluate('location.search + location.hash')) === '?block=h31-90#lead', 'the URL carries block and the drawing it shows', await s.evaluate('location.search + location.hash'));
+  check(!(await s.evaluate('document.querySelector("details#skill").open')), 'no panel is thrown open behind the reader');
+  check((await active()) === 'h2 in section#lead', 'focus stays on the curve heading', await active());
+  const curveTop = await s.evaluate('document.querySelector("#lead").getBoundingClientRect().top');
+  const curveSeen = await s.evaluate('(() => { const r = document.querySelector("#lead svg[data-lead]").getBoundingClientRect(); return r.top < innerHeight && r.bottom > 0; })()');
+  check(curveSeen, 'and the drawing being compared is still on screen', `#lead top ${Math.round(curveTop)} px`);
   check(await s.evaluate('document.querySelector("#lead .lead-bands a.on b").textContent.startsWith("-")'), 'the curve hatches the block with the negative skill');
+  check(await s.evaluate('document.querySelector("details#skill summary").textContent.includes("days 31–90")'), 'and the panels below carry the new block in their titles');
   check(await s.evaluate('getComputedStyle(document.activeElement).outlineStyle === "solid"'), 'the focus ring is drawn', await s.evaluate('getComputedStyle(document.activeElement).outline'));
   await s.send('Page.captureScreenshot', {}).then(r => writeFileSync(join(shots, `${name}-block.png`), Buffer.from(r.data, 'base64')));
 
@@ -132,14 +137,13 @@ async function run(cdp, url, { name, width, height, mobile }) {
   await click('#lead .p-tabs a[href*="DRESDEN"]');
   check((await s.evaluate('location.search + location.hash')) === '?block=h31-90&lead=DRESDEN#lead', 'the URL carries the gauge', await s.evaluate('location.search + location.hash'));
   check((await active()) === 'h2 in section#lead', 'focus sits on the curve heading', await active());
-  check(await s.evaluate('document.querySelector("details#skill").open'), 'the open panel survived the re-render');
-  await s.evaluate('document.querySelector("details#skill details.tbl").open = true');
+  await s.evaluate('document.querySelector("#lead details.tbl").open = true');
   await click('#lead .p-tabs a[href*="KOBLENZ"]');
-  check(await s.evaluate('document.querySelector("details#skill").open && document.querySelector("details#skill details.tbl").open'), 'and so does an open table twin inside it');
+  check(await s.evaluate('document.querySelector("#lead details.tbl").open'), 'an open table twin survives the re-render');
   await s.evaluate('history.back()'); await sleep(700);  // one entry back: DRESDEN again, through popstate
   check((await s.evaluate('location.search + location.hash')) === '?block=h31-90&lead=DRESDEN#lead', 'back from the KOBLENZ chip lands on DRESDEN', await s.evaluate('location.search + location.hash'));
-  check(await s.evaluate('document.querySelector("details#skill details.tbl").open'), 'the table twin is still open after popstate');
-  await s.evaluate('document.querySelector("details#skill details.tbl").open = false');
+  check(await s.evaluate('document.querySelector("#lead details.tbl").open'), 'the table twin is still open after popstate');
+  await s.evaluate('document.querySelector("#lead details.tbl").open = false');
   check(await s.evaluate('document.querySelector("#lead [data-readout]").textContent.endsWith("cm")'), 'the readout is for one gauge, not pooled');
   check(await s.evaluate('!!document.querySelector("#lead .clip.up.ln-clim")'), 'Dresden’s climatology is marked above the frame');
 
@@ -177,7 +181,7 @@ async function run(cdp, url, { name, width, height, mobile }) {
 
   // 5. an index link opens its panel and focuses it; the others stay as they were
   await click('.index a[data-focus="calib"]');
-  check(await s.evaluate('document.querySelector("details#calib").open && document.querySelector("details#skill").open'), 'calibration opened, skill stayed open');
+  check(await s.evaluate('document.querySelector("details#calib").open'), 'the index link opened calibration');
   check((await active()) === 'summary in details#calib', 'focus sits on the calibration summary', await active());
   check((await s.evaluate('location.hash')) === '#calib', 'the hash names the panel');
 
@@ -186,7 +190,7 @@ async function run(cdp, url, { name, width, height, mobile }) {
   check((await s.evaluate('location.search + location.hash')) === '?block=h31-90&lead=DRESDEN#lead', 'back restores the previous URL', await s.evaluate('location.search + location.hash'));
   check((await active()) === 'h2 in section#lead', 'and focuses what the hash names', await active());
   await s.evaluate('history.back()'); await sleep(700);
-  check((await s.evaluate('location.search + location.hash')) === '?block=h31-90#skill', 'back again: the gauge chip is undone', await s.evaluate('location.search + location.hash'));
+  check((await s.evaluate('location.search + location.hash')) === '?block=h31-90#lead', 'back again: the gauge chip is undone', await s.evaluate('location.search + location.hash'));
   check(await s.evaluate('document.querySelector("#lead [data-readout]").textContent.endsWith("pooled")'), 'the curve is pooled again');
   await s.evaluate('history.back()'); await sleep(700);
   check((await s.evaluate('location.search + location.hash')) === '', 'back to the start: a bare URL', await s.evaluate('location.search + location.hash'));
@@ -216,6 +220,38 @@ async function run(cdp, url, { name, width, height, mobile }) {
   await s.send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: dark ? 'light' : 'dark' }] });
   await sleep(200);
   await s.send('Page.captureScreenshot', {}).then(r => writeFileSync(join(shots, `${name}-${dark ? 'light' : 'dark'}.png`), Buffer.from(r.data, 'base64')));
+  // 7. the address bar follows what the reader unfolds, so any URL can be sent as
+  //    it stands. Last on purpose: this uses replaceState, which EDITS the current
+  //    history entry — doing it inside the back/forward chain above would rewrite
+  //    the very entries that chain is checking.
+  await s.send('Page.navigate', { url: url.replace(/[?#].*$/, '') + '?block=h31-90&lead=DRESDEN' });
+  for (let i = 0; i < 40 && !(await s.evaluate('!!document.querySelector("#lead svg[data-lead]")')); i++) await sleep(250);
+  await sleep(300);
+  const foldsBefore = await s.evaluate('history.length');
+  await click('details#method > summary');
+  check((await s.evaluate('location.hash')) === '#method', 'opening Method by hand puts it in the URL', await s.evaluate('location.hash'));
+  await click('details#short > summary');
+  check((await s.evaluate('location.hash')) === '#short', 'opening a second panel names the newer one', await s.evaluate('location.hash'));
+  check((await s.evaluate('location.search')) === '?block=h31-90&lead=DRESDEN', 'and the data in the query is untouched', await s.evaluate('location.search'));
+  await click('details#short > summary');
+  check((await s.evaluate('location.hash')) === '#method', 'closing it hands the hash back to the one still open', await s.evaluate('location.hash'));
+  await click('details#method > summary');
+  check((await s.evaluate('location.hash')) === '', 'closing the last one drops the hash', await s.evaluate('location.hash'));
+  check((await s.evaluate('history.length')) === foldsBefore, 'four folds, no history entries', `${await s.evaluate('history.length')} vs ${foldsBefore}`);
+  // a chip re-renders the whole sheet; what the reader unfolded has to survive it
+  await click('details#method > summary');
+  await click('details#short > summary');
+  await click('nav[aria-label="target and horizon block"] a[href*="block=h15-30"]');
+  check(await s.evaluate('document.querySelector("details#short").open && document.querySelector("details#method").open'), 'both open panels survive a chip’s re-render');
+  check((await s.evaluate('location.hash')) === '#lead', 'and the chip names the drawing it changed, not a panel it merely reopened', await s.evaluate('location.hash'));
+  // a sent URL arrives on the right sheet: same data, that panel open and focused
+  await s.send('Page.navigate', { url: url.replace(/[?#].*$/, '') + '?target=max&block=h15-30#short' });
+  for (let i = 0; i < 40 && !(await s.evaluate('!!document.querySelector("#lead svg[data-lead]")')); i++) await sleep(250);
+  await sleep(300);
+  check(await s.evaluate('document.querySelector("details#short").open'), 'a sent link opens the panel it names');
+  check((await active()) === 'summary in details#short', 'and focuses it', await active());
+  check((await s.evaluate('document.querySelector(\'nav[aria-label="target and horizon block"] a.on\').textContent')) === 'daily max', 'with the target the link carried');
+
   await s.close();
 }
 

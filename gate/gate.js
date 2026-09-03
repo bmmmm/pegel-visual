@@ -390,7 +390,7 @@ function renderLead(m) {
     Array.from({ length: L.H }, (_, i) => `<tr><td>${i + 1}</td><td>×${r2(L.series.tfm[i])}</td><td>×${r2(L.series.clim[i])}</td><td>×${r2(L.series.persist[i])}</td><td>${num(L.blendCm[i], 1)}</td></tr>`).join('') +
     `</tbody></table></div></details>`;
   return `<section id="lead" class="p-block">${head}` +
-    `<p class="p-dim">Each method's error divided by the blend's, day by day out to ${esc(L.H)}: below the line is better than the blend. The model wins early and hands over to the calendar; persistence never recovers. The hatched band is the horizon block in view — the band labels switch it, as does the filter row further down; the vertical rule is a cursor — drag it, or use the arrow keys.</p>` +
+    `<p class="p-dim">Each method's error divided by the blend's, day by day out to ${esc(L.H)}: below the line is better than the blend. The model wins early and hands over to the calendar; persistence never recovers. The hatched band is the horizon block in view — the band labels switch it, as does the row above the chart; the vertical rule is a cursor — drag it, or use the arrow keys.</p>` +
     chips +
     `<div class="plot"><div class="lead-bands">${bandLabels}</div><div class="vscale" aria-hidden="true">${vscale}</div><div class="plot-box">${bands}${svg}${clips}</div>` +
     `<div class="ticks lead-ticks" aria-hidden="true">${ticks}</div></div>` +
@@ -400,7 +400,7 @@ function renderLead(m) {
       { sw: swLine('ln ln-clim'), label: 'climatology (day-of-year mean of earlier years)' },
       { sw: swLine('ln ln-persist'), label: 'persistence — today’s level, held' },
       { sw: swLine('ln-blend'), label: 'the blend, ×1.00 — the bar' },
-      { sw: '<span class="sw"><span class="lb on" style="position:relative;display:block;height:12px;width:12px"></span></span>', label: 'the horizon block in view — pick one by its label, or in the filter row' },
+      { sw: '<span class="sw"><span class="lb on" style="position:relative;display:block;height:12px;width:12px"></span></span>', label: 'the horizon block in view — pick one by its label, or in the row above the chart' },
       { sw: '<span class="sw"><span class="lb" style="position:relative;display:block;height:12px;width:12px"></span></span>', label: 'block boundaries — days 14 and 30, each labelled with its skill' },
       { sw: '<span class="sw"><svg viewBox="0 0 12 12" aria-hidden="true"><line class="ln-cur" x1="6" y1="0" x2="6" y2="12"/></svg></span>', label: 'the cursor; the line under the chart reads its day' },
       { note: `The y axis is logarithmic, ×${LEAD_DOMAIN[0]} to ×${LEAD_DOMAIN[1]}; a ▴ or ▾ marks days a curve runs above or below the frame (climatology in its first days).` },
@@ -419,14 +419,21 @@ function renderIndex(m) {
     `</ul></nav>`;
 }
 
+// The one row that relabels the whole sheet. It sits directly above the curve
+// because that is the drawing it changes first: measured in Chrome before this
+// move, the chips sat 1 121 px below the curve's head (2 173 on a phone) and a
+// click scrolled the curve 1 166 px off the top of the screen. Now the chip
+// focuses the curve, and the drawing the reader is comparing stays in front of
+// them. The panels below read the same state; the index is what leads into them.
 function renderControls(m) {
   const s = m.state;
   return ctlRow('target', [
     ...m.targets.map(t => t.available
-      ? { href: stateHref(s, { target: t.k, panel: 'skill' }), label: t.label, on: s.target === t.k, focus: 'skill', title: t.k === 'mid' ? 'the day’s (min+max)/2 — what the archive stores' : 'the day’s maximum — the crest is what matters in a flood' }
+      ? { href: stateHref(s, { target: t.k, panel: 'lead' }), label: t.label, on: s.target === t.k, focus: 'lead', title: t.k === 'mid' ? 'the day’s (min+max)/2 — what the archive stores' : 'the day’s maximum — the crest is what matters in a flood' }
       : { off: t.label, title: `the ${t.label} report did not load` }),
     { lbl: 'horizon' },
-    ...BLOCKS.map(b => ({ href: stateHref(s, { block: b, panel: 'skill' }), label: BLOCK_LABEL[b], on: s.block === b, focus: 'skill' })),
+    ...BLOCKS.map(b => ({ href: stateHref(s, { block: b, panel: 'lead' }), label: BLOCK_LABEL[b], on: s.block === b, focus: 'lead' })),
+    { lbl: '· every chart on this sheet' },
   ], 'target and horizon block');
 }
 
@@ -645,10 +652,10 @@ export function renderPage(m) {
     `<header class="p-head"><h1 tabindex="-1"><a href="../">PEGEL://</a> · FORECAST GATE</h1>` +
     `<p class="p-sub">${esc(m.gist)}</p></header>` +
     renderVerdict(m) +
+    renderControls(m) +
     renderLead(m) +
     renderFacts(m) +
     renderIndex(m) +
-    renderControls(m) +
     m.panels.map(p => renderPanel(p, m)).join('') +
     renderFoot(m);
 }
@@ -665,6 +672,12 @@ async function getJson(url) {
 let reports = null;
 let root = null;
 let known = [];
+// draw() reopens panels itself, and that must not read as the reader opening one.
+// A time flag cannot do it: `toggle` fires in a task of its own, long after the
+// restore loop has finished, so the element is marked instead and cleared when
+// its event arrives. (Measured: with a flag, a chip clicked while two panels
+// were open wrote #method into the URL instead of the drawing it changed.)
+const silentToggles = new WeakSet();
 
 const reducedMotion = () => typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
 const coarsePointer = () => typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches;
@@ -752,6 +765,24 @@ function wire() {
   });
   // chips and index links are real links; intercept so the sheet re-renders in
   // place, and every one of them says what to focus afterwards
+  // Opening a panel by hand puts it in the URL, so the address bar always names
+  // what the reader is looking at and can be sent as it stands. replaceState,
+  // not push: unfolding a section is not a navigation step, and a history entry
+  // per fold would bury the chips' own back button. `toggle` does not bubble —
+  // hence the capture phase, which catches it on the way down.
+  root.addEventListener('toggle', e => {
+    const d = e.target;
+    if (!(d instanceof HTMLElement) || !d.classList.contains('panel')) return;
+    if (silentToggles.has(d)) { silentToggles.delete(d); return; }
+    let panel;
+    if (d.open) panel = d.id;                                   // opened: that is what the reader is looking at
+    else if (location.hash === '#' + d.id) {                    // closed the one the URL named: hand it on
+      const last = [...root.querySelectorAll('details.panel[open]')].pop();
+      panel = last ? last.id : null;
+    } else return;                                              // closing a panel the URL never named changes nothing
+    if ((panel ? '#' + panel : '') === location.hash) return;
+    history.replaceState(null, '', stateHref(parseState(location.search, location.hash, known), { panel }));
+  }, true);
   root.addEventListener('click', e => {
     const a = e.target.closest('.p-tabs a, .index a, .lead-bands a');
     if (!a || e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
@@ -775,7 +806,7 @@ function draw(opts = {}) {
   for (const o of open) {
     const d = root.querySelector(`#${CSS.escape(o.id)}`);
     if (!d) continue;
-    if (o.tbl == null) d.open = true;
+    if (o.tbl == null) { silentToggles.add(d); d.open = true; }
     else { const t = d.querySelectorAll('details.tbl')[o.tbl]; if (t) t.open = true; }
   }
   document.title = `PEGEL:// gate · ${m.verdict}`;

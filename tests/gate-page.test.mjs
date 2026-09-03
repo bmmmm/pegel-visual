@@ -167,7 +167,7 @@ test('state round-trips through the URL: query for the data, hash for the panel'
   assert.equal(stateHref({ target: 'max', block: 'h15-30', lead: 'DRESDEN', panel: 'lead' }), '?target=max&block=h15-30&lead=DRESDEN#lead');
   assert.equal(stateHref({ target: 'max', block: 'h15-30', lead: 'DRESDEN', panel: 'lead' }, { lead: 'pooled', panel: null }), '?target=max&block=h15-30');
   const html = renderPage(buildModel(reports, parseState('?target=max&block=h15-30')));
-  assert.ok(html.includes('<a href="?target=max&amp;block=h31-90#skill" data-focus="skill">'), 'the block chip keeps the target and names the panel it opens');
+  assert.ok(html.includes('<a href="?target=max&amp;block=h31-90#lead" data-focus="lead">'), 'the block chip keeps the target and holds the reader on the curve');
   assert.ok(html.includes('class="on" aria-current="true"'), 'the active chip is marked');
 });
 
@@ -206,7 +206,15 @@ test('the panels come closed, in the order of the index, every summary a link ta
     assert.match(p, /^<details class="panel" id="[\w-]+"><summary>[^<]+<\/summary><section><h2 class="vh">/, `${id}: summary, then a hidden h2 for the outline`);
     assert.equal(p.match(/<summary>([^<]+)<\/summary>/)[1], p.match(/<h2 class="vh">([^<]+)<\/h2>/)[1], 'summary and heading agree');
   }
-  assert.ok(html.indexOf('id="lead"') < html.indexOf('class="facts"') && html.indexOf('class="facts"') < html.indexOf('class="index"') && html.indexOf('class="index"') < html.indexOf('<nav class="p-tabs" aria-label="target and horizon block">') && html.indexOf('aria-label="target and horizon block"') < html.indexOf('<details class="panel"'), 'curve · in brief · index · filter row · panels');
+  const at = needle => html.indexOf(needle);
+  assert.ok(at('class="verdict"') < at('aria-label="target and horizon block"'), 'the verdict comes first');
+  assert.ok(at('aria-label="target and horizon block"') < at('id="lead"'), 'the filter row sits ABOVE the curve it relabels, not a screen below it');
+  // and the words agree with the layout: nothing may send the reader downwards for it
+  const curveText = html.slice(at('id="lead"'), at('class="facts"'));
+  assert.ok(!/filter row (further )?(down|below)/.test(curveText), 'the curve does not send the reader down to a row that is above it');
+  assert.match(curveText, /the row above the chart/, 'it names where the row actually is');
+  assert.ok(at('id="lead"') < at('class="facts"') && at('class="facts"') < at('class="index"') && at('class="index"') < at('<details class="panel"'),
+    'verdict · filter row · curve · in brief · index · panels');
 });
 
 test('a hostile station name never reaches the markup unescaped', () => {
@@ -232,7 +240,7 @@ test('the page survives a missing max or short report — one panel fewer, no de
   const html = renderPage(m);
   assert.ok(html.includes('<span class="off" aria-disabled="true" title="the daily max report did not load">daily max</span>'), 'the max chip is there, but not a link');
   assert.ok(!html.includes('daily max ·'), 'no panel title claims the max run');
-  assert.ok(html.includes('<a href="./#skill" class="on" aria-current="true"'), 'the mid chip is current');
+  assert.ok(html.includes('<a href="./#lead" class="on" aria-current="true"'), 'the mid chip is current');
   assert.ok(!html.includes('Short horizon'), 'no short panel without its report');
   assert.ok(!html.includes('#short"'), 'and no index link to it');
   assert.deepEqual(m.panels.map(p => p.id), ['skill', 'error', 'calib', 'clim', 'model', 'method', 'basics']);
