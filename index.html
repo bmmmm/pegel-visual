@@ -2064,7 +2064,13 @@ async function loadData() {
     // cannot be closed by a delta, so that falls back to a fresh seed.
     const arc = loadArchive(forStation);
     const lastTs = arc.length ? arc[arc.length - 1][0] : 0;
-    const inWindow = lastTs && Date.now() - lastTs < (API_MAX_DAYS - 1) * 864e5;
+    // Both bounds, not just the upper one: a point dated after the clock made
+    // the age negative, negative is always inside the window, and the API
+    // rejects a start it cannot reach with 400 — swallowed below, so the live
+    // delta failed in silence. Where such a point came from is not this line's
+    // business; it must never become a start.
+    const age = Date.now() - lastTs;
+    const inWindow = lastTs && age >= 0 && age < (API_MAX_DAYS - 1) * 864e5;
     const start = inWindow ? new Date(lastTs + 1000).toISOString() : `P${API_MAX_DAYS}D`;
     const [info, gauge, delta] = await Promise.all([
       state.info || getJson(`${API}/stations/${enc}.json?includeTimeseries=true`),
@@ -3610,11 +3616,28 @@ function historyViewModel() {
   } else if ((wd || spanDays) > API_MAX_DAYS) {
     note = { kind: 'raw', text: `unvalidated raw data (${archiveSource()})` };
   }
+  // note above measures the START of the window; this measures its END. Both can
+  // be wrong at once, so they are two entries, not two branches of one. t1 is
+  // the last point there IS — an archive that stopped months ago is drawn across
+  // the full width and looks complete unless the plate says otherwise. The
+  // threshold is the readings' own cadence (windowGapLimit), not a fixed number
+  // of hours: 24 h is an outage at one gauge and the rhythm at another.
+  const behind = Date.now() - t1;
+  const stale = behind > windowGapLimit(arch)
+    ? { at: t1, text: `no reading after ${new Date(t1).toISOString().slice(0, 10)} — the right edge is where the record ends, not today` }
+    : null;
   // The axis is time now, so a tick sits where its instant sits: frac is the
   // share of the window that had elapsed, nothing to do with how many readings
   // fell before it. That is what makes two windows over the same days show the
   // same slope.
   const nTicks = plateDensity() === 'narrow' ? 3 : 6;
+  // Above 120 days the labels are coarser than a day, and the ticks sit on equal
+  // shares of the window rather than on calendar boundaries — so at 5Y the end
+  // tick read "2026" while it stood on the 3rd of September, and the chart
+  // looked as if the record stopped in January. Only the end tick is ambiguous
+  // that way (the others are read as approximate anyway), so only it is spelled
+  // out in full.
+  const coarse = spanDays > 120;
   const fmt = ts => {
     const iso = new Date(ts).toISOString();
     if (spanDays <= 2) return iso.slice(11, 16);
@@ -3626,8 +3649,11 @@ function historyViewModel() {
   let lastLbl = '';
   for (let i = 0; i < nTicks; i++) {
     const frac = i / (nTicks - 1);
-    const text = fmt(t0 + frac * (t1 - t0));
-    if (text === lastLbl) continue;
+    const last = i === nTicks - 1;
+    const at = t0 + frac * (t1 - t0);
+    const text = last && coarse ? new Date(at).toISOString().slice(0, 10) : fmt(at);
+    // the end tick is the one label the reader needs most — never dedupe it away
+    if (!last && text === lastLbl) continue;
     lastLbl = text;
     ticks.push({ frac, text });
   }
@@ -3635,7 +3661,7 @@ function historyViewModel() {
     empty: false,
     label: wd ? preset.label : spanDays > 730 ? (spanDays / 365.25).toFixed(1) + 'Y' : spanDays + 'D',
     windowDays: wd, spanDays, points: arch.length, from: t0, to: t1,
-    series: b, banded, ticks, note, gaps: b.gaps,
+    series: b, banded, ticks, note, stale, gaps: b.gaps,
     marks: historyRefMarks(b.min, b.max),
     insight: unusualNow(),
   };
@@ -3776,6 +3802,7 @@ function renderHistory(h) {
       label: `${h.gaps} ${plural(h.gaps, 'break')} — ${T.histGapKey}` },
     { note: `${h.points} readings` },
     h.note && { note: h.note.text, warn: true },
+    h.stale && { note: h.stale.text, warn: true },
   ]);
   return `<section class="p-block"><h2 class="p-h2">${esc(T.history)} · ${esc(h.label)}</h2>` +
     historyCtl() +
@@ -7033,13 +7060,21 @@ async function loadRepoArchive() {
   // the file's own y wins, so a not-yet-frozen current.json maps to its real year
   const years = results.flatMap(r => (Array.isArray(r) ? r : [r]));
   const measurements = [];
+  // 06:00/18:00 is a convention for a day that is OVER; on the running day —
+  // and current.json now reaches up to today — the 18:00 slot is still hours
+  // away. Dating a reading into the future poisons everything that asks "how
+  // old is my newest point": loadData() read it as fresh, made it the delta
+  // start, and the API answered 400. Nothing is lost by dropping it, the live
+  // 30-day window carries today's real readings.
+  const now = Date.now();
   for (const yr of years) {
     const base = Date.UTC(yr.y, 0, 1) - 36e5; // MEZ midnight of Jan 1 (data is UTC+1 year-round)
     for (let d = 0; d < yr.min.length; d++) {
       if (yr.min[d] == null) continue;
       // two points per day keep both the daily low and the flood peak honest
-      measurements.push({ timestamp: new Date(base + d * 864e5 + 6 * 36e5).toISOString(), value: yr.min[d] });
-      measurements.push({ timestamp: new Date(base + d * 864e5 + 18 * 36e5).toISOString(), value: yr.max[d] });
+      const lo = base + d * 864e5 + 6 * 36e5, hi = base + d * 864e5 + 18 * 36e5;
+      if (lo <= now) measurements.push({ timestamp: new Date(lo).toISOString(), value: yr.min[d] });
+      if (hi <= now) measurements.push({ timestamp: new Date(hi).toISOString(), value: yr.max[d] });
     }
   }
   // The archive is keyed by station NAME, so a reader who moved on mid-fetch

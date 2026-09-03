@@ -672,6 +672,29 @@ test('loadRepoArchive: lazily merges current.json into the local archive', async
   assert.equal(app.run(`loadArchive('BONN')`).length, 2);
 });
 
+// The running year's current.json now reaches up to TODAY, so its last day's
+// synthetic 18:00 point would sit in the future — and a future point in the
+// archive is what made loadData() ask the API for a start it cannot serve.
+test('loadRepoArchive: the running day contributes no point past the clock', async () => {
+  const app = loadApp({ now: NOON }); // 2026-01-15 12:00 UTC
+  const year = new Date(NOON).getUTCFullYear();
+  const days = 366;
+  const min = Array(days).fill(null), max = Array(days).fill(null);
+  for (let d = 0; d <= 14; d++) { min[d] = 100 + d; max[d] = 200 + d; } // Jan 1 … Jan 15 (today)
+  app.run(`state.info = { uuid: 'today-uuid' }`);
+  app.run(`getJson = async url => {
+    if (url === 'archive/today-uuid/current.json') return { y: ${year}, min: ${JSON.stringify(min)}, max: ${JSON.stringify(max)} };
+    throw new Error('404 ' + url);
+  }`);
+  await app.run('loadRepoArchive()');
+  const arch = app.run(`loadArchive('BONN')`);
+  const future = arch.filter(p => p[0] > NOON);
+  assert.deepEqual(future, [], 'no archived point may be dated after the clock');
+  // …and only that one point is dropped: today's 06:00 low is at 05:00 UTC, past.
+  assert.equal(arch.length, 29, '15 days × 2 points, minus today\'s 18:00 maximum');
+  assert.equal(arch[arch.length - 1][1], 114, 'the last point kept is today\'s daily low');
+});
+
 test('loadRepoArchive: merges the closed bundle + current.json in exactly 3 requests', async () => {
   const app = loadApp({ now: NOON });
   const year = new Date(NOON).getUTCFullYear();
@@ -990,19 +1013,94 @@ test('historyViewModel: the time axis is labelled from real timestamps', () => {
   app.run(`historyKey = 'all'`);
   const h = app.run('historyViewModel()');
   assert.equal(h.empty, false);
-  assert.ok(h.ticks.every(t => /^\d{4}-\d{2}$/.test(t.text)), `YYYY-MM ticks: ${h.ticks.map(t => t.text)}`);
+  assert.ok(h.ticks.slice(0, -1).every(t => /^\d{4}-\d{2}$/.test(t.text)), `YYYY-MM ticks: ${h.ticks.map(t => t.text)}`);
   assert.equal(h.ticks[0].text, '2024-01', 'the first tick sits at the two-years-ago start (NOON is 2026-01-15)');
-  assert.equal(h.ticks.at(-1).text, '2026-01', 'the last tick is the now end');
+  assert.equal(h.ticks.at(-1).text, '2026-01-15', 'the last tick writes its day out — it is the window end, not a month boundary');
   assert.ok(h.ticks.every(t => t.frac >= 0 && t.frac <= 1), 'ticks are positioned as fractions, not columns');
   assert.ok(h.ticks[0].frac < h.ticks.at(-1).frac, 'and run left to right');
   // The assurance the whole change exists for: frac IS elapsed time. Every tick
   // must sit where its own instant sits in the window, whatever the reading
   // density happens to be on either side of it.
   const span = h.to - h.from;
-  for (const t of h.ticks) {
-    const at = new Date(h.from + t.frac * span).toISOString().slice(0, 7);
+  h.ticks.forEach((t, i) => {
+    const cut = i === h.ticks.length - 1 ? 10 : 7;
+    const at = new Date(h.from + t.frac * span).toISOString().slice(0, cut);
     assert.equal(t.text, at, `the tick at ${(t.frac * 100).toFixed(0)}% of the window is labelled with that instant`);
+  });
+});
+
+// Six ticks sit on six equal SHARES of the window, not on year boundaries — so
+// at 5Y the last one read "2026" while it actually stood on 2026-09-03, and the
+// chart looked as if the record stopped in January. A year label that is not a
+// year boundary has to say which day it means.
+test('historyViewModel: the axis writes out the day it ends on', () => {
+  const app = loadApp({ now: NOON });
+  const day = new Date(NOON).toISOString().slice(0, 10);
+  const seed = days => {
+    const pts = [];
+    for (let d = 0; d < days; d++) {
+      const ts = NOON - (days - 1 - d) * 864e5;
+      pts.push([ts - 6 * 36e5, 200 - (d % 7)], [ts, 260 + (d % 7)]);
+    }
+    return pts;
+  };
+  for (const [key, days] of [['1y', 365], ['5y', 1825], ['10y', 3650], ['all', 3650]]) {
+    app.run(`state.archive = ${JSON.stringify(seed(days))}`);
+    app.run(`historyKey = ${JSON.stringify(key)}`);
+    const h = app.run('historyViewModel()');
+    assert.match(h.ticks.at(-1).text, /^\d{4}-\d{2}-\d{2}$/, `${key}: the end tick carries a full date`);
+    assert.equal(h.ticks.at(-1).text, new Date(h.to).toISOString().slice(0, 10),
+      `${key}: and it is the day the window actually ends on`);
+    assert.equal(h.ticks.at(-1).text, day, `${key}: which is today`);
+    assert.equal(h.ticks.length, 6, `${key}: the end tick is never deduped away`);
   }
+  // Below the day-coarse threshold nothing changes: the labels already name days.
+  app.run(`state.archive = ${JSON.stringify(seed(30))}`);
+  app.run(`historyKey = '30d'`);
+  assert.match(app.run('historyViewModel()').ticks.at(-1).text, /^\d{2}-\d{2}$/, '30D keeps MM-DD');
+  app.run(`historyKey = '24h'`);
+  assert.match(app.run('historyViewModel()').ticks.at(-1).text, /^\d{2}:\d{2}$/, '24H keeps HH:MM');
+});
+
+// t1 is the last point there IS, never the clock, so an archive that stopped
+// months ago is stretched across the full width and looks complete. The only
+// warning measured the START (coveredDays from arch[0]), so a window missing its
+// whole right end still reported a reassuring "unvalidated raw data". A plate
+// that cannot name that does not ship.
+test('historyViewModel: a record that stops short of the clock says so', () => {
+  const app = loadApp({ now: NOON });
+  // 400 days, two points a day — cadence 12 h, so windowGapLimit lands at 48 h
+  const seed = endTs => {
+    const pts = [];
+    for (let d = 399; d >= 0; d--) {
+      pts.push([endTs - d * 864e5 - 12 * 36e5, 200], [endTs - d * 864e5, 260]);
+    }
+    return pts;
+  };
+  const runWith = endTs => {
+    app.run(`state.archive = ${JSON.stringify(seed(endTs))}`);
+    app.run(`historyKey = 'all'`);
+    const h = app.run('historyViewModel()');
+    return { h, html: app.run('renderHistory(historyViewModel())') };
+  };
+
+  const stopped = NOON - 90 * 864e5;
+  const { h, html } = runWith(stopped);
+  const day = new Date(stopped).toISOString().slice(0, 10);
+  assert.ok(h.stale, 'a record 90 days behind the clock is named');
+  assert.ok(h.stale.text.includes(day), `the note carries the last reading's date: ${h.stale.text}`);
+  // anchored to its own <dd>, not to the class: the "unvalidated raw data" note
+  // is a warning too, and a bare class match would pass on that one instead
+  assert.ok(html.includes(`<dd class="warn">${h.stale.text}</dd>`),
+    'and it reaches the key as its own warning entry, date and all');
+  assert.ok(html.includes('unvalidated raw data'), 'beside the start-of-window note, not instead of it');
+
+  // The threshold is the readings' own cadence, not a fixed number of hours: at
+  // 12 h spacing a one-day silence is still inside the gauge's normal rhythm.
+  assert.equal(runWith(NOON - 864e5).h.stale, null, 'one day at a 12-hourly cadence is not a stale record');
+  const fresh = runWith(NOON);
+  assert.equal(fresh.h.stale, null, 'a current record carries no note at all');
+  assert.ok(!fresh.html.includes('no reading after'), 'and nothing about a stale edge in the key');
 });
 
 // The archive changes cadence inside a window — 15-minutely for 16 days, hourly
@@ -1145,6 +1243,37 @@ test('recent chips: only a gauge that actually answered is remembered', async ()
   await app.run('loadData()');
   assert.ok(app.localStorage['pegel.recent'], 'a reading arrived — now it earns its chip');
   assert.deepEqual(JSON.parse(app.localStorage['pegel.recent']), ['BONN']);
+});
+
+// The freshness test that picks the delta window had no lower bound: a future
+// lastTs makes (now - lastTs) negative, negative is always < 29 days, so the
+// point counted as "fresh" and became the start — and the API answers 400
+// ("Start datetime … not before end datetime …"), swallowed by .catch(() => []).
+test('loadData: the delta window never starts in the future', async () => {
+  const seeStart = async pt => {
+    const app = loadApp({ search: '?station=BONN', now: NOON, storage: WARM_STATIONS });
+    app.run(`mergeIntoArchive('BONN', [{ timestamp: ${JSON.stringify(new Date(pt).toISOString())}, value: 250 }])`);
+    app.run(`globalThis.__urls = []`);
+    app.run(`fetch = url => {
+      globalThis.__urls.push(url);
+      const body =
+        url.includes('/stations/BONN.json') ? { shortname: 'BONN', water: { shortname: 'RHEIN' }, km: 654.8, timeseries: [{ shortname: 'W' }] } :
+        url.includes('/stations/BONN/W.json') ? { currentMeasurement: { timestamp: new Date().toISOString(), value: 250 } } :
+        url.includes('measurements.json') ? [] : null;
+      return body === null
+        ? Promise.reject(new Error('offline (test stub)'))
+        : Promise.resolve({ ok: true, json: () => Promise.resolve(body) });
+    }`);
+    await app.run('loadData()');
+    const urls = app.run('globalThis.__urls');
+    delete globalThis.__urls;
+    const m = urls.find(u => u.includes('measurements.json'));
+    return decodeURIComponent(m.slice(m.indexOf('start=') + 6));
+  };
+  assert.equal(await seeStart(NOON + 5 * 36e5), 'P30D',
+    'a point dated after the clock is not a valid delta anchor — seed the full window instead');
+  assert.equal(await seeStart(NOON - 2 * 864e5), new Date(NOON - 2 * 864e5 + 1000).toISOString(),
+    'a recent point still yields its delta — the guard must not disable the delta path');
 });
 
 test('archive script: migrateStation names the malformed year file instead of a bare SyntaxError', async () => {
