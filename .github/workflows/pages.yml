@@ -44,7 +44,11 @@ jobs:
       - name: Assemble site
         run: |
           mkdir /tmp/site
-          rsync -a --exclude .git --exclude .github --exclude tests --exclude scripts ./ /tmp/site/
+          # The artifact is the SITE, not the checkout. CLAUDE.md was being
+          # served at /pegel-visual/CLAUDE.md (200, measured 2026-09-03) and
+          # .claude/domains/ would have joined it — agent notes, not assets.
+          rsync -a --exclude .git --exclude .github --exclude tests --exclude scripts \
+                --exclude .claude --exclude CLAUDE.md ./ /tmp/site/
       - name: Stamp the deployed commit and date
         # main's own HEAD, not $GITHUB_SHA — a push to the `archive` branch also
         # triggers this workflow, and GITHUB_SHA would then be the archive
