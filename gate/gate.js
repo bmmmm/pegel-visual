@@ -38,12 +38,12 @@ const pctStr = v => `${Math.round(Math.abs(v) * 100)} %`;
 
 export function parseState(search, hash = '', known = null) {
   const q = new URLSearchParams(search || '');
-  const target = q.get('target') in TARGETS ? q.get('target') : 'mid';
+  const target = Object.hasOwn(TARGETS, q.get('target')) ? q.get('target') : 'mid';  // hasOwn: `in` would accept ?target=constructor
   const block = BLOCKS.includes(q.get('block')) ? q.get('block') : 'h1-14';
   const raw = q.get('lead');
   const lead = raw && raw !== 'pooled' && (!known || known.includes(raw)) ? raw : 'pooled';
   const h = String(hash || '').replace(/^#/, '');
-  const panel = PANEL_IDS.includes(h) ? h : null;
+  const panel = PANEL_IDS.includes(h) ? h : h === 'writeup' ? 'basics' : null;  // #writeup was the write-up's anchor before it became Basics; shared links keep working
   return { target, block, lead, panel };
 }
 
@@ -116,7 +116,12 @@ function leadModel(report, state) {
   }
   const src = station === 'pooled' ? report.pooled : report.stations[station];
   const proto = report.header.protocol.blocks;
-  const blocks = BLOCKS.map(b => ({ name: b, from: proto[b][0], to: proto[b][1], ss: src.blocks[b].ss, on: b === state.block }));
+  // the band label uses the curve's own estimator: for one gauge its block skill, for the
+  // pooled view the MEDIAN of the five gauges' block skills — not clause A1's cm-pooled
+  // figure, which weighs the Rhine by its centimetres and sits on a different line
+  const median = xs => { const v = xs.filter(x => x != null && !Number.isNaN(x)).sort((a, b) => a - b); return v.length ? (v.length % 2 ? v[(v.length - 1) / 2] : (v[v.length / 2 - 1] + v[v.length / 2]) / 2) : NaN; };
+  const blockSs = b => station === 'pooled' ? median(report.pooled.stations.map(n => report.stations[n] && report.stations[n].blocks[b].ss)) : src.blocks[b].ss;
+  const blocks = BLOCKS.map(b => ({ name: b, from: proto[b][0], to: proto[b][1], ss: blockSs(b), on: b === state.block }));
   return { station, stations, H, series, blendCm: src.per_h.blend, blocks, cursor: proto[state.block][1] };
 }
 
@@ -127,8 +132,12 @@ export function leadSay(L, day) {
   return `day ${i + 1}: TimesFM ${r(L.series.tfm[i])} · climatology ${r(L.series.clim[i])} · persistence ${r(L.series.persist[i])} · blend MAE ${num(L.blendCm[i], 1)} cm${L.station === 'pooled' ? ' pooled' : ''}`;
 }
 
-export function buildModel({ seasonal, short }, state) {
-  const report = seasonal[state.target] || seasonal.mid;
+export function buildModel({ seasonal, short }, parsed) {
+  // a target whose report did not load falls back to mid — and SAYS mid everywhere,
+  // instead of labelling the mid run as the max run
+  const targets = Object.keys(TARGETS).map(k => ({ k, label: TARGETS[k], available: !!(Object.hasOwn(seasonal, k) && seasonal[k]) }));
+  const state = { ...parsed, target: targets.some(t => t.k === parsed.target && t.available) ? parsed.target : 'mid' };
+  const report = seasonal[state.target];
   const h = report.header;
   const block = state.block;
   const pooled = report.pooled.blocks[block];
@@ -191,23 +200,18 @@ export function buildModel({ seasonal, short }, state) {
   const mid = seasonal.mid;
   const koeln = mid.stations['KÖLN'] && mid.stations['KÖLN'].blocks['h31-90'];
   const climLong = Object.entries(mid.stations).map(([n, s]) => ({ n, v: Math.abs(s.blocks['h31-90'].ss_clim_vs_blend) })).sort((a, b) => b.v - a.v);
-  const picps = BLOCKS.map(b => mid.pooled.blocks[b].picp80.tfm * 100);
   const story = {
     verdict: mid.verdict,
     h1: pctStr(mid.pooled.blocks['h1-14'].ss),
     h90: pctStr(mid.pooled.blocks['h31-90'].ss),
     h90sign: mid.pooled.blocks['h31-90'].ss < 0 ? 'behind' : 'ahead',
-    rhine90: pctStr((mid.regimes['Mittelrhein'] || { blocks: { 'h31-90': { ss: 0 } } }).blocks['h31-90'].ss),
     persistGain: koeln ? pctStr(1 - koeln.mae.blend / koeln.mae.persist) : '—',
-    picp: `${Math.round(Math.min(...picps))}–${Math.round(Math.max(...picps))} %`,
     climWorst: climLong[0] ? climLong[0].n : '—',
     climRest: climLong[1] ? pctStr(climLong[1].v) : '—',
-    perGauge: Math.round(Object.values(mid.station_info).reduce((a, s) => a + (s.test || 0), 0) / Object.keys(mid.stations).length),
     windows: Object.values(mid.station_info).reduce((a, s) => a + (s.test || 0), 0),
-    minutes: Math.max(1, Math.round((mid.header.elapsed_s || 0) / 60)),
   };
   const m = {
-    state, verdict: report.verdict, clauses, block, target: state.target, gist, facts, story,
+    state, targets, verdict: report.verdict, clauses, block, target: state.target, gist, facts, story,
     head: {
       generated: h.generated, model: h.model, license: h.model_license, checkpoint: h.checkpoint, git: h.git,
       fingerprint: h.config_fingerprint, versions: h.versions, elapsed: h.elapsed_s, reproduced: h.reproduced_by_run,
@@ -245,6 +249,8 @@ const SHAPES = {
 const mark = (kind, x, extra = '') => `<span class="mk mk-${kind}"${attr('style', `left:${x.toFixed(2)}%`)}${extra}><svg viewBox="0 0 12 12" aria-hidden="true">${SHAPES[kind]}</svg></span>`;
 const sw = kind => `<span class="sw mk-${kind}"><svg viewBox="0 0 12 12" aria-hidden="true">${SHAPES[kind]}</svg></span>`;
 const swBar = cls => `<span class="sw bar ${cls}"></span>`;
+// a vertical hairline swatch: the drawing's own class (zero, one, thr) on a 12 px box
+const swRule = cls => `<span class="sw"><span class="${cls}" style="position:relative;display:block;height:12px;left:6px"></span></span>`;
 // a line swatch: the curve's own class on a 12-unit stroke, so dash and colour follow the drawing
 const swLine = cls => `<span class="sw"><svg viewBox="0 0 12 12" aria-hidden="true"><line class="${cls}" x1="0" y1="6" x2="12" y2="6"/></svg></span>`;
 
@@ -258,6 +264,7 @@ function ctlRow(label, items, aria) {
   return `<nav class="p-tabs"${attr('aria-label', aria || label)}>` +
     (label ? `<span class="p-tabs-lbl">${esc(label)}</span>` : '') +
     items.map(it => it.lbl ? `<span class="p-tabs-lbl">${esc(it.lbl)}</span>` :
+      it.off ? `<span class="off" aria-disabled="true"${attr('title', it.title)}>${esc(it.off)}</span>` :
       `<a${attr('href', it.href)}${attr('class', it.on ? 'on' : '')}${it.on ? ' aria-current="true"' : ''}${attr('title', it.title)}${attr('data-focus', it.focus)}>${esc(it.label)}</a>`).join('') +
     '</nav>';
 }
@@ -345,10 +352,11 @@ function renderLead(m) {
     ...L.stations.map(n => ({ href: stateHref(s, { lead: n, panel: 'lead' }), label: n, on: L.station === n, focus: 'lead' })),
   ], 'gauge drawn in the curve');
   const bands = L.blocks.map(b => `<span class="lb${b.on ? ' on' : ''}"${attr('style', `left:${((b.from - 1) / L.H * 100).toFixed(2)}%;width:${((b.to - b.from + 1) / L.H * 100).toFixed(2)}%`)}></span>`).join('');
-  const bandLabels = L.blocks.map(b => `<span${attr('class', b.on ? 'on' : '')}${attr('style', `left:${((b.from - 1) / L.H * 100).toFixed(2)}%;width:${((b.to - b.from + 1) / L.H * 100).toFixed(2)}%`)}><span class="lbn">${esc(`${b.from}–${b.to}`)}</span><b>${esc(signed(b.ss, 2))}</b></span>`).join('');
+  // the band labels are the block chips of this chart: each one is the same link the filter row carries
+  const bandLabels = L.blocks.map(b => `<a${attr('href', stateHref(s, { block: b.name, panel: 'lead' }))}${attr('class', b.on ? 'on' : '')}${b.on ? ' aria-current="true"' : ''} data-focus="lead"${attr('style', `left:${((b.from - 1) / L.H * 100).toFixed(2)}%;width:${((b.to - b.from + 1) / L.H * 100).toFixed(2)}%`)}${attr('title', `${BLOCK_LABEL[b.name]}: skill ${signed(b.ss, 3)}${L.station === 'pooled' ? ', median of the five gauges' : ''}`)}><span class="lbn">${esc(`${b.from}–${b.to}`)}</span><b>${esc(signed(b.ss, 2))}</b></a>`).join('');
   const paths = ['persist', 'clim', 'tfm'].map(k => ({ k, ...leadPath(L.series[k], L.H) }));
   const lines = paths.map(p => `<path class="ln ln-${p.k}"${attr('d', p.d)}/>`).join('');
-  const clips = paths.flatMap(p => p.clips.map(c => `<span class="clip ${c.dir} ln-${p.k}"${attr('style', `left:${leadXpct(c.day, L.H)}%`)}${attr('title', `${p.k === 'tfm' ? 'TimesFM' : p.k === 'clim' ? 'climatology' : 'persistence'} beyond ×${LEAD_DOMAIN[c.dir === 'up' ? 1 : 0]} on days ${c.from}–${c.to}`)}></span>`)).join('');
+  const clips = paths.flatMap(p => p.clips.map(c => `<span class="clip ${c.dir} ln-${p.k}"${attr('style', `left:${leadXpct(c.day, L.H)}%`)}${attr('title', `${p.k === 'tfm' ? 'TimesFM' : p.k === 'clim' ? 'climatology' : 'persistence'} beyond ×${LEAD_DOMAIN[c.dir === 'up' ? 1 : 0]} on ${c.from === c.to ? `day ${c.from}` : `days ${c.from}–${c.to}`}`)}></span>`)).join('');
   const cx = leadX(L.cursor, L.H).toFixed(2);
   const say = leadSay(L, L.cursor);
   const svg = `<svg viewBox="0 0 ${LEAD_W} ${LEAD_HGT}" preserveAspectRatio="none" tabindex="0" role="slider" data-lead` +
@@ -357,6 +365,10 @@ function renderLead(m) {
     `<line class="ln-cur" data-cur${attr('x1', cx)} y1="0"${attr('x2', cx)} y2="${LEAD_HGT}"/></svg>`;
   const vscale = [4, 2, 1, 0.5].map(v => `<span${attr('style', `top:${(leadY(v) / LEAD_HGT * 100).toFixed(1)}%`)}>×${v}</span>`).join('');
   const ticks = [1, 14, 30, 60, 90].filter(d => d <= L.H).map(d => `<span${attr('style', `left:${leadXpct(d, L.H)}%`)}>${d}</span>`).join('');
+  const r2 = v => v == null || Number.isNaN(v) ? '—' : v.toFixed(2);
+  const table = `<details class="tbl"><summary>table — every lead day</summary><div class="tblwrap"><table><thead><tr><th>day</th><th>TimesFM</th><th>climatology</th><th>persistence</th><th>blend MAE cm</th></tr></thead><tbody>` +
+    Array.from({ length: L.H }, (_, i) => `<tr><td>${i + 1}</td><td>×${r2(L.series.tfm[i])}</td><td>×${r2(L.series.clim[i])}</td><td>×${r2(L.series.persist[i])}</td><td>${num(L.blendCm[i], 1)}</td></tr>`).join('') +
+    `</tbody></table></div></details>`;
   return `<section id="lead" class="p-block">${head}` +
     `<p class="p-dim">Each method's error divided by the blend's, day by day out to ${esc(L.H)}: below the line is better than the blend. The model wins early and hands over to the calendar; persistence never recovers. The hatched band is the block the filter row picked; the vertical rule is a cursor — drag it, or use the arrow keys.</p>` +
     chips +
@@ -371,9 +383,9 @@ function renderLead(m) {
       { sw: '<span class="sw"><span class="lb on" style="position:relative;display:block;height:12px;width:12px"></span></span>', label: 'the horizon block picked in the filter row' },
       { sw: '<span class="sw"><span class="lb" style="position:relative;display:block;height:12px;width:12px"></span></span>', label: 'block boundaries — days 14 and 30, each labelled with its skill' },
       { sw: '<span class="sw"><svg viewBox="0 0 12 12" aria-hidden="true"><line class="ln-cur" x1="6" y1="0" x2="6" y2="12"/></svg></span>', label: 'the cursor; the line under the chart reads its day' },
-      { note: `The y axis is logarithmic, ×${LEAD_DOMAIN[0]} to ×${LEAD_DOMAIN[1]}; a ▴ marks days a curve runs above the frame (climatology in its first days).` },
-      L.station === 'pooled' ? { note: 'Pooled here means the median of the five regime gauges’ ratios, so the Rhine and the Elbe do not outvote the Saar by their centimetres; the blend MAE is the cm-pooled figure.' } : null,
-    ]) + '</section>';
+      { note: `The y axis is logarithmic, ×${LEAD_DOMAIN[0]} to ×${LEAD_DOMAIN[1]}; a ▴ or ▾ marks days a curve runs above or below the frame (climatology in its first days).` },
+      L.station === 'pooled' ? { note: 'Pooled here means the median of the five regime gauges — of their day-by-day ratios in the curve and of their block skills in the band labels — so the Rhine and the Elbe do not outvote the Saar by their centimetres. Clause A1 in the facts pools centimetres instead; the blend MAE in the readout is that cm-pooled figure.' } : null,
+    ]) + table + '</section>';
 }
 
 function renderFacts(m) {
@@ -390,7 +402,9 @@ function renderIndex(m) {
 function renderControls(m) {
   const s = m.state;
   return ctlRow('target', [
-    ...Object.entries(TARGETS).map(([k, label]) => ({ href: stateHref(s, { target: k, panel: 'skill' }), label, on: s.target === k, focus: 'skill', title: k === 'mid' ? 'the day’s (min+max)/2 — what the archive stores' : 'the day’s maximum — the crest is what matters in a flood' })),
+    ...m.targets.map(t => t.available
+      ? { href: stateHref(s, { target: t.k, panel: 'skill' }), label: t.label, on: s.target === t.k, focus: 'skill', title: t.k === 'mid' ? 'the day’s (min+max)/2 — what the archive stores' : 'the day’s maximum — the crest is what matters in a flood' }
+      : { off: t.label, title: `the ${t.label} report did not load` }),
     { lbl: 'horizon' },
     ...BLOCKS.map(b => ({ href: stateHref(s, { block: b, panel: 'skill' }), label: BLOCK_LABEL[b], on: s.block === b, focus: 'skill' })),
   ], 'target and horizon block');
@@ -424,9 +438,10 @@ function renderSkill(m) {
       { sw: swBar('pos'), label: 'better than the blend' },
       { sw: swBar('neg'), label: 'worse than the blend' },
       { sw: swBar('tie'), label: 'a tie — under 2 cm apart, neither win nor loss' },
+      { sw: swRule('zero'), label: 'zero — as good as the blend' },
       { sw: '<span class="sw"><span class="ci" style="position:relative;display:block;top:5px;width:12px"></span></span>', label: 'bootstrap 95 % CI (pooled row)' },
-      { sw: '<span class="sw"><span class="thr" style="position:relative;display:block;height:12px;left:6px"></span></span>', label: 'the A1 bar, +0.10' },
-      { sw: '<span class="sw" style="text-align:center;color:var(--water-line)">●</span>', label: 'Diebold-Mariano p below 0.10 (Newey-West, lag 13)' },
+      { sw: swRule('thr'), label: 'the A1 bar, +0.10' },
+      { sw: '<span class="sw sig" style="text-align:center">●</span>', label: 'Diebold-Mariano p below 0.10 (Newey-West, lag 13)' },
       { note: 'The three Rhine gauges lie on 97 river-km of one chain and vote as one regime, by their median.' },
     ]) + table;
 }
@@ -446,7 +461,7 @@ function renderError(m) {
     `<p class="p-readout" data-readout><span class="hint">Hover or pick a row for the MAE of every method in cm.</span></p>` +
     plateKey([
       { sw: sw('tfm'), label: 'TimesFM 2.5' },
-      { sw: sw('blend'), label: 'the blend (×1.00)' },
+      { sw: swRule('one'), label: 'the blend, ×1.00' },
       { sw: sw('persist'), label: 'persistence — the MASE denominator, not the bar' },
       { sw: sw('clim'), label: 'climatology (day-of-year mean of earlier years)' },
       { sw: sw('snaive'), label: 'seasonal naive — the value 365 days before' },
@@ -478,7 +493,8 @@ function renderCalib(m) {
       { sw: sw('picp-t'), label: 'TimesFM, 80 % interval coverage' },
       { sw: sw('picp-b'), label: 'the blend with its own residual deciles' },
       { sw: '<span class="sw"><span class="band" style="position:relative;display:block;height:12px;width:12px"></span></span>', label: 'accepted range 72–88 %' },
-      { sw: '<span class="sw"><span class="thr" style="position:relative;display:block;height:12px;left:6px"></span></span>', label: 'ideal 80 %' },
+      { sw: swRule('thr'), label: 'ideal 80 %' },
+      { sw: '<span class="sw"><span class="link" style="position:relative;display:block;top:5px;width:12px"></span></span>', label: 'the gap between the model’s coverage and the blend’s' },
       { sw: '<span class="sw"><svg viewBox="0 0 12 12" aria-hidden="true"><rect class="pb" x="1" y="4" width="4" height="8"/><rect class="pb" x="7" y="2" width="4" height="10"/></svg></span>', label: 'PIT histogram: share of readings that fell at or below each decile' },
       { sw: '<span class="sw"><svg viewBox="0 0 12 12" aria-hidden="true"><line class="pu" x1="0" y1="6" x2="12" y2="6"/></svg></span>', label: 'the flat 10 % a calibrated model would show' },
     ]) + table;
@@ -495,6 +511,7 @@ function renderClim(m) {
       { sw: swBar('pos'), label: 'climatology better than the blend' },
       { sw: swBar('neg'), label: 'climatology worse (values below −0.20 are clipped, marked ◂)' },
       { sw: swBar('tie'), label: 'a tie' },
+      { sw: swRule('zero'), label: 'zero — as good as the blend' },
     ]);
 }
 
@@ -509,7 +526,7 @@ function renderShort(m) {
   }).join('');
   const blocks = s.stations.length ? Object.keys(s.stations[0].blocks) : [];
   const table = `<details class="tbl"><summary>first-week numbers (no verdict)</summary><div class="tblwrap"><table><thead><tr><th>station</th><th>origins</th><th>rises</th>${blocks.map(b => `<th>${esc(b)} TimesFM</th><th>best baseline</th><th>skill</th>`).join('')}</tr></thead><tbody>` +
-    s.stations.map(st => `<tr><td>${esc(st.name)}</td><td>${st.origins}</td><td>${st.rises}</td>${blocks.map(b => { const v = st.blocks[b]; return `<td>${num(v.mae.tfm_point, 1)}</td><td>${esc(v.best_baseline)} ${num(v.mae[v.best_baseline], 1)}</td><td>${signed(v.ss_vs_best)}</td>`; }).join('')}</tr>`).join('') +
+    s.stations.map(st => `<tr><td>${esc(st.name)}</td><td>${esc(st.origins)}</td><td>${esc(st.rises)}</td>${blocks.map(b => { const v = st.blocks[b]; return `<td>${num(v.mae.tfm_point, 1)}</td><td>${esc(v.best_baseline)} ${num(v.mae[v.best_baseline], 1)}</td><td>${signed(v.ss_vs_best)}</td>`; }).join('')}</tr>`).join('') +
     `</tbody></table></div></details>`;
   return `<p class="p-dim">The daily archive keeps day extremes only, so 15-minute readings are being collected weekly since 2026-09-02. The verdict stays PROVISIONAL until every gauge has ${esc(s.need)} independent origins (about sixteen weeks) and ${esc(s.needRises)} rise events; it can never be SHIP before that.</p>` +
     `<div class="rows">${rows}</div>` +
@@ -595,7 +612,9 @@ const coarsePointer = () => typeof matchMedia === 'function' && matchMedia('(poi
 
 function announce(text) {
   const box = document.getElementById('gate-status');
-  if (box) box.textContent = text;
+  if (!box) return;
+  box.textContent = '';                               // the same text twice would not re-fire the live region
+  setTimeout(() => { box.textContent = text; }, 30);
 }
 
 // after a full re-render the focus would be nowhere: put it on what was asked
@@ -634,14 +653,18 @@ function wireLead(m) {
     svg.setAttribute('aria-valuetext', say);
     if (readout) readout.innerHTML = `<b>${esc(say)}</b>`;
   };
+  // a thumb cannot aim at one of 90 days: on a coarse pointer the cursor snaps to every
+  // fifth day plus the block edges, so day 14 and day 30 — the verdict's own boundaries — stay reachable
+  const stops = [...new Set([1, ...Array.from({ length: Math.floor(L.H / 5) }, (_, i) => (i + 1) * 5), ...L.blocks.flatMap(b => [b.from, b.to])])].filter(d => d >= 1 && d <= L.H).sort((a, b) => a - b);
   const dayAt = e => {
     const r = svg.getBoundingClientRect();
     const raw = ((e.clientX - r.left) / Math.max(1, r.width)) * L.H + 0.5;
-    if (coarsePointer()) return raw <= 3 ? 1 : Math.round(raw / 5) * 5;  // a thumb cannot aim at one of 90 days
-    return raw;
+    if (!coarsePointer()) return raw;
+    return stops.reduce((best, d) => Math.abs(d - raw) < Math.abs(best - raw) ? d : best, stops[0]);
   };
-  svg.addEventListener('pointerdown', e => { svg.setPointerCapture && svg.setPointerCapture(e.pointerId); set(dayAt(e)); });
-  svg.addEventListener('pointermove', e => { if (e.pointerType === 'mouse' || e.buttons) set(dayAt(e)); });
+  // drag, not hover: a parked reading (arrow keys, a screen reader on the slider) must survive a passing mouse
+  svg.addEventListener('pointerdown', e => { if (e.button !== 0) return; svg.setPointerCapture && svg.setPointerCapture(e.pointerId); set(dayAt(e)); });
+  svg.addEventListener('pointermove', e => { if (e.buttons & 1) set(dayAt(e)); });
   svg.addEventListener('keydown', e => {
     const step = { ArrowLeft: -1, ArrowRight: 1, ArrowDown: -1, ArrowUp: 1, PageDown: -7, PageUp: 7 }[e.key];
     if (step) { e.preventDefault(); set(day + step); }
@@ -671,10 +694,10 @@ function wire() {
   // chips and index links are real links; intercept so the sheet re-renders in
   // place, and every one of them says what to focus afterwards
   root.addEventListener('click', e => {
-    const a = e.target.closest('.p-tabs a, .index a');
+    const a = e.target.closest('.p-tabs a, .index a, .lead-bands a');
     if (!a || e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
     e.preventDefault();
-    history.pushState(null, '', a.getAttribute('href'));
+    if (a.href !== location.href) history.pushState(null, '', a.getAttribute('href'));  // the active chip again: no duplicate history entry
     draw({ focus: a.dataset.focus || parseState(location.search, location.hash, known).panel, scroll: true });
   });
 }
@@ -683,9 +706,19 @@ function draw(opts = {}) {
   if (!reports) return;
   const state = parseState(location.search, location.hash, known);
   const m = buildModel(reports, state);
-  const open = [...root.querySelectorAll('details.panel[open]')].map(d => d.id);
+  // what the reader had open stays open: the panels, and the table twins inside them (by position)
+  const open = [...root.querySelectorAll('details[open]')].map(d => {
+    if (d.classList.contains('panel')) return { id: d.id };
+    const panel = d.closest('details.panel, #lead');  // the panel, or the curve's section — not the id-less <section> inside a panel
+    return panel ? { id: panel.id, tbl: [...panel.querySelectorAll('details.tbl')].indexOf(d) } : null;
+  }).filter(Boolean);
   root.innerHTML = renderPage(m);
-  for (const id of open) { const d = root.querySelector(`#${CSS.escape(id)}`); if (d) d.open = true; }
+  for (const o of open) {
+    const d = root.querySelector(`#${CSS.escape(o.id)}`);
+    if (!d) continue;
+    if (o.tbl == null) d.open = true;
+    else { const t = d.querySelectorAll('details.tbl')[o.tbl]; if (t) t.open = true; }
+  }
   document.title = `PEGEL:// gate · ${m.verdict}`;
   wireLead(m);
   if (opts.focus) focusTo(opts.focus, opts.scroll);
@@ -708,7 +741,7 @@ export async function main() {
   window.addEventListener('popstate', () => {
     draw();
     const panel = parseState(location.search, location.hash, known).panel;
-    if (panel) requestAnimationFrame(() => requestAnimationFrame(() => focusTo(panel, false)));
+    requestAnimationFrame(() => requestAnimationFrame(() => focusTo(panel, false)));  // no panel: the h1
   });
   // the reports arrive after the load, so a #panel in the URL opens only now
   draw({ focus: parseState(location.search, location.hash, known).panel, scroll: true });

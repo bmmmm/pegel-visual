@@ -210,9 +210,12 @@ def pooled(data: dict, blocks: dict, thresholds: dict) -> dict:
     # per lead day, for the page's curve: the cm-pooled MAE (sum |err| / count over
     # the five, Rhine and Elbe weigh most) and the median of the five stations'
     # ratios method/blend ("five regimes, one vote each"; blend is 1.0 by construction)
+    # a pooled column exists only where EVERY pooled station has it: upstream lives at
+    # KÖLN alone, and one gauge's number must not come out labelled as five gauges'
     H = data[uuids[0]]["y"].shape[1] if uuids else 0
     sums = {k: np.zeros(H) for k in METHODS}
     counts = {k: np.zeros(H) for k in METHODS}
+    complete = {k: np.ones(H, bool) for k in METHODS}
     ratios = {k: [] for k in METHODS}
     for u in uuids:
         s_u, c_u = per_h_abs_err(data[u])
@@ -220,11 +223,12 @@ def pooled(data: dict, blocks: dict, thresholds: dict) -> dict:
         for k in METHODS:
             sums[k] += s_u[k]
             counts[k] += c_u[k]
+            complete[k] &= c_u[k] > 0
             ratios[k].append(_ratio(mae_u[k], mae_u["blend"]))
-    out["per_h"] = {k: np.round(_ratio(sums[k], counts[k]), 2) for k in METHODS}
+    out["per_h"] = {k: np.round(np.where(complete[k], _ratio(sums[k], counts[k]), np.nan), 2) for k in METHODS}
     with warnings.catch_warnings():
-        warnings.simplefilter("ignore", RuntimeWarning)  # all-NaN columns (upstream) are null, not noise
-        out["per_h_ratio_median"] = {k: np.round(np.nanmedian(np.array(ratios[k]), axis=0), 3) if ratios[k] else np.full(H, np.nan) for k in METHODS}
+        warnings.simplefilter("ignore", RuntimeWarning)  # all-NaN columns are null, not noise
+        out["per_h_ratio_median"] = {k: np.round(np.where(complete[k], np.nanmedian(np.array(ratios[k]), axis=0), np.nan), 3) if ratios[k] else np.full(H, np.nan) for k in METHODS}
     return out
 
 

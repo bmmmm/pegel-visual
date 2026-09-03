@@ -256,15 +256,19 @@ th:first-child, td:first-child { text-align: left; }
   font-family: var(--font-data);
 }
 .plot .lead-bands { grid-column: 2; grid-row: 1; position: relative; height: 2.5em; font-size: 0.68em; color: var(--mid); }
-.plot .lead-bands > span {
+.plot .lead-bands > a {
   position: absolute; top: 0; bottom: 0;
   display: flex; flex-direction: column; justify-content: flex-end; align-items: center;
   border-left: 1px solid var(--rule);
   overflow: hidden; white-space: nowrap; line-height: 1.25;
+  color: var(--mid); text-decoration: none;
 }
-.plot .lead-bands > span:first-child { border-left: 0; }
-.plot .lead-bands > span.on { color: var(--ink); }
+.plot .lead-bands > a:first-child { border-left: 0; }
+.plot .lead-bands > a:hover, .plot .lead-bands > a:focus-visible { color: var(--ink); text-decoration: underline; }
+.plot .lead-bands > a.on { color: var(--ink); }
 .plot .lead-bands b { font-weight: 600; color: var(--ink); }
+.p-tabs .off { display: inline-flex; align-items: center; border: 1px dashed var(--rule); color: var(--dim); padding: 0.15em 0.8ch; white-space: nowrap; }
+.sw.sig { color: var(--water-line); }
 .plot .vscale { grid-column: 1; grid-row: 2; position: relative; font-size: 0.66rem; color: var(--mid); }
 .plot .vscale span { position: absolute; right: 0.6ch; transform: translateY(-50%); white-space: nowrap; }
 .plot .plot-box { grid-column: 2; grid-row: 2; position: relative; border: 1px solid var(--ink); }

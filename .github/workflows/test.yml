@@ -42,3 +42,24 @@ jobs:
           cache-dependency-glob: scripts/forecast/uv.lock
       - run: uv sync --locked --no-group model
       - run: uv run --no-sync pytest -q
+
+  # the gate page's runtime — focus after a full re-render, open panels, back and
+  # forward, the cursor, overflow on a phone — has no DOM in node --test.
+  # scripts/gate-check.mjs drives the runner's Chrome over CDP on two viewports
+  # and fails on any FAIL line; the deploy waits for it like for the other two.
+  gate-page:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - run: node scripts/gate-check.mjs --shots gate-check-shots
+        env:
+          CHROME: google-chrome
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gate-check-shots
+          path: gate-check-shots

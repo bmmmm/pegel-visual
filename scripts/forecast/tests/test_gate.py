@@ -152,3 +152,17 @@ def test_per_h_curves_cover_every_lead_day_and_the_blend_is_the_unit():
     assert all(r < 1 for r in med["tfm_point"]) and all(r > 1 for r in med["clim"])
     assert all(v is None for v in gate._clean(med["upstream"]))
     json.dumps(gate._clean(rep))
+
+
+def test_a_column_one_pooled_station_has_is_not_pooled():
+    # upstream exists at KÖLN only in reality: its own curve is reported, the pooled one is null
+    rng = np.random.default_rng(7)
+    data = {u: synth_station(rng, model_sigma=5.0) for u in st.STATIONS}
+    koeln = st.POOLED[0]
+    assert st.name_of(koeln) == "KÖLN"
+    data[koeln]["upstream"] = data[koeln]["y"] + rng.normal(0, 8.0, data[koeln]["y"].shape)
+    rep = gate.seasonal_report(header_for(data), data, thresholds())
+    assert all(v is not None for v in gate._clean(rep["stations"]["KÖLN"]["per_h"]["upstream"]))
+    assert all(v is None for v in gate._clean(rep["pooled"]["per_h"]["upstream"]))
+    assert all(v is None for v in gate._clean(rep["pooled"]["per_h_ratio_median"]["upstream"]))
+    assert all(v is not None for v in gate._clean(rep["pooled"]["per_h"]["tfm_point"])), "a complete column is still pooled"

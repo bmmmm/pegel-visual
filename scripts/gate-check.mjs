@@ -11,8 +11,10 @@
 //
 // Without --url it serves the repo itself (python3 -m http.server on a free
 // port); without --cdp it starts Chrome headless on a fresh profile and stops
-// it at the end. Both need to bind and connect on loopback — from an agent
-// sandbox that means running this ONE command with the sandbox bypass.
+// it at the end (CHROME=<binary> overrides the macOS path; CI adds --no-sandbox).
+// Both need to bind and connect on loopback — from an agent sandbox that means
+// running this ONE command with the sandbox bypass. The `gate-page` job in
+// .github/workflows/test.yml runs it on every push, so the deploy waits for it.
 // Headless Chrome does not exit by itself when the script is killed: end the
 // script normally (or kill Chrome by its pid, printed on start), never pkill.
 //
@@ -47,7 +49,7 @@ async function chrome() {
   const port = await freePort();
   const profile = mkdtempSync(join(tmpdir(), 'gate-check-'));
   const p = spawn(CHROME, ['--headless=new', '--disable-gpu', '--no-first-run', '--no-default-browser-check', `--user-data-dir=${profile}`,
-    `--remote-debugging-port=${port}`, '--remote-allow-origins=*', 'about:blank'], { stdio: ['ignore', 'ignore', 'pipe'] });
+    `--remote-debugging-port=${port}`, '--remote-allow-origins=*', ...(process.env.CI ? ['--no-sandbox'] : []), 'about:blank'], { stdio: ['ignore', 'ignore', 'pipe'] });
   children.push(p);
   p.on('exit', () => rmSync(profile, { recursive: true, force: true }));
   console.log(`chrome pid ${p.pid} on port ${port}`);
@@ -67,7 +69,7 @@ async function session(cdp) {
   const pending = new Map();
   ws.onmessage = ev => { const m = JSON.parse(ev.data); if (m.id && pending.has(m.id)) { const { res, rej } = pending.get(m.id); pending.delete(m.id); m.error ? rej(new Error(m.error.message)) : res(m.result); } };
   const send = (method, params = {}) => new Promise((res, rej) => { const i = ++id; pending.set(i, { res, rej }); ws.send(JSON.stringify({ id: i, method, params })); });
-  const evaluate = async expr => { const r = await send('Runtime.evaluate', { expression: expr, returnByValue: true, awaitPromise: true }); if (r.exceptionDetails) throw new Error(r.exceptionDetails.text + ' ' + (r.exceptionDetails.exception || {}).description); return r.result.value; };
+  const evaluate = async expr => { const r = await send('Runtime.evaluate', { expression: expr, returnByValue: true, awaitPromise: true }); if (r.exceptionDetails) throw new Error(`${r.exceptionDetails.text} ${(r.exceptionDetails.exception || {}).description || ''} — in: ${expr.slice(0, 120)}`); return r.result.value; };
   const close = async () => { ws.close(); await fetch(`${cdp}/json/close/${t.id}`).catch(() => {}); };
   return { send, evaluate, close };
 }
@@ -97,21 +99,28 @@ async function run(cdp, url, { name, width, height, mobile }) {
   const sw = await s.evaluate('({ scroll: document.documentElement.scrollWidth, inner: window.innerWidth })');
   check(sw.scroll <= sw.inner, 'no horizontal overflow', `scrollWidth ${sw.scroll} ≤ ${sw.inner}`);
   // rendered elements only, and not the tables — those scroll inside .tblwrap by design
-  const wide = await s.evaluate('[...document.querySelectorAll("#plate *")].filter(e => e.checkVisibility() && !e.closest(".tblwrap") && e.getBoundingClientRect().right > window.innerWidth + 1).map(e => e.tagName + "." + e.className).slice(0, 5)');
+  const sweep = () => s.evaluate('[...document.querySelectorAll("#plate *")].filter(e => e.checkVisibility() && !e.closest(".tblwrap") && e.getBoundingClientRect().right > window.innerWidth + 1).map(e => e.tagName + "." + e.className).slice(0, 5)');
+  const wide = await sweep();
   check(wide.length === 0, 'no visible element sticks out on the right', wide.join(', '));
+  await s.evaluate('for (const d of document.querySelectorAll("details")) d.open = true');
+  const wideOpen = await sweep();
+  const sw2 = await s.evaluate('({ scroll: document.documentElement.scrollWidth, inner: window.innerWidth })');
+  check(wideOpen.length === 0 && sw2.scroll <= sw2.inner, 'nothing sticks out with every panel and table open either', wideOpen.join(', ') + ` scrollWidth ${sw2.scroll}`);
+  await s.evaluate('for (const d of document.querySelectorAll("details")) d.open = false');
   check(await s.evaluate('document.querySelector("#lead [data-readout]").textContent.startsWith("day 14: TimesFM ×")'), 'the readout starts on day 14');
   const plot = await rect('#lead svg[data-lead]');
   check(plot && plot.h >= 90, 'the curve has height', `${Math.round(plot.w)}×${Math.round(plot.h)} px`);
   await s.send('Page.captureScreenshot', {}).then(r => writeFileSync(join(shots, `${name}-load.png`), Buffer.from(r.data, 'base64')));
 
   // 2. a block chip: re-render, then focus on the opened panel's summary, scrolled to it
-  await click('.p-tabs a[href*="block=h31-90"]');
+  await click('nav[aria-label="target and horizon block"] a[href*="block=h31-90"]');
   check((await s.evaluate('location.search + location.hash')) === '?block=h31-90#skill', 'the URL carries block and panel', await s.evaluate('location.search + location.hash'));
   check(await s.evaluate('document.querySelector("details#skill").open'), 'the skill panel opened');
   check((await active()) === 'summary in details#skill', 'focus sits on the skill summary', await active());
-  check((await s.evaluate('window.scrollY')) > 0, 'the page scrolled to it', `scrollY ${await s.evaluate('window.scrollY')}`);
+  const top = await s.evaluate('document.querySelector("details#skill summary").getBoundingClientRect().top');
+  check(top >= -2 && top <= 60, 'the page scrolled so the summary sits at the top', `summary top ${Math.round(top)} px`);
   check(await s.evaluate('document.querySelector("details#skill summary").textContent.includes("days 31–90")'), 'the summary names the new block');
-  check(await s.evaluate('document.querySelector("#lead .lead-bands span.on b").textContent.startsWith("-")'), 'the curve hatches the block with the negative skill');
+  check(await s.evaluate('document.querySelector("#lead .lead-bands a.on b").textContent.startsWith("-")'), 'the curve hatches the block with the negative skill');
   check(await s.evaluate('getComputedStyle(document.activeElement).outlineStyle === "solid"'), 'the focus ring is drawn', await s.evaluate('getComputedStyle(document.activeElement).outline'));
   await s.send('Page.captureScreenshot', {}).then(r => writeFileSync(join(shots, `${name}-block.png`), Buffer.from(r.data, 'base64')));
 
@@ -120,6 +129,13 @@ async function run(cdp, url, { name, width, height, mobile }) {
   check((await s.evaluate('location.search + location.hash')) === '?block=h31-90&lead=DRESDEN#lead', 'the URL carries the gauge', await s.evaluate('location.search + location.hash'));
   check((await active()) === 'h2 in section#lead', 'focus sits on the curve heading', await active());
   check(await s.evaluate('document.querySelector("details#skill").open'), 'the open panel survived the re-render');
+  await s.evaluate('document.querySelector("details#skill details.tbl").open = true');
+  await click('#lead .p-tabs a[href*="KOBLENZ"]');
+  check(await s.evaluate('document.querySelector("details#skill").open && document.querySelector("details#skill details.tbl").open'), 'and so does an open table twin inside it');
+  await s.evaluate('history.back()'); await sleep(700);  // one entry back: DRESDEN again, through popstate
+  check((await s.evaluate('location.search + location.hash')) === '?block=h31-90&lead=DRESDEN#lead', 'back from the KOBLENZ chip lands on DRESDEN', await s.evaluate('location.search + location.hash'));
+  check(await s.evaluate('document.querySelector("details#skill details.tbl").open'), 'the table twin is still open after popstate');
+  await s.evaluate('document.querySelector("details#skill details.tbl").open = false');
   check(await s.evaluate('document.querySelector("#lead [data-readout]").textContent.endsWith("cm")'), 'the readout is for one gauge, not pooled');
   check(await s.evaluate('!!document.querySelector("#lead .clip.up.ln-clim")'), 'Dresden’s climatology is marked above the frame');
 
@@ -144,6 +160,15 @@ async function run(cdp, url, { name, width, height, mobile }) {
   check(mobile ? day === 25 : day === 23, `a press at a quarter of the width lands on day ${mobile ? 25 : 23}`, `day ${day}`);
   check(await s.evaluate('document.querySelector("#lead [data-readout]").textContent.startsWith("day " + document.querySelector("#lead svg[data-lead]").getAttribute("aria-valuenow"))'), 'the readout follows the cursor');
   check((await s.evaluate('location.search + location.hash')) === '?block=h31-90&lead=DRESDEN#lead', 'the cursor never touches the URL');
+  await s.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: p.x + p.w * 0.75, y: py });
+  await sleep(100);
+  check(Number(await s.evaluate('document.querySelector("#lead svg[data-lead]").getAttribute("aria-valuenow")')) === day, 'a passing mouse does not move the parked cursor');
+  await click('#lead .lead-bands a[href*="block=h15-30"]');
+  check((await s.evaluate('location.search + location.hash')) === '?block=h15-30&lead=DRESDEN#lead', 'a band label switches the block', await s.evaluate('location.search + location.hash'));
+  check(await s.evaluate('document.querySelector("#lead .lead-bands a.on").textContent.startsWith("15–30")'), 'and the hatch moves with it');
+  check((await active()) === 'h2 in section#lead', 'focus stays on the curve');
+  await s.evaluate('history.back()'); await sleep(700);
+  check((await s.evaluate('location.search + location.hash')) === '?block=h31-90&lead=DRESDEN#lead', 'back undoes the band click');
   await s.send('Page.captureScreenshot', {}).then(r => writeFileSync(join(shots, `${name}-cursor.png`), Buffer.from(r.data, 'base64')));
 
   // 5. an index link opens its panel and focuses it; the others stay as they were
@@ -159,6 +184,13 @@ async function run(cdp, url, { name, width, height, mobile }) {
   await s.evaluate('history.back()'); await sleep(700);
   check((await s.evaluate('location.search + location.hash')) === '?block=h31-90#skill', 'back again: the gauge chip is undone', await s.evaluate('location.search + location.hash'));
   check(await s.evaluate('document.querySelector("#lead [data-readout]").textContent.endsWith("pooled")'), 'the curve is pooled again');
+  await s.evaluate('history.back()'); await sleep(700);
+  check((await s.evaluate('location.search + location.hash')) === '', 'back to the start: a bare URL', await s.evaluate('location.search + location.hash'));
+  check((await active()) === 'h1', 'with no panel to name, the focus lands on the h1', await active());
+  await click('nav[aria-label="target and horizon block"] a[href*="block=h31-90"]');
+  const entries = await s.evaluate('history.length');
+  await click('nav[aria-label="target and horizon block"] a[href*="block=h31-90"]');
+  check((await s.evaluate('history.length')) === entries, 'clicking the active chip again adds no history entry');
 
   // 7. a deep link opens its panel on load
   await open(url + '?target=max#clim');
@@ -187,8 +219,9 @@ const url = await serve();
 const cdp = await chrome();
 console.log(`page ${url}\ncdp  ${cdp}\nshots ${shots}`);
 try {
-  await run(cdp, url, { name: 'desktop', width: 1240, height: 900, mobile: false });
-  await run(cdp, url, { name: 'phone', width: 390, height: 844, mobile: true });
+  for (const vp of [{ name: 'desktop', width: 1240, height: 900, mobile: false }, { name: 'phone', width: 390, height: 844, mobile: true }]) {
+    try { await run(cdp, url, vp); } catch (e) { check(false, `${vp.name}: the run threw`, String(e.stack || e).split('\n').slice(0, 3).join(' | ')); }
+  }
 } finally {
   for (const c of children) c.kill();
 }

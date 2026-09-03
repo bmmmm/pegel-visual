@@ -86,7 +86,13 @@ test('the curve draws three lines, the bands, the bar and a cursor, each named i
   assert.match(lead, /<span class="clip up ln-clim" style="left:[\d.]+%" title="climatology beyond ×4 on days 1–\d+">/, 'the clipped first days of climatology are marked');
   assert.match(lead, /<svg viewBox="0 0 320 120" preserveAspectRatio="none" tabindex="0" role="slider" data-lead aria-valuemin="1" aria-valuemax="90" aria-valuenow="14" aria-valuetext="day 14: /);
   assert.ok(lead.includes('<h2 class="p-h2" tabindex="-1">Error by lead day · DRESDEN</h2>'));
-  assert.equal((lead.match(/<a href="[^"]*#lead" class="on" aria-current="true"/g) || []).length, 1, 'the DRESDEN chip is on');
+  const gaugeRow = (lead.match(/<nav class="p-tabs"[\s\S]*?<\/nav>/) || [''])[0];
+  assert.equal((gaugeRow.match(/<a href="[^"]*#lead" class="on" aria-current="true"/g) || []).length, 1, 'the DRESDEN chip is on');
+  const bands = (lead.match(/<div class="lead-bands">[\s\S]*?<\/div>/) || [''])[0];
+  assert.equal((bands.match(/<a href="[^"]*#lead"/g) || []).length, 3, 'the three band labels are the block links of this chart');
+  assert.ok(bands.includes('<a href="?block=h15-30&amp;lead=DRESDEN#lead" data-focus="lead"'), 'a band link keeps the gauge and names the block');
+  assert.ok(bands.includes('<a href="?lead=DRESDEN#lead" class="on" aria-current="true" data-focus="lead"'), 'the picked band is current');
+  assert.match(lead, /<details class="tbl"><summary>table — every lead day<\/summary>[\s\S]*?<tr><td>90<\/td><td>×\d\.\d\d<\/td>/, 'the curve has its table twin, all 90 days');
   assert.match(lead, /<a href="\.\/#lead"[^>]*data-focus="lead">five regimes<\/a>/, 'the pooled chip drops the lead from the URL');
   assert.ok(lead.includes('<a href="?lead=K%C3%96LN#lead" data-focus="lead">KÖLN</a>'));
   const key = (lead.match(/<dl class="p-key">[\s\S]*?<\/dl>/) || [''])[0];
@@ -97,21 +103,36 @@ test('the curve draws three lines, the bands, the bar and a cursor, each named i
   assert.ok(pooled.includes('median of the five regime gauges'), 'the pooled key says what pooled means');
 });
 
-test('every mark a section draws is named in that section’s key', () => {
-  for (const state of everyState) {
+// Mechanical, like the app's own gate in logic.test.mjs: pull every class out of
+// the drawing, every class out of its <dl class="p-key">, and demand the second
+// set covers the first. A renderer that gains a mark without a legend entry — a
+// fourth curve, a new bar state — turns this red without anyone editing a list.
+const classesIn = html => { const out = new Set(); for (const m of html.matchAll(/class="([^"]+)"/g)) for (const c of m[1].split(/\s+/)) if (c) out.add(c); return out; };
+// not marks: layout, text, hit targets and states the key spells out in words (▸ ◂ ▴ ▾ are glyphs in the notes)
+const NOT_A_MARK = new Set(['p-block', 'row', 'pooled', 'head', 'lbl', 'rg', 'track', 'val', 'axis', 'ticks', 'mk', 'sw', 'hint', 'p-readout', 'p-dim', 'p-tabs', 'p-tabs-lbl', 'on', 'off', 'rows', 'pits', 'pit', 'nm',
+  'plot', 'vscale', 'plot-box', 'lead-bands', 'lbn', 'lead-ticks', 'clip', 'lo', 'hi', 'up', 'dn', 'vh', 'p-h2']);
+test('every mark a section draws is named in that section’s key — mechanically', () => {
+  let drawings = 0;
+  for (const state of [...everyState, parseState('?lead=DRESDEN', '', STATIONS)]) {
     const html = renderPage(buildModel(reports, state));
     const sections = html.split(/<details class="panel"|<section id="lead"/).slice(1).filter(s => s.includes('class="rows"') || s.includes('class="pits"') || s.includes('class="plot"'));
     assert.ok(sections.length >= 5, 'lead, skill, error, calibration, finding 2 (and short)');
     for (const s of sections) {
       const key = (s.match(/<dl class="p-key">[\s\S]*?<\/dl>/) || [''])[0];
       assert.ok(key, 'a section with a drawing has a key');
-      const drawing = s.slice(0, s.indexOf('<dl class="p-key">'));
-      for (const cls of ['mk-tfm', 'mk-persist', 'mk-clim', 'mk-snaive', 'mk-up', 'mk-picp-t', 'mk-picp-b', 'bar pos', 'bar neg', 'bar tie', 'class="band', 'class="thr', 'class="ci', 'class="meter', 'class="pb', 'class="pu',
-        'ln-tfm', 'ln-clim', 'ln-persist', 'ln-blend', 'ln-cur', 'class="lb"', 'class="lb on"']) {
-        if (drawing.includes(cls)) assert.ok(key.includes(cls), `${cls} is drawn but not in the key of: ${s.slice(0, 60)}`);
-      }
+      const drawing = s.slice(0, s.indexOf('<dl class="p-key">')).replace(/<details class="tbl">[\s\S]*?<\/details>/g, '');
+      const named = classesIn(key);
+      const missing = [...classesIn(drawing)].filter(c => !NOT_A_MARK.has(c) && !named.has(c));
+      assert.deepEqual(missing, [], `drawn but not in the key of: ${s.slice(0, 50)}`);
+      drawings++;
     }
   }
+  assert.ok(drawings >= 35, `the gate saw ${drawings} drawings`);
+  // and it can go red: a mark class the key does not know
+  const html = renderPage(buildModel(reports, parseState(''))).replace('<path class="ln ln-tfm"', '<path class="ln ln-ghost"');
+  const lead = html.split('<section id="lead"')[1];
+  const missing = [...classesIn(lead.slice(0, lead.indexOf('<dl class="p-key">')))].filter(c => !NOT_A_MARK.has(c) && !classesIn(lead.match(/<dl class="p-key">[\s\S]*?<\/dl>/)[0]).has(c));
+  assert.deepEqual(missing, ['ln-ghost']);
 });
 
 test('every row carries its readout sentence, every chart its table twin', () => {
@@ -119,7 +140,7 @@ test('every row carries its readout sentence, every chart its table twin', () =>
   const rows = html.match(/<div class="row[^"]*" tabindex="0" role="button" data-say="[^"]+">/g) || [];
   assert.ok(rows.length >= 7 * 4 + 1 + 7, `rows: ${rows.length}`);
   assert.ok(!/<div class="row[^"]*" tabindex="0" role="button">/.test(html), 'no silent row');
-  assert.equal((html.match(/<details class="tbl">/g) || []).length, 4, 'skill, error, calibration, short');
+  assert.equal((html.match(/<details class="tbl">/g) || []).length, 5, 'the curve, skill, error, calibration, short');
   assert.equal((html.match(/data-readout/g) || []).length, 6, 'the curve, skill, error, calibration, finding 2, short');
   for (const c of ['A1', 'A2', 'A3', 'A4', 'A5', 'A6', 'A7']) assert.ok(html.includes(`>${c} `), `${c} chip`);
   assert.ok(html.includes('<span class="g" aria-hidden="true">✗</span>') && html.includes('<span class="g" aria-hidden="true">✓</span>'), 'pass and fail carry a glyph, not only a colour');
@@ -129,6 +150,9 @@ test('state round-trips through the URL: query for the data, hash for the panel'
   assert.deepEqual(parseState(''), { target: 'mid', block: 'h1-14', lead: 'pooled', panel: null });
   assert.deepEqual(parseState('?target=max&block=h31-90', '#calib'), { target: 'max', block: 'h31-90', lead: 'pooled', panel: 'calib' });
   assert.deepEqual(parseState('?target=bogus&block=nope&lead=', '#nowhere'), { target: 'mid', block: 'h1-14', lead: 'pooled', panel: null });
+  for (const t of ['constructor', 'toString', '__proto__', 'hasOwnProperty']) assert.equal(parseState(`?target=${t}`).target, 'mid', `${t} is not a target`);
+  assert.ok(renderPage(buildModel(reports, parseState('?target=constructor'))).includes('daily mid'), 'and the page still renders');
+  assert.equal(parseState('', '#writeup').panel, 'basics', 'the old write-up anchor still lands');
   assert.equal(parseState('?lead=DRESDEN').lead, 'DRESDEN');
   assert.equal(parseState('?lead=DRESDEN', '', STATIONS).lead, 'DRESDEN');
   assert.equal(parseState('?lead=ATLANTIS', '', STATIONS).lead, 'pooled', 'an unknown gauge falls back to the median');
@@ -151,6 +175,7 @@ test('every chip and index link says what to focus, and the way back is there tw
   const chips = html.match(/<nav class="p-tabs"[\s\S]*?<\/nav>/g) || [];
   assert.equal(chips.length, 2, 'the gauge row on the curve and the filter row');
   for (const nav of chips) for (const a of nav.match(/<a [^>]+>/g)) assert.match(a, / data-focus="(lead|skill)"/, a);
+  for (const a of (html.match(/<div class="lead-bands">[\s\S]*?<\/div>/) || [''])[0].match(/<a [^>]+>/g)) assert.match(a, / data-focus="lead"/, a);
   const index = (html.match(/<nav class="index"[\s\S]*?<\/nav>/) || [''])[0];
   assert.ok(index, 'an index');
   const links = index.match(/<a href="[^"]+" data-focus="[^"]+">/g) || [];
@@ -197,10 +222,16 @@ test('a hostile station name never reaches the markup unescaped', () => {
   }
 });
 
-test('the page survives a missing max or short report — one panel fewer, no dead index link', () => {
+test('the page survives a missing max or short report — one panel fewer, no dead index link, no relabelled run', () => {
   const m = buildModel({ seasonal: { mid: reports.seasonal.mid } }, parseState('?target=max'));
   assert.equal(m.verdict, 'NO-SHIP');
+  assert.equal(m.target, 'mid', 'the mid run is not passed off as the max run');
+  assert.equal(m.state.target, 'mid');
+  assert.ok(m.gist.startsWith('On the daily mid target'));
   const html = renderPage(m);
+  assert.ok(html.includes('<span class="off" aria-disabled="true" title="the daily max report did not load">daily max</span>'), 'the max chip is there, but not a link');
+  assert.ok(!html.includes('daily max ·'), 'no panel title claims the max run');
+  assert.ok(html.includes('<a href="./#skill" class="on" aria-current="true"'), 'the mid chip is current');
   assert.ok(!html.includes('Short horizon'), 'no short panel without its report');
   assert.ok(!html.includes('#short"'), 'and no index link to it');
   assert.deepEqual(m.panels.map(p => p.id), ['skill', 'error', 'calib', 'clim', 'method', 'basics']);
