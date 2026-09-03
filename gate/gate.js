@@ -3,9 +3,16 @@
 // Pure functions build a view model from the committed report.json files and
 // render it to markup; main() wires the page. The module has no DOM at import
 // time so tests/gate-page.test.mjs can run buildModel/renderPage in Node
-// against the real reports. Every chart shares the one filter row (target and
+// against the real reports.
+//
+// The sheet reads top-down: a way back, the verdict, ONE picture (error over
+// the lead day, the story in a glance), five facts, then an index into closed
+// <details> panels — every chart shares the one filter row (target and
 // horizon block, both in the URL), every mark class is also a legend swatch,
-// and every chart has a table twin. Nothing repaints on a timer.
+// and every chart has a table twin. State is one URL: ?target=…&block=…&lead=…
+// picks the data, #panel names the last panel a chip or index link jumped to;
+// chips and index links go through the same pushState path, and every
+// re-render puts the focus on what it just opened. Nothing repaints on a timer.
 
 export const BLOCKS = ['h1-14', 'h15-30', 'h31-90'];
 export const BLOCK_LABEL = { 'h1-14': 'days 1–14', 'h15-30': 'days 15–30', 'h31-90': 'days 31–90' };
@@ -13,6 +20,8 @@ export const TARGETS = { mid: 'daily mid', max: 'daily max' };
 export const SKILL_DOMAIN = [-0.2, 0.2];   // fixed across blocks and targets, so bars stay comparable
 export const RATIO_DOMAIN = [0.5, 2.0];    // error relative to the blend; 1.0 is the bar
 export const PICP_DOMAIN = [0.6, 1.0];
+export const LEAD_DOMAIN = [0.5, 4];       // the curve's y, log2: ×0.5 and ×2 sit symmetric about the blend
+export const PANEL_IDS = ['lead', 'skill', 'error', 'calib', 'clim', 'short', 'method', 'basics'];
 
 export const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 export const attr = (name, v) => v == null || v === '' ? '' : ` ${name}="${esc(v)}"`;
@@ -22,22 +31,31 @@ const signed = (v, d = 3) => (v == null || Number.isNaN(v)) ? '—' : (v > 0 ? '
 const pct = (frac, [lo, hi]) => Math.max(0, Math.min(100, ((frac - lo) / (hi - lo)) * 100));
 const clampInfo = (v, [lo, hi]) => ({ x: pct(Math.max(lo, Math.min(hi, v)), [lo, hi]), clipped: v < lo ? 'lo' : v > hi ? 'hi' : null });
 const pval = p => p == null || Number.isNaN(p) ? '—' : p < 0.001 ? '< 0.001' : p.toFixed(3);
-const thousands = n => String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ' '); // 3 563, the thin space the app uses
+const thousands = n => String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ' '); // 3 563, the thin space the app uses
+const pctStr = v => `${Math.round(Math.abs(v) * 100)} %`;
 
-export function parseState(search) {
+// ---------- state: one URL ----------
+
+export function parseState(search, hash = '', known = null) {
   const q = new URLSearchParams(search || '');
   const target = q.get('target') in TARGETS ? q.get('target') : 'mid';
   const block = BLOCKS.includes(q.get('block')) ? q.get('block') : 'h1-14';
-  return { target, block };
+  const raw = q.get('lead');
+  const lead = raw && raw !== 'pooled' && (!known || known.includes(raw)) ? raw : 'pooled';
+  const h = String(hash || '').replace(/^#/, '');
+  const panel = PANEL_IDS.includes(h) ? h : null;
+  return { target, block, lead, panel };
 }
 
+// the one place that spells the URL: query for the data, hash for the panel
 export function stateHref(state, patch = {}) {
   const s = { ...state, ...patch };
   const q = new URLSearchParams();
   if (s.target !== 'mid') q.set('target', s.target);
   if (s.block !== 'h1-14') q.set('block', s.block);
+  if (s.lead && s.lead !== 'pooled') q.set('lead', s.lead);
   const str = q.toString();
-  return str ? '?' + str : './';
+  return (str ? '?' + str : './') + (s.panel ? '#' + s.panel : '');
 }
 
 // the clauses, spelled out for people — the report carries them as codes
@@ -77,6 +95,36 @@ export function skillRows(report, block, key = 'ss') {
       `; MASE ${num(b.mase, 2)}.`;
     return { station, regime, ss, tie, sig, say, model, blend: mae.blend, z: b.dm && b.dm.z, p: b.dm && b.dm.p };
   });
+}
+
+// the curve over the lead day: error of every method relative to the blend,
+// pooled as the median of the five regimes' ratios or for one gauge
+function leadModel(report, state) {
+  const per = report.pooled.per_h;
+  if (!per || !per.blend) return null;
+  const stations = Object.keys(report.stations);
+  const station = state.lead !== 'pooled' && report.stations[state.lead] && report.stations[state.lead].per_h ? state.lead : 'pooled';
+  const H = per.blend.length;
+  const ratio = (a, b) => a == null || b == null || !(b > 0) ? null : a / b;
+  let series;
+  if (station === 'pooled') {
+    const med = report.pooled.per_h_ratio_median;
+    series = { tfm: med.tfm_point, clim: med.clim, persist: med.persist };
+  } else {
+    const p = report.stations[station].per_h;
+    series = { tfm: p.tfm_point.map((v, i) => ratio(v, p.blend[i])), clim: p.clim.map((v, i) => ratio(v, p.blend[i])), persist: p.persist.map((v, i) => ratio(v, p.blend[i])) };
+  }
+  const src = station === 'pooled' ? report.pooled : report.stations[station];
+  const proto = report.header.protocol.blocks;
+  const blocks = BLOCKS.map(b => ({ name: b, from: proto[b][0], to: proto[b][1], ss: src.blocks[b].ss, on: b === state.block }));
+  return { station, stations, H, series, blendCm: src.per_h.blend, blocks, cursor: proto[state.block][1] };
+}
+
+// what the readout says for one lead day — the slider's value text, too
+export function leadSay(L, day) {
+  const i = Math.max(1, Math.min(L.H, day)) - 1;
+  const r = v => v == null || Number.isNaN(v) ? '—' : '×' + v.toFixed(2);
+  return `day ${i + 1}: TimesFM ${r(L.series.tfm[i])} · climatology ${r(L.series.clim[i])} · persistence ${r(L.series.persist[i])} · blend MAE ${num(L.blendCm[i], 1)} cm${L.station === 'pooled' ? ' pooled' : ''}`;
 }
 
 export function buildModel({ seasonal, short }, state) {
@@ -122,12 +170,28 @@ export function buildModel({ seasonal, short }, state) {
     stations: Object.entries(short.stations).map(([name, s]) => ({ name, origins: s.origins, rises: s.rise_events, blocks: s.blocks })),
     generated: short.header.generated,
   } : null;
-  // the write-up quotes the primary (mid) run whatever the chips say
+  const windows = Object.values(report.station_info).reduce((a, s) => a + (s.test || 0), 0);
+  const nStations = Object.keys(report.stations).length;
+  const nRegimes = Object.keys(report.regimes).length;
+  // the gist follows the target; the facts follow target AND block
+  const pb = b => report.pooled.blocks[b].ss;
+  const rel = v => Math.abs(v) < 0.02 ? 'draws' : `is ${pctStr(v)} ${v < 0 ? 'behind' : 'ahead'}`;
+  const climLongT = Object.entries(report.stations).map(([n, s]) => ({ n, v: Math.abs(s.blocks['h31-90'].ss_clim_vs_blend) })).sort((a, b) => b.v - a.v);
+  const gist = `On the ${TARGETS[state.target]} target TimesFM beats the blend by ${pctStr(pb('h1-14'))} at two weeks, ${rel(pb('h15-30'))} at a month and ${rel(pb('h31-90'))} by three months — the bar was ${pctStr(report.thresholds.A1_pooled_ss_min)} in every block, and beyond a month a calendar does as well.`;
+  const positive = regimes.filter(r => r.ss > 0).length;
+  const B = v => `<b>${esc(v)}</b>`;
+  const facts = [
+    { k: 'setup', html: `${B(nStations)} gauges in ${B(nRegimes)} regimes · ${B(report.pooled.n_origins)} test origins per gauge, ${B(thousands(windows))} windows from ${B(String(h.protocol.test_from).slice(0, 4))} · ${B(thousands(h.protocol.context))} days in, ${B(h.protocol.horizon)} days out` },
+    { k: BLOCK_LABEL[block], html: `pooled skill ${B(signed(pooled.ss, 2))} against the blend (95 % CI ${B(signed(pooled.ci95[0], 2))} to ${B(signed(pooled.ci95[1], 2))}), ${B(positive)} of ${B(nRegimes)} regimes ahead — the bar was ${B(signed(report.thresholds.A1_pooled_ss_min, 2))}` },
+    { k: 'calibration', html: `the 80 % band covered ${B(num(pooled.picp80.tfm * 100, 0) + ' %')} of days at ${BLOCK_LABEL[block]} (the blend's own band ${B(num(pooled.picp80.blend * 100, 0) + ' %')}); CRPS skill ${B(signed(pooled.ss_crps, 2))}` },
+    { k: 'climatology', html: `from day 31 plain climatology sits within ${B(climLongT[1] ? pctStr(climLongT[1].v) : '—')} of the blend at every gauge but ${B(climLongT[0] ? climLongT[0].n : '—')} — the long horizon needs a calendar, not a model` },
+    { k: 'run', html: `${B(Math.max(1, Math.round((h.elapsed_s || 0) / 60)) + ' min')} on a laptop CPU, ${h.reproduced_by_run ? 'reproduced bit for bit by a second run' : 'second run not compared'} · ${B(h.model)}, ${B(h.model_license)} — pinned since the 3.0 line went non-commercial on ${B('2026-08-28')}` },
+  ];
+  // the basics quote the primary (mid) run whatever the chips say
   const mid = seasonal.mid;
   const koeln = mid.stations['KÖLN'] && mid.stations['KÖLN'].blocks['h31-90'];
   const climLong = Object.entries(mid.stations).map(([n, s]) => ({ n, v: Math.abs(s.blocks['h31-90'].ss_clim_vs_blend) })).sort((a, b) => b.v - a.v);
   const picps = BLOCKS.map(b => mid.pooled.blocks[b].picp80.tfm * 100);
-  const pctStr = v => `${Math.round(Math.abs(v) * 100)} %`;
   const story = {
     verdict: mid.verdict,
     h1: pctStr(mid.pooled.blocks['h1-14'].ss),
@@ -142,17 +206,28 @@ export function buildModel({ seasonal, short }, state) {
     windows: Object.values(mid.station_info).reduce((a, s) => a + (s.test || 0), 0),
     minutes: Math.max(1, Math.round((mid.header.elapsed_s || 0) / 60)),
   };
-  return {
-    state, verdict: report.verdict, clauses, block, target: state.target, story,
+  const m = {
+    state, verdict: report.verdict, clauses, block, target: state.target, gist, facts, story,
     head: {
       generated: h.generated, model: h.model, license: h.model_license, checkpoint: h.checkpoint, git: h.git,
       fingerprint: h.config_fingerprint, versions: h.versions, elapsed: h.elapsed_s, reproduced: h.reproduced_by_run,
-      windows: Object.values(report.station_info).reduce((a, s) => a + (s.test || 0), 0),
-      stations: Object.keys(report.stations).length, regimes: Object.keys(report.regimes).length,
+      windows, stations: nStations, regimes: nRegimes,
     },
+    lead: leadModel(report, state),
     skill, error, calib, clim, short: shortModel,
     void: report.void || [],
   };
+  // the panels actually rendered, in order — the index is built from this list
+  m.panels = [
+    { id: 'skill', title: `Skill by gauge · ${TARGETS[state.target]} · ${BLOCK_LABEL[block]}`, hook: 'seven gauges, five regime votes, the bootstrap interval', render: renderSkill },
+    { id: 'error', title: `Error by method · ${BLOCK_LABEL[block]}`, hook: 'every baseline’s MAE next to the blend’s, gauge by gauge', render: renderError },
+    { id: 'calib', title: `Calibration · ${BLOCK_LABEL[block]}`, hook: 'how often the 80 % band held, and the PIT histograms', render: renderCalib },
+    { id: 'clim', title: `Climatology alone · ${BLOCK_LABEL[block]}`, hook: 'Finding 2: the calendar against the blend', render: renderClim },
+    shortModel ? { id: 'short', title: `Short horizon · ${shortModel.verdict}`, hook: 'hours to two days — still collecting, no verdict yet', render: renderShort } : null,
+    { id: 'method', title: 'Method', hook: 'how it was measured, and what it cannot prove', render: renderMethod },
+    { id: 'basics', title: 'Basics', hook: 'the model, the bar and the verdict in three short paragraphs', render: renderBasics },
+  ].filter(Boolean);
+  return m;
 }
 
 // ---------- marks and swatches (drawing and key share these) ----------
@@ -170,6 +245,8 @@ const SHAPES = {
 const mark = (kind, x, extra = '') => `<span class="mk mk-${kind}"${attr('style', `left:${x.toFixed(2)}%`)}${extra}><svg viewBox="0 0 12 12" aria-hidden="true">${SHAPES[kind]}</svg></span>`;
 const sw = kind => `<span class="sw mk-${kind}"><svg viewBox="0 0 12 12" aria-hidden="true">${SHAPES[kind]}</svg></span>`;
 const swBar = cls => `<span class="sw bar ${cls}"></span>`;
+// a line swatch: the curve's own class on a 12-unit stroke, so dash and colour follow the drawing
+const swLine = cls => `<span class="sw"><svg viewBox="0 0 12 12" aria-hidden="true"><line class="${cls}" x1="0" y1="6" x2="12" y2="6"/></svg></span>`;
 
 function plateKey(items) {
   return '<dl class="p-key"><dt>key</dt>' + items.filter(Boolean).map(it =>
@@ -181,7 +258,7 @@ function ctlRow(label, items, aria) {
   return `<nav class="p-tabs"${attr('aria-label', aria || label)}>` +
     (label ? `<span class="p-tabs-lbl">${esc(label)}</span>` : '') +
     items.map(it => it.lbl ? `<span class="p-tabs-lbl">${esc(it.lbl)}</span>` :
-      `<a${attr('href', it.href)}${attr('class', it.on ? 'on' : '')}${it.on ? ' aria-current="true"' : ''}${attr('title', it.title)}>${esc(it.label)}</a>`).join('') +
+      `<a${attr('href', it.href)}${attr('class', it.on ? 'on' : '')}${it.on ? ' aria-current="true"' : ''}${attr('title', it.title)}${attr('data-focus', it.focus)}>${esc(it.label)}</a>`).join('') +
     '</nav>';
 }
 
@@ -203,7 +280,11 @@ function skillBar(ss, tie) {
     (clipped ? `<span class="clip ${clipped}"${attr('style', `left:${x.toFixed(2)}%`)}></span>` : '');
 }
 
-// ---------- sections ----------
+// ---------- the sheet's head: a way back, the verdict, the picture, the facts ----------
+
+function renderBack() {
+  return `<nav class="p-back" aria-label="back"><a href="../">← back to the live gauges</a></nav>`;
+}
 
 function renderVerdict(m) {
   const why = m.verdict === 'SHIP'
@@ -219,14 +300,109 @@ function renderVerdict(m) {
     `</ul><p class="p-readout" id="clause-readout"><span class="hint">Pick a clause for what it demanded and what was measured.</span></p>`;
 }
 
+// the curve: x is the lead day, y the error relative to the blend on a log axis
+const LEAD_W = 320, LEAD_HGT = 120;
+const leadX = (day, H) => (day - 0.5) / H * LEAD_W;
+const leadY = v => {
+  const lo = Math.log2(LEAD_DOMAIN[0]), hi = Math.log2(LEAD_DOMAIN[1]);
+  return LEAD_HGT - (Math.log2(v) - lo) / (hi - lo) * LEAD_HGT;
+};
+const leadXpct = (day, H) => ((day - 0.5) / H * 100).toFixed(2);
+
+function leadPath(vals, H) {
+  // one path, a new sub-path after every gap; values outside the frame are drawn on its edge and marked
+  let d = '', pen = false;
+  const clipped = [];
+  vals.forEach((v, i) => {
+    if (v == null || Number.isNaN(v) || !(v > 0)) { pen = false; return; }
+    const c = Math.max(LEAD_DOMAIN[0], Math.min(LEAD_DOMAIN[1], v));
+    d += `${pen ? 'L' : 'M'}${leadX(i + 1, H).toFixed(2)} ${leadY(c).toFixed(2)}`;
+    pen = true;
+    if (v > LEAD_DOMAIN[1] || v < LEAD_DOMAIN[0]) clipped.push({ day: i + 1, dir: v > LEAD_DOMAIN[1] ? 'up' : 'dn' });
+  });
+  // one mark per run of clipped days, at the run's middle
+  const runs = [];
+  for (const c of clipped) {
+    const last = runs[runs.length - 1];
+    if (last && last.dir === c.dir && last.to === c.day - 1) last.to = c.day; else runs.push({ from: c.day, to: c.day, dir: c.dir });
+  }
+  return { d, clips: runs.map(r => ({ day: (r.from + r.to) / 2, dir: r.dir, from: r.from, to: r.to })) };
+}
+
+function leadAria(L) {
+  const who = L.station === 'pooled' ? 'the median of five regimes' : L.station;
+  return `Error relative to the blend by lead day, ${who}. Blocks: ` +
+    L.blocks.map(b => `${BLOCK_LABEL[b.name]} skill ${signed(b.ss, 2)}`).join(', ') + '. Arrow keys move the day.';
+}
+
+function renderLead(m) {
+  const L = m.lead;
+  const s = m.state;
+  const head = `<h2 class="p-h2" tabindex="-1">Error by lead day · ${esc(L ? (L.station === 'pooled' ? 'five regimes, one vote each' : L.station) : '')}</h2>`;
+  if (!L) return `<section id="lead" class="p-block">${head}<p class="p-empty p-dim">This report carries no per-day curve; re-run gate.py to add it.</p></section>`;
+  const chips = ctlRow('gauge', [
+    { href: stateHref(s, { lead: 'pooled', panel: 'lead' }), label: 'five regimes', on: L.station === 'pooled', focus: 'lead', title: 'the median of the five pooled gauges’ ratios, day by day' },
+    ...L.stations.map(n => ({ href: stateHref(s, { lead: n, panel: 'lead' }), label: n, on: L.station === n, focus: 'lead' })),
+  ], 'gauge drawn in the curve');
+  const bands = L.blocks.map(b => `<span class="lb${b.on ? ' on' : ''}"${attr('style', `left:${((b.from - 1) / L.H * 100).toFixed(2)}%;width:${((b.to - b.from + 1) / L.H * 100).toFixed(2)}%`)}></span>`).join('');
+  const bandLabels = L.blocks.map(b => `<span${attr('class', b.on ? 'on' : '')}${attr('style', `left:${((b.from - 1) / L.H * 100).toFixed(2)}%;width:${((b.to - b.from + 1) / L.H * 100).toFixed(2)}%`)}><span class="lbn">${esc(`${b.from}–${b.to}`)}</span><b>${esc(signed(b.ss, 2))}</b></span>`).join('');
+  const paths = ['persist', 'clim', 'tfm'].map(k => ({ k, ...leadPath(L.series[k], L.H) }));
+  const lines = paths.map(p => `<path class="ln ln-${p.k}"${attr('d', p.d)}/>`).join('');
+  const clips = paths.flatMap(p => p.clips.map(c => `<span class="clip ${c.dir} ln-${p.k}"${attr('style', `left:${leadXpct(c.day, L.H)}%`)}${attr('title', `${p.k === 'tfm' ? 'TimesFM' : p.k === 'clim' ? 'climatology' : 'persistence'} beyond ×${LEAD_DOMAIN[c.dir === 'up' ? 1 : 0]} on days ${c.from}–${c.to}`)}></span>`)).join('');
+  const cx = leadX(L.cursor, L.H).toFixed(2);
+  const say = leadSay(L, L.cursor);
+  const svg = `<svg viewBox="0 0 ${LEAD_W} ${LEAD_HGT}" preserveAspectRatio="none" tabindex="0" role="slider" data-lead` +
+    ` aria-valuemin="1"${attr('aria-valuemax', L.H)}${attr('aria-valuenow', L.cursor)}${attr('aria-valuetext', say)}${attr('aria-label', leadAria(L))}>` +
+    `<line class="ln-blend" x1="0"${attr('y1', leadY(1).toFixed(2))} x2="${LEAD_W}"${attr('y2', leadY(1).toFixed(2))}/>` + lines +
+    `<line class="ln-cur" data-cur${attr('x1', cx)} y1="0"${attr('x2', cx)} y2="${LEAD_HGT}"/></svg>`;
+  const vscale = [4, 2, 1, 0.5].map(v => `<span${attr('style', `top:${(leadY(v) / LEAD_HGT * 100).toFixed(1)}%`)}>×${v}</span>`).join('');
+  const ticks = [1, 14, 30, 60, 90].filter(d => d <= L.H).map(d => `<span${attr('style', `left:${leadXpct(d, L.H)}%`)}>${d}</span>`).join('');
+  return `<section id="lead" class="p-block">${head}` +
+    `<p class="p-dim">Each method's error divided by the blend's, day by day out to ${esc(L.H)}: below the line is better than the blend. The model wins early and hands over to the calendar; persistence never recovers. The hatched band is the block the filter row picked; the vertical rule is a cursor — drag it, or use the arrow keys.</p>` +
+    chips +
+    `<div class="plot"><div class="lead-bands">${bandLabels}</div><div class="vscale" aria-hidden="true">${vscale}</div><div class="plot-box">${bands}${svg}${clips}</div>` +
+    `<div class="ticks lead-ticks" aria-hidden="true">${ticks}</div></div>` +
+    `<p class="p-readout" data-readout><b>${esc(say)}</b></p>` +
+    plateKey([
+      { sw: swLine('ln ln-tfm'), label: 'TimesFM 2.5' },
+      { sw: swLine('ln ln-clim'), label: 'climatology (day-of-year mean of earlier years)' },
+      { sw: swLine('ln ln-persist'), label: 'persistence — today’s level, held' },
+      { sw: swLine('ln-blend'), label: 'the blend, ×1.00 — the bar' },
+      { sw: '<span class="sw"><span class="lb on" style="position:relative;display:block;height:12px;width:12px"></span></span>', label: 'the horizon block picked in the filter row' },
+      { sw: '<span class="sw"><span class="lb" style="position:relative;display:block;height:12px;width:12px"></span></span>', label: 'block boundaries — days 14 and 30, each labelled with its skill' },
+      { sw: '<span class="sw"><svg viewBox="0 0 12 12" aria-hidden="true"><line class="ln-cur" x1="6" y1="0" x2="6" y2="12"/></svg></span>', label: 'the cursor; the line under the chart reads its day' },
+      { note: `The y axis is logarithmic, ×${LEAD_DOMAIN[0]} to ×${LEAD_DOMAIN[1]}; a ▴ marks days a curve runs above the frame (climatology in its first days).` },
+      L.station === 'pooled' ? { note: 'Pooled here means the median of the five regime gauges’ ratios, so the Rhine and the Elbe do not outvote the Saar by their centimetres; the blend MAE is the cm-pooled figure.' } : null,
+    ]) + '</section>';
+}
+
+function renderFacts(m) {
+  return `<section class="facts-wrap"><h2 class="p-h2">In brief</h2><ul class="facts">` +
+    m.facts.map(f => `<li><span class="fk">${esc(f.k)}</span><span>${f.html}</span></li>`).join('') + `</ul></section>`;
+}
+
+function renderIndex(m) {
+  return `<nav class="index" aria-label="explore by interest"><h2 class="p-h2">Explore by interest</h2><ul>` +
+    m.panels.map(p => `<li><a${attr('href', stateHref(m.state, { panel: p.id }))}${attr('data-focus', p.id)}>${esc(p.title.split(' · ')[0])}</a><span class="hook">${esc(p.hook)}</span></li>`).join('') +
+    `</ul></nav>`;
+}
+
 function renderControls(m) {
   const s = m.state;
   return ctlRow('target', [
-    ...Object.entries(TARGETS).map(([k, label]) => ({ href: stateHref(s, { target: k }), label, on: s.target === k, title: k === 'mid' ? 'the day’s (min+max)/2 — what the archive stores' : 'the day’s maximum — the crest is what matters in a flood' })),
+    ...Object.entries(TARGETS).map(([k, label]) => ({ href: stateHref(s, { target: k, panel: 'skill' }), label, on: s.target === k, focus: 'skill', title: k === 'mid' ? 'the day’s (min+max)/2 — what the archive stores' : 'the day’s maximum — the crest is what matters in a flood' })),
     { lbl: 'horizon' },
-    ...BLOCKS.map(b => ({ href: stateHref(s, { block: b }), label: BLOCK_LABEL[b], on: s.block === b })),
+    ...BLOCKS.map(b => ({ href: stateHref(s, { block: b, panel: 'skill' }), label: BLOCK_LABEL[b], on: s.block === b, focus: 'skill' })),
   ], 'target and horizon block');
 }
+
+// a panel: the summary is the focus and click target; the visually hidden h2
+// keeps the heading in the outline (an h2 inside summary loses its semantics)
+function renderPanel(p, m) {
+  return `<details class="panel"${attr('id', p.id)}><summary>${esc(p.title)}</summary><section><h2 class="vh">${esc(p.title)}</h2>${p.render(m)}</section></details>`;
+}
+
+// ---------- the panels ----------
 
 function renderSkill(m) {
   const k = m.skill;
@@ -241,8 +417,7 @@ function renderSkill(m) {
   const table = `<details class="tbl"><summary>table</summary><div class="tblwrap"><table><thead><tr><th>station</th><th>regime</th><th>TimesFM MAE</th><th>blend MAE</th><th>skill</th><th>tie</th><th>DM z</th><th>p</th></tr></thead><tbody>` +
     k.rows.map(r => `<tr><td>${esc(r.station)}</td><td>${esc(r.regime)}</td><td>${num(r.model, 1)}</td><td>${num(r.blend, 1)}</td><td>${signed(r.ss)}</td><td>${r.tie ? 'yes' : 'no'}</td><td>${num(r.z, 2)}</td><td>${pval(r.p)}</td></tr>`).join('') +
     `</tbody></table></div></details>`;
-  return `<section class="p-block"><h2 class="p-h2">Skill against the blend · ${esc(TARGETS[m.target])} · ${esc(BLOCK_LABEL[m.block])}</h2>` +
-    `<p class="p-dim">1 − MAE<sub>TimesFM</sub> / MAE<sub>blend</sub>. Positive means the model beat the persistence-to-climatology blend; the bar had to reach ${esc(signed(k.threshold, 2))} pooled. Regime medians: ${esc(regimeLine)}.</p>` +
+  return `<p class="p-dim">1 − MAE<sub>TimesFM</sub> / MAE<sub>blend</sub>. Positive means the model beat the persistence-to-climatology blend; the bar had to reach ${esc(signed(k.threshold, 2))} pooled. Regime medians: ${esc(regimeLine)}.</p>` +
     `<div class="rows">${rows}</div>` + axis([-0.2, -0.1, 0, 0.1, 0.2], SKILL_DOMAIN, v => signed(v, 1)) +
     `<p class="p-readout" data-readout><span class="hint">Hover or pick a row for the numbers behind it.</span></p>` +
     plateKey([
@@ -253,7 +428,7 @@ function renderSkill(m) {
       { sw: '<span class="sw"><span class="thr" style="position:relative;display:block;height:12px;left:6px"></span></span>', label: 'the A1 bar, +0.10' },
       { sw: '<span class="sw" style="text-align:center;color:var(--water-line)">●</span>', label: 'Diebold-Mariano p below 0.10 (Newey-West, lag 13)' },
       { note: 'The three Rhine gauges lie on 97 river-km of one chain and vote as one regime, by their median.' },
-    ]) + table + '</section>';
+    ]) + table;
 }
 
 function renderError(m) {
@@ -266,8 +441,7 @@ function renderError(m) {
     m.error.map(r => { const g = kind => { const k = r.marks.find(x => x.kind === kind); return k ? num(k.mae, 1) : '—'; };
       return `<tr><td>${esc(r.station)}</td><td>${num(r.blend, 1)}</td><td>${g('tfm')}</td><td>${g('persist')}</td><td>${g('clim')}</td><td>${g('snaive')}</td><td>${g('up')}</td></tr>`; }).join('') +
     `</tbody></table></div></details>`;
-  return `<section class="p-block"><h2 class="p-h2">Mean absolute error, relative to the blend · ${esc(BLOCK_LABEL[m.block])}</h2>` +
-    `<p class="p-dim">Each method's MAE divided by the blend's, so a 15 cm gauge and a 100 cm gauge share one axis. Left of the line is better than the blend. The value column is the blend's own MAE in cm.</p>` +
+  return `<p class="p-dim">Each method's MAE divided by the blend's, so a 15 cm gauge and a 100 cm gauge share one axis. Left of the line is better than the blend. The value column is the blend's own MAE in cm.</p>` +
     `<div class="rows">${rows}</div>` + axis([0.5, 0.75, 1, 1.25, 1.5, 1.75, 2], RATIO_DOMAIN, v => '×' + v.toFixed(2)) +
     `<p class="p-readout" data-readout><span class="hint">Hover or pick a row for the MAE of every method in cm.</span></p>` +
     plateKey([
@@ -278,7 +452,7 @@ function renderError(m) {
       { sw: sw('snaive'), label: 'seasonal naive — the value 365 days before' },
       { sw: sw('up'), label: 'upstream OLS (KÖLN from MAXAU; reference only)' },
       { note: 'Beyond a month climatology sits within 2 % of the blend at every gauge but Dresden — a seasonal outlook is a lookup table.' },
-    ]) + table + '</section>';
+    ]) + table;
 }
 
 function renderCalib(m) {
@@ -296,8 +470,7 @@ function renderCalib(m) {
   const table = `<details class="tbl"><summary>table</summary><div class="tblwrap"><table><thead><tr><th>station</th><th>PICP80 TimesFM</th><th>PICP80 blend</th>${Array.from({ length: 10 }, (_, i) => `<th>PIT ${i}</th>`).join('')}</tr></thead><tbody>` +
     m.calib.map(r => `<tr><td>${esc(r.station)}</td><td>${num(r.tfm, 3)}</td><td>${num(r.blend, 3)}</td>${r.pit.map(f => `<td>${num(f * 100, 1)}</td>`).join('')}</tr>`).join('') +
     `</tbody></table></div></details>`;
-  return `<section class="p-block"><h2 class="p-h2">Calibration · ${esc(BLOCK_LABEL[m.block])}</h2>` +
-    `<p class="p-dim">How often the model's 80 % interval actually contained the reading. Inside the shaded band is clause A5; the dashed line is the ideal 80 %. Below, the PIT histograms: a flat profile means the deciles are honest, a U means the band is too narrow, a hump too wide.</p>` +
+  return `<p class="p-dim">How often the model's 80 % interval actually contained the reading. Inside the shaded band is clause A5; the dashed line is the ideal 80 %. Below, the PIT histograms: a flat profile means the deciles are honest, a U means the band is too narrow, a hump too wide.</p>` +
     `<div class="rows">${rows}</div>` + axis([0.6, 0.7, 0.8, 0.9, 1.0], PICP_DOMAIN, v => num(v * 100, 0) + ' %') +
     `<p class="p-readout" data-readout><span class="hint">Hover or pick a row for coverage and CRPS.</span></p>` +
     `<div class="pits">${pits}</div>` +
@@ -308,22 +481,21 @@ function renderCalib(m) {
       { sw: '<span class="sw"><span class="thr" style="position:relative;display:block;height:12px;left:6px"></span></span>', label: 'ideal 80 %' },
       { sw: '<span class="sw"><svg viewBox="0 0 12 12" aria-hidden="true"><rect class="pb" x="1" y="4" width="4" height="8"/><rect class="pb" x="7" y="2" width="4" height="10"/></svg></span>', label: 'PIT histogram: share of readings that fell at or below each decile' },
       { sw: '<span class="sw"><svg viewBox="0 0 12 12" aria-hidden="true"><line class="pu" x1="0" y1="6" x2="12" y2="6"/></svg></span>', label: 'the flat 10 % a calibrated model would show' },
-    ]) + table + '</section>';
+    ]) + table;
 }
 
 function renderClim(m) {
   const zero = pct(0, SKILL_DOMAIN);
   const rows = m.clim.rows.map(r => rowOpen('', r.say) + lbl(r.station, r.regime) +
     `<span class="track"><span class="zero"${attr('style', `left:${zero.toFixed(2)}%`)}></span>${skillBar(r.ss, r.tie)}</span><span class="val">${esc(signed(r.ss))}</span></div>`).join('');
-  return `<section class="p-block"><h2 class="p-h2">Finding 2 · climatology alone against the blend · ${esc(BLOCK_LABEL[m.block])}</h2>` +
-    `<p class="p-dim">The same skill score, but for plain day-of-year climatology with no knowledge of today's level. Switch the horizon: at days 1–14 it is far behind, at days 31–90 it is a tie almost everywhere — the long horizon needs no model, only a calendar.</p>` +
+  return `<p class="p-dim">The same skill score, but for plain day-of-year climatology with no knowledge of today's level. Switch the horizon: at days 1–14 it is far behind, at days 31–90 it is a tie almost everywhere — the long horizon needs no model, only a calendar.</p>` +
     `<div class="rows">${rows}</div>` + axis([-0.2, -0.1, 0, 0.1, 0.2], SKILL_DOMAIN, v => signed(v, 1)) +
     `<p class="p-readout" data-readout><span class="hint">Hover or pick a row.</span></p>` +
     plateKey([
       { sw: swBar('pos'), label: 'climatology better than the blend' },
       { sw: swBar('neg'), label: 'climatology worse (values below −0.20 are clipped, marked ◂)' },
       { sw: swBar('tie'), label: 'a tie' },
-    ]) + '</section>';
+    ]);
 }
 
 function renderShort(m) {
@@ -339,38 +511,35 @@ function renderShort(m) {
   const table = `<details class="tbl"><summary>first-week numbers (no verdict)</summary><div class="tblwrap"><table><thead><tr><th>station</th><th>origins</th><th>rises</th>${blocks.map(b => `<th>${esc(b)} TimesFM</th><th>best baseline</th><th>skill</th>`).join('')}</tr></thead><tbody>` +
     s.stations.map(st => `<tr><td>${esc(st.name)}</td><td>${st.origins}</td><td>${st.rises}</td>${blocks.map(b => { const v = st.blocks[b]; return `<td>${num(v.mae.tfm_point, 1)}</td><td>${esc(v.best_baseline)} ${num(v.mae[v.best_baseline], 1)}</td><td>${signed(v.ss_vs_best)}</td>`; }).join('')}</tr>`).join('') +
     `</tbody></table></div></details>`;
-  return `<section class="p-block"><h2 class="p-h2">Short horizon (hours to two days) · ${esc(s.verdict)}</h2>` +
-    `<p class="p-dim">The daily archive keeps day extremes only, so 15-minute readings are being collected weekly since 2026-09-02. The verdict stays PROVISIONAL until every gauge has ${esc(s.need)} independent origins (about sixteen weeks) and ${esc(s.needRises)} rise events; it can never be SHIP before that.</p>` +
+  return `<p class="p-dim">The daily archive keeps day extremes only, so 15-minute readings are being collected weekly since 2026-09-02. The verdict stays PROVISIONAL until every gauge has ${esc(s.need)} independent origins (about sixteen weeks) and ${esc(s.needRises)} rise events; it can never be SHIP before that.</p>` +
     `<div class="rows">${rows}</div>` +
     `<p class="p-readout" data-readout><span class="hint">Hover or pick a gauge for its first-week numbers.</span></p>` +
     plateKey([
       { sw: '<span class="meter sw" style="display:inline-block;width:12px;height:12px"><span style="width:60%"></span></span>', label: `independent 48-hour origins collected, of the ${s.need} the gate needs` },
       { note: `Collected ${esc(s.generated)}. Ten origins is a month of data; nothing here is a result yet.` },
-    ]) + table + '</section>';
+    ]) + table;
 }
 
-// the write-up: what was tried, why the bar sits where it sits, and what the
-// one word above cost — prose for the reader who came from the main page
-function renderStory(m) {
+// the basics: model and question, the bar, the verdict — three short paragraphs
+// for the reader who came from the main page, every number from the mid run
+function renderBasics(m) {
   const k = m.story;
-  return `<section class="p-block prose" id="writeup"><h2 class="p-h2">Write-up · a brand-new model meets 26 years of river data</h2>` +
-    `<p><b>The question.</b> PEGEL:// draws what a river did and what it does right now, never what it will do. In 2026 that stopped being a given: Google's <b>TimesFM 2.5</b> is a 200-million-parameter foundation model for time series that forecasts <em>zero-shot</em> — no training on the data at hand, a <code>pip install</code> and a checkpoint. It is the first thing of its kind a one-file website could plausibly run against 737 gauges without keeping 737 models alive. So before drawing a single forecast line we asked the only question that matters: can it beat something trivial?</p>` +
-    `<p><b>What we did.</b> We took the daily archive this site already hosts — every gauge since 2000, condensed to day min/max — and built a backtest: 1 024 days of history in, 90 days out, one origin every week, ${esc(k.perGauge)} test origins per gauge from 2016 to 2025 on seven gauges chosen for their regimes: the sluggish Rhine, the continental Elbe, the alpine Danube, the flashy Saar, the tidal North Sea coast. The whole thing ran on a laptop CPU — ${esc(k.minutes)} minutes for ${esc(thousands(k.windows))} windows — and then once more, to prove it reproduces bit for bit. Every threshold, the model configuration and even the tie rule were written down before the first run, because a test set you re-run after peeking is no longer a test.</p>` +
-    `<p><b>The bar.</b> Not persistence. Persistence — "tomorrow is today" — is the opponent that makes every model look brilliant at three months; we measured that a two-line blend, today's level decaying into the day-of-year norm with one time constant per gauge, already beats it by ${esc(k.persistGain)} there at KÖLN. That blend is the bar, and the model had to beat <em>it</em> by ten percent, pooled, in every horizon block, with confidence intervals that respect overlapping windows and with the three Rhine gauges counted as one vote.</p>` +
-    `<p><b>The answer.</b> ${esc(k.verdict)}. TimesFM is a genuinely good forecaster: at two weeks it beats the blend by ${esc(k.h1)} — real, significant, and short of the bar. At a month it is a draw. At three months it is ${esc(k.h90)} ${esc(k.h90sign)}, ${esc(k.rhine90)} behind on the Rhine. Its uncertainty bands are honest (coverage ${esc(k.picp)} where 80 was asked), it forecasts recent years no worse than old ones, and the daily maximum tells the same story as the daily mean. The quiet finding underneath is worth more than the loud one: beyond a month, plain climatology — a calendar lookup — sits within ${esc(k.climRest)} of the bar at every gauge but ${esc(k.climWorst)}. The long horizon needs no model at all.</p>` +
-    `<p><b>What it cost and what it bought.</b> One evening, a 2.5 GB download and about 700 lines of Python that now live in the repository as a permanent instrument. It bought a clean no: no forecast view, no Python in the deploy, no model weights to licence-check every release (the 3.0 line went non-commercial on 2026-08-28, which is why the gate pins 2.5). What may follow is a seasonal outlook drawn from the archive alone, and a second verdict on the <em>short</em> horizon — hours to two days — for which 15-minute readings are now collected weekly and mirrored into a data branch, because the archive never kept them. That verdict is due around the turn of the year and can be no better than the data it waits for.</p>` +
-    `<p class="p-dim">Every number in this write-up is read from the committed report below; the code is under <a href="https://github.com/bmmmm/pegel-visual/tree/main/scripts/forecast">scripts/forecast</a>, the markdown reports sit beside this page.</p></section>`;
+  return `<div class="prose">` +
+    `<p><b>Model and question.</b> TimesFM 2.5 is Google's 200-million-parameter foundation model for time series; it forecasts <em>zero-shot</em>, untrained on the series at hand. Could it beat something trivial on 26 years of daily archive? ${esc(thousands(k.windows))} windows on seven gauges, run twice to prove it reproduces.</p>` +
+    `<p><b>The bar.</b> Not persistence: a two-line blend, today's level decaying into the day-of-year norm, already beats it by ${esc(k.persistGain)} at KÖLN over three months. The model had to beat that blend by ten percent, pooled, in every block; the Rhine trio votes once.</p>` +
+    `<p><b>The verdict.</b> ${esc(k.verdict)}. At two weeks TimesFM beats the blend by ${esc(k.h1)}, under the bar; at a month it draws; at three months it is ${esc(k.h90)} ${esc(k.h90sign)}. Its bands are honest. Beyond a month climatology alone sits within ${esc(k.climRest)} of the bar everywhere but ${esc(k.climWorst)}: the long horizon needs a calendar, not a model.</p>` +
+    `<p class="p-dim">Code: <a href="https://github.com/bmmmm/pegel-visual/tree/main/scripts/forecast">scripts/forecast</a>; the markdown reports sit beside this page.</p></div>`;
 }
 
 function renderMethod(m) {
   const h = m.head;
-  return `<section class="p-block prose"><h2 class="p-h2">How it was measured</h2>` +
+  return `<div class="prose">` +
     `<p>Rolling-origin backtest on the daily archive, closed years 2000–2025: 1 024 days of context, 90 days of horizon, one origin every 7 days. Origins before 2016 (676 per gauge) fit the blend's τ and its residual deciles; origins from 2016 (${esc(h.windows / h.stations)} per gauge, ${esc(h.windows)} in all) are scored. A 90-day embargo separates the two.</p>` +
     `<p>The bar is the <b>blend</b> — e<sup>−h/τ</sup>·today + (1 − e<sup>−h/τ</sup>)·climatology(day) — not persistence: at days 31–90 the blend already beats persistence by a quarter, so a win over persistence would be a win over nothing. Overlapping windows are not independent samples: significance comes from Diebold-Mariano tests with a Newey-West variance (lag 13) and a moving-block bootstrap over origins (block 26), and the Rhine trio votes once, by its median.</p>` +
     `<ul><li>Every threshold and the ForecastConfig were fixed before the first model run; a run with a different config, a truncated grid, or one that does not reproduce bit for bit is VOID, not a verdict.</li>` +
     `<li>TimesFM 2.5 has no published corpus manifest. PEGELONLINE is open and CAMELS-DE covers German basins, so 2000–2024 may be in its training data. Clause A7 compares recent against old origins; it is a probe, not a proof.</li>` +
     `<li>The blend's τ and residual deciles are fitted on the pre-2016 origins, which favours the blend slightly on A7's old side.</li>` +
-    `<li>The daily-max target run (switch the target chip above) tells the same story: the crest is no easier to forecast than the mid.</li></ul></section>`;
+    `<li>The daily-max target run (switch the target chip above) tells the same story: the crest is no easier to forecast than the mid.</li></ul></div>`;
 }
 
 function renderFoot(m) {
@@ -384,6 +553,7 @@ function renderFoot(m) {
     `<a href="seasonal-mid/report.md">report (mid)</a> · <a href="seasonal-max/report.md">report (max)</a> · <a href="short-mid/report.md">report (short)</a> · ` +
     `<a href="https://github.com/bmmmm/pegel-visual/tree/main/scripts/forecast">the gate's code</a></p>` +
     `<p><span class="lbl">not</span>a forecast product. Nothing on this sheet predicts a river; it measures whether a model could, and the answer was no.</p>` +
+    renderBack() +
     `</footer>`;
 }
 
@@ -395,12 +565,16 @@ export function screenSummary(m) {
 
 export function renderPage(m) {
   return `<p class="vh">${esc(screenSummary(m))}</p>` +
-    `<header class="p-head"><h1><a href="../">PEGEL://</a> · FORECAST GATE</h1>` +
-    `<p class="p-sub">Can a zero-shot model beat a persistence-to-climatology blend on the daily archive? ${esc(m.head.stations)} gauges in ${esc(m.head.regimes)} regimes, ${esc(thousands(m.head.windows))} test windows, measured ${esc(String(m.head.generated).slice(0, 10))}.</p></header>` +
+    renderBack() +
+    `<header class="p-head"><h1 tabindex="-1"><a href="../">PEGEL://</a> · FORECAST GATE</h1>` +
+    `<p class="p-sub">${esc(m.gist)}</p></header>` +
     renderVerdict(m) +
-    renderStory(m) +
+    renderLead(m) +
+    renderFacts(m) +
+    renderIndex(m) +
     renderControls(m) +
-    renderSkill(m) + renderError(m) + renderCalib(m) + renderClim(m) + renderShort(m) + renderMethod(m) + renderFoot(m);
+    m.panels.map(p => renderPanel(p, m)).join('') +
+    renderFoot(m);
 }
 
 // ---------- the page ----------
@@ -412,7 +586,71 @@ async function getJson(url) {
   } catch { return null; }
 }
 
-function wire(root) {
+let reports = null;
+let root = null;
+let known = [];
+
+const reducedMotion = () => typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
+const coarsePointer = () => typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches;
+
+function announce(text) {
+  const box = document.getElementById('gate-status');
+  if (box) box.textContent = text;
+}
+
+// after a full re-render the focus would be nowhere: put it on what was asked
+// for — a panel's summary (opened), the curve's heading, or the h1 as a fallback
+function focusTo(id, scroll) {
+  let target = null, label = '';
+  const el = id && root.querySelector(`#${CSS.escape(id)}`);
+  if (el && el.tagName === 'DETAILS') {
+    el.open = true;
+    target = el.querySelector(':scope > summary');
+    label = `${el.querySelector('summary').textContent}, opened`;
+  } else if (el) {
+    target = el.querySelector('h2[tabindex]') || el;
+    label = el.querySelector('h2') ? el.querySelector('h2').textContent : id;
+  }
+  if (!target) { target = root.querySelector('h1'); label = 'top of the gate'; }
+  if (!target) return;
+  target.focus({ preventScroll: true });
+  if (scroll) target.scrollIntoView({ block: 'start', behavior: reducedMotion() ? 'auto' : 'smooth' });
+  announce(label);
+}
+
+function wireLead(m) {
+  const svg = root.querySelector('#lead svg[data-lead]');
+  const L = m.lead;
+  if (!svg || !L) return;
+  const readout = root.querySelector('#lead [data-readout]');
+  const cur = svg.querySelector('[data-cur]');
+  let day = L.cursor;
+  const set = d => {
+    day = Math.max(1, Math.min(L.H, Math.round(d)));
+    const x = leadX(day, L.H).toFixed(2);
+    cur.setAttribute('x1', x); cur.setAttribute('x2', x);
+    const say = leadSay(L, day);
+    svg.setAttribute('aria-valuenow', String(day));
+    svg.setAttribute('aria-valuetext', say);
+    if (readout) readout.innerHTML = `<b>${esc(say)}</b>`;
+  };
+  const dayAt = e => {
+    const r = svg.getBoundingClientRect();
+    const raw = ((e.clientX - r.left) / Math.max(1, r.width)) * L.H + 0.5;
+    if (coarsePointer()) return raw <= 3 ? 1 : Math.round(raw / 5) * 5;  // a thumb cannot aim at one of 90 days
+    return raw;
+  };
+  svg.addEventListener('pointerdown', e => { svg.setPointerCapture && svg.setPointerCapture(e.pointerId); set(dayAt(e)); });
+  svg.addEventListener('pointermove', e => { if (e.pointerType === 'mouse' || e.buttons) set(dayAt(e)); });
+  svg.addEventListener('keydown', e => {
+    const step = { ArrowLeft: -1, ArrowRight: 1, ArrowDown: -1, ArrowUp: 1, PageDown: -7, PageUp: 7 }[e.key];
+    if (step) { e.preventDefault(); set(day + step); }
+    else if (e.key === 'Home') { e.preventDefault(); set(1); }
+    else if (e.key === 'End') { e.preventDefault(); set(L.H); }
+  });
+}
+
+function wire() {
   // the fixed readout under each chart: hover, focus or pick a row, and the
   // numbers behind it appear in prose — no floating tooltip to chase on touch
   const show = el => {
@@ -430,25 +668,27 @@ function wire(root) {
   root.addEventListener('keydown', e => {
     if ((e.key === 'Enter' || e.key === ' ') && e.target.matches('.row[data-say]')) { e.preventDefault(); show(e.target); }
   });
-  // the chips are real links; intercept so the filter row re-renders in place
+  // chips and index links are real links; intercept so the sheet re-renders in
+  // place, and every one of them says what to focus afterwards
   root.addEventListener('click', e => {
-    const a = e.target.closest('.p-tabs a');
-    if (!a || e.metaKey || e.ctrlKey || e.button !== 0) return;
+    const a = e.target.closest('.p-tabs a, .index a');
+    if (!a || e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
     e.preventDefault();
     history.pushState(null, '', a.getAttribute('href'));
-    draw();
+    draw({ focus: a.dataset.focus || parseState(location.search, location.hash, known).panel, scroll: true });
   });
 }
 
-let reports = null;
-let root = null;
-
-function draw() {
+function draw(opts = {}) {
   if (!reports) return;
-  const state = parseState(location.search);
+  const state = parseState(location.search, location.hash, known);
   const m = buildModel(reports, state);
+  const open = [...root.querySelectorAll('details.panel[open]')].map(d => d.id);
   root.innerHTML = renderPage(m);
+  for (const id of open) { const d = root.querySelector(`#${CSS.escape(id)}`); if (d) d.open = true; }
   document.title = `PEGEL:// gate · ${m.verdict}`;
+  wireLead(m);
+  if (opts.focus) focusTo(opts.focus, opts.scroll);
 }
 
 export async function main() {
@@ -459,9 +699,19 @@ export async function main() {
     return;
   }
   reports = { seasonal: { mid, max: max || undefined }, short: short || undefined };
-  wire(root);
-  window.addEventListener('popstate', draw);
-  draw();
+  known = Object.keys(mid.stations);
+  wire();
+  // back/forward: the browser restores the scroll position itself. It also
+  // processes the URL's fragment after popstate — and Chrome CLEARS the focus
+  // when the fragment's target is not focusable (a <section>, a <details>) —
+  // so the focus goes on after the next frame has done that, not inside the handler.
+  window.addEventListener('popstate', () => {
+    draw();
+    const panel = parseState(location.search, location.hash, known).panel;
+    if (panel) requestAnimationFrame(() => requestAnimationFrame(() => focusTo(panel, false)));
+  });
+  // the reports arrive after the load, so a #panel in the URL opens only now
+  draw({ focus: parseState(location.search, location.hash, known).panel, scroll: true });
 }
 
 if (typeof document !== 'undefined' && document.getElementById('plate')) main();

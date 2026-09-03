@@ -134,3 +134,21 @@ def test_short_report_is_provisional_before_sixty_origins():
     assert rep["verdict"] == "PROVISIONAL"
     assert any("9/60 origins" in r for r in rep["provisional_reasons"])
     assert "PROVISIONAL" in gate.render_short(rep)
+
+
+def test_per_h_curves_cover_every_lead_day_and_the_blend_is_the_unit():
+    rng = np.random.default_rng(6)
+    data = {u: synth_station(rng, model_sigma=5.0) for u in st.STATIONS}
+    rep = gate.seasonal_report(header_for(data), data, thresholds())
+    per = rep["stations"]["KÖLN"]["per_h"]
+    assert sorted(per) == sorted(gate.METHODS) and len(per) == 6
+    assert all(len(per[k]) == H for k in per)
+    assert all(t < b for t, b in zip(per["tfm_point"], per["blend"])), "a clear winner stays under the blend on every lead day"
+    assert all(v is None for v in gate._clean(per["upstream"])), "an empty column is null, not 0"
+    pool = rep["pooled"]
+    assert all(len(pool["per_h"][k]) == H for k in gate.METHODS)
+    med = pool["per_h_ratio_median"]
+    assert np.allclose(med["blend"], 1.0)
+    assert all(r < 1 for r in med["tfm_point"]) and all(r > 1 for r in med["clim"])
+    assert all(v is None for v in gate._clean(med["upstream"]))
+    json.dumps(gate._clean(rep))

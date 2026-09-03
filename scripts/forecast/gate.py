@@ -85,6 +85,36 @@ def fmt(v, digits=3):
 
 # ---------- per-station scoring ----------
 
+METHODS = ("persist", "clim", "snaive", "blend", "tfm_point", "upstream")
+
+
+def per_h_abs_err(d: dict, split: str = "is_test") -> tuple[dict, dict]:
+    """(sum of |err|, count) per lead day h = 1..H and method, on the given split —
+    the raw material for a curve over the lead day, poolable across stations."""
+    sel = d[split].astype(bool)
+    y, m = d["y"][sel], d["tmask"][sel]
+    sums, counts = {}, {}
+    for k in METHODS:
+        err = np.abs(d[k][sel] - y)
+        ok = m & ~np.isnan(err)
+        sums[k] = np.where(ok, err, 0.0).sum(axis=0)
+        counts[k] = ok.sum(axis=0)
+    return sums, counts
+
+
+def _ratio(num: np.ndarray, den: np.ndarray) -> np.ndarray:
+    with np.errstate(divide="ignore", invalid="ignore"):
+        return np.where(den > 0, num / np.where(den > 0, den, 1.0), np.nan)
+
+
+def per_h_mae(d: dict, split: str = "is_test") -> dict:
+    """MAE per lead day for every method — {method: [H]}, NaN where a column is
+    empty (upstream at every gauge but KÖLN). Rounded to 2 decimals; _clean turns
+    the NaN into null. This is the curve the gate page draws, not a clause input."""
+    sums, counts = per_h_abs_err(d, split)
+    return {k: np.round(_ratio(sums[k], counts[k]), 2) for k in METHODS}
+
+
 def score_station(d: dict, blocks: dict, thresholds: dict, split: str = "is_test") -> dict:
     sel = d[split].astype(bool)
     y, m = d["y"][sel], d["tmask"][sel]
@@ -118,6 +148,7 @@ def score_station(d: dict, blocks: dict, thresholds: dict, split: str = "is_test
             lt, lb = np.nanmean(err_t, axis=1), np.nanmean(err_b, axis=1)
         b["dm"] = metrics.dm_test(lt, lb, thresholds["newey_west_lag"])
         out["blocks"][name] = b
+    out["per_h"] = per_h_mae(d, split)
     return out
 
 
@@ -176,6 +207,24 @@ def pooled(data: dict, blocks: dict, thresholds: dict) -> dict:
             "ss_crps": 1 - crps_t / crps_b if crps_b > 0 else float("nan"),
             "ss_new": 1 - new_t / new_b if new_b > 0 else float("nan"),
         }
+    # per lead day, for the page's curve: the cm-pooled MAE (sum |err| / count over
+    # the five, Rhine and Elbe weigh most) and the median of the five stations'
+    # ratios method/blend ("five regimes, one vote each"; blend is 1.0 by construction)
+    H = data[uuids[0]]["y"].shape[1] if uuids else 0
+    sums = {k: np.zeros(H) for k in METHODS}
+    counts = {k: np.zeros(H) for k in METHODS}
+    ratios = {k: [] for k in METHODS}
+    for u in uuids:
+        s_u, c_u = per_h_abs_err(data[u])
+        mae_u = {k: _ratio(s_u[k], c_u[k]) for k in METHODS}
+        for k in METHODS:
+            sums[k] += s_u[k]
+            counts[k] += c_u[k]
+            ratios[k].append(_ratio(mae_u[k], mae_u["blend"]))
+    out["per_h"] = {k: np.round(_ratio(sums[k], counts[k]), 2) for k in METHODS}
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)  # all-NaN columns (upstream) are null, not noise
+        out["per_h_ratio_median"] = {k: np.round(np.nanmedian(np.array(ratios[k]), axis=0), 3) if ratios[k] else np.full(H, np.nan) for k in METHODS}
     return out
 
 
@@ -324,6 +373,8 @@ def short_report(header: dict, data: dict, th: dict) -> dict:
             continue
         d = data[u]
         y, m = d["y"], d["tmask"]
+        # no per_h here on purpose: the page's curve over the lead day reads the
+        # chosen SEASONAL report; the short protocol has a different grid and no blend
         entry = {"origins": int(n), "rise_events": int(rises), "blocks": {}}
         for bname, block in blocks.items():
             s = block_slice(block)

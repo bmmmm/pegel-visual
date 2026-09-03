@@ -32,6 +32,8 @@ body {
 }
 a { color: var(--ink); }
 :where(a, button, [tabindex]):focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+/* what a chip or index link just opened: the ring must show whatever the focus heuristic thinks */
+details.panel > summary:focus, #lead h2[tabindex]:focus, h1[tabindex]:focus { outline: 2px solid var(--ink); outline-offset: 3px; }
 main {
   margin: 5vh auto 4vh;
   padding: 1.6em 1.8em;
@@ -52,7 +54,11 @@ main {
 .p-head h1 { font-family: var(--font-data); font-size: 1.25em; letter-spacing: 0.04em; margin: 0; }
 .p-head a { text-decoration: none; }
 .p-head a:hover { text-decoration: underline; }
-.p-sub { margin: 0.2em 0 0; color: var(--mid); font-size: 0.85em; }
+.p-sub { margin: 0.3em 0 0; color: var(--mid); font-size: 0.9em; max-width: 52rem; line-height: 1.5; }
+.p-back { font-family: var(--font-data); font-size: 0.8em; margin: 0 0 0.9em; }
+.p-back a { text-decoration: none; }
+.p-back a:hover, .p-back a:focus-visible { text-decoration: underline; }
+#plate-foot .p-back { margin: 0.9em 0 0; font-size: 1em; }
 .p-h2 {
   font-size: 0.8em;
   text-transform: uppercase;
@@ -241,10 +247,93 @@ th:first-child, td:first-child { text-align: left; }
 .prose p { margin: 0.5em 0; }
 .prose ul { margin: 0.4em 0; padding-left: 1.2em; }
 
+/* ---- the picture: error by lead day, three lines on a log axis ---- */
+.plot {
+  display: grid;
+  grid-template-columns: 2.6rem 1fr;
+  grid-template-rows: auto auto auto;
+  margin-top: 0.4em;
+  font-family: var(--font-data);
+}
+.plot .lead-bands { grid-column: 2; grid-row: 1; position: relative; height: 2.5em; font-size: 0.68em; color: var(--mid); }
+.plot .lead-bands > span {
+  position: absolute; top: 0; bottom: 0;
+  display: flex; flex-direction: column; justify-content: flex-end; align-items: center;
+  border-left: 1px solid var(--rule);
+  overflow: hidden; white-space: nowrap; line-height: 1.25;
+}
+.plot .lead-bands > span:first-child { border-left: 0; }
+.plot .lead-bands > span.on { color: var(--ink); }
+.plot .lead-bands b { font-weight: 600; color: var(--ink); }
+.plot .vscale { grid-column: 1; grid-row: 2; position: relative; font-size: 0.66rem; color: var(--mid); }
+.plot .vscale span { position: absolute; right: 0.6ch; transform: translateY(-50%); white-space: nowrap; }
+.plot .plot-box { grid-column: 2; grid-row: 2; position: relative; border: 1px solid var(--ink); }
+.plot .plot-box svg {
+  display: block; width: 100%; aspect-ratio: 8 / 3; max-height: 15rem;
+  position: relative; touch-action: pan-y; cursor: col-resize; overflow: visible;
+}
+.plot .plot-box svg:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+.plot .ticks.lead-ticks { grid-column: 2; grid-row: 3; position: relative; height: 1.3em; font-size: 0.66rem; color: var(--mid); }
+.plot .ticks.lead-ticks span { position: absolute; transform: translateX(-50%); white-space: nowrap; }
+/* the horizon blocks, behind the drawing: a hairline between blocks, a hatch on the picked one */
+.lb { position: absolute; top: 0; bottom: 0; border-left: 1px solid var(--mid); }
+.plot-box > .lb:first-child { border-left: 0; }  /* the plot's own edge; the key's swatch keeps its line */
+.lb.on { background: repeating-linear-gradient(45deg, transparent 0 3px, var(--rule) 3px 4px); }
+/* the lines share one stroke width whatever the plot's stretch; dash and hue tell them apart */
+.ln { fill: none; stroke-width: 2; vector-effect: non-scaling-stroke; stroke-linejoin: round; stroke-linecap: round; }
+.ln-tfm { stroke: var(--water-line); }
+.ln-clim { stroke: var(--dry-line); stroke-dasharray: 7 4; }
+.ln-persist { stroke: var(--ink); stroke-dasharray: 2 4; }
+.ln-blend { stroke: var(--ink); stroke-width: 1; vector-effect: non-scaling-stroke; }
+.ln-cur { stroke: var(--ink); stroke-width: 1.5; vector-effect: non-scaling-stroke; stroke-dasharray: 4 3; pointer-events: none; }
+.plot-box .clip { position: absolute; top: 0; height: 0; pointer-events: none; }
+.plot-box .clip::after { right: auto; left: 0; top: -0.2em; transform: translateX(-50%); font-size: 0.75em; }
+.plot-box .clip.up::after { content: '▴'; }
+.plot-box .clip.dn::after { content: '▾'; top: auto; bottom: -0.2em; }
+.plot-box .clip.ln-clim::after { color: var(--dry-line); }
+.plot-box .clip.ln-tfm::after { color: var(--water-line); }
+
+/* ---- in brief: five lines, the numbers bold ---- */
+.facts { list-style: none; margin: 0.4em 0 0; padding: 0; font-size: 0.9em; max-width: 56rem; }
+.facts li { display: grid; grid-template-columns: 7.5rem 1fr; gap: 0 1ch; padding: 0.32em 0; border-bottom: 1px solid var(--rule); line-height: 1.45; }
+.facts li:last-child { border-bottom: 0; }
+.facts .fk { font-family: var(--font-data); font-size: 0.78em; text-transform: uppercase; letter-spacing: 0.06em; color: var(--dim); padding-top: 0.2em; }
+.facts b { font-family: var(--font-data); font-weight: 600; font-variant-numeric: tabular-nums; }
+
+/* ---- the index into the panels ---- */
+.index ul { list-style: none; margin: 0.4em 0 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(17rem, 1fr)); gap: 0.35em 1.6em; font-size: 0.9em; }
+.index li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 0.8ch; line-height: 1.4; }
+.index a { font-family: var(--font-data); text-decoration: none; border-bottom: 1px solid var(--ink); padding-bottom: 1px; }
+.index a:hover, .index a:focus-visible { background: var(--ink); color: var(--paper); }
+.index a::before { content: '→ '; }
+.index .hook { color: var(--mid); font-size: 0.88em; }
+
+/* ---- panels: closed sheets with a heading for a lid ---- */
+details.panel { margin-top: 1.2em; }
+details.panel > summary {
+  list-style: none;
+  cursor: pointer;
+  font-size: 0.8em;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  padding: 0.45em 0 0.3em;
+  border-bottom: 1px solid var(--rule);
+  display: flex; align-items: baseline; gap: 0.8ch;
+}
+details.panel > summary::-webkit-details-marker { display: none; }
+details.panel > summary::before { content: '▸'; font-family: var(--font-data); color: var(--dim); flex: none; }
+details.panel[open] > summary::before { content: '▾'; }
+details.panel > summary:hover { border-bottom-color: var(--ink); }
+details.panel[open] > summary { border-bottom-color: var(--ink); }
+details.panel > section { padding-top: 0.2em; }
+
 /* a container cannot query itself, so the narrow tokens land on the rows */
 @container plate (max-width: 40rem) {
   .rows, .axis { --lbl: 6.5rem; --val: 4.5rem; }
   .verdict .word { font-size: 1.9em; }
+  .facts li { grid-template-columns: 5.2rem 1fr; }
+  .plot { grid-template-columns: 2.1rem 1fr; }
+  .plot .plot-box svg { aspect-ratio: 5 / 3; }
 }
 @media (max-width: 40rem) {
   main { padding: 1.1em 0.9em; }

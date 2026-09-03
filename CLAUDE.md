@@ -111,9 +111,27 @@
 - **`gate/` is deployed** (`pages.yml` excludes only `scripts/`, `tests/`,
   `.github/`): `gate/index.html` + `gate.js` render the committed `report.json`
   files as an interactive plate at `/pegel-visual/gate/`. `gate.py` writes there
-  by default. `gate.js` is pure at import — `tests/gate-page.test.mjs` runs
-  `buildModel`/`renderPage` against the real reports and applies the same
-  legend gate as the app: every mark class must appear in its section's key.
+  by default; its `per_h` / `per_h_ratio_median` keys (MAE per lead day, and the
+  median of the five regimes' ratios to the blend) feed the page's one picture,
+  the error-by-lead-day curve. `gate.js` is pure at import —
+  `tests/gate-page.test.mjs` runs `buildModel`/`renderPage` against the real
+  reports and applies the same legend gate as the app: every mark class must
+  appear in its section's key.
+- **The gate page re-renders the whole plate on every chip, so focus is a
+  deliverable.** Three patterns, verified only in a real browser: (1) every chip
+  and index link carries `data-focus`, and `draw({focus})` opens the `<details
+  class="panel">` it names and focuses its `<summary>` — with a `summary:focus`
+  ring, not `:focus-visible`, because script-set focus fails that heuristic;
+  (2) open panel ids are read before `innerHTML` and restored after; (3) one
+  `stateHref()` spells query (data) and hash (panel), chips and index links go
+  through one `pushState` path. After `popstate`, Chrome processes the URL
+  fragment and CLEARS the focus when its target is not focusable (a section, a
+  details) — so the popstate path focuses after a double `requestAnimationFrame`,
+  never inside the handler. `node scripts/gate-check.mjs` (headless Chrome over
+  CDP, desktop + phone with touch emulation, needs the sandbox bypass for
+  loopback) is the gate for all of this — run it before every deploy of the
+  page. `(pointer: coarse)` comes from `Emulation.setTouchEmulationEnabled`;
+  `setEmulatedMedia` cannot override it.
 - **`timesfm` is pinned to 2.0.2 and the pin is load-bearing.** The 3.0 line's
   weights are non-commercial and GPL-incompatible; `tests/test_license.py`
   greps the whole repo for the 3.0 package, class and checkpoint names, so do
