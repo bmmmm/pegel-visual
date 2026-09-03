@@ -483,6 +483,7 @@ test('switching a model off makes the WHOLE sheet speak for the other one', () =
     const others = MANIFEST.models.filter(x => x.key !== mo.key);
     assert.ok(html.includes(`Skill by gauge · ${mo.label} ·`), `${mo.key}: the skill panel names it`);
     assert.ok(html.includes(`Calibration · ${mo.label} ·`), `${mo.key}: calibration names it`);
+    if (m.short) assert.ok(html.includes(`Short horizon · ${mo.label} ·`), `${mo.key}: the short-horizon panel names it`);
     assert.ok(screenSummary(m).startsWith(`Forecast gate, ${m.verdict}. ${mo.label} against`), `${mo.key}: the screen-reader summary names it`);
     assert.ok(m.gist.includes(`target ${mo.label} beats`), `${mo.key}: the gist names it`);
     const modelPanel = html.slice(html.indexOf('<details class="panel" id="model">'), html.indexOf('<details class="panel" id="method">'));
@@ -501,6 +502,25 @@ test('switching a model off makes the WHOLE sheet speak for the other one', () =
     const foot = (html.match(/<footer id="plate-foot">[\s\S]*?<\/footer>/) || [''])[0];
     for (const [, f] of Object.entries(mo.files)) if (f.md) assert.ok(foot.includes(f.md), `${mo.key}: the foot links ${f.md}`);
   }
+});
+
+test('the short-horizon panel draws the run of the model in view, not the shipped one', () => {
+  // the 15-minute grid is its own test set: a second candidate measured there
+  // must reach the panel, or switching models would silently keep 2.5's numbers
+  const withShort = MANIFEST.models.filter(mo => mo.files['short-mid']);
+  assert.ok(withShort.length > 1, 'more than one candidate has been measured on the 15-minute grid');
+  const own = new Map();
+  for (const mo of withShort) {
+    const m = buildModel(reports, parseState(`?models=${mo.key}`, '', null, MODEL_KEYS));
+    const rep = readReport(mo.files['short-mid'].json);
+    assert.equal(m.short.generated, rep.header.generated, `${mo.key}: the panel reads its own run`);
+    assert.equal(rep.header.model_key || MANIFEST.shipped, mo.key, `${mo.key}: and that run is its own`);
+    const mae = rep.stations.KOBLENZ.blocks['h1-6h'].mae.tfm_point;
+    assert.equal(m.short.stations.find(s => s.name === 'KOBLENZ').blocks['h1-6h'].mae.tfm_point, mae);
+    assert.ok(panel(renderPage(m), 'short').includes(mae.toFixed(1)), `${mo.key}: and prints it`);
+    own.set(mo.key, mae);
+  }
+  assert.equal(new Set(own.values()).size, own.size, 'the candidates are not showing each other’s numbers');
 });
 
 test('the manifest decides what is offered — a model whose report did not load is not a chip', () => {

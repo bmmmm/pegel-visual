@@ -355,7 +355,7 @@ export function buildModel(reports, parsed) {
     { id: 'error', title: `Error by method · ${BLOCK_LABEL[block]}`, hook: 'every baseline’s MAE next to the blend’s, gauge by gauge', render: renderError },
     { id: 'calib', title: `Calibration · ${primaryLabel} · ${BLOCK_LABEL[block]}`, hook: 'how often the 80 % band held, and the PIT histograms', render: renderCalib },
     { id: 'clim', title: `Climatology alone · ${BLOCK_LABEL[block]}`, hook: 'Finding 2: the calendar against the blend', render: renderClim },
-    shortModel ? { id: 'short', title: `Short horizon · ${shortModel.verdict}`, hook: 'hours to two days — still collecting, no verdict yet', render: renderShort } : null,
+    shortModel ? { id: 'short', title: `Short horizon · ${primaryLabel} · ${shortModel.verdict}`, hook: 'hours to two days — still collecting, no verdict yet', render: renderShort } : null,
     { id: 'model', title: `The model, and the chain it runs in · ${primaryLabel}`, hook: `what ${primaryLabel} is, where the weights come from, and the seven steps from archive to this sheet`, render: renderModel },
     { id: 'method', title: 'Method', hook: 'how it was measured, and what it cannot prove', render: renderMethod },
     { id: 'basics', title: 'Basics', hook: 'the model, the bar and the verdict in three short paragraphs', render: renderBasics },
@@ -711,14 +711,18 @@ function renderClim(m) {
 function renderShort(m) {
   const s = m.short;
   if (!s) return '';
+  // the model's own name, and the cm value BEFORE it: "TimesFM 3.0 2.5 cm" would
+  // spell the other candidate's label out of a name and a number that only look
+  // adjacent — a sheet read for one model must not contain the other's name at all
+  const label = nameOf(m.primary);
   const rows = s.stations.map(st => {
     const o = Math.min(100, (st.origins / s.need) * 100);
     const say = `${st.name}: ${st.origins} of ${s.need} independent 48-hour origins collected, ${st.rises} rise events (${s.needRises} needed). ` +
-      Object.entries(st.blocks).map(([b, v]) => `${b}: TimesFM ${num(v.mae.tfm_point, 1)} cm vs best simple baseline (${v.best_baseline}) ${num(v.mae[v.best_baseline], 1)} cm, skill ${signed(v.ss_vs_best)}`).join('; ') + '.';
+      Object.entries(st.blocks).map(([b, v]) => `${b}: ${num(v.mae.tfm_point, 1)} cm for ${label}, best simple baseline (${v.best_baseline}) ${num(v.mae[v.best_baseline], 1)} cm, skill ${signed(v.ss_vs_best)}`).join('; ') + '.';
     return rowOpen('', say) + `<span class="lbl">${esc(st.name)}</span><span class="track"><span class="meter" style="position:relative;display:block;height:100%"><span${attr('style', `width:${o.toFixed(1)}%`)}></span></span></span><span class="val">${esc(st.origins)} / ${esc(s.need)}</span></div>`;
   }).join('');
   const blocks = s.stations.length ? Object.keys(s.stations[0].blocks) : [];
-  const table = `<details class="tbl"><summary>first-week numbers (no verdict)</summary><div class="tblwrap"><table><thead><tr><th>station</th><th>origins</th><th>rises</th>${blocks.map(b => `<th>${esc(b)} TimesFM</th><th>best baseline</th><th>skill</th>`).join('')}</tr></thead><tbody>` +
+  const table = `<details class="tbl"><summary>first-week numbers (no verdict)</summary><div class="tblwrap"><table><thead><tr><th>station</th><th>origins</th><th>rises</th>${blocks.map(b => `<th>${esc(b)} ${esc(label)}</th><th>best baseline</th><th>skill</th>`).join('')}</tr></thead><tbody>` +
     s.stations.map(st => `<tr><td>${esc(st.name)}</td><td>${esc(st.origins)}</td><td>${esc(st.rises)}</td>${blocks.map(b => { const v = st.blocks[b]; return `<td>${num(v.mae.tfm_point, 1)}</td><td>${esc(v.best_baseline)} ${num(v.mae[v.best_baseline], 1)}</td><td>${signed(v.ss_vs_best)}</td>`; }).join('')}</tr>`).join('') +
     `</tbody></table></div></details>`;
   return `<p class="p-dim">The daily archive keeps day extremes only, so 15-minute readings are being collected weekly since 2026-09-02. The verdict stays PROVISIONAL until every gauge has ${esc(s.need)} independent origins (about sixteen weeks) and ${esc(s.needRises)} rise events; it can never be SHIP before that.</p>` +

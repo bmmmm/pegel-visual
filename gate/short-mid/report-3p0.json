@@ -21,10 +21,10 @@
       "snaive": 4.439583333333333,
       "drift": 0.9420452816884644,
       "tidal": null,
-      "tfm_point": 1.0062517960866293
+      "tfm_point": 0.9376207828521729
      },
      "best_baseline": "drift",
-     "ss_vs_best": -0.06815650547400987
+     "ss_vs_best": 0.004696694439529803
     },
     "h6-24h": {
      "mae": {
@@ -32,10 +32,10 @@
       "snaive": 5.938888888888889,
       "drift": 4.819753265116397,
       "tidal": null,
-      "tfm_point": 5.016324864493476
+      "tfm_point": 4.915480682584975
      },
      "best_baseline": "drift",
-     "ss_vs_best": -0.04078457725207474
+     "ss_vs_best": -0.019861476760940855
     },
     "h24-48h": {
      "mae": {
@@ -43,10 +43,10 @@
       "snaive": 11.694791666666667,
       "drift": 10.973960468133006,
       "tidal": null,
-      "tfm_point": 10.799687774976094
+      "tfm_point": 11.398853858311972
      },
      "best_baseline": "drift",
-     "ss_vs_best": 0.01588056505789115
+     "ss_vs_best": -0.038718327026309396
     }
    }
   },
@@ -60,10 +60,10 @@
       "snaive": 3.9166666666666665,
       "drift": 0.8238692347459652,
       "tidal": null,
-      "tfm_point": 0.8989759604136149
+      "tfm_point": 0.8120267073313395
      },
      "best_baseline": "drift",
-     "ss_vs_best": -0.09116340615729923
+     "ss_vs_best": 0.014374280426040165
     },
     "h6-24h": {
      "mae": {
@@ -71,10 +71,10 @@
       "snaive": 6.709722222222222,
       "drift": 4.002787066950765,
       "tidal": null,
-      "tfm_point": 4.562052747938368
+      "tfm_point": 4.500703398386637
      },
      "best_baseline": "drift",
-     "ss_vs_best": -0.13971906864724626
+     "ss_vs_best": -0.12439241036500448
     },
     "h24-48h": {
      "mae": {
@@ -82,10 +82,10 @@
       "snaive": 10.390625,
       "drift": 7.360940466662604,
       "tidal": null,
-      "tfm_point": 7.2444317976633705
+      "tfm_point": 8.118898566563924
      },
      "best_baseline": "drift",
-     "ss_vs_best": 0.0158279596916856
+     "ss_vs_best": -0.10297027986221075
     }
    }
   },
@@ -99,10 +99,10 @@
       "snaive": 10.041666666666666,
       "drift": 2.9234860097190416,
       "tidal": null,
-      "tfm_point": 2.3683099349339805
+      "tfm_point": 2.4580570665498573
      },
      "best_baseline": "persist",
-     "ss_vs_best": 0.011488027157990799
+     "ss_vs_best": -0.025971645168636037
     },
     "h6-24h": {
      "mae": {
@@ -110,10 +110,10 @@
       "snaive": 7.481944444444444,
       "drift": 4.980247011909767,
       "tidal": null,
-      "tfm_point": 3.8489689734246997
+      "tfm_point": 4.33170898689164
      },
      "best_baseline": "persist",
-     "ss_vs_best": 0.04505249453281068
+     "ss_vs_best": -0.07471759840178516
     },
     "h24-48h": {
      "mae": {
@@ -121,10 +121,10 @@
       "snaive": 10.046875,
       "drift": 5.038798435526515,
       "tidal": null,
-      "tfm_point": 5.205662636955579
+      "tfm_point": 6.9412722945834195
      },
      "best_baseline": "drift",
-     "ss_vs_best": -0.03311587148487072
+     "ss_vs_best": -0.37756498566073526
     }
    }
   },
@@ -138,10 +138,10 @@
       "snaive": 13.245833333333334,
       "drift": 2.5702633606901846,
       "tidal": null,
-      "tfm_point": 3.053259579340617
+      "tfm_point": 1.9175988515218099
      },
      "best_baseline": "drift",
-     "ss_vs_best": -0.1879170150566729
+     "ss_vs_best": 0.2539290405606983
     },
     "h6-24h": {
      "mae": {
@@ -149,10 +149,10 @@
       "snaive": 11.370833333333334,
       "drift": 7.116968715679201,
       "tidal": null,
-      "tfm_point": 8.774470371670192
+      "tfm_point": 6.604985295401679
      },
      "best_baseline": "drift",
-     "ss_vs_best": -0.23289432934268683
+     "ss_vs_best": 0.07193841096274389
     },
     "h24-48h": {
      "mae": {
@@ -160,10 +160,10 @@
       "snaive": 14.945833333333333,
       "drift": 10.59401452412795,
       "tidal": null,
-      "tfm_point": 11.91328050295512
+      "tfm_point": 12.35779181321462
      },
      "best_baseline": "drift",
-     "ss_vs_best": -0.12452937230004091
+     "ss_vs_best": -0.16648809429793143
     }
    }
   },
@@ -177,10 +177,10 @@
       "snaive": 5.133333333333334,
       "drift": 6.853124501441443,
       "tidal": null,
-      "tfm_point": 3.1127875010172525
+      "tfm_point": 2.684443791707357
      },
      "best_baseline": "persist",
-     "ss_vs_best": 0.36796192872746136
+     "ss_vs_best": 0.4549352707193184
     },
     "h6-24h": {
      "mae": {
@@ -188,10 +188,10 @@
       "snaive": 6.054166666666666,
       "drift": 11.361907945350064,
       "tidal": null,
-      "tfm_point": 7.054220030042861
+      "tfm_point": 5.8494933658176
      },
      "best_baseline": "snaive",
-     "ss_vs_best": -0.16518431328994265
+     "ss_vs_best": 0.03380701459310109
     },
     "h24-48h": {
      "mae": {
@@ -199,10 +199,10 @@
       "snaive": 8.38125,
       "drift": 13.0432187298443,
       "tidal": null,
-      "tfm_point": 9.986736170450847
+      "tfm_point": 9.766440804799398
      },
      "best_baseline": "snaive",
-     "ss_vs_best": -0.19155688834611162
+     "ss_vs_best": -0.16527257924526761
     }
    }
   },
@@ -216,10 +216,10 @@
       "snaive": 3.6,
       "drift": 3.2509301261581025,
       "tidal": null,
-      "tfm_point": 2.376816749572754
+      "tfm_point": 2.3975865681966146
      },
      "best_baseline": "persist",
-     "ss_vs_best": 0.01137604870457376
+     "ss_vs_best": 0.0027369560360702705
     },
     "h6-24h": {
      "mae": {
@@ -227,10 +227,10 @@
       "snaive": 3.2916666666666665,
       "drift": 5.401523844802008,
       "tidal": null,
-      "tfm_point": 2.4277534908718534
+      "tfm_point": 2.285950830247667
      },
      "best_baseline": "snaive",
-     "ss_vs_best": 0.2624546356845002
+     "ss_vs_best": 0.30553392498805043
     },
     "h24-48h": {
      "mae": {
@@ -238,10 +238,10 @@
       "snaive": 3.8979166666666667,
       "drift": 5.744004163108314,
       "tidal": null,
-      "tfm_point": 2.87185107866923
+      "tfm_point": 2.9108323097229003
      },
      "best_baseline": "snaive",
-     "ss_vs_best": 0.2632343571559431
+     "ss_vs_best": 0.25323382754302937
     }
    }
   },
@@ -255,10 +255,10 @@
       "snaive": 39.4125,
       "drift": 106.00511287486123,
       "tidal": 27.947524647378906,
-      "tfm_point": 12.24388313293457
+      "tfm_point": 10.939733123779297
      },
      "best_baseline": "tidal",
-     "ss_vs_best": 0.5618974028140671
+     "ss_vs_best": 0.6085616432292764
     },
     "h6-24h": {
      "mae": {
@@ -266,10 +266,10 @@
       "snaive": 35.88055555555555,
       "drift": 171.76093772709754,
       "tidal": 27.610107033961786,
-      "tfm_point": 20.352082146538628
+      "tfm_point": 17.362091869778105
      },
      "best_baseline": "tidal",
-     "ss_vs_best": 0.26287565196670304
+     "ss_vs_best": 0.37116897633095447
     },
     "h24-48h": {
      "mae": {
@@ -277,10 +277,10 @@
       "snaive": 68.36458333333333,
       "drift": 163.81349886050987,
       "tidal": 30.296388907660532,
-      "tfm_point": 26.66860958735148
+      "tfm_point": 26.305647214253742
      },
      "best_baseline": "tidal",
-     "ss_vs_best": 0.11974296116167682
+     "ss_vs_best": 0.13172334516730866
     }
    }
   }
@@ -334,121 +334,130 @@
   "forecast_config": {
    "max_context": 1024,
    "max_horizon": 192,
-   "normalize_inputs": true,
-   "use_continuous_quantile_head": true,
-   "force_flip_invariance": true,
-   "infer_is_positive": false,
-   "fix_quantile_crossing": true,
-   "per_core_batch_size": 32
+   "per_core_batch_size": 32,
+   "use_symmetric_averaging": true,
+   "make_positive": false,
+   "sort_quantiles": true,
+   "use_znorm": false,
+   "padding_mode": "none",
+   "use_stitching": true,
+   "use_linear_detrending": true,
+   "use_iterative_cpm_revin": true,
+   "use_variate_attention": true,
+   "input_transform": "identity"
   },
-  "config_fingerprint": "8b66814738659343",
-  "checkpoint": "google/timesfm-2.5-200m-pytorch",
-  "model": "timesfm-2.5-200m",
-  "model_license": "Apache-2.0",
+  "config_fingerprint": "c4199c1e1b0c1468",
+  "checkpoint": "google/timesfm-3.0-pytorch",
+  "model": "timesfm-3.0",
+  "model_license": "timesfm-non-commercial-license-v1.0",
+  "model_key": "3p0",
+  "model_shippable": false,
+  "model_license_url": "https://huggingface.co/google/timesfm-3.0-pytorch/blob/main/LICENSE",
+  "model_params": "330M",
   "torch_threads": 8,
   "versions": {
    "python": "3.12.13",
-   "timesfm": "2.0.2",
+   "timesfm": "3.0.1",
    "torch": "2.14.0",
    "numpy": "2.5.2"
   },
-  "git": "2247d9c",
-  "generated": "2026-09-02T19:41:20Z",
-  "elapsed_s": 24.3,
+  "git": "1fd8c68",
+  "generated": "2026-09-03T23:28:16Z",
+  "elapsed_s": 55.7,
   "model_ran": true,
   "limit": null,
   "repeat_identical": true,
-  "tfm_sha256": "26399568c043a4ccb7b3e243542008bd835a9ce692bd09feb679532564fc5619"
+  "tfm_sha256": "fdf5ceca1a6ddc7f4e203efce54b64aca6abebdccf05409999c6c0d5f2831c9c"
  },
  "station_info": {
   "a6ee8177-107b-47dd-bcfd-30960ccc6e9c": {
    "name": "KÖLN",
-   "collected_steps": 3058,
+   "collected_steps": 3060,
    "grid": 10,
    "kept": 10,
    "pairs_expected": 1920,
    "pairs_scored": 1920,
    "span": [
     "2026-08-01T23:15",
-    "2026-09-02T19:30"
+    "2026-09-02T20:00"
    ],
    "rise_events": 3
   },
   "593647aa-9fea-43ec-a7d6-6476a76ae868": {
    "name": "BONN",
-   "collected_steps": 3058,
+   "collected_steps": 3060,
    "grid": 10,
    "kept": 10,
    "pairs_expected": 1920,
    "pairs_scored": 1920,
    "span": [
     "2026-08-01T23:15",
-    "2026-09-02T19:30"
+    "2026-09-02T20:00"
    ],
    "rise_events": 3
   },
   "4c7d796a-39f2-4f26-97a9-3aad01713e29": {
    "name": "KOBLENZ",
-   "collected_steps": 3058,
+   "collected_steps": 3060,
    "grid": 10,
    "kept": 10,
    "pairs_expected": 1920,
    "pairs_scored": 1920,
    "span": [
     "2026-08-01T23:15",
-    "2026-09-02T19:30"
+    "2026-09-02T20:00"
    ],
    "rise_events": 4
   },
   "70272185-b2b3-4178-96b8-43bea330dcae": {
    "name": "DRESDEN",
-   "collected_steps": 3058,
+   "collected_steps": 3060,
    "grid": 10,
    "kept": 10,
    "pairs_expected": 1920,
    "pairs_scored": 1920,
    "span": [
     "2026-08-01T23:15",
-    "2026-09-02T19:30"
+    "2026-09-02T20:00"
    ],
    "rise_events": 4
   },
   "33ceb441-23bc-4ca6-9fcd-ac35d41ef117": {
    "name": "PASSAU ILZSTADT",
-   "collected_steps": 3058,
+   "collected_steps": 3060,
    "grid": 10,
    "kept": 10,
    "pairs_expected": 1920,
    "pairs_scored": 1920,
    "span": [
     "2026-08-01T23:15",
-    "2026-09-02T19:30"
+    "2026-09-02T20:00"
    ],
    "rise_events": 3
   },
   "fe72ee98-88e9-4d19-aba1-f97f61b7d4de": {
    "name": "FREMERSDORF",
-   "collected_steps": 3058,
+   "collected_steps": 3060,
    "grid": 10,
    "kept": 10,
    "pairs_expected": 1920,
    "pairs_scored": 1920,
    "span": [
     "2026-08-01T23:15",
-    "2026-09-02T19:30"
+    "2026-09-02T20:00"
    ],
    "rise_events": 10
   },
   "aad49293-242a-43ad-a8b1-e91d7792c4b2": {
    "name": "CUXHAVEN STEUBENHÖFT",
-   "collected_steps": 3058,
+   "collected_steps": 3059,
    "grid": 10,
    "kept": 10,
    "pairs_expected": 1920,
    "pairs_scored": 1920,
    "span": [
     "2026-08-01T23:15",
-    "2026-09-02T19:30"
+    "2026-09-02T19:45"
    ],
    "rise_events": 5
   }
