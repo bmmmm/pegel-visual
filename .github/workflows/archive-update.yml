@@ -1,18 +1,28 @@
 name: archive-update
 
-# Refreshes the running-year WSV archive data on the `archive` branch once a
-# month. The --current step pulls the last month from the PEGELONLINE REST
-# API (requests 35 days, the server caps at ~31) and upserts them into
+# Refreshes the running-year WSV archive data on the `archive` branch, weekly
+# and monthly. The --current step pulls the last month from the PEGELONLINE
+# REST API (requests 35 days, the server caps at ~31) and upserts them into
 # current.json; in January the just-completed year
 # is first re-backfilled from the WSV ZIP archive (authoritative; the REST
 # accumulation only fills its gaps, and graduates unchanged if the ZIP path
 # fails — the gap sweep below then retries) before it freezes into the
 # immutable closed.json bundle. A push to the data branch cannot trigger
 # pages.yml (the orphan branch carries no workflow files), so the last step
-# dispatches the deploy explicitly — the site stays at most one month stale.
+# dispatches the deploy explicitly — the site stays at most one week stale.
+#
+# Two cadences, because the monthly one alone lost half of 2026: the REST
+# window reaches ~31 days back and the cron fires every ~31 days, so a single
+# cancelled run tears a hole nothing can ever fill again (two of them, on
+# 2026-07-18 and 2026-08-03, left Jan..Jul empty in every current.json until
+# 2026-09-03). Weekly, four consecutive runs would have to fail for a hole to
+# open at all — and the monthly run additionally re-reads the whole running
+# year out of the ZIP archive (--running), which fixes a hole even after the
+# REST retention has passed. R6 in the consistency gate watches the result.
 on:
   schedule:
-    - cron: '23 4 3 * *'
+    - cron: '23 4 3 * *'   # monthly: REST + ZIP heal + gap sweep
+    - cron: '23 4 * * 1'   # weekly (Monday): REST only
   workflow_dispatch:
 
 permissions:
@@ -33,7 +43,8 @@ jobs:
     # 26-year re-backfill of all 737 stations and silently ate the default 6h
     # cap twice (2026-07-18, 2026-08-03) without ever reaching the push step —
     # fail fast instead so a repeat shows up as a red run, not a missed month.
-    # the healthy run takes ~30-40min; 120 leaves headroom for WSV throttling
+    # a healthy weekly run takes ~5min, a monthly one ~50-60min (the ZIP heal
+    # adds ~17min at --parallel 2); 120 leaves headroom for WSV throttling
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v7
@@ -46,10 +57,19 @@ jobs:
           node-version: 24
       - name: Fetch current-year data from WSV (REST, last 30 days)
         run: node scripts/fetch-wsv-archive.mjs --current --out archive-branch/archive
+      - name: Heal the running year from the WSV ZIP archive
+        # the authority on the running year: the ZIP endpoint returns it whole
+        # (BONN 2026-01-01..09-03: 23517 points, no missing day), so a month
+        # the REST refresh never saw is still recoverable months later. Monthly
+        # only — ~17min at --parallel 2, and the weekly REST run keeps the
+        # window covered in between.
+        if: github.event_name == 'workflow_dispatch' || github.event.schedule == '23 4 3 * *'
+        run: node scripts/fetch-wsv-archive.mjs --running --parallel 2 --out archive-branch/archive
       - name: Gap sweep (new stations + retry the none-stations)
         # the plain backfill IS the sweep: stations with a complete meta.json
         # are skipped, stations that never succeeded (newly commissioned, or
         # archive-less so far) get a full 2000->last-year attempt
+        if: github.event_name == 'workflow_dispatch' || github.event.schedule == '23 4 3 * *'
         run: node scripts/fetch-wsv-archive.mjs --out archive-branch/archive
       - name: Refresh Rijkswaterstaat gauges (running year)
         # the 10 Dutch partner gauges WSV has no archive for are backed by

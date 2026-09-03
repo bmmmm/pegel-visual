@@ -57,13 +57,15 @@ jobs:
           DRIFT_HOURS=$(( (COMMIT_EPOCH - GEN_EPOCH) / 3600 ))
           echo "deployed overview.generated: ${GEN:-unfetchable} (${DRIFT_HOURS}h behind the branch head)"
 
-          # Monthly cadence. The two checks above are both satisfied by the
-          # DAILY snapshot alone, so archive-update could stop running for a
-          # year without either of them noticing. manifest.json is the one file
-          # only the monthly job rewrites (buildManifest stamps `generated`;
-          # snapshot-wsv.mjs never touches it), so its age is the monthly run's
-          # own heartbeat. Cron is the 3rd of each month — 40 days leaves a
-          # week of slack before this counts as a miss.
+          # archive-update's own cadence. The two checks above are both
+          # satisfied by the DAILY snapshot alone, so archive-update could stop
+          # running for a year without either of them noticing. manifest.json
+          # is the one file only that job rewrites (buildManifest stamps
+          # `generated`; snapshot-wsv.mjs never touches it), so its age is its
+          # heartbeat. Since 2026-09-03 it runs weekly (Monday) as well as
+          # monthly, so 10 days is a miss with slack — at 40 the watchdog
+          # quietly signed off on a whole month of nothing, which is how
+          # Jan..Jul 2026 went missing from every current.json.
           MGEN=$(curl -sf "https://bmmmm.github.io/pegel-visual/archive/manifest.json?cb=${{ github.run_id }}" | jq -r '.generated // empty' || true)
           if [ -n "$MGEN" ]; then MGEN_EPOCH=$(date -d "$MGEN" +%s 2>/dev/null || echo 0); else MGEN_EPOCH=0; fi
           MANIFEST_DAYS=$(( (NOW_EPOCH - MGEN_EPOCH) / 86400 ))
@@ -77,8 +79,8 @@ jobs:
           if [ "$DRIFT_HOURS" -gt 6 ]; then
             PROBLEMS="$PROBLEMS${PROBLEMS:+$NL$NL}The deployed site's overview.json (generated: ${GEN:-unfetchable}) is ${DRIFT_HOURS}h behind the archive branch head — the branch was updated but the pages deploy never ran. Fix: gh workflow run pages.yml --ref main"
           fi
-          if [ "$MANIFEST_DAYS" -gt 40 ]; then
-            PROBLEMS="$PROBLEMS${PROBLEMS:+$NL$NL}The monthly archive refresh has not completed in ${MANIFEST_DAYS} days (manifest.json generated: ${MGEN:-unfetchable}). The daily snapshot keeps the branch and the deploy looking fresh, so only this check sees a dead archive-update.yml. Check its recent runs: a scheduled run has never finished on its own cron, only workflow_dispatch has."
+          if [ "$MANIFEST_DAYS" -gt 10 ]; then
+            PROBLEMS="$PROBLEMS${PROBLEMS:+$NL$NL}The archive refresh has not completed in ${MANIFEST_DAYS} days (manifest.json generated: ${MGEN:-unfetchable}). It runs weekly (Monday) and monthly (the 3rd). The daily snapshot keeps the branch and the deploy looking fresh, so only this check sees a dead archive-update.yml. Check its recent runs — the 2026-07/08 misses ended as CANCELLED timeouts, not failures."
           fi
 
           if [ -z "$PROBLEMS" ]; then
@@ -94,7 +96,7 @@ jobs:
           elif [ "$DRIFT_HOURS" -gt 6 ]; then
             TITLE="Data pipeline stale: deployed site behind the archive branch"
           else
-            TITLE="Data pipeline stale: monthly archive refresh ${MANIFEST_DAYS}d overdue"
+            TITLE="Data pipeline stale: archive refresh ${MANIFEST_DAYS}d overdue"
           fi
           ISSUE_NUM=$(gh issue list --label data-freshness --state open --json number --jq '.[0].number')
 

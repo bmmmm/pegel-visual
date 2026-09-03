@@ -19,6 +19,21 @@ on:
     - cron: '17 5 * * *'
     - cron: '17 15 * * *'
   workflow_dispatch:
+    # a one-off wide heal for slots older than the REST retention (~30 days),
+    # which are reachable only through the ZIP archive. The daily runs keep the
+    # defaults: the ZIP path costs a prepare POST per station and would spend
+    # 739 of them every day on a hole that may well be unhealable.
+    inputs:
+      heal_days:
+        description: 'Self-heal lookback in days (empty = 7)'
+        required: false
+        default: ''
+      heal_source:
+        description: 'Where healed points come from'
+        required: false
+        default: rest
+        type: choice
+        options: [rest, zip]
 
 permissions:
   contents: write
@@ -31,8 +46,10 @@ concurrency:
 jobs:
   snapshot:
     runs-on: ubuntu-latest
-    # one bulk request and a JSON write — a stuck run should fail fast and red
-    timeout-minutes: 30
+    # one bulk request and a JSON write — a stuck run should fail fast and red.
+    # a dispatched run may carry the ZIP heal instead (739 prepare POSTs at
+    # pool 2 with a 1.5s throttle ≈ 15-20min), which does not fit in 30.
+    timeout-minutes: ${{ github.event_name == 'workflow_dispatch' && 90 || 30 }}
     steps:
       - uses: actions/checkout@v7
       - uses: actions/checkout@v7
@@ -43,7 +60,12 @@ jobs:
         with:
           node-version: 24
       - name: Snapshot current water levels
-        run: node scripts/snapshot-wsv.mjs --out archive-branch/archive/snapshots
+        run: |
+          node scripts/snapshot-wsv.mjs --out archive-branch/archive/snapshots \
+            ${HEAL_DAYS:+--heal-days "$HEAL_DAYS"} --heal-source "${HEAL_SOURCE:-rest}"
+        env:
+          HEAL_DAYS: ${{ inputs.heal_days }}
+          HEAL_SOURCE: ${{ inputs.heal_source }}
       - name: Append today into river totals (?total view)
         # folds the fresh snapshot into the running year's per-river totals —
         # no network (reuses the persisted unit sidecar), stays cheap

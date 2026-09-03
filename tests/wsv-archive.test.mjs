@@ -22,7 +22,7 @@ import { PLAUSIBLE_MIN_CM as RIVER_MIN_CM, PLAUSIBLE_MAX_CM as RIVER_MAX_CM }
 process.env.PEGEL_NOW = '2026-08-21T09:00:00Z';
 const CURRENT_YEAR = 2026;
 const {
-  condense, daysInYear, buildManifest, freezeFromZip,
+  condense, daysInYear, buildManifest, freezeFromZip, healRunningYearFromZip, fetchRawRange,
   requestEnd, lastYearOf, planChunks, dropSpillYears,
   writeStation, graduateCompletedYear,
   PLAUSIBLE_MIN_CM, PLAUSIBLE_MAX_CM,
@@ -179,6 +179,104 @@ test('freezeFromZip requests through Jan 1 and ignores the spill year', async ()
   assert.equal(out.min.length, n, 'the 2026 sliver never leaks into the frozen year');
   assert.equal(out.min[n - 1], 470);
   assert.equal(out.max[n - 1], 515, 'Dec 31 is a real span');
+});
+
+test('fetchRawRange sends the start DAY it was given, not a Jan 1 derived from it', async () => {
+  const seen = [];
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url, init) => {
+    seen.push(Object.fromEntries(new URLSearchParams(String(init.body))));
+    return { status: 500, headers: { get: () => null } }; // stop before the download
+  };
+  try {
+    await assert.rejects(() => fetchRawRange('uuid-x', '2026-08-01', '2026-08-13'), /prepare failed/);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+  assert.equal(seen[0].start, '2026-08-01', 'the snapshot heal asks for a window inside the year');
+  assert.equal(seen[0].end, '2026-08-13');
+  assert.equal(seen[0].parameter, 'WASSERSTAND ROHDATEN');
+});
+
+// ---------- 2b. the running year's heal (--running) ----------
+
+// the shape --running found in production on 2026-09-03: a current.json whose
+// only data is the REST window's last ~48 days
+const runningYear = (fill = {}) => {
+  const n = daysInYear(CURRENT_YEAR);
+  const yr = { y: CURRENT_YEAR, min: Array(n).fill(null), max: Array(n).fill(null) };
+  for (const [d, [lo, hi]] of Object.entries(fill)) { yr.min[d] = lo; yr.max[d] = hi; }
+  return yr;
+};
+
+test('healRunningYearFromZip: the ZIP day wins over a differing existing day', () => {
+  const dir = tmp('pegel-running-win-');
+  const jul10 = doy(CURRENT_YEAR, 7, 10);
+  writeFileSync(join(dir, 'current.json'), JSON.stringify(runningYear({ [jul10]: [480, 490] })));
+  const zy = runningYear({ [jul10]: [470, 515] });
+
+  assert.equal(healRunningYearFromZip(dir, 'BONN', CURRENT_YEAR, zy), true);
+  const out = JSON.parse(readFileSync(join(dir, 'current.json')));
+  assert.equal(out.min[jul10], 470, 'an extreme union would keep the old 480 as the minimum');
+  assert.equal(out.max[jul10], 515);
+});
+
+test('healRunningYearFromZip: a day only the existing file has survives (R4 would block the push)', () => {
+  const dir = tmp('pegel-running-keep-');
+  const jan5 = doy(CURRENT_YEAR, 1, 5), aug20 = doy(CURRENT_YEAR, 8, 20);
+  writeFileSync(join(dir, 'current.json'), JSON.stringify(runningYear({ [aug20]: [300, 320] })));
+  const zy = runningYear({ [jan5]: [610, 640] }); // ZIP has the winter, not the tail
+
+  healRunningYearFromZip(dir, 'BONN', CURRENT_YEAR, zy);
+  const out = JSON.parse(readFileSync(join(dir, 'current.json')));
+  assert.equal(out.min[jan5], 610, 'the half-year the ZIP brings is what the heal is for');
+  assert.equal(out.min[aug20], 300, 'non-null -> null is exactly what compareCurrent rejects');
+  assert.equal(out.max[aug20], 320);
+});
+
+test('healRunningYearFromZip: writes a current.json that does not exist yet', () => {
+  const dir = tmp('pegel-running-new-');
+  const jan5 = doy(CURRENT_YEAR, 1, 5);
+  assert.equal(healRunningYearFromZip(dir, 'NEUSTADT', CURRENT_YEAR, runningYear({ [jan5]: [1, 2] })), true);
+  const out = JSON.parse(readFileSync(join(dir, 'current.json')));
+  assert.equal(out.y, CURRENT_YEAR);
+  assert.equal(out.min[jan5], 1);
+  assert.equal(JSON.parse(readFileSync(join(dir, 'meta.json'))).name, 'NEUSTADT');
+});
+
+test('healRunningYearFromZip leaves meta.json byte-identical', () => {
+  const dir = tmp('pegel-running-meta-');
+  // fetchedThrough is a claim about COMPLETED years — bumping it to the running
+  // year would tell the January gap sweep this station is done
+  const meta = '{"name":"BONN","fetchedFrom":2000,"fetchedThrough":2025}';
+  writeFileSync(join(dir, 'meta.json'), meta);
+  writeFileSync(join(dir, 'current.json'), JSON.stringify(runningYear()));
+
+  healRunningYearFromZip(dir, 'BONN', CURRENT_YEAR, runningYear({ [doy(CURRENT_YEAR, 1, 5)]: [1, 2] }));
+  assert.equal(readFileSync(join(dir, 'meta.json'), 'utf8'), meta);
+});
+
+test('healRunningYearFromZip refuses to overwrite a completed year still awaiting the freeze', () => {
+  const dir = tmp('pegel-running-freeze-');
+  const prev = { y: CURRENT_YEAR - 1, min: [7], max: [9] };
+  writeFileSync(join(dir, 'current.json'), JSON.stringify(prev));
+
+  assert.equal(healRunningYearFromZip(dir, 'BONN', CURRENT_YEAR, runningYear({ 0: [1, 2] })), false,
+    'that year lives nowhere else yet — writeStation graduates it, not the heal');
+  assert.deepEqual(JSON.parse(readFileSync(join(dir, 'current.json'))), prev);
+
+  // once closed.json holds it, the slot is free for the new running year
+  writeFileSync(join(dir, 'closed.json'), JSON.stringify([prev]));
+  assert.equal(healRunningYearFromZip(dir, 'BONN', CURRENT_YEAR, runningYear({ 0: [1, 2] })), true);
+  assert.equal(JSON.parse(readFileSync(join(dir, 'current.json'))).y, CURRENT_YEAR);
+});
+
+test('healRunningYearFromZip: an empty ZIP year changes nothing', () => {
+  const dir = tmp('pegel-running-empty-');
+  const before = JSON.stringify(runningYear({ 5: [10, 20] }));
+  writeFileSync(join(dir, 'current.json'), before);
+  assert.equal(healRunningYearFromZip(dir, 'BONN', CURRENT_YEAR, runningYear()), false);
+  assert.equal(readFileSync(join(dir, 'current.json'), 'utf8'), before);
 });
 
 // ---------- 3. manifest keeps orphaned station dirs ----------

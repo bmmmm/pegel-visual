@@ -22,16 +22,24 @@
 //  - full backfill / gap sweep: the /gast/ ZIP endpoint (all years at once).
 //    Browsers cannot fetch it (doubled CORS header), so this runs locally / in
 //    CI. Be polite: sequential, throttled, resumable.
-//  - monthly --current refresh: the official REST API (30 days at 15-min
+//  - weekly --current refresh: the official REST API (30 days at 15-min
 //    resolution, ?start=P35D) — no CORS quirk, no ZIP prepare step. Condensed
 //    to daily min/max and upserted into current.json. In January the completed
 //    year graduates from current.json into closed.json (the freeze).
+//  - monthly --running heal: the ZIP endpoint again, but for the RUNNING year.
+//    The REST window reaches ~31 days back, so a refresh the cron missed can
+//    never be filled by it again — that is how Jan..Jul 2026 stayed empty in
+//    every current.json for half a year. This mode is the authority on the
+//    running year; R6 in check-archive-consistency.mjs watches its continuity.
 //
 // Usage:
 //   node scripts/fetch-wsv-archive.mjs                    # backfill 2000..last year (ZIP)
 //   node scripts/fetch-wsv-archive.mjs --current          # refresh running year (REST;
 //                                        # January: ZIP re-backfill of the completed
 //                                        # year, REST accumulation as fallback)
+//   node scripts/fetch-wsv-archive.mjs --running          # heal the running year
+//                                        # from the ZIP (whole year, authoritative;
+//                                        # the REST refresh only reaches ~31 days back)
 //   node scripts/fetch-wsv-archive.mjs --station BONN     # one station
 //   node scripts/fetch-wsv-archive.mjs --from 2020 --to 2024 --out archive
 //   node scripts/fetch-wsv-archive.mjs --migrate --out archive  # year files -> bundles
@@ -100,6 +108,7 @@ const OUT = opt('out', 'archive');
 const FROM = Number(opt('from', 2000));
 const TO = Number(opt('to', CURRENT_YEAR - 1));
 const CURRENT_ONLY = has('current');
+const RUNNING = has('running');
 const MIGRATE = has('migrate');
 const ONLY_STATION = (opt('station', '') || '').toUpperCase();
 // workers overlap the server-side zip preparation (the actual bottleneck);
@@ -246,11 +255,16 @@ export function dropSpillYears(years, lastYear) {
 
 // ---------- fetch one station range and write its files ----------
 
-async function fetchRange(uuid, startYear, endDate) {
+// start and end are both full YYYY-MM-DD days. The backfill always asks from
+// Jan 1 of its first year; the snapshot heal (snapshot-wsv.mjs --heal-source
+// zip) asks for an arbitrary window inside the running year, which is why the
+// start is a date and not a year. Both ends are read as MIDNIGHT by the
+// endpoint — see requestEnd for what that costs at the far end.
+export async function fetchRawRange(uuid, startDate, endDate) {
   const body = new URLSearchParams({
     uuid,
     parameter: 'WASSERSTAND ROHDATEN',
-    start: `${startYear}-01-01`,
+    start: startDate,
     end: endDate,
     format: 'json',
   });
@@ -280,7 +294,7 @@ async function fetchRange(uuid, startYear, endDate) {
 async function fetchCondensed(uuid, startYear, endDate) {
   const lastYear = lastYearOf(endDate);
   try {
-    const measurements = await fetchRange(uuid, startYear, endDate);
+    const measurements = await fetchRawRange(uuid, `${startYear}-01-01`, endDate);
     return { years: dropSpillYears(condense(measurements), lastYear), pts: measurements.length };
   } catch (e) {
     if (!/string longer|Invalid string length/i.test(e.message)) throw e;
@@ -288,7 +302,7 @@ async function fetchCondensed(uuid, startYear, endDate) {
     let pts = 0;
     for (const c of planChunks(startYear, endDate)) {
       await sleep(THROTTLE_MS);
-      const chunk = await fetchRange(uuid, c.startYear, c.end);
+      const chunk = await fetchRawRange(uuid, `${c.startYear}-01-01`, c.end);
       pts += chunk.length;
       // ascending plan: the sliver of the next chunk's first year that this
       // chunk's Jan-1 end drags in is overwritten by that chunk's full year
@@ -518,6 +532,48 @@ export async function freezeFromZip(dir, uuid, y, fetchYear = fetchCondensed) {
   return true;
 }
 
+// The running year's heal, and freezeFromZip's sibling: same merge semantics
+// (ZIP day wins, the existing file only fills what the ZIP lacks — an
+// extreme-union would let a since-corrected outlier from the monthly snapshots
+// survive), but for the year still in progress and therefore without the
+// graduation. `zy` is the condensed running year from the ZIP.
+//
+// Two things it deliberately does NOT do:
+//  - it never sets a populated day back to null. R4 (compareCurrent) blocks the
+//    push on every non-null -> null transition, so the fallback to the existing
+//    value is what keeps the run green, not a nicety.
+//  - it leaves meta.json alone apart from the name. fetchedThrough is a claim
+//    about COMPLETED years; stamping the running year there would tell the
+//    January gap sweep this station is done and silence it for good.
+export function healRunningYearFromZip(dir, name, y, zy) {
+  if (!zy || !zy.min.some(v => v != null)) return false; // ZIP has nothing to offer
+  const currentPath = join(dir, 'current.json');
+  const cur = readJson(currentPath);
+  // A current.json for an EARLIER year is the completed year still waiting for
+  // the January freeze — writeStation graduates it, we must not overwrite it
+  // before closed.json holds it. Missing entirely (just after the freeze) is
+  // the normal case: write the ZIP year straight out.
+  if (cur && cur.y !== y) {
+    if (cur.y > y || !isFrozen(dir, cur.y)) return false;
+  }
+  const min = zy.min.slice(), max = zy.max.slice();
+  const keep = cur && cur.y === y && cur.min.length === min.length ? cur : null;
+  if (keep) {
+    for (let d = 0; d < min.length; d++) {
+      if (min[d] == null) min[d] = keep.min[d];
+      if (max[d] == null) max[d] = keep.max[d];
+    }
+  }
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(currentPath, JSON.stringify({ y, min, max }));
+  const metaPath = join(dir, 'meta.json');
+  const meta = readJson(metaPath);
+  // a station that has never been backfilled has no meta yet; an existing one
+  // is rewritten byte-identically as long as its name has not changed
+  if (!meta || meta.name !== name) writeFileSync(metaPath, JSON.stringify({ ...(meta || {}), name }));
+  return true;
+}
+
 // Plan A seed reformat: fold one station's per-year files into a single sorted
 // closed.json bundle and delete them. Pure reformat — no WSV data changes.
 export function migrateStation(dir) {
@@ -578,7 +634,10 @@ async function main() {
     .filter(s => !ONLY_STATION || s.shortname.toUpperCase() === ONLY_STATION || s.uuid === ONLY_STATION.toLowerCase())
     .sort((a, b) => a.shortname.localeCompare(b.shortname));
 
-  console.log(`${stations.length} stations · mode: ${CURRENT_ONLY ? 'current year refresh' : `backfill ${FROM}-${TO}`} · out: ${OUT}/ · ${PARALLEL} worker(s)`);
+  const mode = CURRENT_ONLY ? 'current year refresh (REST)'
+    : RUNNING ? `running year ${CURRENT_YEAR} heal (ZIP)`
+    : `backfill ${FROM}-${TO}`;
+  console.log(`${stations.length} stations · mode: ${mode} · out: ${OUT}/ · ${PARALLEL} worker(s)`);
 
   let ok = 0, skipped = 0, failed = 0, cursor = 0;
   async function processStation(s, i) {
@@ -586,8 +645,8 @@ async function main() {
     const tag = `[${i + 1}/${stations.length}] ${s.shortname}`;
     try {
       let startYear, fetchedThrough;
-      if (CURRENT_ONLY) {
-        ({ startYear } = currentRunPlan());
+      if (CURRENT_ONLY || RUNNING) {
+        startYear = RUNNING ? CURRENT_YEAR : currentRunPlan().startYear;
       } else {
         let meta = {};
         try { meta = JSON.parse(readFileSync(join(dir, 'meta.json'), 'utf8')); } catch {}
@@ -603,7 +662,17 @@ async function main() {
         ? await fetchCurrentViaRest(s.uuid)
         // requestEnd(TO), not `${TO}-12-31`: the endpoint's midnight `end` would
         // hand back a single 00:00 reading for Dec 31 and flatten it to min==max
-        : await fetchCondensed(s.uuid, startYear, requestEnd(TO));
+        // (--running asks through Jan 1 of NEXT year for the same reason —
+        // measured 2026-09-03, the endpoint accepts a future end date and simply
+        // returns everything up to the last reading)
+        : await fetchCondensed(s.uuid, startYear, requestEnd(RUNNING ? CURRENT_YEAR : TO));
+      if (RUNNING) {
+        const healed = healRunningYearFromZip(dir, s.shortname, CURRENT_YEAR, years.get(CURRENT_YEAR));
+        console.log(`${tag} · ${pts} pts -> ${healed ? 'running year healed' : 'left alone'}`);
+        ok++;
+        await sleep(THROTTLE_MS);
+        return;
+      }
       if (CURRENT_ONLY) {
         // a REST refresh proves nothing about closed years, so it must not bump
         // meta.fetchedThrough — that would cancel the gap sweep for stations

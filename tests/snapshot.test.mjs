@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mezParts, daysInMonth, emptyShard, applySnapshot, parseBulkForSnapshot, shardIsPrunable, shardName, medianDailySpan, TIDAL_SPAN_CM, plausibilityEnvelope, implausibleCapture, lastCapturedValue, ENVELOPE_FLOOR_CM, missingRecentDays, pickNearestMeasurement, lastValueBefore, backfillDayStations, BACKFILL_WINDOW_DAYS, BACKFILL_MIN_COVERAGE } from '../scripts/snapshot-wsv.mjs';
+import { mezParts, daysInMonth, emptyShard, applySnapshot, parseBulkForSnapshot, shardIsPrunable, shardName, medianDailySpan, TIDAL_SPAN_CM, plausibilityEnvelope, implausibleCapture, lastCapturedValue, ENVELOPE_FLOOR_CM, missingRecentDays, pickNearestMeasurement, lastValueBefore, backfillDayStations, zipWindowDays, BACKFILL_WINDOW_DAYS, BACKFILL_MIN_COVERAGE } from '../scripts/snapshot-wsv.mjs';
 
 test('daysInMonth: month lengths incl. leap years', () => {
   assert.equal(daysInMonth(2026, 2), 28);
@@ -188,6 +188,30 @@ test('missingRecentDays: reaches across the month boundary, oldest first, absent
   // without the August shard on disk its days are pre-history, not holes
   assert.deepEqual(missingRecentDays([sep], new Date('2026-09-02T12:00:00Z')).map(h => h.targetIso),
     ['2026-09-01T15:17:00.000Z']);
+});
+
+test('missingRecentDays: a wide window reaches the slots older than the REST retention', () => {
+  // the real 2026-08 shard on 2026-09-03: the capture began on the 13th, so
+  // days 1-12 are null and unreachable for the REST heal's 30-day retention
+  const aug = shardWith(2026, 8, Array.from({ length: 19 }, (_, i) => [12 + i, 100]));
+  const sep = shardWith(2026, 9, [[0, 100], [1, 100]]);
+  const now = new Date('2026-09-03T15:17:00Z');
+  // 2026-09-03 minus 33 days = 2026-08-01
+  const holes = missingRecentDays([sep, aug], now, 33);
+  assert.equal(holes.length, 12, 'exactly the uncaptured first twelve days of August');
+  assert.deepEqual([holes[0].targetIso, holes[11].targetIso],
+    ['2026-08-01T15:17:00.000Z', '2026-08-12T15:17:00.000Z']);
+  assert.ok(holes.every(h => h.m === 8), 'the captured September days are not holes');
+  // the daily job's default window sees none of them
+  assert.deepEqual(missingRecentDays([sep, aug], now, BACKFILL_WINDOW_DAYS), []);
+});
+
+test('zipWindowDays: whole days, and the end reaches one day past the last hole', () => {
+  // what healMissingDays derives for holes 2026-08-01 .. 08-12 (MEZ boundaries)
+  const startIso = new Date(Date.UTC(2026, 7, 1) - 36e5).toISOString();
+  const endIso = new Date(Date.UTC(2026, 7, 12) - 36e5 + 864e5).toISOString();
+  assert.deepEqual(zipWindowDays(startIso, endIso), ['2026-07-31', '2026-08-13'],
+    'end=2026-08-12 would return that day as its 00:00 reading alone');
 });
 
 test('pickNearestMeasurement: nearest point, but only from the target MEZ day', () => {

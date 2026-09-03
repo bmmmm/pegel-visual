@@ -52,10 +52,13 @@
 //   node scripts/snapshot-wsv.mjs --out archive-branch/archive/snapshots
 //   node scripts/snapshot-wsv.mjs --out archive/snapshots --max-months 24
 //   node scripts/snapshot-wsv.mjs --out /tmp/snaps --archive /tmp/archive
+//   node scripts/snapshot-wsv.mjs --heal-days 33 --heal-source zip
+//     # one-off: slots older than the REST retention, out of the ZIP archive
+//     # (2026-08-01..08-12 — the days before the capture existed)
 import { mkdirSync, writeFileSync, readFileSync, readdirSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { PLAUSIBLE_MIN_CM, PLAUSIBLE_MAX_CM } from './fetch-wsv-archive.mjs';
+import { PLAUSIBLE_MIN_CM, PLAUSIBLE_MAX_CM, fetchRawRange } from './fetch-wsv-archive.mjs';
 
 const API = 'https://www.pegelonline.wsv.de/webservices/rest-api/v2';
 // PEGEL_NOW pins the clock for tests and local two-day rehearsals
@@ -213,6 +216,18 @@ export const BACKFILL_WINDOW_DAYS = 7;
 // yielded a point — a thin day would block future heal attempts while
 // serving as a worse baseline than an honest null
 export const BACKFILL_MIN_COVERAGE = 0.5;
+// How far this run looks back, and where it takes its points from. The daily
+// job stays on the defaults: REST reaches ~30 days back and costs one request
+// per station, while the ZIP path needs a prepare POST per station and would
+// spend 739 of them every day on a hole that may well be unhealable. A wider
+// window is a one-off dispatch for slots OLDER than the REST retention — those
+// are reachable only through the ZIP archive (2026-08-01..08-12 was the case
+// this was built for).
+const HEAL_DAYS = Number(opt('heal-days', 0)) || BACKFILL_WINDOW_DAYS;
+const HEAL_SOURCE = opt('heal-source', 'rest');
+// the ZIP prepare endpoint rejects bursts (see fetch-wsv-archive.mjs, worker())
+const HEAL_POOL = HEAL_SOURCE === 'zip' ? 2 : 10;
+const HEAL_THROTTLE_MS = HEAL_SOURCE === 'zip' ? 1500 : 0;
 // the nominal capture instant of a day, mirroring the primary cron slot —
 // backfilled values stay comparable to their live-captured neighbours
 export const CAPTURE_UTC = { hour: 15, minute: 17 };
@@ -308,6 +323,8 @@ function pruneOldShards(dir, maxMonths, refDate) {
 
 // ---------- self-heal backfill (network side) ----------
 
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
 async function mapPool(items, limit, fn) {
   const out = new Array(items.length);
   let i = 0;
@@ -333,21 +350,43 @@ async function fetchStationMeasurements(uuid, startIso, endIso) {
   return res.json();
 }
 
+// the same window out of the ZIP archive, for holes the REST retention no
+// longer covers. fetchRawRange takes whole days and the endpoint reads both
+// ends as MIDNIGHT, so the end has to be the day AFTER the last hole or that
+// day comes back as its 00:00 reading alone (the trap requestEnd documents).
+// The points come back in the archive's own {timestamp, value} shape, which is
+// what pickNearestMeasurement already reads. The start rounds down to the
+// calendar day holding the MEZ boundary (23:00Z of the day before) and so
+// drags in one extra day — harmless, pickNearestMeasurement takes points only
+// from the hole's own MEZ day.
+export function zipWindowDays(startIso, endIso) {
+  return [startIso.slice(0, 10), new Date(Date.parse(endIso) + 36e5).toISOString().slice(0, 10)];
+}
+
+async function fetchStationMeasurementsZip(uuid, startIso, endIso) {
+  const [start, end] = zipWindowDays(startIso, endIso);
+  return fetchRawRange(uuid, start, end);
+}
+
 // refill recent null day slots from the raw timeseries. One request per
 // station spanning all holes; per-station failures degrade to an empty point
 // list, so a broad outage simply fails the coverage floor instead of writing
 // a thin day. Returns the (possibly replaced) shards plus which shard files
 // were healed into.
 async function healMissingDays(shards, roster, records) {
-  const holes = missingRecentDays(shards, now);
+  const holes = missingRecentDays(shards, now, HEAL_DAYS);
   const healedMonths = new Set();
   if (!holes.length) return { shards, healedMonths };
   const first = holes[0], last = holes[holes.length - 1];
   // a MEZ day starts at 23:00Z of the previous calendar day
   const startIso = new Date(Date.UTC(first.y, first.m - 1, first.dayIdx + 1) - 36e5).toISOString();
   const endIso = new Date(Date.UTC(last.y, last.m - 1, last.dayIdx + 1) - 36e5 + 864e5).toISOString();
-  const points = new Map(await mapPool(roster, 10, async s =>
-    [s.uuid, await fetchStationMeasurements(s.uuid, startIso, endIso).catch(() => [])]));
+  const fetchOne = HEAL_SOURCE === 'zip' ? fetchStationMeasurementsZip : fetchStationMeasurements;
+  console.log(`backfill: ${holes.length} hole(s) over ${HEAL_DAYS} days via ${HEAL_SOURCE}, ${roster.length} stations`);
+  const points = new Map(await mapPool(roster, HEAL_POOL, async s => {
+    if (HEAL_THROTTLE_MS) await sleep(HEAL_THROTTLE_MS);
+    return [s.uuid, await fetchOne(s.uuid, startIso, endIso).catch(() => [])];
+  }));
   for (const hole of holes) {
     const label = hole.targetIso.slice(0, 10);
     const { stations, captured, dropped } = backfillDayStations(roster, points, hole, records, shards);
