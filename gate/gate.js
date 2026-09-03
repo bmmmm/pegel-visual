@@ -210,6 +210,20 @@ function leadModel(models, state) {
   return { station, stations, H, series, curves, gap, blendCm: src.per_h.blend, blocks, cursor: proto[state.block][1] };
 }
 
+// Direct labels: every line says its own name at the end of its run, so the
+// first look needs no legend at all. Two curves that finish a hair apart would
+// print their names on top of each other, so the stack is spread — from the top
+// down, then pushed back up if the last one runs off the bottom. The y a label
+// ends up at is therefore NOT its value; it points at a line, it does not read
+// one, which is why the drawing keeps its own scale on the left.
+export const LABEL_GAP = 8.5;   // per cent of the plot's height, ≈ one line of the label type
+export function stackLabels(items, gap = LABEL_GAP, lo = 0, hi = 100) {
+  const out = items.filter(it => it.y != null && !Number.isNaN(it.y)).sort((a, b) => a.y - b.y).map(it => ({ ...it }));
+  for (let i = 0; i < out.length; i++) out[i].y = Math.max(out[i].y, (i === 0 ? lo : out[i - 1].y + gap));
+  for (let i = out.length - 1; i >= 0; i--) out[i].y = Math.min(out[i].y, (i === out.length - 1 ? hi : out[i + 1].y - gap));
+  return out;
+}
+
 // what the readout says for one lead day — the slider's value text, too
 export function leadSay(L, day) {
   const i = Math.max(1, Math.min(L.H, day)) - 1;
@@ -511,10 +525,25 @@ function renderLead(m) {
   // the baselines are the same windows for every model, so they are drawn once;
   // each model in view adds its own line, told apart by its dash and its hue
   const paths = [
-    ...['persist', 'clim'].map(k => ({ cls: `ln-${k}`, name: k === 'clim' ? 'climatology' : 'persistence', ...leadPath(L.series[k], L.H) })),
-    ...L.curves.map(c => ({ cls: `ln-${c.mark}`, name: c.label, ...leadPath(c.ratios, L.H) })),
+    ...['persist', 'clim'].map(k => ({ cls: `ln-${k}`, name: k === 'clim' ? 'climatology' : 'persistence', vals: L.series[k], ...leadPath(L.series[k], L.H) })),
+    ...L.curves.map(c => ({ cls: `ln-${c.mark}`, name: c.label, vals: c.ratios, ...leadPath(c.ratios, L.H) })),
   ];
   const lines = paths.map(p => `<path class="ln ${p.cls}"${attr('d', p.d)}/>`).join('');
+  // every line says its own name where it ends, so the first look reads without
+  // the key. The swatch carries the hue and the dash — the name itself stays
+  // full ink, because a label is text and text is where contrast is cheapest.
+  const endY = vals => {
+    for (let i = vals.length - 1; i >= 0; i--) {
+      const v = vals[i];
+      if (v != null && !Number.isNaN(v) && v > 0) return leadY(Math.max(LEAD_DOMAIN[0], Math.min(LEAD_DOMAIN[1], v))) / LEAD_HGT * 100;
+    }
+    return null;
+  };
+  // the blend gets no end label: it IS the ×1 line of the scale and the edge of
+  // the shaded half, so a fourth name crowding the same height would only push
+  // the three that mean something further from where they actually end
+  const ends = stackLabels(paths.map(p => ({ cls: p.cls, name: p.name, y: endY(p.vals) })))
+    .map(e => `<span class="end"${attr('style', `top:${e.y.toFixed(2)}%`)}>${swLine(`ln ${e.cls}`)}<b>${esc(e.name)}</b></span>`).join('');
   const clips = paths.flatMap(p => p.clips.map(c => `<span class="clip ${c.dir} ${p.cls}"${attr('style', `left:${leadXpct(c.day, L.H)}%`)}${attr('title', `${p.name} beyond ×${LEAD_DOMAIN[c.dir === 'up' ? 1 : 0]} on ${c.from === c.to ? `day ${c.from}` : `days ${c.from}–${c.to}`}`)}></span>`)).join('');
   const cx = leadX(L.cursor, L.H).toFixed(2);
   const say = leadSay(L, L.cursor);
@@ -535,7 +564,11 @@ function renderLead(m) {
   return `<section id="lead" class="p-block">${head}` +
     `<p class="p-dim">Each method's error divided by the blend's, day by day out to ${esc(L.H)}: below the line is better than the blend. The model wins early and hands over to the calendar; persistence never recovers. The hatched band is the horizon block in view — the band labels switch it, as does the row above the chart; the vertical rule is a cursor — drag it, or use the arrow keys.</p>` +
     chips +
-    `<div class="plot"><div class="lead-bands">${bandLabels}</div><div class="vscale" aria-hidden="true">${vscale}</div><div class="plot-box">${bands}${svg}${clips}</div>` +
+    // the half of the frame that means "better than the blend" is shaded, so the
+    // sign of the whole picture is readable before a single number is
+    `<div class="plot"><div class="lead-bands">${bandLabels}</div><div class="vscale" aria-hidden="true">${vscale}</div>` +
+    `<div class="plot-box">${bands}<span class="better"${attr('style', `top:${(leadY(1) / LEAD_HGT * 100).toFixed(2)}%`)}><i>better than the blend</i></span>${svg}${clips}</div>` +
+    `<div class="ends" aria-hidden="true">${ends}</div>` +
     `<div class="ticks lead-ticks" aria-hidden="true">${ticks}</div></div>` +
     `<p class="p-readout" data-readout><b>${esc(say)}</b></p>` +
     plateKey([
@@ -546,6 +579,7 @@ function renderLead(m) {
       { sw: swLine('ln ln-clim'), label: 'climatology (day-of-year mean of earlier years)' },
       { sw: swLine('ln ln-persist'), label: 'persistence — today’s level, held' },
       { sw: swLine('ln-blend'), label: 'the blend, ×1.00 — the bar' },
+      { sw: '<span class="sw"><span class="better" style="position:relative;display:block;height:12px;width:12px;top:0"></span></span>', label: 'the shaded half: a line in here beat the blend that day' },
       { sw: '<span class="sw"><span class="lb on" style="position:relative;display:block;height:12px;width:12px"></span></span>', label: 'the horizon block in view — pick one by its label, or in the row above the chart' },
       { sw: '<span class="sw"><span class="lb" style="position:relative;display:block;height:12px;width:12px"></span></span>', label: 'block boundaries — days 14 and 30, each labelled with its skill' },
       { sw: '<span class="sw"><svg viewBox="0 0 12 12" aria-hidden="true"><line class="ln-cur" x1="6" y1="0" x2="6" y2="12"/></svg></span>', label: 'the cursor; the line under the chart reads its day' },

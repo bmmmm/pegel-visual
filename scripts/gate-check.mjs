@@ -95,7 +95,44 @@ async function run(cdp, url, { name, width, height, mobile }) {
   if (mobile) check(await s.evaluate('matchMedia("(pointer: coarse)").matches'), 'the emulated pointer is coarse');
 
   const rect = sel => s.evaluate(`(() => { const e = document.querySelector(${JSON.stringify(sel)}); if (!e) return null; const r = e.getBoundingClientRect(); return { x: r.x, y: r.y, w: r.width, h: r.height }; })()`);
-  const click = async sel => { const r = await rect(sel); if (!r) throw new Error(`no element ${sel}`); await s.evaluate(`document.querySelector(${JSON.stringify(sel)}).scrollIntoView({block:'center'})`); await sleep(100); const r2 = await rect(sel); const x = r2.x + r2.w / 2, y = r2.y + r2.h / 2; await s.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y }); await s.send('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'left', clickCount: 1 }); await s.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button: 'left', clickCount: 1 }); await sleep(700); };
+  // The page scrolls `behavior: 'smooth'` (gate.js, focusFor), so a rect measured
+  // while a scroll is still running is a rect that has already moved by the time
+  // the click lands — the press falls in the gap between two chips, nothing
+  // happens, and every check after it fails for a reason that is not there. This
+  // waits for the page to stop moving before believing a measurement. It was a
+  // latent race: 24 px of new page height was enough to start losing the click.
+  const settle = async (tries = 40) => {
+    let last = null;
+    for (let i = 0; i < tries; i++) {
+      const y = await s.evaluate('scrollY');
+      if (y === last) return y;
+      last = y;
+      await sleep(50);
+    }
+    return last;
+  };
+  // A press is dispatched at a POINT, so the helper checks that the point still
+  // belongs to the element before spending it: a rect measured a frame too early
+  // sends the click into the gap between two chips, nothing happens, and every
+  // check downstream fails for a reason that is not there. It re-measures rather
+  // than guessing, and says so loudly if the point never becomes the element.
+  const click = async sel => {
+    if (!(await rect(sel))) throw new Error(`no element ${sel}`);
+    await s.evaluate(`document.querySelector(${JSON.stringify(sel)}).scrollIntoView({block:'center'})`);
+    let r2, hit = false;
+    for (let i = 0; i < 20 && !hit; i++) {
+      await settle();
+      r2 = await rect(sel);
+      hit = await s.evaluate(`(() => { const e = document.querySelector(${JSON.stringify(sel)}); const r = e.getBoundingClientRect(); const t = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2); return !!t && (t === e || e.contains(t)); })()`);
+      if (!hit) await sleep(50);
+    }
+    if (!hit) throw new Error(`the centre of ${sel} is not the element itself — something covers it, or it never stopped moving`);
+    const x = r2.x + r2.w / 2, y = r2.y + r2.h / 2;
+    await s.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y });
+    await s.send('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'left', clickCount: 1 });
+    await s.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button: 'left', clickCount: 1 });
+    await sleep(700); await settle();
+  };
   const active = () => s.evaluate('(() => { const a = document.activeElement; return a ? a.tagName.toLowerCase() + (a.id ? "#" + a.id : "") + (a.closest("details") ? " in details#" + a.closest("details").id : "") + (a.closest("section") && a.closest("section").id ? " in section#" + a.closest("section").id : "") : null; })()');
 
   // 1. load: everything closed, nothing overflows, the readout speaks
@@ -108,9 +145,16 @@ async function run(cdp, url, { name, width, height, mobile }) {
   check(wide.length === 0, 'no visible element sticks out on the right', wide.join(', '));
   await s.evaluate('for (const d of document.querySelectorAll("details")) d.open = true');
   const wideOpen = await sweep();
+  // Measured against the EMULATED width, not window.innerWidth: on a phone
+  // viewport Chrome widens the layout viewport to fit an overflow, so innerWidth
+  // grows with the very thing this is looking for and `scroll <= inner` is
+  // always true. A plot that spilled 44 px past a 390 px phone passed this check
+  // reading "scrollWidth 434" next to an inner of 434.
   const sw2 = await s.evaluate('({ scroll: document.documentElement.scrollWidth, inner: window.innerWidth })');
-  check(wideOpen.length === 0 && sw2.scroll <= sw2.inner, 'nothing sticks out with every panel and table open either', wideOpen.join(', ') + ` scrollWidth ${sw2.scroll}`);
+  check(wideOpen.length === 0 && sw2.scroll <= width + 1, 'nothing sticks out with every panel and table open either',
+    wideOpen.join(', ') + ` scrollWidth ${sw2.scroll} vs ${width} emulated (innerWidth ${sw2.inner})`);
   await s.evaluate('for (const d of document.querySelectorAll("details")) d.open = false');
+  await settle();   // every one of those toggles can have started a smooth scroll of its own
   check(await s.evaluate('/^day 14: TimesFM/.test(document.querySelector("#lead [data-readout]").textContent)'), 'the readout starts on day 14 and names its model',
     await s.evaluate('document.querySelector("#lead [data-readout]").textContent.slice(0, 60)'));
   const plot = await rect('#lead svg[data-lead]');

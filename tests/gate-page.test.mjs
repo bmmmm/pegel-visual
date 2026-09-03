@@ -136,6 +136,7 @@ const classesIn = html => { const out = new Set(); for (const m of html.matchAll
 // not marks: layout, text, hit targets and states the key spells out in words (▸ ◂ ▴ ▾ are glyphs in the notes)
 const NOT_A_MARK = new Set(['p-block', 'row', 'pooled', 'head', 'lbl', 'rg', 'track', 'val', 'axis', 'ticks', 'mk', 'sw', 'hint', 'p-readout', 'p-dim', 'p-tabs', 'p-tabs-lbl', 'on', 'off', 'rows', 'pits', 'pit', 'nm',
   'plot', 'vscale', 'plot-box', 'lead-bands', 'lbn', 'lead-ticks', 'clip', 'lo', 'hi', 'up', 'dn', 'vh', 'p-h2',
+  'ends', 'end',   // the direct labels: containers for a swatch whose OWN class is a mark and is in the key
   'prose', 'flow', 'fn']);  // prose/flow/fn are the model chain's containers; its four node kinds ARE marks
 test('every mark a section draws is named in that section’s key — mechanically', () => {
   let drawings = 0;
