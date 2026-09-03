@@ -142,18 +142,32 @@ def test_challenger_reports_declare_the_model_they_ran():
 
 
 def test_the_page_publishes_only_the_shipped_reports():
-    """The guard the file-level checks miss: gate/gate.js decides WHICH report the
-    deployed plate speaks for. Point its fetches at a challenger and every other
-    test here stays green while the site shows non-commercial numbers under prose
-    that names the shipped model."""
+    """The guard the file-level checks miss: the page decides WHICH report the
+    deployed plate speaks for.
+
+    That decision used to be a fetch literal in gate.js; since the model toggle it
+    is gate/models.json, so the hazard moved with it. The page may fetch nothing
+    but the manifest, and the manifest may only call the SHIPPABLE model shipped,
+    pointing it at the un-suffixed report.json files a challenger never writes."""
     js = (REPO / "gate" / "gate.js").read_text(encoding="utf-8")
     fetched = re.findall(r"getJson\(\s*'([^']+)'", js)
-    assert fetched, "no getJson literals found — has the loader been rewritten?"
-    shipped_names = {"report.json", "models.json"}
-    for url in fetched:
-        name = url.rsplit("/", 1)[-1]
-        assert name in shipped_names, \
-            f"gate.js fetches {url!r}; the deployed plate may only speak for the shipped report"
+    assert fetched == ["models.json"], \
+        f"gate.js fetches report paths of its own ({fetched}); the manifest must be the only one"
+    # the legacy fallback legitimately spells the SHIPPED model's own paths, for a
+    # deploy that predates the manifest; naming a challenger's is the hazard
+    for key, entry in tfm.MODELS.items():
+        if not entry["shippable"]:
+            assert f"report-{key}" not in js, f"gate.js names {key}'s report directly instead of reading the manifest"
+
+    manifest = json.loads((REPO / "gate" / "models.json").read_text(encoding="utf-8"))
+    assert manifest["shipped"] == tfm.SHIPPED
+    assert tfm.MODELS[manifest["shipped"]]["shippable"] is True, "the manifest calls a non-shippable model shipped"
+    for m in manifest["models"]:
+        stem = "report" if m["key"] == manifest["shipped"] else f"report-{m['key']}"
+        for where in m["files"].values():
+            for path in where.values():
+                assert path.rsplit("/", 1)[-1].split(".")[0] == stem, \
+                    f"{m['key']} points at {path}, which is not its own {stem}.*"
 
 
 def test_the_committed_manifest_matches_the_registry_and_disk():

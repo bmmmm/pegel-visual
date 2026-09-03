@@ -34,6 +34,9 @@ const a = (href, text) => `<a${attr('href', href)}>${esc(text)}</a>`;
 // the model in view, and its own model card: every sentence that names a model
 // must name the one this sheet is currently drawing
 const cardOf = mo => (mo && mo.checkpoint ? `https://huggingface.co/${mo.checkpoint}` : LINKS.card);
+// the manifest is data the page FETCHES; a licence link is the one field taken
+// verbatim as an href, so anything that is not plain https is dropped
+const httpsOnly = u => (typeof u === 'string' && /^https:\/\//.test(u) ? u : null);
 const nameOf = mo => (mo && mo.label) || 'the model';
 export const SKILL_DOMAIN = [-0.2, 0.2];   // fixed across blocks and targets, so bars stay comparable
 export const RATIO_DOMAIN = [0.5, 2.0];    // error relative to the blend; 1.0 is the bar
@@ -50,7 +53,7 @@ export const PANEL_IDS = ['lead', 'skill', 'error', 'calib', 'clim', 'short', 'm
 // A model's mark is bound to the MODEL, not to its position, so a line does not
 // change shape when its neighbour is switched off. Meaning never rides on hue
 // alone: the second model's curve is dashed and its error mark is hollow.
-export const MODEL_MARKS = ['tfm', 'tfm-alt'];
+export const MODEL_MARKS = ['tfm', 'tfm-alt', 'tfm-3', 'tfm-4'];
 // what the page falls back to when models.json is missing — the shipped model as
 // it was addressed before there was a manifest
 export const LEGACY_MANIFEST = {
@@ -59,7 +62,11 @@ export const LEGACY_MANIFEST = {
              checkpoint: 'google/timesfm-2.5-200m-pytorch', license: 'Apache-2.0', license_url: '',
              files: { 'seasonal-mid': { json: 'seasonal-mid/report.json' }, 'seasonal-max': { json: 'seasonal-max/report.json' }, 'short-mid': { json: 'short-mid/report.json' } } }],
 };
-export const markOf = (models, key) => MODEL_MARKS[Math.min(models.findIndex(mo => mo.key === key), MODEL_MARKS.length - 1)] || 'tfm';
+// A mark per model, never shared: clamping to the last one would draw two
+// candidates with the same line AND the same point, and the mechanical legend
+// gate would stay green because the class IS named. More models than marks is a
+// thing to notice, so it renders as no mark at all rather than a lookalike.
+export const markOf = (models, key) => MODEL_MARKS[models.findIndex(mo => mo.key === key)] || null;
 // a model whose weights this repo may not ship carries a glyph wherever it is
 // named — a shape, not a colour, and the key says what it means
 export const NC_GLYPH = '⚖';
@@ -172,10 +179,10 @@ function leadModel(models, state) {
   let series;
   if (station === 'pooled') {
     const med = report.pooled.per_h_ratio_median;
-    series = { tfm: med.tfm_point, clim: med.clim, persist: med.persist };
+    series = { clim: med.clim, persist: med.persist };
   } else {
     const p = report.stations[station].per_h;
-    series = { tfm: p.tfm_point.map((v, i) => ratio(v, p.blend[i])), clim: p.clim.map((v, i) => ratio(v, p.blend[i])), persist: p.persist.map((v, i) => ratio(v, p.blend[i])) };
+    series = { clim: p.clim.map((v, i) => ratio(v, p.blend[i])), persist: p.persist.map((v, i) => ratio(v, p.blend[i])) };
   }
   const src = station === 'pooled' ? report.pooled : report.stations[station];
   const proto = report.header.protocol.blocks;
@@ -235,8 +242,9 @@ export function buildModel(reports, parsed) {
     .map(mo => ({ ...mo, mark: markOf(all, mo.key), report: repOf(mo.key) }));
   const models = all.map(mo => ({
     ...mo, mark: markOf(all, mo.key), on: enabled.includes(mo.key),
-    // a model that is on but has no report for THIS target still holds its chip
-    missing: enabled.includes(mo.key) && !repOf(mo.key),
+    // a model with no report for the target in view cannot be drawn at all, so
+    // its chip goes dead rather than staying lit over a sheet that is silent
+    missing: !repOf(mo.key),
   }));
   const h = report.header;
   const block = state.block;
@@ -299,7 +307,8 @@ export function buildModel(reports, parsed) {
     { k: BLOCK_LABEL[block], html: `pooled skill ${B(signed(pooled.ss, 2))} against the blend (95 % CI ${B(signed(pooled.ci95[0], 2))} to ${B(signed(pooled.ci95[1], 2))}), ${B(positive)} of ${B(nRegimes)} regimes ahead — the bar was ${B(signed(report.thresholds.A1_pooled_ss_min, 2))}` },
     { k: 'calibration', html: `the 80 % band covered ${B(num(pooled.picp80.tfm * 100, 0) + ' %')} of days at ${BLOCK_LABEL[block]} (the blend's own band ${B(num(pooled.picp80.blend * 100, 0) + ' %')}); CRPS skill ${B(signed(pooled.ss_crps, 2))}` },
     { k: 'climatology', html: `from day 31 plain climatology sits within ${B(climLongT[1] ? pctStr(climLongT[1].v) : '—')} of the blend at every gauge but ${B(climLongT[0] ? climLongT[0].n : '—')} — the long horizon needs a calendar, not a model` },
-    { k: 'run', html: `${B(Math.max(1, Math.round((h.elapsed_s || 0) / 60)) + ' min')} on a laptop CPU, ${h.reproduced_by_run ? 'reproduced bit for bit by a second run' : 'second run not compared'} · ${B(h.model)}, ${B(h.model_license)} — pinned since the 3.0 line went non-commercial on ${B('2026-08-28')}` },
+    { k: 'run', html: `${B(Math.max(1, Math.round((h.elapsed_s || 0) / 60)) + ' min')} on a laptop CPU, ${h.reproduced_by_run ? 'reproduced bit for bit by a second run' : 'second run not compared'} · ${B(h.model)}, ${B(h.model_license)}` +
+      ((drawn[0] || {}).shippable === false ? ' — measured here, never shipped' : ' — the version is pinned exactly, so this run can be repeated') },
   ];
   // the basics quote the primary (mid) run whatever the chips say
   const mid = seasonal.mid;
@@ -358,7 +367,9 @@ export function buildModel(reports, parsed) {
 
 const SHAPES = {
   tfm: '<circle cx="6" cy="6" r="4.5"/>',
-  'tfm-alt': '<path d="M6 1.2 L10.8 6 L6 10.8 L1.2 6 Z"/>',
+  'tfm-alt': '<rect x="1.6" y="1.6" width="8.8" height="8.8"/>',
+  'tfm-3': '<path d="M6 1 L11 10.5 L1 10.5 Z" transform="rotate(180 6 6)"/>',
+  'tfm-4': '<path d="M1.5 1.5 L10.5 1.5 L10.5 10.5 L1.5 10.5 Z M3.5 3.5 L8.5 8.5 M8.5 3.5 L3.5 8.5"/>',
   blend: '<rect x="5.2" y="0" width="1.6" height="12"/>',
   persist: '<circle cx="6" cy="6" r="4.2"/>',
   clim: '<path d="M6 1.5 L11 10.5 L1 10.5 Z"/>',
@@ -387,7 +398,7 @@ function ctlRow(label, items, aria) {
   return `<nav class="p-tabs"${attr('aria-label', aria || label)}>` +
     (label ? `<span class="p-tabs-lbl">${esc(label)}</span>` : '') +
     items.map(it => it.lbl ? `<span class="p-tabs-lbl">${esc(it.lbl)}</span>` :
-      it.off ? `<span class="off" aria-disabled="true"${attr('title', it.title)}${attr('data-ctl', it.ctl)}>${esc(it.off)}</span>` :
+      it.off ? `<span${attr('class', it.on ? 'off on' : 'off')} aria-disabled="true"${it.on ? ' aria-current="true"' : ''}${attr('title', it.title)}${attr('data-ctl', it.ctl)}>${esc(it.off)}</span>` :
       `<a${attr('href', it.href)}${attr('class', it.on ? 'on' : '')}${it.on ? ' aria-current="true"' : ''}${attr('title', it.title)}${attr('data-focus', it.focus)}${attr('data-ctl', it.ctl)}>${esc(it.label)}</a>`).join('') +
     '</nav>';
 }
@@ -417,11 +428,15 @@ function renderBack() {
 }
 
 function renderVerdict(m) {
+  // the sentence is assembled from the clauses that actually passed, so a re-run
+  // that flips one cannot leave the page praising something that failed
+  const passed = id => (m.clauses.find(c => c.id === id) || {}).pass;
+  const honest = [passed('A5') ? 'calibrated' : null, passed('A7') ? 'no better on the recent years than on the old ones' : null].filter(Boolean);
   const why = m.verdict === 'SHIP'
     ? 'Every pre-registered clause held. The model may ship.'
     : m.verdict === 'VOID'
       ? 'The run is invalid; no verdict was formed.'
-      : 'At least one pre-registered clause failed. The model is honest — calibrated, and no better on the recent years than on the old ones — but not better than the blend past two weeks.';
+      : `At least one pre-registered clause failed.${honest.length ? ` The model is honest — ${honest.join(', and ')} — but` : ' It is'} not better than the blend past two weeks.`;
   // with more than one candidate in view the headline verdict is the primary's,
   // and each model states its own underneath rather than sharing one word
   const others = m.verdicts.length > 1 ? `<ul class="vmodels" aria-label="verdict per model">` + m.verdicts.map(v =>
@@ -556,7 +571,8 @@ function renderControls(m) {
   const modelChips = m.models.length < 2 ? [] : [
     ...m.models.map(mo => {
       const label = mo.label + (mo.shippable === false ? ` ${NC_GLYPH}` : '');
-      if (mo.on && on.length === 1) return { ctl: 'model', off: label, title: `${mo.label} is the only model in view — switch another on first` };
+      if (mo.missing) return { ctl: 'model', off: label, title: `${mo.label} has no ${TARGETS[s.target]} report — it cannot be drawn here` };
+      if (mo.on && on.length === 1) return { ctl: 'model', off: label, on: true, title: `${mo.label} is the only model in view — switch another on first` };
       const next = mo.on ? on.filter(k => k !== mo.key) : m.models.filter(x => x.on || x.key === mo.key).map(x => x.key);
       return {
         ctl: 'model',
@@ -567,6 +583,8 @@ function renderControls(m) {
     }),
     { lbl: '· target' },
   ];
+  const ncLabel = m.models.some(mo => mo.shippable === false)
+    ? [{ lbl: `· ${NC_GLYPH} non-commercial weights: measured, never shipped` }] : [];
   return ctlRow(m.models.length < 2 ? 'target' : 'model', [
     ...modelChips,
     ...m.targets.map(t => t.available
@@ -575,6 +593,7 @@ function renderControls(m) {
     { lbl: 'horizon' },
     ...BLOCKS.map(b => ({ ctl: 'block', href: stateHref(s, { block: b, panel: 'lead' }), label: BLOCK_LABEL[b], on: s.block === b, focus: 'lead' })),
     { lbl: '· every chart on this sheet' },
+    ...(m.models.length < 2 ? [] : ncLabel),
   ], m.models.length < 2 ? 'target and horizon block' : 'model, target and horizon block');
 }
 
@@ -620,9 +639,15 @@ function renderError(m) {
     `<span class="track"><span class="one"${attr('style', `left:${one.toFixed(2)}%`)}></span>` +
     r.marks.map(k => { const { x, clipped } = clampInfo(k.ratio, RATIO_DOMAIN); return mark(k.kind, x) + (clipped ? `<span class="clip ${clipped}"${attr('style', `left:${x.toFixed(2)}%`)}></span>` : ''); }).join('') +
     `</span><span class="val">${esc(num(r.blend, 1))} cm</span></div>`).join('');
-  const table = `<details class="tbl"><summary>table</summary><div class="tblwrap"><table><thead><tr><th>station</th><th>blend</th><th>TimesFM</th><th>persistence</th><th>climatology</th><th>seasonal naive</th><th>upstream OLS</th></tr></thead><tbody>` +
+  // one column per model in view: the table twin has to carry what the drawing
+  // carries, or the reader who opens it gets a different sheet
+  const table = `<details class="tbl"><summary>table</summary><div class="tblwrap"><table><thead><tr><th>station</th><th>blend</th>` +
+    m.drawn.map(mo => `<th>${esc(mo.label)}</th>`).join('') +
+    `<th>persistence</th><th>climatology</th><th>seasonal naive</th><th>upstream OLS</th></tr></thead><tbody>` +
     m.error.map(r => { const g = kind => { const k = r.marks.find(x => x.kind === kind); return k ? num(k.mae, 1) : '—'; };
-      return `<tr><td>${esc(r.station)}</td><td>${num(r.blend, 1)}</td><td>${g('tfm')}</td><td>${g('persist')}</td><td>${g('clim')}</td><td>${g('snaive')}</td><td>${g('up')}</td></tr>`; }).join('') +
+      return `<tr><td>${esc(r.station)}</td><td>${num(r.blend, 1)}</td>` +
+        m.drawn.map(mo => `<td>${g(mo.mark)}</td>`).join('') +
+        `<td>${g('persist')}</td><td>${g('clim')}</td><td>${g('snaive')}</td><td>${g('up')}</td></tr>`; }).join('') +
     `</tbody></table></div></details>`;
   return `<p class="p-dim">Each method's MAE divided by the blend's, so a 15 cm gauge and a 100 cm gauge share one axis. Left of the line is better than the blend. The value column is the blend's own MAE in cm.</p>` +
     `<div class="rows">${rows}</div>` + axis([0.5, 0.75, 1, 1.25, 1.5, 1.75, 2], RATIO_DOMAIN, v => '×' + v.toFixed(2)) +
@@ -744,7 +769,7 @@ function renderModel(m) {
     `${a(LINKS.pkg, 'timesfm package')} pinned to ${esc(v.timesfm)} — both pins are deliberate. ` +
     (m.primary && m.primary.shippable === false
       ? `These weights are <b>non-commercial</b> ${NC_GLYPH}: this repo is GPL-3.0, so this line is measured here and its numbers published, but it can never be the model the site ships, however it scores.`
-      : `The 3.0 line's weights are non-commercial and this repo is GPL-3.0, so that line is measured beside this one but never shipped.`) + `</p>` +
+      : `These weights are permissively licensed, which is why this line is the one the site ships.`) + `</p>` +
     `<p class="p-dim">What follows is the chain the ${esc(thousands(h.windows))} scored windows travel, from the archive to the picture at the top of this sheet. Only one link in it is the model.</p></div>` +
     chain +
     plateKey([
@@ -775,7 +800,7 @@ function renderFoot(m) {
   return `<footer id="plate-foot">` +
     m.verdicts.map(mv => {
       const vh = mv.head, vv = vh.versions || {};
-      const card = mv.licenseUrl || LINKS.card;
+      const card = httpsOnly(mv.licenseUrl) || LINKS.card;
       return `<p><span class="lbl">model</span>${esc(vh.model)} · ${a(card, vh.checkpoint)} · ${esc(vh.model_license)}` +
         (mv.shippable ? '' : ` ${NC_GLYPH} measured, never shipped`) +
         ` · ${a(LINKS.pkg, 'timesfm')} ${esc(vv.timesfm)} · torch ${esc(vv.torch)} · numpy ${esc(vv.numpy)} · config ${esc(vh.config_fingerprint)}</p>`;
@@ -783,7 +808,9 @@ function renderFoot(m) {
     `<p><span class="lbl">run</span>${esc(h.generated)} · git ${esc(h.git)} · ${esc(num(h.elapsed, 0))} s on CPU, float32` +
     (h.reproduced ? ` · reproduced bit for bit by a second full run at ${esc(h.reproduced)}` : ' · second full run: not compared') + `</p>` +
     `<p><span class="lbl">source</span>PEGELONLINE (WSV) daily archive on the <a href="https://github.com/bmmmm/pegel-visual/tree/archive">archive branch</a> · ` +
-    `<a href="seasonal-mid/report.md">report (mid)</a> · <a href="seasonal-max/report.md">report (max)</a> · <a href="short-mid/report.md">report (short)</a> · ` +
+    m.drawn.flatMap(mo => Object.entries(mo.files || {})
+      .filter(([, f]) => f && f.md)
+      .map(([dir, f]) => `${a(f.md, `${m.drawn.length > 1 ? `${mo.label} ` : ''}report (${dir.replace(/^(seasonal|short)-/, '')})`)} · `)).join('') +
     `<a href="https://github.com/bmmmm/pegel-visual/tree/main/scripts/forecast">the gate's code</a></p>` +
     `<p><span class="lbl">not</span>a forecast product. Nothing on this sheet predicts a river; it measures whether a model could, and the answer was no.</p>` +
     renderBack() +

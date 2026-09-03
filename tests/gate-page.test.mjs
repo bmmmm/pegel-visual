@@ -6,7 +6,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { BLOCKS, LINKS, MODEL_MARKS, NC_GLYPH, PANEL_IDS, TARGETS, buildModel, leadSay, parseState, renderPage, screenSummary, stateHref } from '../gate/gate.js';
+import { BLOCKS, LINKS, MODEL_MARKS, NC_GLYPH, PANEL_IDS, TARGETS, buildModel, leadSay, markOf, parseState, renderPage, screenSummary, stateHref } from '../gate/gate.js';
 
 const ROOT = new URL('../gate/', import.meta.url).pathname;
 // the page is manifest-driven, so its tests read the same manifest the browser does
@@ -73,9 +73,14 @@ test('the report carries a curve over the lead day, and the curve tells the stor
   const L = buildModel(reports, parseState('')).lead;
   assert.equal(L.station, 'pooled');
   assert.deepEqual(L.stations, STATIONS);
-  assert.ok(L.series.tfm[0] < 0.9, `TimesFM wins on day 1 (×${L.series.tfm[0]})`);
-  assert.ok(L.series.tfm[13] < 1, 'still ahead at day 14');
-  assert.ok(Math.abs(L.series.tfm[89] - 1) < 0.05, 'a draw by day 90');
+  // read the curve that is DRAWN, not a parallel field: the three sentences this
+  // test is named for must be checked against what reaches the page
+  const drawnRatios = L.curves[0].ratios;
+  assert.ok(drawnRatios[0] < 0.9, `the model wins on day 1 (×${drawnRatios[0]})`);
+  assert.ok(drawnRatios[13] < 1, 'still ahead at day 14');
+  assert.ok(Math.abs(drawnRatios[89] - 1) < 0.05, 'a draw by day 90');
+  const leadHtml = section(renderPage(buildModel(shipped, parseState(''))), 'lead');
+  assert.ok(leadHtml.includes(`×${drawnRatios[0].toFixed(2)}`), 'and that curve is the one the table twin prints');
   assert.ok(L.series.clim[0] > 2 && Math.abs(L.series.clim[89] - 1) < 0.02, 'Finding 2: climatology starts far off and ends on the blend');
   assert.ok(L.series.persist[89] > 1.3, 'persistence never recovers');
   assert.deepEqual(L.blocks.map(b => [b.from, b.to]), [[1, 14], [15, 30], [31, 90]]);
@@ -84,7 +89,8 @@ test('the report carries a curve over the lead day, and the curve tells the stor
   const oneModel = buildModel(shipped, parseState('')).lead;
   assert.match(leadSay(oneModel, 14), /^day 14: TimesFM 2\.5 ×0\.\d\d · climatology ×\d\.\d\d · persistence ×\d\.\d\d · blend MAE \d+\.\d cm pooled$/);
   // with both candidates drawn the readout names each of them, in the curve's order
-  assert.match(leadSay(L, 14), new RegExp('^day 14: ' + L.curves.map(c => `${c.label} ×\\d\\.\\d\\d`).join(' · ') + ' · climatology'));
+  const rx = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  assert.match(leadSay(L, 14), new RegExp('^day 14: ' + L.curves.map(c => `${rx(c.label)} ×\\d\\.\\d\\d`).join(' · ') + ' · climatology'));
   const D = buildModel(reports, parseState('?lead=DRESDEN', '', STATIONS)).lead;
   assert.equal(D.station, 'DRESDEN');
   assert.ok(D.series.clim[0] > 4, 'Dresden’s climatology on day 1 lies above the frame — the clip mark has a job');
@@ -302,7 +308,12 @@ test('gist, facts and basics quote the report, not a remembered number', () => {
   assert.ok(f3[1].html.includes(`<b>${(p.ci95[0] > 0 ? '+' : '') + p.ci95[0].toFixed(2)}</b>`), 'CI from the report');
   assert.ok(f3[2].html.includes(`<b>${Math.round(p.picp80.tfm * 100)} %</b>`), 'coverage from the report');
   assert.ok(f1[3].html.includes('<b>DRESDEN</b>'), 'the one gauge where climatology is not a near-tie');
-  assert.ok(f1[4].html.includes('<b>2026-08-28</b>') && f1[4].html.includes(`<b>${mid.header.model}</b>`));
+  assert.ok(f1[4].html.includes(`<b>${mid.header.model}</b>`) && f1[4].html.includes(`<b>${mid.header.model_license}</b>`),
+    'the run fact names the model of the run in view and its licence');
+  assert.ok(f1[4].html.includes('pinned exactly'), 'the shipped line says its version is pinned');
+  const ncFacts = buildModel(reports, parseState(`?models=${MODEL_KEYS.find(k => k !== MANIFEST.shipped)}`, '', null, MODEL_KEYS)).facts;
+  assert.ok(ncFacts[4].html.includes('never shipped') && !ncFacts[4].html.includes('pinned exactly'),
+    'and a non-commercial line says THAT instead, rather than blaming a pin it does not honour');
   assert.ok(f1[0].html.includes('<b>3 563</b>') && f1[0].html.includes('<b>509</b>'));
   const html = renderPage(gm);
   assert.equal((html.match(/<li><span class="fk">/g) || []).length, 5);
@@ -419,7 +430,15 @@ test('the model chips are state in the URL, and the last one on cannot be switch
   // that vanishes when you use it cannot be found again, and an empty sheet is
   // not a state this page can reach
   const alone = renderPage(buildModel(reports, parseState('?models=3p0', '', null, MODEL_KEYS)));
-  assert.match(chipRow(alone), /<span class="off" aria-disabled="true" title="TimesFM 3\.0 is the only model in view[^"]*" data-ctl="model">TimesFM 3\.0/);
+  // disabled AND still marked current: the model in view must not be painted
+  // like an unavailable one while the model switched off looks available
+  assert.match(chipRow(alone), /<span class="off on" aria-disabled="true" aria-current="true" title="TimesFM 3\.0 is the only model in view[^"]*" data-ctl="model">TimesFM 3\.0/);
+  // an UNAVAILABLE chip stays plainly off — the two states must not look alike
+  const noMax = JSON.parse(JSON.stringify(reports));
+  delete noMax.byKey[MODEL_KEYS.find(k => k !== MANIFEST.shipped)].seasonal.max;
+  const rowMax = chipRow(renderPage(buildModel(noMax, parseState('?target=max', '', null, MODEL_KEYS))));
+  assert.ok(rowMax.includes('<span class="off" aria-disabled="true"'), 'unavailable is a different state from locked-on');
+  assert.ok(!rowMax.includes('class="off on"'), 'and it is not marked current');
   assert.ok(chipRow(alone).includes('title="draw TimesFM 2.5 too"'), 'and the other one invites you back');
   // switching the second one on returns to the parameter-free default
   assert.ok(chipRow(alone).includes('href="./#lead"'), 'the way back is the bare URL');
@@ -469,10 +488,18 @@ test('switching a model off makes the WHOLE sheet speak for the other one', () =
     const modelPanel = html.slice(html.indexOf('<details class="panel" id="model">'), html.indexOf('<details class="panel" id="method">'));
     assert.ok(modelPanel.includes(mo.checkpoint), `${mo.key}: the model panel shows its own checkpoint`);
     assert.ok(modelPanel.includes(`href="https://huggingface.co/${mo.checkpoint}"`), `${mo.key}: and links its own card`);
+    // everything BUT the control row, which legitimately names every model you
+    // could switch on — the rest of the sheet must belong to the one in view
+    const sheet = html.replace(/<nav class="p-tabs"[\s\S]*?<\/nav>/g, '');
     for (const other of others) {
-      assert.ok(!modelPanel.includes(other.checkpoint), `${mo.key}: the model panel does not name ${other.key}`);
-      assert.ok(!html.includes(`Skill by gauge · ${other.label} ·`), `${mo.key}: no panel title claims ${other.key}`);
+      assert.ok(!sheet.includes(other.checkpoint), `${mo.key}: ${other.key}'s checkpoint survives somewhere on the sheet`);
+      assert.ok(!sheet.includes(other.label), `${mo.key}: ${other.key}'s NAME survives somewhere on the sheet`);
+      assert.ok(!sheet.includes(other.files['seasonal-mid'].json), `${mo.key}: a link to ${other.key}'s report survives`);
+      if (other.files['seasonal-mid'].md) assert.ok(!sheet.includes(other.files['seasonal-mid'].md), `${mo.key}: a link to ${other.key}'s write-up survives`);
     }
+    // and the write-ups the foot offers are the ones of the model in view
+    const foot = (html.match(/<footer id="plate-foot">[\s\S]*?<\/footer>/) || [''])[0];
+    for (const [, f] of Object.entries(mo.files)) if (f.md) assert.ok(foot.includes(f.md), `${mo.key}: the foot links ${f.md}`);
   }
 });
 
@@ -513,5 +540,63 @@ test('with two candidates drawn the sheet measures how far apart they are', () =
   const wide = buildModel(bent, parseState('', '', null, MODEL_KEYS)).lead.gap;
   assert.ok(Math.abs(wide.d - 0.5) < 1e-9, `the gap follows the data (${wide.d})`);
   assert.equal(wide.ahead, MANIFEST.models.find(mo => mo.key === MANIFEST.shipped).label, 'and names the lower curve');
+});
+
+test('the table twin carries every model the drawing carries', () => {
+  // the drawing gained a mark per model while its table kept one hardcoded
+  // column, so a reader who opened it got a different sheet
+  for (const q of ['', ...MODEL_KEYS.map(k => `?models=${k}`)]) {
+    const m = buildModel(reports, parseState(q, '', null, MODEL_KEYS));
+    const html = renderPage(m);
+    const errPanel = html.slice(html.indexOf('<details class="panel" id="error">'), html.indexOf('<details class="panel" id="calib">'));
+    const head = (errPanel.match(/<thead>[\s\S]*?<\/thead>/) || [''])[0];
+    for (const mo of m.drawn) assert.ok(head.includes(`<th>${mo.label}</th>`), `${q || 'default'}: ${mo.label} has a column`);
+    const body = (errPanel.match(/<tbody>[\s\S]*?<\/tbody>/) || [''])[0];
+    const firstRow = (body.match(/<tr>[\s\S]*?<\/tr>/) || [''])[0];
+    const cells = [...firstRow.matchAll(/<td>([^<]*)<\/td>/g)].map(x => x[1]);
+    for (let i = 0; i < m.drawn.length; i++) {
+      assert.notEqual(cells[2 + i], '—', `${q || 'default'}: ${m.drawn[i].label}'s MAE is in the table, not a dash`);
+      const mark = m.error[0].marks.find(k => k.kind === m.drawn[i].mark);
+      assert.equal(cells[2 + i], mark.mae.toFixed(1), 'and it is the number the drawing plotted');
+    }
+  }
+});
+
+test('every candidate gets a mark of its own, or none at all', () => {
+  // clamping to the last mark would draw two models with the SAME line and the
+  // same point, and the legend gate would stay green because the class is named
+  const fake = n => Array.from({ length: n }, (_, i) => ({ key: `m${i}` }));
+  const marks = n => fake(n).map(mo => markOf(fake(n), mo.key));
+  for (const n of [1, 2, MODEL_MARKS.length]) {
+    assert.equal(new Set(marks(n)).size, n, `${n} models get ${n} distinct marks`);
+    assert.ok(marks(n).every(Boolean));
+  }
+  assert.equal(markOf(fake(MODEL_MARKS.length + 1), `m${MODEL_MARKS.length}`), null,
+    'one model more than there are marks gets none — a thing to notice, not a lookalike');
+  assert.ok(MODEL_MARKS.length >= MANIFEST.models.length, 'the manifest fits inside the marks that exist');
+});
+
+test('a model with no report for the target in view has a dead chip, not a lit one', () => {
+  const other = MODEL_KEYS.find(k => k !== MANIFEST.shipped);
+  const half = JSON.parse(JSON.stringify(reports));
+  delete half.byKey[other].seasonal.max;                       // it has mid, but no max
+  const m = buildModel(half, parseState('?target=max', '', null, MODEL_KEYS));
+  assert.equal(m.state.target, 'max', 'the shipped model still has the max report');
+  assert.deepEqual(m.drawn.map(mo => mo.key), [MANIFEST.shipped], 'only what can be drawn is drawn');
+  const row = chipRow(renderPage(m));
+  const label = MANIFEST.models.find(mo => mo.key === other).label;
+  assert.match(row, new RegExp(`<span class="off"[^>]*title="${label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} has no daily max report[^"]*"`),
+    'its chip is dead and says why, instead of staying lit over a sheet that is silent about it');
+  // and on the target it does have, it is a live chip again
+  assert.ok(chipRow(renderPage(buildModel(half, parseState('', '', null, MODEL_KEYS)))).includes(label), 'on the target it does have, it is live again');
+});
+
+test('a licence link that is not plain https never reaches an href', () => {
+  const bent = JSON.parse(JSON.stringify(reports));
+  const other = MODEL_KEYS.find(k => k !== MANIFEST.shipped);
+  for (const rep of Object.values(bent.byKey[other].seasonal)) if (rep) rep.header.model_license_url = 'javascript:alert(1)';
+  const html = renderPage(buildModel(bent, parseState('', '', null, MODEL_KEYS)));
+  assert.ok(!html.includes('javascript:'), 'the scheme is dropped, not escaped and kept');
+  assert.ok(html.includes(`href="${LINKS.card}"`), 'and the foot falls back to a link it trusts');
 });
 

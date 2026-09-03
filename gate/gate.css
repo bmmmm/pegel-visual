@@ -104,8 +104,10 @@ main {
 .vmodels .vw { font-family: var(--font-data); letter-spacing: 0.04em; }
 .vmodels .vw.pass { color: var(--water-line); }
 .vmodels .vn { color: var(--mid); }
-/* the licence mark: a glyph, never a colour on its own */
-.vmodels .nc, .p-tabs .nc { font-size: 1.05em; }
+/* the licence mark: a glyph, never a colour on its own. On a chip it rides in
+   the label's own text; the control row spells out what it means, because a
+   title attribute is unreachable with a finger. */
+.vmodels .nc { font-size: 1.05em; }
 .clauses { list-style: none; margin: 1em 0 0; padding: 0; display: flex; flex-wrap: wrap; gap: 0.4em 0.5ch; }
 .clauses button {
   font: inherit;
@@ -197,7 +199,11 @@ main {
 .mk { width: 12px; height: 12px; top: 50%; transform: translate(-50%, -50%); }
 .mk svg { display: block; width: 12px; height: 12px; overflow: visible; }
 .mk-tfm { fill: var(--water-line); stroke: var(--ink); stroke-width: 1; }
+/* one shape per candidate, none of them a near-twin of a baseline's: `persist`
+   is a hollow circle, `up` a diamond, `clim`/`snaive` triangles */
 .mk-tfm-alt { fill: var(--water-line); stroke: var(--ink); stroke-width: 1; }
+.mk-tfm-3 { fill: var(--paper); stroke: var(--ink); stroke-width: 1.4; }
+.mk-tfm-4 { fill: none; stroke: var(--ink); stroke-width: 1.2; }
 .mk-blend { fill: var(--ink); stroke: none; }
 .mk-persist { fill: var(--paper); stroke: var(--ink); stroke-width: 1.2; }
 .mk-clim { fill: var(--dry); stroke: var(--dry-line); stroke-width: 1.2; }
@@ -279,6 +285,10 @@ th:first-child, td:first-child { text-align: left; }
 .plot .lead-bands > a.on { color: var(--ink); }
 .plot .lead-bands b { font-weight: 600; color: var(--ink); }
 .p-tabs .off { display: inline-flex; align-items: center; border: 1px dashed var(--rule); color: var(--dim); padding: 0.15em 0.8ch; white-space: nowrap; }
+/* a chip can be disabled because it is UNAVAILABLE or because it is the last one
+   still on. The second is the active chip: painting it like the first would show
+   the model in view as greyed out and the one switched off as available. */
+.p-tabs .off.on { background: var(--ink); color: var(--paper); border-style: solid; border-color: var(--ink); cursor: default; }
 .sw.sig { color: var(--water-line); }
 .plot .vscale { grid-column: 1; grid-row: 2; position: relative; font-size: 0.66rem; color: var(--mid); }
 .plot .vscale span { position: absolute; right: 0.6ch; transform: translateY(-50%); white-space: nowrap; }
@@ -298,6 +308,8 @@ th:first-child, td:first-child { text-align: left; }
 .ln { fill: none; stroke-width: 2; vector-effect: non-scaling-stroke; stroke-linejoin: round; stroke-linecap: round; }
 .ln-tfm { stroke: var(--water-line); }
 .ln-tfm-alt { stroke: var(--water-line); stroke-dasharray: 8 3 2 3; }
+.ln-tfm-3 { stroke: var(--water-line); stroke-dasharray: 1 3; }
+.ln-tfm-4 { stroke: var(--water-line); stroke-dasharray: 12 3 1 3 1 3; }
 .ln-clim { stroke: var(--dry-line); stroke-dasharray: 7 4; }
 .ln-persist { stroke: var(--ink); stroke-dasharray: 2 4; }
 .ln-blend { stroke: var(--ink); stroke-width: 1; vector-effect: non-scaling-stroke; }
@@ -308,7 +320,9 @@ th:first-child, td:first-child { text-align: left; }
 .plot-box .clip.dn::after { content: '▾'; top: auto; bottom: -0.2em; }
 .plot-box .clip.ln-clim::after { color: var(--dry-line); }
 .plot-box .clip.ln-tfm::after { color: var(--water-line); }
-.plot-box .clip.ln-tfm-alt::after { color: var(--water-line); }
+.plot-box .clip.ln-tfm-alt::after,
+.plot-box .clip.ln-tfm-3::after,
+.plot-box .clip.ln-tfm-4::after { color: var(--water-line); }
 
 /* ---- in brief: five lines, the numbers bold ---- */
 .facts { list-style: none; margin: 0.4em 0 0; padding: 0; font-size: 0.9em; max-width: 56rem; }

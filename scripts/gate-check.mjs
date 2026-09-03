@@ -139,12 +139,15 @@ async function run(cdp, url, { name, width, height, mobile }) {
   const chipRow = 'nav.p-tabs';
   const modelChips = await s.evaluate(`document.querySelectorAll('${chipRow} [data-ctl="model"]').length`);
   if (modelChips >= 2) {
+    // derived, not hardcoded to two: a third candidate must turn these red for a
+    // real reason or not at all, never because the count moved
+    const BASELINES = 2;  // persistence and climatology, drawn once for every model
     const paths = () => s.evaluate('document.querySelectorAll("#lead svg[data-lead] path.ln").length');
-    check((await paths()) === 4, 'both models are drawn beside the two baselines', `${await paths()} lines`);
-    // the two model lines must not be told apart by colour alone
-    const dashes = await s.evaluate('JSON.stringify([...document.querySelectorAll("#lead path.ln-tfm, #lead path.ln-tfm-alt")].map(p => getComputedStyle(p).strokeDasharray))');
+    check((await paths()) === modelChips + BASELINES, `all ${modelChips} models are drawn beside the two baselines`, `${await paths()} lines`);
+    // no two model lines may be told apart by colour alone
+    const dashes = await s.evaluate('JSON.stringify([...document.querySelectorAll("#lead path.ln:not(.ln-persist):not(.ln-clim)")].map(p => getComputedStyle(p).strokeDasharray))');
     const dash = JSON.parse(dashes);
-    check(dash.length === 2 && dash[0] !== dash[1], 'and told apart by their dash, not their hue', dashes);
+    check(dash.length === modelChips && new Set(dash).size === dash.length, 'and each told apart by its own dash, not its hue', dashes);
     // every swatch in the key must actually show ink — a dasharray that starts on
     // a gap, or a mark placed off its own viewBox, leaves an empty 12 px box that
     // no Node test can see
@@ -154,16 +157,29 @@ async function run(cdp, url, { name, width, height, mobile }) {
     await click(`${chipRow} a[data-ctl="model"][href*="models="]`);
     const url = await s.evaluate('location.search + location.hash');
     check(/[?&]models=/.test(url), 'a model chip puts the selection in the URL', url);
-    check((await paths()) === 3, 'one model fewer is one line fewer', `${await paths()} lines`);
+    check((await paths()) === modelChips - 1 + BASELINES, 'one model fewer is one line fewer', `${await paths()} lines`);
     check((await active()) === 'h2 in section#lead', 'and the focus stays on the drawing it changed', await active());
     const left = await s.evaluate(`document.querySelector('${chipRow} span.off[data-ctl="model"]') && document.querySelector('${chipRow} span.off[data-ctl="model"]').textContent`);
     check(!!left, 'the last model on cannot be switched off — its chip is disabled, not gone', String(left));
+    // and it must still LOOK like the model in view. Painted like an ordinary
+    // unavailable chip it reads as greyed out while the model switched off beside
+    // it reads as available — the state inverted, which no class assertion sees.
+    const paint = await s.evaluate(`JSON.stringify({
+      locked: getComputedStyle(document.querySelector('${chipRow} span.off[data-ctl="model"]')).backgroundColor,
+      active: getComputedStyle(document.querySelector('${chipRow} a[data-ctl="block"].on')).backgroundColor,
+      off: getComputedStyle(document.querySelector('${chipRow} a[data-ctl="block"]:not(.on)')).backgroundColor })`);
+    const paints = JSON.parse(paint);
+    check(paints.locked === paints.active && paints.locked !== paints.off, 'and it is painted like the chip that is on, not like one that is unavailable', paint);
     const title = await s.evaluate('document.querySelector("details#skill summary").textContent');
     check(title.includes(String(left).replace(/[^\x20-\x7e].*$/, '').trim()), 'and the panels below name the model they now speak for', title);
+    const cols = await s.evaluate('(() => { const d = document.querySelector("details#error details.tbl"); d.open = true; const th = [...d.querySelectorAll("thead th")].map(x => x.textContent); const td = [...d.querySelectorAll("tbody tr:first-child td")].map(x => x.textContent); d.open = false; return JSON.stringify({ th, dash: td.filter(x => x === "—").length }); })()');
+    const tbl = JSON.parse(cols);
+    check(tbl.th.includes(String(left).replace(/[^\x20-\x7e].*$/, '').trim()), 'the table twin has a column for the model in view', cols);
+    check(tbl.dash === 0 || tbl.th.includes('upstream OLS'), 'and its first row is numbers, not dashes', cols);
     await s.send('Page.captureScreenshot', {}).then(r => writeFileSync(join(shots, `${name}-one-model.png`), Buffer.from(r.data, 'base64')));
     await s.evaluate('history.back()');
     await sleep(400);
-    check((await paths()) === 4, 'back restores both curves', `${await paths()} lines`);
+    check((await paths()) === modelChips + BASELINES, 'back restores every curve', `${await paths()} lines`);
   }
 
   // 3. a gauge chip on the curve: focus on the curve's heading, panel stays open,
