@@ -198,6 +198,26 @@ test('fetchRawRange sends the start DAY it was given, not a Jan 1 derived from i
   assert.equal(seen[0].parameter, 'WASSERSTAND ROHDATEN');
 });
 
+test('fetchRawRange tells "WSV has no archive for this gauge" apart from a real failure', async () => {
+  const realFetch = globalThis.fetch;
+  const withLocation = loc => async () => ({ status: 303, headers: { get: () => loc } });
+  const rejection = async () => {
+    try { await fetchRawRange('uuid-x', '2026-01-01', '2027-01-01'); } catch (e) { return e; }
+    throw new Error('expected a rejection');
+  };
+  try {
+    // the steady state of ~111 lock and weir gauges: live on REST, never archived
+    globalThis.fetch = withLocation('/errorpages/errorException');
+    assert.equal((await rejection()).noArchive, true);
+    globalThis.fetch = withLocation('/some/other/error');
+    assert.equal((await rejection()).noArchive, false, 'only the error page means "nothing here"');
+    globalThis.fetch = async () => ({ status: 502, headers: { get: () => null } });
+    assert.equal((await rejection()).noArchive, false, 'an outage must stay a failure');
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
 // ---------- 2b. the running year's heal (--running) ----------
 
 // the shape --running found in production on 2026-09-03: a current.json whose

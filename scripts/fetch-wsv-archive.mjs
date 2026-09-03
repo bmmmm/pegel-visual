@@ -270,7 +270,17 @@ export async function fetchRawRange(uuid, startDate, endDate) {
   });
   const res = await fetch(PREPARE, { method: 'POST', body, redirect: 'manual', signal: AbortSignal.timeout(180000) });
   const loc = res.headers.get('location');
-  if (!loc || loc.includes('error')) throw new Error(`prepare failed (${res.status}, ${loc || 'no redirect'})`);
+  if (!loc || loc.includes('error')) {
+    const err = new Error(`prepare failed (${res.status}, ${loc || 'no redirect'})`);
+    // A 303 to the error page is how the endpoint says "no historical series
+    // for this gauge" — the steady state for ~111 lock and weir gauges WSV
+    // serves live but never archived. Counting those as failures is what kept
+    // every scheduled archive-update run red (and therefore unpushed) since
+    // the fail-rate guard went in: the sweep skips the 626 complete stations,
+    // attempts only the hopeless ones, and lands at a 100% failure rate.
+    err.noArchive = loc ? loc.includes('/errorpages/errorException') : false;
+    throw err;
+  }
   const zipRes = await fetch(new URL(loc, PREPARE), { signal: AbortSignal.timeout(300000) });
   if (!zipRes.ok) throw new Error('download failed HTTP ' + zipRes.status);
   const bytes = new Uint8Array(await zipRes.arrayBuffer());
@@ -639,7 +649,7 @@ async function main() {
     : `backfill ${FROM}-${TO}`;
   console.log(`${stations.length} stations · mode: ${mode} · out: ${OUT}/ · ${PARALLEL} worker(s)`);
 
-  let ok = 0, skipped = 0, failed = 0, cursor = 0;
+  let ok = 0, skipped = 0, failed = 0, noArchive = 0, cursor = 0;
   async function processStation(s, i) {
     const dir = join(OUT, s.uuid);
     const tag = `[${i + 1}/${stations.length}] ${s.shortname}`;
@@ -689,8 +699,13 @@ async function main() {
       console.log(`${tag} · ${pts} pts -> ${touched} year(s)`);
       ok++;
     } catch (e) {
-      console.log(`${tag} · FAILED: ${e.message}`);
-      failed++;
+      if (e.noArchive) {
+        console.log(`${tag} · no ZIP archive at WSV`);
+        noArchive++;
+      } else {
+        console.log(`${tag} · FAILED: ${e.message}`);
+        failed++;
+      }
     }
     await sleep(THROTTLE_MS);
   }
@@ -710,6 +725,16 @@ async function main() {
     const none = Object.values(m.stations).filter(e => e.none).length;
     console.log(`manifest: ${stations.length} stations, ${stations.length - none} archived, ${none} without WSV archive`);
   }
-  console.log(`done · ${ok} fetched · ${skipped} already complete · ${failed} failed${failed ? ' (re-run to retry)' : ''}`);
+  console.log(`done · ${ok} fetched · ${skipped} already complete · ${noArchive} without a WSV ZIP archive`
+    + ` · ${failed} failed${failed ? ' (re-run to retry)' : ''}`);
   reportRunOutcome('WSV archive fetch', ok, failed);
+  // The one mode that attempts EVERY station: coming back with nothing there
+  // is the endpoint being down, not a fleet without archives. The gap sweep
+  // cannot make that call — skipping the 626 complete stations and finding
+  // only archive-less ones left is precisely its healthy steady state.
+  if (RUNNING && ok === 0 && failed + noArchive > 0) {
+    console.error(`error: --running healed no station at all (${noArchive} reported no archive,`
+      + ` ${failed} failed) — that is a WSV ZIP outage, not a fleet without history`);
+    process.exitCode = 1;
+  }
 }
