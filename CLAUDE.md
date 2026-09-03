@@ -84,109 +84,22 @@
   acts: every loader must end in `scheduleRender()`. A loader that forgets it
   simply never appears (this bit `loadStationList` during the migration).
   All motion is CSS on `transform`/`opacity`, off under reduced motion.
-- **Verify in a real browser**, not only via tests — and `--headless=new
-  --screenshot` alone does NOT do it: `scheduleRender()` rides on rAF, which a
-  headless page never serves, so every data-driven view screenshots as
-  `loading…`. What works: a `python3 -m http.server` plus Chrome with
-  `--remote-debugging-port=9222 --remote-allow-origins='*'` (both need the
-  sandbox bypass — socket bind and loopback connect), then a ~40-line CDP
-  client over the global `WebSocket`: `Page.navigate`, sleep, evaluate
-  `renderNow()`, `Page.captureScreenshot`.
-  `Emulation.setDeviceMetricsOverride {mobile:true}` gives a true phone
-  viewport, `setEmulatedMedia` a real `pointer: coarse`, and a `clip` at
-  `scale: 4` is how you read a 12 px swatch. Measure through
-  `Runtime.evaluate` in the same run — a `getBoundingClientRect()` sweep
-  catches what a screenshot only hints at. `Runtime.enable` + `Log.enable` +
-  `Network.enable` BEFORE `Page.navigate` collect the console
-  (`Runtime.consoleAPICalled`, `Log.entryAdded`, `Runtime.exceptionThrown`) and
-  every response code in the same run — that is how a request the app swallows
-  in a `.catch` becomes visible at all.
-- **One engine is not a check.** The 400 on `measurements.json` and the „history
-  stops in January" report both came out of Firefox. Gecko over **WebDriver
-  BiDi**: `firefox --headless --no-remote --profile <tmp> --remote-debugging-port
-  <p> about:blank`, then a WebSocket on `ws://127.0.0.1:<p>/session` — Firefox
-  serves **no** `/json/version` and CDP is off. `session.new {capabilities:{}}` →
-  `browsingContext.getTree` (take `contexts[0].context`) →
-  `browsingContext.navigate {wait:'complete'}` → `script.evaluate {target:
-  {context}, awaitPromise:true}`. The expression must return a **string**
-  (`JSON.stringify(...)`), or the result comes back as a serialized object tree.
-  Console via `session.subscribe {events:['log.entryAdded']}`. Errors arrive as
-  `{type:'error'}`, not as a rejected promise.
-- **A time series has two edges, and a check that measures one proves nothing.**
-  The gate that signed off the running-year heal only asked whether the line
-  breaks — a series ending cleanly on 31.12.2025 would have passed it. Always
-  measure the newest point against the CLOCK as well as the oldest against the
-  window. The same asymmetry sat in the plate itself: `coveredDays` warned about
-  a short start while a missing right end went unnamed.
-- **Local checks need real data, and `/archive/` is gitignored for exactly
-  that.** `curl` the deployed `archive/manifest.json` plus the one gauge's
-  `closed.json` + `current.json` into `archive/<uuid>/` next to the worktree's
-  `index.html`, then serve it — that is how new code meets real data before it
-  is deployed. `?station=BONN&history=5y` drives the range straight from the URL.
-- **Driving the live browser: the tab has to be VISIBLE.** A tab that is
-  minimised, on another Space or fully covered by another window reports
-  `document.visibilityState === 'hidden'`, and Chrome then stops serving
-  `requestAnimationFrame` — since `scheduleRender()` rides on rAF, the page sits
-  on `loading…` with the data already in `state`, and `captureVisibleTab`
-  returns blank images. Both look exactly like app bugs. Check
-  `document.visibilityState` before believing either. (`renderNow()` from the
-  console rendering fine while `scheduleRender()` does nothing is the tell.)
-  A second trap: with browser zoom on, the extension's screenshot is a crop in
-  device pixels, so image coordinates are `css * devicePixelRatio` — click by
-  element `ref`, not by pixels read off the picture.
+- **Verify in a real browser**, not only via tests — `--headless=new
+  --screenshot` alone does NOT do it (`scheduleRender()` rides on rAF, which a
+  headless page never serves), and one engine is not a check. The recipes —
+  Chrome over CDP with console and network capture, Firefox over WebDriver
+  BiDi, phone emulation, the tab-visibility traps, and how to put real archive
+  data under a local server — live in **`.claude/domains/browser-verify.md`**
+  (moved there 2026-09-03). Read it before the first tool call of such a task.
+  And measure a time series at **both** edges: the newest point against the
+  clock, not only the oldest against the window.
 
-## Forecast gate (`scripts/forecast/`, Python via uv)
+## Forecast gate (`scripts/forecast/`, `gate/`)
 
-- **The verdict is on file, not in memory.** `gate/seasonal-mid/report.md`
-  is the 2026-09-02 gate run of TimesFM 2.5 against the persistence/climatology
-  blend: **NO-SHIP** (pooled skill 0.07 at h1–14, nothing at h15–30, −0.04 at
-  h31–90; calibration fine). Re-running the gate consumes the test set — read
-  the report and the plan (`~/.claude/plans/mache-den-plan-wie-linked-puddle.md`)
-  before touching a threshold, and list every tried variant in the header.
-- **`gate/` is deployed** (`pages.yml` excludes only `scripts/`, `tests/`,
-  `.github/`): `gate/index.html` + `gate.js` render the committed `report.json`
-  files as an interactive plate at `/pegel-visual/gate/`. `gate.py` writes there
-  by default; its `per_h` / `per_h_ratio_median` keys (MAE per lead day, and the
-  median of the five regimes' ratios to the blend) feed the page's one picture,
-  the error-by-lead-day curve. `gate.js` is pure at import —
-  `tests/gate-page.test.mjs` runs `buildModel`/`renderPage` against the real
-  reports and applies the same legend gate as the app: every mark class must
-  appear in its section's key.
-- **The gate page re-renders the whole plate on every chip, so focus is a
-  deliverable.** Three patterns, verified only in a real browser: (1) every chip
-  and index link carries `data-focus`, and `draw({focus})` opens the `<details
-  class="panel">` it names and focuses its `<summary>` — with a `summary:focus`
-  ring, not `:focus-visible`, because script-set focus fails that heuristic;
-  (2) open panel ids are read before `innerHTML` and restored after; (3) one
-  `stateHref()` spells query (data) and hash (panel), chips and index links go
-  through one `pushState` path. After `popstate`, Chrome processes the URL
-  fragment and CLEARS the focus when its target is not focusable (a section, a
-  details) — so the popstate path focuses after a double `requestAnimationFrame`,
-  never inside the handler. `node scripts/gate-check.mjs` (headless Chrome over
-  CDP, desktop + phone with touch emulation, needs the sandbox bypass for
-  loopback) is the gate for all of this — run it before every deploy of the
-  page. `(pointer: coarse)` comes from `Emulation.setTouchEmulationEnabled`;
-  `setEmulatedMedia` cannot override it.
-- **`timesfm` is pinned to 2.0.2 and the pin is load-bearing.** The 3.0 line's
-  weights are non-commercial and GPL-incompatible; `tests/test_license.py`
-  greps the whole repo for the 3.0 package, class and checkpoint names, so do
-  not spell them out even in comments. Dependabot is told to ignore `>=3`.
-- **`uv run python <script>` is the whole bootstrap.** `[tool.uv]` points the
-  cache at `tmp-forecast/uv-cache` (the default `~/.cache/uv` is not writable in
-  the sandbox) and makes `model` a default group, so the first `uv run` syncs
-  torch + timesfm by itself, no bypass, no separate `uv sync`. CI opts out with
-  `--no-group model`. Weights cache under `tmp-forecast/hf` — pass `--tmp` and
-  `--archive` with the MAIN checkout's paths from a worktree, or the download
-  lands in the worktree and dies with it.
-- **The model's point forecast is the median channel (index 5), not channel 0.**
-  Measured on 2.0.2; `tfm.forecast_batch` asserts it. Horizon ≤ 128 steps is one
-  decode step — the 2.0.2/3.0.1 flip-quantile difference never applies.
-- **`collect-hires.mjs` is the only source of 15-minute data.** Weekly via the
-  LaunchAgent `de.6bm.pegel-hires` (wrapper `collect-hires.sh`, heartbeat
-  `cron:pegel-hires`, on the recap roster at 192 h), into
-  `tmp-forecast/hires/<uuid>/<YYYY-MM>.json` on this Mac and from there into the
-  GitHub-only, protected `hires` data branch (clone under
-  `tmp-forecast/hires-branch/`, fast-forward only, never `origin`) — the
-  short-horizon gate stays PROVISIONAL until ~16 weeks have accumulated. Month
-  shards, not one file per gauge, so the weekly mirror commit stays small. The
-  server clamps `P35D` to ~31 days; merges are idempotent by timestamp.
+Its own subsystem, its own file: **`.claude/domains/forecast-gate.md`** (moved
+there 2026-09-03). Read it before touching the gate, the model pin or the hires
+collector. The two things worth knowing without opening it: the 2026-09-02 run
+of TimesFM 2.5 against the persistence/climatology blend is a **NO-SHIP**, and
+that verdict lives in `gate/seasonal-mid/report.md`, not in anyone's memory —
+re-running the gate consumes the test set. And `timesfm` is **pinned to 2.0.2
+for licence reasons**; `tests/test_license.py` enforces it.

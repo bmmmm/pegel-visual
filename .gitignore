@@ -7,3 +7,7 @@ tmp-*
 .venv/
 __pycache__/
 .pytest_cache/
+# .claude: domains/ is shared knowledge and belongs in the repo; everything
+# else there is per-machine session state (plans, worktrees, write logs)
+/.claude/*
+!/.claude/domains/
