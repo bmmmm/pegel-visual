@@ -283,11 +283,14 @@ test('gist, facts and basics quote the report, not a remembered number', () => {
   assert.equal((basics.match(/<p><b>/g) || []).length, 3, 'three paragraphs');
   const prose = basics.slice(basics.indexOf('<div class="prose">'), basics.indexOf('<p class="p-dim">'));
   assert.ok(words(prose) <= 150, `basics: ${words(prose)} words`);
-  // the main page links here
+  // the main page links here — from its app bar, not from the foot of the page
   const page = readFileSync(join(ROOT, '..', 'index.html'), 'utf8');
-  assert.ok(page.includes('<a href="gate/" id="gate-link"'), 'the site footer links the gate');
+  const appbar = page.slice(page.indexOf('<header id="appbar">'), page.indexOf('</header>'));
+  const footNav = page.slice(page.indexOf('<nav id="footer-nav"'), page.indexOf('</nav>', page.indexOf('<nav id="footer-nav"')));
+  assert.match(appbar, /<a id="gate-link" href="gate\/"[^>]*>forecast gate<\/a>/, 'the app bar links the gate');
+  assert.ok(!footNav.includes('gate'), 'and the footer no longer does');
   assert.ok(page.includes('<dt>forecast gate</dt>'), 'the feature guide explains it');
-  assert.equal((page.match(/href="gate\/"/g) || []).length, 2, 'footer and guide, relative — the site lives on a subpath');
+  assert.equal((page.match(/href="gate\/"/g) || []).length, 2, 'app bar and guide, relative — the site lives on a subpath');
 });
 
 test('nothing the deploy stamps appears here, and no closing script tag is ever emitted', () => {

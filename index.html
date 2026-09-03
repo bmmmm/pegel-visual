@@ -415,9 +415,12 @@
   }
   #reportbox-actions button:hover { background: var(--ink); color: var(--paper); }
   /* ---- app bar: the plate's head row — wordmark, view nav, finder, info ---- */
-  /* `flex-wrap: wrap` is the intent, not a bug to chase: below ~370 px the bar
-     takes a second row rather than shrinking its tap targets or dropping an
-     item. Measured at 360 px: two rows, 90 px, no horizontal overflow. */
+  /* `flex-wrap: wrap` is the intent, not a bug to chase: the bar takes another
+     row rather than shrinking its tap targets or dropping an item. Measured
+     with the gate link in the nav: 1240 px one row (48 px), 390 px two rows
+     (90 px), 360 px and below three (129 px) — no horizontal overflow at any
+     of them. The link costs exactly one of those rows on a phone; a shorter
+     label would buy it back and stop saying what the page is. */
   #appbar {
     display: flex;
     align-items: baseline;
@@ -1364,10 +1367,10 @@
     .cmd-deco { display: none; }
     #recent button { padding: 0.2em 0.7ch; } /* a little more tap area */
     #infobox, #reportbox { padding: 1em 0.9em; max-width: calc(100vw - 1.6em); }
-    /* One row on a phone: wordmark, the four views, the two tools. It only fits
-       once the gaps tighten and the finder drops to its glyph (its aria-label
-       and title still say "find a gauge or river"), and that buys back the whole
-       second row at the top of the screen. */
+    /* Two rows on a phone: wordmark and the five nav items on the first, the
+       two tools on the second. The gaps tighten and the finder drops to its
+       glyph (its aria-label and title still say "find a gauge or river") —
+       without that the tools would not share a row at all. */
     #appbar { margin: -1em -0.7em 1em; padding: 0.4em 0.7em; gap: 0.3em 0.6em; font-size: 0.85em; }
     #mode-nav { gap: 0.2em 0.65em; }
     #appbar-tools { margin-left: 0; gap: 0.4em; }
@@ -1394,6 +1397,7 @@
       <a id="rivers-btn" href="?rivers" data-nav="rivers" title="--rivers · all waters on a map">map</a>
       <a id="rising-btn" href="?rising" data-nav="rising" title="--rising · who's rising right now">rising</a>
       <a id="total-btn" href="?total" data-nav="total" title="--total · all rivers, summed">totals</a>
+      <a id="gate-link" href="gate/" title="could a zero-shot model forecast these gauges? the measurement and the write-up">forecast gate</a>
     </nav>
     <div id="appbar-tools">
       <button id="finder-btn" type="button" aria-haspopup="dialog" aria-label="find a gauge or river"
@@ -1623,7 +1627,6 @@
     <a href="#" id="info-link">info</a>
     · <a href="#" id="report-link">report issue</a>
     · <a href="#" id="share-link">share</a>
-    · <a href="gate/" id="gate-link" title="could a zero-shot model forecast these gauges? the measurement and the write-up">forecast gate</a>
     · <a href="https://github.com/bmmmm/pegel-visual" rel="noopener">source</a>
     · <a href="https://ko-fi.com/bmabma" rel="noopener">support on ko-fi</a>
   </nav>
