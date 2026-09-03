@@ -31,6 +31,8 @@ from pathlib import Path
 import numpy as np
 
 PERMISSIVE = frozenset({"Apache-2.0", "MIT", "BSD-3-Clause"})
+# what metrics.py scores: nine deciles, the median in the middle
+DECILE_LEVELS = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
 
 # ---------- the two pre-registered ForecastConfigs ----------
 #
@@ -143,6 +145,9 @@ def _load_3p0(entry: dict, tmp_dir: Path, config: dict):
     assert model.config.median_quantile_index == entry["point_channel"], \
         f"median channel moved: {model.config.median_quantile_index} != {entry['point_channel']}"
     assert len(model.config.quantiles) == entry["quantile_channels"], model.config.quantiles
+    # the levels, not just the count: metrics.py scores these columns AS deciles
+    # (DECILES = 0.1..0.9) and calls the outer pair an 80 % interval
+    assert [round(q, 6) for q in model.config.quantiles] == DECILE_LEVELS, model.config.quantiles
     return model
 
 
@@ -212,16 +217,17 @@ FORECAST_CONFIG = MODELS[SHIPPED]["config"]
 
 
 def license_guard(key: str = SHIPPED) -> None:
-    """Two promises, both able to fail: the shipped weights are permissively
-    licensed, and a model that may not be shipped never becomes the shipped one."""
-    shipped = MODELS[SHIPPED]
-    assert shipped["shippable"], "the shipped model is not marked shippable"
-    assert shipped["license"] in PERMISSIVE, \
-        f"shipped weights are {shipped['license']}, which is not a permissive licence"
+    """Two promises, both able to fail — and the order matters: the per-key check
+    runs FIRST, or `SHIPPED` pointing at non-commercial weights would always be
+    caught by the second assert and the first could never fire at all."""
     entry = MODELS[key]
     if not entry["shippable"]:
         assert key != SHIPPED, f"{key} may not be shipped and must never be the shipped model"
         assert entry["license_url"], f"{key}: a model that cannot ship must link the licence that says so"
+    shipped = MODELS[SHIPPED]
+    assert shipped["shippable"], "the shipped model is not marked shippable"
+    assert shipped["license"] in PERMISSIVE, \
+        f"shipped weights are {shipped['license']}, which is not a permissive licence"
 
 
 def config_fingerprint(config: dict = FORECAST_CONFIG) -> str:
@@ -230,8 +236,13 @@ def config_fingerprint(config: dict = FORECAST_CONFIG) -> str:
 
 def expected_config(header: dict) -> dict:
     """The config the report's own model was pre-registered with. Headers written
-    before the registry carry no model_key — those are the shipped model."""
-    return MODELS[header.get("model_key") or SHIPPED]["config"]
+    before the registry carry no model_key — those are the shipped model.
+
+    An unregistered key falls back to the shipped config rather than raising: a
+    header from a removed entry must come out of the gate as a VOID verdict
+    (gate.void_reasons names it, and the fingerprint will not match either), not
+    as a traceback."""
+    return MODELS.get(header.get("model_key") or SHIPPED, MODELS[SHIPPED])["config"]
 
 
 def load_model(tmp_dir: Path, config: dict = None, key: str = SHIPPED) -> Loaded:
@@ -274,4 +285,13 @@ def forecast_batch(loaded: Loaded, contexts: np.ndarray, horizon: int):
     assert np.array_equal(quant[..., entry["point_channel"]], point), \
         "the point forecast is not the median channel"
     lo, hi = entry["decile_slice"]
-    return point, quant[..., lo:hi]
+    deciles = quant[..., lo:hi]
+    # The slice itself was the gap: asserting the point channel of the RAW output
+    # says nothing about what leaves this function. metrics.py reads these nine
+    # columns as the deciles 0.1..0.9, so column 4 must BE the point forecast —
+    # a slice off by one passes every other check here and scores a plausible,
+    # wrong CRPS, PICP80 and PIT.
+    assert deciles.shape[-1] == len(DECILE_LEVELS), deciles.shape
+    assert np.array_equal(deciles[..., DECILE_LEVELS.index(0.5)], point), \
+        "the returned deciles are not centred on the point forecast — check decile_slice"
+    return point, deciles

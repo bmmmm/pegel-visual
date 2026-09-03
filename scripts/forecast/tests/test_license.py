@@ -13,6 +13,7 @@ guard the hazard instead: the shipped model's licence, the shipped reports, and
 the fact that a plain `uv run` can never even install the non-commercial line.
 """
 import json
+import re
 import tomllib
 from pathlib import Path
 
@@ -87,12 +88,16 @@ def test_the_non_commercial_line_is_opt_in_only():
     pp = pyproject()
     groups, uv = pp["dependency-groups"], pp["tool"]["uv"]
     shipped_group = tfm.MODELS[tfm.SHIPPED]["group"]
+    # a list, not the word "all": `x not in "all"` is a SUBSTRING test and would
+    # pass for every group name while every group is in fact default
+    defaults = uv["default-groups"]
+    assert isinstance(defaults, list), f"default-groups must be a list, got {defaults!r}"
     for key, entry in tfm.MODELS.items():
         if entry["shippable"]:
             continue
         group = entry["group"]
         assert group in groups, f"{key}: group {group!r} is not declared"
-        assert group not in uv["default-groups"], f"{key}: {group!r} must not be a default group"
+        assert group not in defaults, f"{key}: {group!r} must not be a default group"
         pins = [d for d in groups[group] if d.startswith("timesfm")]
         assert len(pins) == 1 and "==" in pins[0], f"{group}: timesfm must be pinned exactly, got {pins}"
         # the same distribution at two versions: uv must know they exclude each other
@@ -134,3 +139,46 @@ def test_challenger_reports_declare_the_model_they_ran():
         assert header.get("model_shippable") is tfm.MODELS[key]["shippable"]
         if not tfm.MODELS[key]["shippable"]:
             assert header.get("model_license_url"), f"{path.relative_to(REPO)}: no licence link in the header"
+
+
+def test_the_page_publishes_only_the_shipped_reports():
+    """The guard the file-level checks miss: gate/gate.js decides WHICH report the
+    deployed plate speaks for. Point its fetches at a challenger and every other
+    test here stays green while the site shows non-commercial numbers under prose
+    that names the shipped model."""
+    js = (REPO / "gate" / "gate.js").read_text(encoding="utf-8")
+    fetched = re.findall(r"getJson\(\s*'([^']+)'", js)
+    assert fetched, "no getJson literals found — has the loader been rewritten?"
+    shipped_names = {"report.json", "models.json"}
+    for url in fetched:
+        name = url.rsplit("/", 1)[-1]
+        assert name in shipped_names, \
+            f"gate.js fetches {url!r}; the deployed plate may only speak for the shipped report"
+
+
+def test_the_committed_manifest_matches_the_registry_and_disk():
+    """models.json is deployed and is the machine-readable claim about which model
+    this repo ships. Nothing else reads it yet, so nothing else would catch a
+    hand-edit."""
+    manifest = json.loads((REPO / "gate" / "models.json").read_text(encoding="utf-8"))
+    assert manifest["shipped"] == tfm.SHIPPED
+    listed = {m["key"] for m in manifest["models"]}
+    assert listed <= set(tfm.MODELS), f"manifest names an unregistered model: {listed - set(tfm.MODELS)}"
+    for m in manifest["models"]:
+        entry = tfm.MODELS[m["key"]]
+        for field in ("checkpoint", "license", "license_url", "shippable", "id", "params", "label"):
+            assert m[field] == entry[field], f"{m['key']}.{field}: {m[field]!r} != {entry[field]!r}"
+        for where in m["files"].values():
+            for path in where.values():
+                assert (REPO / "gate" / path).exists(), f"manifest points at a missing file: {path}"
+    assert [m["key"] for m in manifest["models"] if m["shippable"]] == [tfm.SHIPPED]
+
+
+def test_default_groups_is_a_list_not_a_word():
+    """`group not in default-groups` degrades to a SUBSTRING test if uv's
+    `default-groups = "all"` spelling is ever used — and "model-nc" is not a
+    substring of "all", so the opt-in guard would pass while every group is on."""
+    uv = pyproject()["tool"]["uv"]
+    assert isinstance(uv["default-groups"], list), uv["default-groups"]
+    assert tfm.MODELS[tfm.SHIPPED]["group"] in uv["default-groups"], "the shipped model must sync by default"
+

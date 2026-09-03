@@ -308,6 +308,9 @@ def clauses(pool: dict, reg: dict, contam: dict, blocks: dict, th: dict) -> dict
 
 def void_reasons(header: dict, data: dict, expected_config: dict, th: dict) -> list[str]:
     reasons = []
+    key = header.get("model_key")
+    if key is not None and key not in tfm.MODELS:
+        reasons.append(f"header names an unregistered model ({key})")
     if header.get("config_fingerprint") != tfm.config_fingerprint(expected_config):
         reasons.append("ForecastConfig fingerprint differs from the pre-registered one")
     if not header.get("model_ran"):
@@ -412,17 +415,27 @@ def shipping_note(h: dict) -> list[str]:
             f"GPL-3.0 repo ships, however it scores.", ""]
 
 
+def candidates_in(out_dir: Path, key: str) -> list[str]:
+    """Registry keys with a report in this directory, plus the one being written.
+
+    Registry keys only, in registry order: a stray `report_backup_….json` must
+    never be counted as a candidate, and the directory is the one actually being
+    written, so --report cannot make the count describe some other run."""
+    found = {key} | {k for k in tfm.MODELS
+                     if (out_dir / f"{'report' if k == tfm.SHIPPED else f'report-{k}'}.json").exists()}
+    return [k for k in tfm.MODELS if k in found]
+
+
 def candidate_note(rep: dict) -> list[str]:
     """Every candidate measured on this TEST set, named. The thresholds were
     pre-registered for one; a second look at the same origins is a second
-    hypothesis test, and a reader must be able to see how many were taken."""
-    kind, target = rep["header"]["horizon_kind"], rep["header"]["target"]
-    found = sorted({p.stem.removeprefix("report-") if p.stem != "report" else tfm.SHIPPED
-                    for p in (REPO / "gate" / f"{kind}-{target}").glob("report*.json")}
-                   | {rep["header"].get("model_key") or tfm.SHIPPED})
+    hypothesis test, and a reader must be able to see how many were taken.
+    Reads rep["candidates"] — the same list the JSON carries, so the page can
+    say it too instead of the markdown saying it alone."""
+    found = rep.get("candidates") or []
     if len(found) < 2:
         return []
-    names = ", ".join(tfm.MODELS[k]["id"] if k in tfm.MODELS else k for k in found)
+    names = ", ".join(tfm.MODELS[k]["id"] for k in found)
     return [f"- {len(found)} candidates have now been measured on the SAME TEST origins ({names}). "
             f"The clause thresholds were pre-registered for a single candidate; read the significances "
             f"as {len(found)} looks at one test set, not one."]
@@ -436,8 +449,12 @@ def write_models_manifest(repo: Path) -> dict:
         files = {}
         stem = "report" if key == tfm.SHIPPED else f"report-{key}"
         for d in sorted(x for x in (repo / "gate").glob("*-*") if x.is_dir()):
-            if (d / f"{stem}.json").exists():
-                files[d.name] = {"json": f"{d.name}/{stem}.json", "md": f"{d.name}/{stem}.md"}
+            if not (d / f"{stem}.json").exists():
+                continue
+            entry_files = {"json": f"{d.name}/{stem}.json"}
+            if (d / f"{stem}.md").exists():  # a listed twin that 404s is worse than none
+                entry_files["md"] = f"{d.name}/{stem}.md"
+            files[d.name] = entry_files
         if not files:
             continue
         models.append({"key": key, "label": entry["label"], "id": entry["id"], "params": entry["params"],
@@ -496,8 +513,9 @@ def render_seasonal(rep: dict) -> str:
     for b in blocks:
         lines.append(f"| {b} | " + " | ".join(fmt(rep["climatology_vs_blend"][b][n]) for n in rep["stations"]) + " |")
     lines += ["", "## Caveats", "",
-              "- TimesFM 2.5 has no published corpus manifest; PEGELONLINE is open and CAMELS-DE (2024) covers German basins. "
-              "Assume 2000-2024 MAY be in the training data. A7 is a probe, not a proof.",
+              f"- {h['model']} has no published corpus manifest; PEGELONLINE is open and CAMELS-DE (2024) covers German basins. "
+              "Assume the archive MAY be in the training data. A7 is a probe, not a proof — and it gets weaker the "
+              "later the checkpoint, because A7's own recent side (2024-2025) can sit inside the training window too.",
               "- The blend's τ and residual deciles are fitted on TRAIN; A7's 2003-2015 side therefore favours the blend slightly.",
               "- Persistence is reported for the MASE denominators only. The bar is the blend."]
     lines += candidate_note(rep) + [""]
@@ -520,6 +538,11 @@ def render_short(rep: dict) -> str:
             lines.append(f"| {name} | {s['origins']} | {s['rise_events']} | {b} | {fmt(m['persist'], 1)} | {fmt(m['snaive'], 1)} | "
                          f"{fmt(m['drift'], 1)} | {fmt(m['tidal'], 1)} | {fmt(m['tfm_point'], 1)} | {v['best_baseline']} | {fmt(v['ss_vs_best'])} |")
     lines += ["", f"collected: " + "; ".join(f"{i.get('name')}: {i.get('collected_steps', 0)} steps" for i in rep["station_info"].values()), ""]
+    # a short-horizon challenger would otherwise publish without the warning the
+    # seasonal reports carry
+    note = candidate_note(rep)
+    if note:
+        lines += ["## Caveats", ""] + note + [""]
     return "\n".join(lines)
 
 
@@ -539,22 +562,30 @@ def main(argv=None) -> int:
             return 2
         header["reproduced_by_run"] = other.get("generated")  # carried into the report: the void condition was measured, not assumed
         print("second run reproduces bit for bit")
-    if header["horizon_kind"] == "seasonal":
-        rep = seasonal_report(header, data, th)
-        text = render_seasonal(rep)
-    else:
-        rep = short_report(header, data, th)
-        text = render_short(rep)
-    print(text)
-    out = Path(args.report) if args.report else REPO / "gate" / f"{header['horizon_kind']}-{header['target']}"
+    # the destination is decided BEFORE rendering: the candidate count is part of
+    # the report, and it must describe the directory this run actually writes to
+    default_out = REPO / "gate" / f"{header['horizon_kind']}-{header['target']}"
+    out = Path(args.report) if args.report else default_out
     out.mkdir(parents=True, exist_ok=True)
     # report.json is THE report — the shipped model's. A challenger writes
     # report-<key>.json beside it and leaves every existing link standing.
     key = header.get("model_key") or tfm.SHIPPED
     stem = "report" if key == tfm.SHIPPED else f"report-{key}"
+    if header["horizon_kind"] == "seasonal":
+        rep = seasonal_report(header, data, th)
+        rep["candidates"] = candidates_in(out, key)
+        text = render_seasonal(rep)
+    else:
+        rep = short_report(header, data, th)
+        rep["candidates"] = candidates_in(out, key)
+        text = render_short(rep)
+    print(text)
     (out / f"{stem}.md").write_text(text + "\n", encoding="utf-8")
     (out / f"{stem}.json").write_text(json.dumps(_clean(rep), indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
-    write_models_manifest(REPO)
+    # the manifest describes the deployed gate/ directory, so only a run that
+    # actually wrote there may rewrite it — `--report elsewhere` must not.
+    if out == default_out:
+        write_models_manifest(REPO)
     print(f"report: {out / stem}.json")
     return {"SHIP": 0, "NO-SHIP": 1, "VOID": 2, "PROVISIONAL": 3}[rep["verdict"]]
 

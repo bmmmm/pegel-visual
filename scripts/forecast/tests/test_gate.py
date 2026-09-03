@@ -228,13 +228,36 @@ def test_the_manifest_lists_only_reports_that_exist(tmp_path):
     assert json.loads((gate_dir / "models.json").read_text(encoding="utf-8")) == two
 
 
-def test_the_caveat_counts_the_candidates_measured_on_one_test_set(tmp_path, monkeypatch):
-    monkeypatch.setattr(gate, "REPO", tmp_path)
-    d = tmp_path / "gate" / "seasonal-mid"
+def test_candidates_are_registry_keys_in_the_directory_being_written(tmp_path):
+    """The count must come from the registry and from the directory this run
+    writes to — not from whatever files happen to sit there."""
+    d = tmp_path / "seasonal-mid"
     d.mkdir(parents=True)
-    rep = {"header": {"horizon_kind": "seasonal", "target": "mid", "model_key": tfm.SHIPPED}}
-    assert gate.candidate_note(rep) == [], "one candidate needs no warning"
+    assert gate.candidates_in(d, tfm.SHIPPED) == [tfm.SHIPPED], "the run being written always counts"
     (d / "report.json").write_text("{}", encoding="utf-8")
     (d / "report-3p0.json").write_text("{}", encoding="utf-8")
-    note = "\n".join(gate.candidate_note(rep))
+    assert gate.candidates_in(d, tfm.SHIPPED) == [tfm.SHIPPED, "3p0"]
+    # a stray file is not a candidate, however much it looks like a report
+    (d / "report_backup_2026-09-01.json").write_text("{}", encoding="utf-8")
+    (d / "report-nonsense.json").write_text("{}", encoding="utf-8")
+    assert gate.candidates_in(d, tfm.SHIPPED) == [tfm.SHIPPED, "3p0"]
+    # and another directory's reports never leak in
+    other = tmp_path / "seasonal-max"
+    other.mkdir()
+    assert gate.candidates_in(other, "3p0") == ["3p0"]
+
+
+def test_the_caveat_reads_the_candidate_list_the_json_also_carries():
+    assert gate.candidate_note({"candidates": [tfm.SHIPPED]}) == [], "one candidate needs no warning"
+    assert gate.candidate_note({}) == []
+    note = "\n".join(gate.candidate_note({"candidates": [tfm.SHIPPED, "3p0"]}))
     assert "2 candidates" in note and tfm.MODELS["3p0"]["id"] in note and "SAME TEST origins" in note
+
+
+def test_an_unregistered_model_in_a_header_is_void_not_a_traceback():
+    rng = np.random.default_rng(5)
+    data = {u: synth_station(rng, model_sigma=5.0) for u in st.STATIONS}
+    h = header_for(data, model_key="3p1")
+    tfm.expected_config(h)  # must not raise
+    reasons = gate.void_reasons(h, data, tfm.expected_config(h), thresholds())
+    assert any("unregistered model" in r for r in reasons), reasons

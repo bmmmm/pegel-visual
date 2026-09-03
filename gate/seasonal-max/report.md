@@ -116,7 +116,7 @@ PIT histogram h31-90: [2713, 3165, 3084, 2960, 2988, 3356, 3406, 3063, 2958, 284
 
 ## Caveats
 
-- TimesFM 2.5 has no published corpus manifest; PEGELONLINE is open and CAMELS-DE (2024) covers German basins. Assume 2000-2024 MAY be in the training data. A7 is a probe, not a proof.
+- timesfm-2.5-200m has no published corpus manifest; PEGELONLINE is open and CAMELS-DE (2024) covers German basins. Assume the archive MAY be in the training data. A7 is a probe, not a proof — and it gets weaker the later the checkpoint, because A7's own recent side (2024-2025) can sit inside the training window too.
 - The blend's τ and residual deciles are fitted on TRAIN; A7's 2003-2015 side therefore favours the blend slightly.
 - Persistence is reported for the MASE denominators only. The bar is the blend.
 - 2 candidates have now been measured on the SAME TEST origins (timesfm-2.5-200m, timesfm-3.0). The clause thresholds were pre-registered for a single candidate; read the significances as 2 looks at one test set, not one.
