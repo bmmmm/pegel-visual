@@ -24,7 +24,7 @@ const CURRENT_YEAR = 2026;
 const {
   condense, daysInYear, buildManifest, freezeFromZip, healRunningYearFromZip, fetchRawRange,
   requestEnd, lastYearOf, planChunks, dropSpillYears,
-  writeStation, graduateCompletedYear,
+  writeStation, graduateCompletedYear, hasClosedYears,
   PLAUSIBLE_MIN_CM, PLAUSIBLE_MAX_CM,
   failureVerdict, reportRunOutcome,
 } = await import('../scripts/fetch-wsv-archive.mjs');
@@ -289,6 +289,54 @@ test('healRunningYearFromZip refuses to overwrite a completed year still awaitin
   writeFileSync(join(dir, 'closed.json'), JSON.stringify([prev]));
   assert.equal(healRunningYearFromZip(dir, 'BONN', CURRENT_YEAR, runningYear({ 0: [1, 2] })), true);
   assert.equal(JSON.parse(readFileSync(join(dir, 'current.json'))).y, CURRENT_YEAR);
+});
+
+test('healRunningYearFromZip: the ZIP day WSV is still ingesting unions instead of truncating', () => {
+  const dir = tmp('pegel-running-tail-');
+  const today = doy(CURRENT_YEAR, 8, 21), before = doy(CURRENT_YEAR, 8, 20);
+  writeFileSync(join(dir, 'current.json'),
+    JSON.stringify(runningYear({ [before]: [300, 400], [today]: [280, 460] })));
+  // the ZIP's last day stops at the last ingested reading, so its span is a
+  // prefix of the REST accumulation's
+  const zy = runningYear({ [before]: [305, 390], [today]: [300, 310] });
+
+  healRunningYearFromZip(dir, 'BONN', CURRENT_YEAR, zy);
+  const out = JSON.parse(readFileSync(join(dir, 'current.json')));
+  assert.deepEqual([out.min[before], out.max[before]], [305, 390], 'a settled day is still ZIP-wins');
+  assert.deepEqual([out.min[today], out.max[today]], [280, 460], 'the unfinished day keeps the wider span');
+});
+
+test('healRunningYearFromZip refuses a current.json it cannot line up day-for-day', () => {
+  const dir = tmp('pegel-running-shape-');
+  const n = daysInYear(CURRENT_YEAR);
+  for (const broken of [{ y: CURRENT_YEAR }, { y: CURRENT_YEAR, min: Array(n + 1).fill(null), max: Array(n + 1).fill(null) }]) {
+    const before = JSON.stringify(broken);
+    writeFileSync(join(dir, 'current.json'), before);
+    assert.equal(healRunningYearFromZip(dir, 'BONN', CURRENT_YEAR, runningYear({ 5: [1, 2] })), false);
+    assert.equal(readFileSync(join(dir, 'current.json'), 'utf8'), before,
+      'writing the ZIP year over it would null every day it holds');
+  }
+});
+
+test('healRunningYearFromZip leaves an UNPARSEABLE meta.json alone', () => {
+  const dir = tmp('pegel-running-badmeta-');
+  // truncated mid-write; readJson cannot tell it from a missing file, and
+  // {name} alone would drop fetchedThrough (a full 2000-> re-backfill next
+  // sweep) and source (the Rijkswaterstaat marker)
+  const broken = '{"name":"BONN","fetchedThrough":2025,"source":"Rijkswater';
+  writeFileSync(join(dir, 'meta.json'), broken);
+  writeFileSync(join(dir, 'current.json'), JSON.stringify(runningYear()));
+  assert.equal(healRunningYearFromZip(dir, 'BONN', CURRENT_YEAR, runningYear({ 5: [1, 2] })), true);
+  assert.equal(readFileSync(join(dir, 'meta.json'), 'utf8'), broken);
+});
+
+test('hasClosedYears: only a bundle with years counts as "WSV archived this gauge"', () => {
+  const dir = tmp('pegel-closed-');
+  assert.equal(hasClosedYears(dir), false, 'no file at all');
+  writeFileSync(join(dir, 'closed.json'), '[]');
+  assert.equal(hasClosedYears(dir), false, 'an empty bundle is not a history');
+  writeFileSync(join(dir, 'closed.json'), JSON.stringify([{ y: 2024, min: [1], max: [2] }]));
+  assert.equal(hasClosedYears(dir), true);
 });
 
 test('healRunningYearFromZip: an empty ZIP year changes nothing', () => {

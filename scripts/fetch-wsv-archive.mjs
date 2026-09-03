@@ -493,6 +493,14 @@ export function isFrozen(dir, y) {
   return (readJson(join(dir, 'closed.json')) || []).some(yr => yr.y === y);
 }
 
+// Has this gauge ever yielded a completed year? The discriminator behind the
+// noArchive tally: WSV answering "nothing here" for a station whose bundle is
+// full is an outage, not a fact about the gauge.
+export function hasClosedYears(dir) {
+  const closed = readJson(join(dir, 'closed.json'));
+  return Array.isArray(closed) && closed.length > 0;
+}
+
 // What a January --current run does with the year that just completed. Either the
 // ZIP freeze graduates it now, or a previous run already did — and in BOTH cases the
 // REST tail of that year has to leave `years` before writeStation sees it, or the
@@ -567,20 +575,43 @@ export function healRunningYearFromZip(dir, name, y, zy) {
     if (cur.y > y || !isFrozen(dir, cur.y)) return false;
   }
   const min = zy.min.slice(), max = zy.max.slice();
-  const keep = cur && cur.y === y && cur.min.length === min.length ? cur : null;
+  let keep = null;
+  if (cur && cur.y === y) {
+    // a file that does not line up day-for-day cannot be merged, and writing
+    // the ZIP year over it would null every day it holds — refuse instead and
+    // let R5 (shape) name the real problem
+    if (!Array.isArray(cur.min) || !Array.isArray(cur.max) || cur.min.length !== min.length) return false;
+    keep = cur;
+  }
   if (keep) {
+    // The ZIP's LAST day is the one WSV is still ingesting, so its span is a
+    // prefix of the real one — there the extreme union is right, and the
+    // "a corrected outlier must not survive" reasoning does not apply to a day
+    // that has no correction history yet.
+    let lastZip = -1;
+    for (let d = 0; d < min.length; d++) if (zy.min[d] != null) lastZip = d;
     for (let d = 0; d < min.length; d++) {
-      if (min[d] == null) min[d] = keep.min[d];
-      if (max[d] == null) max[d] = keep.max[d];
+      if (min[d] == null) { min[d] = keep.min[d]; max[d] = keep.max[d]; continue; }
+      if (d !== lastZip || keep.min[d] == null) continue;
+      if (keep.min[d] < min[d]) min[d] = keep.min[d];
+      if (keep.max[d] > max[d]) max[d] = keep.max[d];
     }
   }
   mkdirSync(dir, { recursive: true });
   writeFileSync(currentPath, JSON.stringify({ y, min, max }));
   const metaPath = join(dir, 'meta.json');
   const meta = readJson(metaPath);
-  // a station that has never been backfilled has no meta yet; an existing one
-  // is rewritten byte-identically as long as its name has not changed
-  if (!meta || meta.name !== name) writeFileSync(metaPath, JSON.stringify({ ...(meta || {}), name }));
+  // A station that has never been backfilled has no meta yet; an existing one
+  // is rewritten byte-identically as long as its name has not changed. An
+  // UNPARSEABLE one is left alone: readJson cannot tell it from a missing file,
+  // and replacing it with {name} would drop fetchedThrough (turning the next
+  // gap sweep into a full 2000-> re-backfill) and `source` (which is what marks
+  // the Rijkswaterstaat gauges in the manifest).
+  if (existsSync(metaPath) && !meta) {
+    console.log(`  ${name}: meta.json does not parse — left untouched`);
+  } else if (!meta || meta.name !== name) {
+    writeFileSync(metaPath, JSON.stringify({ ...(meta || {}), name }));
+  }
   return true;
 }
 
@@ -639,6 +670,9 @@ if (import.meta.url === pathToFileURL(process.argv[1] || '').href) await main();
 
 async function main() {
   if (MIGRATE) return migrateAll(OUT);
+  // --current fetches REST, --running fetches ZIP; together the REST window
+  // would be written with the ZIP's authority and writeStation skipped
+  if (CURRENT_ONLY && RUNNING) throw new Error('--current and --running are separate passes; run them one after the other');
   const stations = (await (await fetch(`${API}/stations.json?includeTimeseries=true`)).json())
     .filter(s => (s.timeseries || []).some(ts => ts.shortname === 'W'))
     .filter(s => !ONLY_STATION || s.shortname.toUpperCase() === ONLY_STATION || s.uuid === ONLY_STATION.toLowerCase())
@@ -649,7 +683,7 @@ async function main() {
     : `backfill ${FROM}-${TO}`;
   console.log(`${stations.length} stations · mode: ${mode} · out: ${OUT}/ · ${PARALLEL} worker(s)`);
 
-  let ok = 0, skipped = 0, failed = 0, noArchive = 0, cursor = 0;
+  let ok = 0, skipped = 0, failed = 0, noArchive = 0, written = 0, cursor = 0;
   async function processStation(s, i) {
     const dir = join(OUT, s.uuid);
     const tag = `[${i + 1}/${stations.length}] ${s.shortname}`;
@@ -679,6 +713,7 @@ async function main() {
       if (RUNNING) {
         const healed = healRunningYearFromZip(dir, s.shortname, CURRENT_YEAR, years.get(CURRENT_YEAR));
         console.log(`${tag} · ${pts} pts -> ${healed ? 'running year healed' : 'left alone'}`);
+        if (healed) written++;
         ok++;
         await sleep(THROTTLE_MS);
         return;
@@ -699,7 +734,13 @@ async function main() {
       console.log(`${tag} · ${pts} pts -> ${touched} year(s)`);
       ok++;
     } catch (e) {
-      if (e.noArchive) {
+      // "no archive" is only credible for a gauge that never had one. A
+      // station whose closed.json already holds years cannot have stopped
+      // having a history — that answer is the backend degrading, and it has to
+      // stay inside the failure rate that turns the run red. Without this
+      // split, a ZIP outage that redirects every prepare to the error page
+      // would push a run that healed almost nothing, green.
+      if (e.noArchive && !hasClosedYears(dir)) {
         console.log(`${tag} · no ZIP archive at WSV`);
         noArchive++;
       } else {
@@ -725,16 +766,19 @@ async function main() {
     const none = Object.values(m.stations).filter(e => e.none).length;
     console.log(`manifest: ${stations.length} stations, ${stations.length - none} archived, ${none} without WSV archive`);
   }
-  console.log(`done · ${ok} fetched · ${skipped} already complete · ${noArchive} without a WSV ZIP archive`
-    + ` · ${failed} failed${failed ? ' (re-run to retry)' : ''}`);
+  console.log(`done · ${ok} fetched${RUNNING ? ` (${written} healed)` : ''} · ${skipped} already complete`
+    + ` · ${noArchive} without a WSV ZIP archive · ${failed} failed${failed ? ' (re-run to retry)' : ''}`);
   reportRunOutcome('WSV archive fetch', ok, failed);
-  // The one mode that attempts EVERY station: coming back with nothing there
-  // is the endpoint being down, not a fleet without archives. The gap sweep
-  // cannot make that call — skipping the 626 complete stations and finding
-  // only archive-less ones left is precisely its healthy steady state.
-  if (RUNNING && ok === 0 && failed + noArchive > 0) {
-    console.error(`error: --running healed no station at all (${noArchive} reported no archive,`
-      + ` ${failed} failed) — that is a WSV ZIP outage, not a fleet without history`);
+  // --running is the one mode that attempts EVERY station, so it is the one
+  // that can tell a fleet-wide problem from a gauge-level one: if not a single
+  // current.json came out of it, the ZIP side is broken — whether it threw,
+  // claimed to have nothing, or handed back empty years. The gap sweep cannot
+  // make that call; skipping the 626 complete stations and finding only
+  // archive-less ones left is precisely its healthy steady state. A
+  // single-station run is a probe, not a fleet verdict.
+  if (RUNNING && !ONLY_STATION && written === 0) {
+    console.error(`error: --running wrote no station at all (${ok} fetched, ${noArchive} without an archive,`
+      + ` ${failed} failed) — the running year was not healed`);
     process.exitCode = 1;
   }
 }

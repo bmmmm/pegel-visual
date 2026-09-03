@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mezParts, daysInMonth, emptyShard, applySnapshot, parseBulkForSnapshot, shardIsPrunable, shardName, medianDailySpan, TIDAL_SPAN_CM, plausibilityEnvelope, implausibleCapture, lastCapturedValue, ENVELOPE_FLOOR_CM, missingRecentDays, pickNearestMeasurement, lastValueBefore, backfillDayStations, zipWindowDays, BACKFILL_WINDOW_DAYS, BACKFILL_MIN_COVERAGE } from '../scripts/snapshot-wsv.mjs';
+import { mezParts, daysInMonth, emptyShard, applySnapshot, parseBulkForSnapshot, shardIsPrunable, shardName, medianDailySpan, TIDAL_SPAN_CM, plausibilityEnvelope, implausibleCapture, lastCapturedValue, ENVELOPE_FLOOR_CM, missingRecentDays, pickNearestMeasurement, lastValueBefore, backfillDayStations, zipWindowDays, healWindowMonths, BACKFILL_WINDOW_DAYS, BACKFILL_MIN_COVERAGE } from '../scripts/snapshot-wsv.mjs';
 
 test('daysInMonth: month lengths incl. leap years', () => {
   assert.equal(daysInMonth(2026, 2), 28);
@@ -204,6 +204,31 @@ test('missingRecentDays: a wide window reaches the slots older than the REST ret
   assert.ok(holes.every(h => h.m === 8), 'the captured September days are not holes');
   // the daily job's default window sees none of them
   assert.deepEqual(missingRecentDays([sep, aug], now, BACKFILL_WINDOW_DAYS), []);
+});
+
+test('healWindowMonths: every month the lookback touches, newest first', () => {
+  const sep3 = new Date('2026-09-03T15:17:00Z');
+  assert.deepEqual(healWindowMonths(sep3, 7), [{ y: 2026, m: 9 }, { y: 2026, m: 8 }]);
+  // the documented one-off: 33 days back from 2026-09-03 reaches 2026-08-01
+  assert.deepEqual(healWindowMonths(sep3, 33), [{ y: 2026, m: 9 }, { y: 2026, m: 8 }]);
+  // a wider window must not stop at the previous month — missingRecentDays
+  // reads an absent shard as pre-history, so a month left off the list is a
+  // window the run claims to have searched and did not
+  assert.deepEqual(healWindowMonths(sep3, 90), [{ y: 2026, m: 9 }, { y: 2026, m: 8 }, { y: 2026, m: 7 }, { y: 2026, m: 6 }]);
+  // and it crosses the year boundary
+  assert.deepEqual(healWindowMonths(new Date('2027-01-05T15:17:00Z'), 40),
+    [{ y: 2027, m: 1 }, { y: 2026, m: 12 }, { y: 2026, m: 11 }]);
+});
+
+test('missingRecentDays finds two months of holes once both shards are on the list', () => {
+  const jul = shardWith(2026, 7, []); // captured nothing at all
+  const aug = shardWith(2026, 8, Array.from({ length: 19 }, (_, i) => [12 + i, 100]));
+  const sep = shardWith(2026, 9, [[0, 100], [1, 100]]);
+  const now = new Date('2026-09-03T15:17:00Z');
+  assert.equal(missingRecentDays([sep, aug], now, 90).length, 12, 'without July on the list it is pre-history');
+  const wide = missingRecentDays([sep, aug, jul], now, 90);
+  assert.equal(wide.length, 43, 'June 5 .. Aug 12 minus the captured days');
+  assert.equal(wide[0].m, 7);
 });
 
 test('zipWindowDays: whole days, and the end reaches one day past the last hole', () => {

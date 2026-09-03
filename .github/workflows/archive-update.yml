@@ -19,10 +19,17 @@ name: archive-update
 # open at all — and the monthly run additionally re-reads the whole running
 # year out of the ZIP archive (--running), which fixes a hole even after the
 # REST retention has passed. R6 in the consistency gate watches the result.
+#
+# ONE cron, not two: a second schedule would collide with this one whenever
+# the monthly date fell on the weekly weekday, and both land in the
+# `archive-branch-write` concurrency group — GitHub cancels the pending member
+# when a third run (the daily snapshot, 54 minutes later) joins it, silently
+# and with no failure step to report it. So the schedule is weekly and the
+# expensive steps decide by date: the first Monday of the month carries the
+# ZIP heal and the gap sweep.
 on:
   schedule:
-    - cron: '23 4 3 * *'   # monthly: REST + ZIP heal + gap sweep
-    - cron: '23 4 * * 1'   # weekly (Monday): REST only
+    - cron: '23 4 * * 1'
   workflow_dispatch:
 
 permissions:
@@ -55,6 +62,17 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: 24
+      - name: Decide whether this is the monthly pass
+        # first Monday of the month (the weekly cron only ever fires on a
+        # Monday, so day-of-month <= 7 IS the first one); a manual dispatch
+        # always does the full pass
+        id: pass
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] || [ "$(date -u +%d)" -le 07 ]; then
+            echo "monthly=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "monthly=false" >> "$GITHUB_OUTPUT"
+          fi
       - name: Fetch current-year data from WSV (REST, last 30 days)
         run: node scripts/fetch-wsv-archive.mjs --current --out archive-branch/archive
       - name: Heal the running year from the WSV ZIP archive
@@ -63,13 +81,13 @@ jobs:
         # the REST refresh never saw is still recoverable months later. Monthly
         # only — ~17min at --parallel 2, and the weekly REST run keeps the
         # window covered in between.
-        if: github.event_name == 'workflow_dispatch' || github.event.schedule == '23 4 3 * *'
+        if: steps.pass.outputs.monthly == 'true'
         run: node scripts/fetch-wsv-archive.mjs --running --parallel 2 --out archive-branch/archive
       - name: Gap sweep (new stations + retry the none-stations)
         # the plain backfill IS the sweep: stations with a complete meta.json
         # are skipped, stations that never succeeded (newly commissioned, or
         # archive-less so far) get a full 2000->last-year attempt
-        if: github.event_name == 'workflow_dispatch' || github.event.schedule == '23 4 3 * *'
+        if: steps.pass.outputs.monthly == 'true'
         run: node scripts/fetch-wsv-archive.mjs --out archive-branch/archive
       - name: Refresh Rijkswaterstaat gauges (running year)
         # the 10 Dutch partner gauges WSV has no archive for are backed by
@@ -88,7 +106,8 @@ jobs:
         # content-level guard before anything is pushed: recency, totals
         # liveness, station coverage, and no regression against the branch
         # HEAD (deleted files, shrunken closed.json, nulled current.json
-        # slots) — the failure() step below already reports a red run
+        # slots) plus R6, the running-year continuity this job alone can fix —
+        # the failure() step below already reports a red run
         run: node scripts/check-archive-consistency.mjs --tree archive-branch/archive --git archive-branch
       - name: Commit and push
         id: push

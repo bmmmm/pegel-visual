@@ -223,8 +223,18 @@ export const BACKFILL_MIN_COVERAGE = 0.5;
 // window is a one-off dispatch for slots OLDER than the REST retention — those
 // are reachable only through the ZIP archive (2026-08-01..08-12 was the case
 // this was built for).
-const HEAL_DAYS = Number(opt('heal-days', 0)) || BACKFILL_WINDOW_DAYS;
+// validated, not defaulted: heal-days arrives as free text from a workflow
+// dispatch input, and "3O" or "33 days" quietly becoming 7 would be a green
+// run that healed nothing anyone asked for
+const HEAL_DAYS = (() => {
+  const raw = opt('heal-days', '');
+  if (raw === '') return BACKFILL_WINDOW_DAYS;
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < 1 || n > 400) throw new Error(`--heal-days ${raw}: want a whole number of days, 1..400`);
+  return n;
+})();
 const HEAL_SOURCE = opt('heal-source', 'rest');
+if (HEAL_SOURCE !== 'rest' && HEAL_SOURCE !== 'zip') throw new Error(`--heal-source ${HEAL_SOURCE}: want rest or zip`);
 // the ZIP prepare endpoint rejects bursts (see fetch-wsv-archive.mjs, worker())
 const HEAL_POOL = HEAL_SOURCE === 'zip' ? 2 : 10;
 const HEAL_THROTTLE_MS = HEAL_SOURCE === 'zip' ? 1500 : 0;
@@ -350,6 +360,26 @@ async function fetchStationMeasurements(uuid, startIso, endIso) {
   return res.json();
 }
 
+// The month shards a heal window of `days` reaches back over, newest first —
+// index 0 is the current month, which the caller replaces with the shard it
+// has just written the live capture into. A month with no file on disk stays
+// null in the list; missingRecentDays reads that as pre-history, which is what
+// it is.
+export function healWindowMonths(refDate, days) {
+  const out = [];
+  for (let k = 0; k <= days; k++) {
+    const { y, m } = mezParts(new Date(refDate.getTime() - k * 864e5));
+    if (!out.some(p => p.y === y && p.m === m)) out.push({ y, m });
+  }
+  return out;
+}
+
+function healWindowShards(dir, refDate, days) {
+  return healWindowMonths(refDate, days).map(({ y, m }) => {
+    try { return JSON.parse(readFileSync(join(dir, shardName(y, m)), 'utf8')); } catch { return null; }
+  });
+}
+
 // the same window out of the ZIP archive, for holes the REST retention no
 // longer covers. fetchRawRange takes whole days and the endpoint reads both
 // ends as MIDNIGHT, so the end has to be the day AFTER the last hole or that
@@ -376,13 +406,18 @@ async function fetchStationMeasurementsZip(uuid, startIso, endIso) {
 async function healMissingDays(shards, roster, records) {
   const holes = missingRecentDays(shards, now, HEAL_DAYS);
   const healedMonths = new Set();
+  // before the early return: a dispatch that found nothing must say so, or a
+  // wide --heal-days that reached nothing looks exactly like a normal run
+  console.log(`backfill: ${holes.length} hole(s) in the last ${HEAL_DAYS} days`
+    + ` across ${shards.filter(Boolean).length} shard(s), source ${HEAL_SOURCE}`);
   if (!holes.length) return { shards, healedMonths };
   const first = holes[0], last = holes[holes.length - 1];
   // a MEZ day starts at 23:00Z of the previous calendar day
   const startIso = new Date(Date.UTC(first.y, first.m - 1, first.dayIdx + 1) - 36e5).toISOString();
   const endIso = new Date(Date.UTC(last.y, last.m - 1, last.dayIdx + 1) - 36e5 + 864e5).toISOString();
   const fetchOne = HEAL_SOURCE === 'zip' ? fetchStationMeasurementsZip : fetchStationMeasurements;
-  console.log(`backfill: ${holes.length} hole(s) over ${HEAL_DAYS} days via ${HEAL_SOURCE}, ${roster.length} stations`);
+  console.log(`backfill: ${first.y}-${first.m}-${first.dayIdx + 1} .. ${last.y}-${last.m}-${last.dayIdx + 1}`
+    + `, ${roster.length} stations at pool ${HEAL_POOL}`);
   const points = new Map(await mapPool(roster, HEAL_POOL, async s => {
     if (HEAL_THROTTLE_MS) await sleep(HEAL_THROTTLE_MS);
     return [s.uuid, await fetchOne(s.uuid, startIso, endIso).catch(() => [])];
@@ -452,11 +487,18 @@ async function main() {
   // a slot that is old enough to serve as a baseline, not one stamped "now"
   const next = applySnapshot(shard, { dayIdx, captureIso: now.toISOString(), stations });
   // self-heal AFTER the live capture: the very run whose drift skipped a day
-  // repairs it in the same breath, and a later hole sees the healed witness
-  const { shards: healed, healedMonths } = await healMissingDays([next, prevShard], stations, records);
-  writeFileSync(path, JSON.stringify(healed[0]));
-  if (healed[1] && healedMonths.has(shardName(py, pm))) {
-    writeFileSync(join(OUT, shardName(py, pm)), JSON.stringify(healed[1]));
+  // repairs it in the same breath, and a later hole sees the healed witness.
+  // Every month the window touches has to be on the list — missingRecentDays
+  // treats a month with no shard here as pre-history, so handing it only the
+  // current and previous month would let a wide --heal-days report a window it
+  // never actually searched.
+  const window = healWindowShards(OUT, now, HEAL_DAYS);
+  const { shards: healed, healedMonths } = await healMissingDays([next, ...window.slice(1)], stations, records);
+  for (let i = 0; i < healed.length; i++) {
+    const s = healed[i];
+    if (!s) continue;
+    const file = shardName(s.y, s.m);
+    if (i === 0 || healedMonths.has(file)) writeFileSync(join(OUT, file), JSON.stringify(s));
   }
   const captured = stations.filter(s => s.v != null).length;
   console.log(`snapshot ${shardName(y, m)} day ${dayIdx + 1}: ${captured}/${stations.length} stations captured, ${flagged} tidal-flagged, ${dropped} implausible dropped`);
