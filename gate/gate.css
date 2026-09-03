@@ -96,6 +96,16 @@ main {
 .verdict { margin: 1.4em 0 0; display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.4em 1.2ch; }
 .verdict .word { font-family: var(--font-data); font-size: 2.4em; font-weight: 700; letter-spacing: 0.06em; line-height: 1; }
 .verdict .why { font-size: 0.95em; max-width: 46rem; }
+/* with more than one candidate in view each states its own verdict here; the
+   headline word above stays the primary's, the one the panels speak for */
+.vmodels { list-style: none; margin: 0.7em 0 0; padding: 0; display: flex; flex-wrap: wrap; gap: 0.3em 1.6ch; font-size: 0.92em; }
+.vmodels li { display: flex; align-items: baseline; gap: 0.7ch; }
+.vmodels .nm { font-weight: 600; }
+.vmodels .vw { font-family: var(--font-data); letter-spacing: 0.04em; }
+.vmodels .vw.pass { color: var(--water-line); }
+.vmodels .vn { color: var(--mid); }
+/* the licence mark: a glyph, never a colour on its own */
+.vmodels .nc, .p-tabs .nc { font-size: 1.05em; }
 .clauses { list-style: none; margin: 1em 0 0; padding: 0; display: flex; flex-wrap: wrap; gap: 0.4em 0.5ch; }
 .clauses button {
   font: inherit;
@@ -187,6 +197,7 @@ main {
 .mk { width: 12px; height: 12px; top: 50%; transform: translate(-50%, -50%); }
 .mk svg { display: block; width: 12px; height: 12px; overflow: visible; }
 .mk-tfm { fill: var(--water-line); stroke: var(--ink); stroke-width: 1; }
+.mk-tfm-alt { fill: var(--water-line); stroke: var(--ink); stroke-width: 1; }
 .mk-blend { fill: var(--ink); stroke: none; }
 .mk-persist { fill: var(--paper); stroke: var(--ink); stroke-width: 1.2; }
 .mk-clim { fill: var(--dry); stroke: var(--dry-line); stroke-width: 1.2; }
@@ -286,6 +297,7 @@ th:first-child, td:first-child { text-align: left; }
 /* the lines share one stroke width whatever the plot's stretch; dash and hue tell them apart */
 .ln { fill: none; stroke-width: 2; vector-effect: non-scaling-stroke; stroke-linejoin: round; stroke-linecap: round; }
 .ln-tfm { stroke: var(--water-line); }
+.ln-tfm-alt { stroke: var(--water-line); stroke-dasharray: 8 3 2 3; }
 .ln-clim { stroke: var(--dry-line); stroke-dasharray: 7 4; }
 .ln-persist { stroke: var(--ink); stroke-dasharray: 2 4; }
 .ln-blend { stroke: var(--ink); stroke-width: 1; vector-effect: non-scaling-stroke; }
@@ -296,6 +308,7 @@ th:first-child, td:first-child { text-align: left; }
 .plot-box .clip.dn::after { content: '▾'; top: auto; bottom: -0.2em; }
 .plot-box .clip.ln-clim::after { color: var(--dry-line); }
 .plot-box .clip.ln-tfm::after { color: var(--water-line); }
+.plot-box .clip.ln-tfm-alt::after { color: var(--water-line); }
 
 /* ---- in brief: five lines, the numbers bold ---- */
 .facts { list-style: none; margin: 0.4em 0 0; padding: 0; font-size: 0.9em; max-width: 56rem; }

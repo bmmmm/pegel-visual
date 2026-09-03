@@ -31,11 +31,38 @@ export const LINKS = {
   archive: 'https://github.com/bmmmm/pegel-visual/tree/archive',
 };
 const a = (href, text) => `<a${attr('href', href)}>${esc(text)}</a>`;
+// the model in view, and its own model card: every sentence that names a model
+// must name the one this sheet is currently drawing
+const cardOf = mo => (mo && mo.checkpoint ? `https://huggingface.co/${mo.checkpoint}` : LINKS.card);
+const nameOf = mo => (mo && mo.label) || 'the model';
 export const SKILL_DOMAIN = [-0.2, 0.2];   // fixed across blocks and targets, so bars stay comparable
 export const RATIO_DOMAIN = [0.5, 2.0];    // error relative to the blend; 1.0 is the bar
 export const PICP_DOMAIN = [0.6, 1.0];
 export const LEAD_DOMAIN = [0.5, 4];       // the curve's y, log2: ×0.5 and ×2 sit symmetric about the blend
 export const PANEL_IDS = ['lead', 'skill', 'error', 'calib', 'clim', 'short', 'model', 'method', 'basics'];
+
+// More than one candidate can sit on this sheet. Which ones are DRAWN is state in
+// the URL — one independent on/off per model, and the last one on cannot be
+// switched off. The first enabled model in manifest order is the PRIMARY: the one
+// picture at the top draws every model that is on, while the panels below, which
+// carry one number per gauge, speak for the primary and say its name.
+//
+// A model's mark is bound to the MODEL, not to its position, so a line does not
+// change shape when its neighbour is switched off. Meaning never rides on hue
+// alone: the second model's curve is dashed and its error mark is hollow.
+export const MODEL_MARKS = ['tfm', 'tfm-alt'];
+// what the page falls back to when models.json is missing — the shipped model as
+// it was addressed before there was a manifest
+export const LEGACY_MANIFEST = {
+  shipped: '2p5',
+  models: [{ key: '2p5', label: 'TimesFM 2.5', id: 'timesfm-2.5-200m', params: '200M', shippable: true,
+             checkpoint: 'google/timesfm-2.5-200m-pytorch', license: 'Apache-2.0', license_url: '',
+             files: { 'seasonal-mid': { json: 'seasonal-mid/report.json' }, 'seasonal-max': { json: 'seasonal-max/report.json' }, 'short-mid': { json: 'short-mid/report.json' } } }],
+};
+export const markOf = (models, key) => MODEL_MARKS[Math.min(models.findIndex(mo => mo.key === key), MODEL_MARKS.length - 1)] || 'tfm';
+// a model whose weights this repo may not ship carries a glyph wherever it is
+// named — a shape, not a colour, and the key says what it means
+export const NC_GLYPH = '⚖';
 
 export const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 export const attr = (name, v) => v == null || v === '' ? '' : ` ${name}="${esc(v)}"`;
@@ -50,7 +77,7 @@ const pctStr = v => `${Math.round(Math.abs(v) * 100)} %`;
 
 // ---------- state: one URL ----------
 
-export function parseState(search, hash = '', known = null) {
+export function parseState(search, hash = '', known = null, models = null) {
   const q = new URLSearchParams(search || '');
   const target = Object.hasOwn(TARGETS, q.get('target')) ? q.get('target') : 'mid';  // hasOwn: `in` would accept ?target=constructor
   const block = BLOCKS.includes(q.get('block')) ? q.get('block') : 'h1-14';
@@ -58,13 +85,23 @@ export function parseState(search, hash = '', known = null) {
   const lead = raw && raw !== 'pooled' && (!known || known.includes(raw)) ? raw : 'pooled';
   const h = String(hash || '').replace(/^#/, '');
   const panel = PANEL_IDS.includes(h) ? h : h === 'writeup' ? 'basics' : null;  // #writeup was the write-up's anchor before it became Basics; shared links keep working
-  return { target, block, lead, panel };
+  // null means "every model that loaded" — the default, and the default carries
+  // no parameter, so every URL that predates the toggle still means what it said
+  const rawModels = q.get('models');
+  let picked = null;
+  if (rawModels && models && models.length) {
+    const want = new Set(String(rawModels).split(',').map(x => x.trim()).filter(Boolean));
+    const keep = models.filter(k => want.has(k));
+    if (keep.length && keep.length < models.length) picked = keep;
+  }
+  return { target, block, lead, panel, models: picked };
 }
 
 // the one place that spells the URL: query for the data, hash for the panel
 export function stateHref(state, patch = {}) {
   const s = { ...state, ...patch };
   const q = new URLSearchParams();
+  if (s.models && s.models.length) q.set('models', s.models.join(','));
   if (s.target !== 'mid') q.set('target', s.target);
   if (s.block !== 'h1-14') q.set('block', s.block);
   if (s.lead && s.lead !== 'pooled') q.set('lead', s.lead);
@@ -113,13 +150,25 @@ export function skillRows(report, block, key = 'ss') {
 
 // the curve over the lead day: error of every method relative to the blend,
 // pooled as the median of the five regimes' ratios or for one gauge
-function leadModel(report, state) {
+// The one picture. `models` are the enabled candidates in manifest order, each
+// with the report it was measured in; the baselines are the same windows for all
+// of them, so they are read once, from the primary.
+function leadModel(models, state) {
+  const report = models[0].report;
   const per = report.pooled.per_h;
   if (!per || !per.blend) return null;
   const stations = Object.keys(report.stations);
   const station = state.lead !== 'pooled' && report.stations[state.lead] && report.stations[state.lead].per_h ? state.lead : 'pooled';
   const H = per.blend.length;
   const ratio = (a, b) => a == null || b == null || !(b > 0) ? null : a / b;
+  // one model's ratio-to-blend curve, read out of ITS OWN report
+  const curveOf = rep => {
+    if (!rep || !rep.pooled.per_h) return null;
+    if (station === 'pooled') return (rep.pooled.per_h_ratio_median || {}).tfm_point || null;
+    const s = rep.stations[station];
+    return s && s.per_h ? s.per_h.tfm_point.map((v, i) => ratio(v, s.per_h.blend[i])) : null;
+  };
+  const curves = models.map(mo => ({ ...mo, ratios: curveOf(mo.report) })).filter(mo => mo.ratios);
   let series;
   if (station === 'pooled') {
     const med = report.pooled.per_h_ratio_median;
@@ -136,22 +185,59 @@ function leadModel(report, state) {
   const median = xs => { const v = xs.filter(x => x != null && !Number.isNaN(x)).sort((a, b) => a - b); return v.length ? (v.length % 2 ? v[(v.length - 1) / 2] : (v[v.length / 2 - 1] + v[v.length / 2]) / 2) : NaN; };
   const blockSs = b => station === 'pooled' ? median(report.pooled.stations.map(n => report.stations[n] && report.stations[n].blocks[b].ss)) : src.blocks[b].ss;
   const blocks = BLOCKS.map(b => ({ name: b, from: proto[b][0], to: proto[b][1], ss: blockSs(b), on: b === state.block }));
-  return { station, stations, H, series, blendCm: src.per_h.blend, blocks, cursor: proto[state.block][1] };
+  // the widest daily gap between the first curve and any other, in points of the
+  // blend's own error (both are ratios to it, so the difference reads directly)
+  let gap = null;
+  if (curves.length > 1) {
+    const a = curves[0].ratios;
+    for (const other of curves.slice(1)) {
+      for (let i = 0; i < H; i++) {
+        const d = a[i] == null || other.ratios[i] == null ? null : Math.abs(a[i] - other.ratios[i]);
+        if (d != null && (!gap || d > gap.d)) gap = { d, day: i + 1, a: curves[0].label, b: other.label, ahead: other.ratios[i] < a[i] ? other.label : curves[0].label };
+      }
+    }
+  }
+  return { station, stations, H, series, curves, gap, blendCm: src.per_h.blend, blocks, cursor: proto[state.block][1] };
 }
 
 // what the readout says for one lead day — the slider's value text, too
 export function leadSay(L, day) {
   const i = Math.max(1, Math.min(L.H, day)) - 1;
   const r = v => v == null || Number.isNaN(v) ? '—' : '×' + v.toFixed(2);
-  return `day ${i + 1}: TimesFM ${r(L.series.tfm[i])} · climatology ${r(L.series.clim[i])} · persistence ${r(L.series.persist[i])} · blend MAE ${num(L.blendCm[i], 1)} cm${L.station === 'pooled' ? ' pooled' : ''}`;
+  const models = L.curves.map(c => `${c.label} ${r(c.ratios[i])}`).join(' · ');
+  return `day ${i + 1}: ${models} · climatology ${r(L.series.clim[i])} · persistence ${r(L.series.persist[i])} · blend MAE ${num(L.blendCm[i], 1)} cm${L.station === 'pooled' ? ' pooled' : ''}`;
 }
 
-export function buildModel({ seasonal, short }, parsed) {
+export function buildModel(reports, parsed) {
+  // only models that actually loaded a mid report can be offered; the first one
+  // enabled is the PRIMARY and every per-gauge number on this sheet is its own
+  const all = (reports.models || []).filter(mo => {
+    const r = reports.byKey[mo.key];
+    return r && r.seasonal && r.seasonal.mid;
+  });
+  const keys = all.map(mo => mo.key);
+  const wanted = parsed.models && parsed.models.length ? keys.filter(k => parsed.models.includes(k)) : keys;
+  const enabled = wanted.length ? wanted : keys.slice(0, 1);  // the last one on cannot be switched off
+  const primary = enabled[0];
+  const seasonal = reports.byKey[primary].seasonal;
+  const short = reports.byKey[primary].short;
   // a target whose report did not load falls back to mid — and SAYS mid everywhere,
   // instead of labelling the mid run as the max run
   const targets = Object.keys(TARGETS).map(k => ({ k, label: TARGETS[k], available: !!(Object.hasOwn(seasonal, k) && seasonal[k]) }));
   const state = { ...parsed, target: targets.some(t => t.k === parsed.target && t.available) ? parsed.target : 'mid' };
   const report = seasonal[state.target];
+  // every enabled model's report for the target in view, in manifest order
+  const repOf = k => {
+    const r = reports.byKey[k];
+    return r && r.seasonal ? (r.seasonal[state.target] || null) : null;
+  };
+  const drawn = all.filter(mo => enabled.includes(mo.key) && repOf(mo.key))
+    .map(mo => ({ ...mo, mark: markOf(all, mo.key), report: repOf(mo.key) }));
+  const models = all.map(mo => ({
+    ...mo, mark: markOf(all, mo.key), on: enabled.includes(mo.key),
+    // a model that is on but has no report for THIS target still holds its chip
+    missing: enabled.includes(mo.key) && !repOf(mo.key),
+  }));
   const h = report.header;
   const block = state.block;
   const pooled = report.pooled.blocks[block];
@@ -171,7 +257,12 @@ export function buildModel({ seasonal, short }, parsed) {
     const b = report.stations[station].blocks[block];
     const m = b.mae;
     const marks = [
-      ['tfm', 'TimesFM', m.tfm_point], ['persist', 'persistence', m.persist], ['clim', 'climatology', m.clim],
+      // one mark per model in view, each read out of its own report
+      ...drawn.map(mo => {
+        const b2 = mo.report.stations[station] && mo.report.stations[station].blocks[block];
+        return [mo.mark, mo.label, b2 && b2.mae.tfm_point];
+      }),
+      ['persist', 'persistence', m.persist], ['clim', 'climatology', m.clim],
       ['snaive', 'seasonal naive 365', m.snaive], ['up', 'upstream OLS', m.upstream],
     ].filter(([, , v]) => v != null && !Number.isNaN(v)).map(([kind, name, v]) => ({ kind, name, mae: v, ratio: v / m.blend }));
     const say = `${station}, ${BLOCK_LABEL[block]}, MAE in cm: blend ${num(m.blend, 1)} · ` +
@@ -200,7 +291,7 @@ export function buildModel({ seasonal, short }, parsed) {
   const pb = b => report.pooled.blocks[b].ss;
   const rel = v => Math.abs(v) < 0.02 ? 'draws' : `is ${pctStr(v)} ${v < 0 ? 'behind' : 'ahead'}`;
   const climLongT = Object.entries(report.stations).map(([n, s]) => ({ n, v: Math.abs(s.blocks['h31-90'].ss_clim_vs_blend) })).sort((a, b) => b.v - a.v);
-  const gist = `On the ${TARGETS[state.target]} target TimesFM beats the blend by ${pctStr(pb('h1-14'))} at two weeks, ${rel(pb('h15-30'))} at a month and ${rel(pb('h31-90'))} by three months — the bar was ${pctStr(report.thresholds.A1_pooled_ss_min)} in every block, and beyond a month a calendar does as well.`;
+  const gist = `On the ${TARGETS[state.target]} target ${(drawn[0] || {}).label || 'the model'} beats the blend by ${pctStr(pb('h1-14'))} at two weeks, ${rel(pb('h15-30'))} at a month and ${rel(pb('h31-90'))} by three months — the bar was ${pctStr(report.thresholds.A1_pooled_ss_min)} in every block, and beyond a month a calendar does as well.`;
   const positive = regimes.filter(r => r.ss > 0).length;
   const B = v => `<b>${esc(v)}</b>`;
   const facts = [
@@ -226,6 +317,7 @@ export function buildModel({ seasonal, short }, parsed) {
   };
   const m = {
     state, targets, verdict: report.verdict, clauses, block, target: state.target, gist, facts, story,
+    primary: drawn.find(mo => mo.key === primary) || drawn[0] || null,
     head: {
       generated: h.generated, model: h.model, license: h.model_license, checkpoint: h.checkpoint, git: h.git,
       fingerprint: h.config_fingerprint, versions: h.versions, elapsed: h.elapsed_s, reproduced: h.reproduced_by_run,
@@ -234,18 +326,28 @@ export function buildModel({ seasonal, short }, parsed) {
       protocol: h.protocol, config: h.forecast_config || {}, threads: h.torch_threads,
       sha: h.tfm_sha256, repeat: h.repeat_identical, kind: h.horizon_kind,
     },
-    lead: leadModel(report, state),
+    models, drawn,
+    verdicts: drawn.map(mo => ({
+      key: mo.key, label: mo.label, shippable: mo.shippable !== false, license: mo.license, licenseUrl: mo.license_url,
+      verdict: mo.report.verdict, mark: mo.mark,
+      passed: Object.values(mo.report.clauses || {}).filter(c => c.pass).length,
+      total: Object.keys(mo.report.clauses || {}).length,
+      head: mo.report.header,
+    })),
+    lead: leadModel(drawn, state),
     skill, error, calib, clim, short: shortModel,
     void: report.void || [],
   };
   // the panels actually rendered, in order — the index is built from this list
+  const primaryLabel = m.primary ? m.primary.label : 'the model';
   m.panels = [
-    { id: 'skill', title: `Skill by gauge · ${TARGETS[state.target]} · ${BLOCK_LABEL[block]}`, hook: 'seven gauges, five regime votes, the bootstrap interval', render: renderSkill },
+    // the panels that print ONE number per gauge say whose number it is
+    { id: 'skill', title: `Skill by gauge · ${primaryLabel} · ${TARGETS[state.target]} · ${BLOCK_LABEL[block]}`, hook: 'seven gauges, five regime votes, the bootstrap interval', render: renderSkill },
     { id: 'error', title: `Error by method · ${BLOCK_LABEL[block]}`, hook: 'every baseline’s MAE next to the blend’s, gauge by gauge', render: renderError },
-    { id: 'calib', title: `Calibration · ${BLOCK_LABEL[block]}`, hook: 'how often the 80 % band held, and the PIT histograms', render: renderCalib },
+    { id: 'calib', title: `Calibration · ${primaryLabel} · ${BLOCK_LABEL[block]}`, hook: 'how often the 80 % band held, and the PIT histograms', render: renderCalib },
     { id: 'clim', title: `Climatology alone · ${BLOCK_LABEL[block]}`, hook: 'Finding 2: the calendar against the blend', render: renderClim },
     shortModel ? { id: 'short', title: `Short horizon · ${shortModel.verdict}`, hook: 'hours to two days — still collecting, no verdict yet', render: renderShort } : null,
-    { id: 'model', title: 'The model, and the chain it runs in', hook: 'what TimesFM 2.5 is, where the weights come from, and the seven steps from archive to this sheet', render: renderModel },
+    { id: 'model', title: `The model, and the chain it runs in · ${primaryLabel}`, hook: `what ${primaryLabel} is, where the weights come from, and the seven steps from archive to this sheet`, render: renderModel },
     { id: 'method', title: 'Method', hook: 'how it was measured, and what it cannot prove', render: renderMethod },
     { id: 'basics', title: 'Basics', hook: 'the model, the bar and the verdict in three short paragraphs', render: renderBasics },
   ].filter(Boolean);
@@ -256,6 +358,7 @@ export function buildModel({ seasonal, short }, parsed) {
 
 const SHAPES = {
   tfm: '<circle cx="6" cy="6" r="4.5"/>',
+  'tfm-alt': '<path d="M6 1.2 L10.8 6 L6 10.8 L1.2 6 Z"/>',
   blend: '<rect x="5.2" y="0" width="1.6" height="12"/>',
   persist: '<circle cx="6" cy="6" r="4.2"/>',
   clim: '<path d="M6 1.5 L11 10.5 L1 10.5 Z"/>',
@@ -284,8 +387,8 @@ function ctlRow(label, items, aria) {
   return `<nav class="p-tabs"${attr('aria-label', aria || label)}>` +
     (label ? `<span class="p-tabs-lbl">${esc(label)}</span>` : '') +
     items.map(it => it.lbl ? `<span class="p-tabs-lbl">${esc(it.lbl)}</span>` :
-      it.off ? `<span class="off" aria-disabled="true"${attr('title', it.title)}>${esc(it.off)}</span>` :
-      `<a${attr('href', it.href)}${attr('class', it.on ? 'on' : '')}${it.on ? ' aria-current="true"' : ''}${attr('title', it.title)}${attr('data-focus', it.focus)}>${esc(it.label)}</a>`).join('') +
+      it.off ? `<span class="off" aria-disabled="true"${attr('title', it.title)}${attr('data-ctl', it.ctl)}>${esc(it.off)}</span>` :
+      `<a${attr('href', it.href)}${attr('class', it.on ? 'on' : '')}${it.on ? ' aria-current="true"' : ''}${attr('title', it.title)}${attr('data-focus', it.focus)}${attr('data-ctl', it.ctl)}>${esc(it.label)}</a>`).join('') +
     '</nav>';
 }
 
@@ -319,7 +422,13 @@ function renderVerdict(m) {
     : m.verdict === 'VOID'
       ? 'The run is invalid; no verdict was formed.'
       : 'At least one pre-registered clause failed. The model is honest — calibrated, and no better on the recent years than on the old ones — but not better than the blend past two weeks.';
-  return `<div class="verdict"><span class="word">${esc(m.verdict)}</span><span class="why">${esc(why)}</span></div>` +
+  // with more than one candidate in view the headline verdict is the primary's,
+  // and each model states its own underneath rather than sharing one word
+  const others = m.verdicts.length > 1 ? `<ul class="vmodels" aria-label="verdict per model">` + m.verdicts.map(v =>
+    `<li><span class="nm">${esc(v.label)}${v.shippable ? '' : ` <span class="nc" title="non-commercial weights: measured, never shipped">${NC_GLYPH}</span>`}</span>` +
+    `<span class="vw ${v.verdict === 'SHIP' ? 'pass' : 'fail'}">${esc(v.verdict)}</span>` +
+    `<span class="vn">${esc(v.passed)} of ${esc(v.total)} clauses</span></li>`).join('') + `</ul>` : '';
+  return `<div class="verdict"><span class="word">${esc(m.verdict)}</span><span class="why">${esc(why)}</span></div>` + others +
     (m.void.length ? `<ul class="p-empty">${m.void.map(v => `<li>${esc(v)}</li>`).join('')}</ul>` : '') +
     `<ul class="clauses" aria-label="clauses">` + m.clauses.map(c =>
       `<li class="${c.pass ? 'pass' : 'fail'}"><button type="button" aria-pressed="false"${attr('data-say', `${c.id} ${c.pass ? 'passed' : 'failed'} — ${c.text}`)}>` +
@@ -373,10 +482,15 @@ function renderLead(m) {
   ], 'gauge drawn in the curve');
   const bands = L.blocks.map(b => `<span class="lb${b.on ? ' on' : ''}"${attr('style', `left:${((b.from - 1) / L.H * 100).toFixed(2)}%;width:${((b.to - b.from + 1) / L.H * 100).toFixed(2)}%`)}></span>`).join('');
   // the band labels are the block chips of this chart: each one is the same link the filter row carries
-  const bandLabels = L.blocks.map(b => `<a${attr('href', stateHref(s, { block: b.name, panel: 'lead' }))}${attr('class', b.on ? 'on' : '')}${b.on ? ' aria-current="true"' : ''} data-focus="lead"${attr('style', `left:${((b.from - 1) / L.H * 100).toFixed(2)}%;width:${((b.to - b.from + 1) / L.H * 100).toFixed(2)}%`)}${attr('title', `${BLOCK_LABEL[b.name]}: skill ${signed(b.ss, 3)}${L.station === 'pooled' ? ', median of the five gauges' : ''}`)}><span class="lbn">${esc(`${b.from}–${b.to}`)}</span><b>${esc(signed(b.ss, 2))}</b></a>`).join('');
-  const paths = ['persist', 'clim', 'tfm'].map(k => ({ k, ...leadPath(L.series[k], L.H) }));
-  const lines = paths.map(p => `<path class="ln ln-${p.k}"${attr('d', p.d)}/>`).join('');
-  const clips = paths.flatMap(p => p.clips.map(c => `<span class="clip ${c.dir} ln-${p.k}"${attr('style', `left:${leadXpct(c.day, L.H)}%`)}${attr('title', `${p.k === 'tfm' ? 'TimesFM' : p.k === 'clim' ? 'climatology' : 'persistence'} beyond ×${LEAD_DOMAIN[c.dir === 'up' ? 1 : 0]} on ${c.from === c.to ? `day ${c.from}` : `days ${c.from}–${c.to}`}`)}></span>`)).join('');
+  const bandLabels = L.blocks.map(b => `<a${attr('href', stateHref(s, { block: b.name, panel: 'lead' }))}${attr('class', b.on ? 'on' : '')}${b.on ? ' aria-current="true"' : ''} data-focus="lead"${attr('style', `left:${((b.from - 1) / L.H * 100).toFixed(2)}%;width:${((b.to - b.from + 1) / L.H * 100).toFixed(2)}%`)}${attr('title', `${BLOCK_LABEL[b.name]}: ${L.curves.length > 1 ? `${m.primary ? m.primary.label : 'the primary model'} skill` : 'skill'} ${signed(b.ss, 3)}${L.station === 'pooled' ? ', median of the five gauges' : ''}`)}><span class="lbn">${esc(`${b.from}–${b.to}`)}</span><b>${esc(signed(b.ss, 2))}</b></a>`).join('');
+  // the baselines are the same windows for every model, so they are drawn once;
+  // each model in view adds its own line, told apart by its dash, not its hue
+  const paths = [
+    ...['persist', 'clim'].map(k => ({ cls: `ln-${k}`, name: k === 'clim' ? 'climatology' : 'persistence', ...leadPath(L.series[k], L.H) })),
+    ...L.curves.map(c => ({ cls: `ln-${c.mark}`, name: c.label, ...leadPath(c.ratios, L.H) })),
+  ];
+  const lines = paths.map(p => `<path class="ln ${p.cls}"${attr('d', p.d)}/>`).join('');
+  const clips = paths.flatMap(p => p.clips.map(c => `<span class="clip ${c.dir} ${p.cls}"${attr('style', `left:${leadXpct(c.day, L.H)}%`)}${attr('title', `${p.name} beyond ×${LEAD_DOMAIN[c.dir === 'up' ? 1 : 0]} on ${c.from === c.to ? `day ${c.from}` : `days ${c.from}–${c.to}`}`)}></span>`)).join('');
   const cx = leadX(L.cursor, L.H).toFixed(2);
   const say = leadSay(L, L.cursor);
   const svg = `<svg viewBox="0 0 ${LEAD_W} ${LEAD_HGT}" preserveAspectRatio="none" tabindex="0" role="slider" data-lead data-core` +
@@ -386,8 +500,12 @@ function renderLead(m) {
   const vscale = [4, 2, 1, 0.5].map(v => `<span${attr('style', `top:${(leadY(v) / LEAD_HGT * 100).toFixed(1)}%`)}>×${v}</span>`).join('');
   const ticks = [1, 14, 30, 60, 90].filter(d => d <= L.H).map(d => `<span${attr('style', `left:${leadXpct(d, L.H)}%`)}>${d}</span>`).join('');
   const r2 = v => v == null || Number.isNaN(v) ? '—' : v.toFixed(2);
-  const table = `<details class="tbl"><summary>table — every lead day</summary><div class="tblwrap"><table><thead><tr><th>day</th><th>TimesFM</th><th>climatology</th><th>persistence</th><th>blend MAE cm</th></tr></thead><tbody>` +
-    Array.from({ length: L.H }, (_, i) => `<tr><td>${i + 1}</td><td>×${r2(L.series.tfm[i])}</td><td>×${r2(L.series.clim[i])}</td><td>×${r2(L.series.persist[i])}</td><td>${num(L.blendCm[i], 1)}</td></tr>`).join('') +
+  const table = `<details class="tbl"><summary>table — every lead day</summary><div class="tblwrap"><table><thead><tr><th>day</th>` +
+    L.curves.map(c => `<th>${esc(c.label)}</th>`).join('') +
+    `<th>climatology</th><th>persistence</th><th>blend MAE cm</th></tr></thead><tbody>` +
+    Array.from({ length: L.H }, (_, i) => `<tr><td>${i + 1}</td>` +
+      L.curves.map(c => `<td>×${r2(c.ratios[i])}</td>`).join('') +
+      `<td>×${r2(L.series.clim[i])}</td><td>×${r2(L.series.persist[i])}</td><td>${num(L.blendCm[i], 1)}</td></tr>`).join('') +
     `</tbody></table></div></details>`;
   return `<section id="lead" class="p-block">${head}` +
     `<p class="p-dim">Each method's error divided by the blend's, day by day out to ${esc(L.H)}: below the line is better than the blend. The model wins early and hands over to the calendar; persistence never recovers. The hatched band is the horizon block in view — the band labels switch it, as does the row above the chart; the vertical rule is a cursor — drag it, or use the arrow keys.</p>` +
@@ -396,7 +514,10 @@ function renderLead(m) {
     `<div class="ticks lead-ticks" aria-hidden="true">${ticks}</div></div>` +
     `<p class="p-readout" data-readout><b>${esc(say)}</b></p>` +
     plateKey([
-      { sw: swLine('ln ln-tfm'), label: 'TimesFM 2.5' },
+      ...L.curves.map(c => ({
+        sw: swLine(`ln ln-${c.mark}`),
+        label: `${c.label}${c.shippable === false ? ` ${NC_GLYPH} — measured here, never shipped: its weights are non-commercial` : ''}`,
+      })),
       { sw: swLine('ln ln-clim'), label: 'climatology (day-of-year mean of earlier years)' },
       { sw: swLine('ln ln-persist'), label: 'persistence — today’s level, held' },
       { sw: swLine('ln-blend'), label: 'the blend, ×1.00 — the bar' },
@@ -404,6 +525,7 @@ function renderLead(m) {
       { sw: '<span class="sw"><span class="lb" style="position:relative;display:block;height:12px;width:12px"></span></span>', label: 'block boundaries — days 14 and 30, each labelled with its skill' },
       { sw: '<span class="sw"><svg viewBox="0 0 12 12" aria-hidden="true"><line class="ln-cur" x1="6" y1="0" x2="6" y2="12"/></svg></span>', label: 'the cursor; the line under the chart reads its day' },
       { note: `The y axis is logarithmic, ×${LEAD_DOMAIN[0]} to ×${LEAD_DOMAIN[1]}; a ▴ or ▾ marks days a curve runs above or below the frame (climatology in its first days).` },
+      L.curves.length > 1 && L.gap ? { note: `Both candidates are drawn here, and they lie on each other: their widest daily gap is ${(L.gap.d * 100).toFixed(1)} points of the blend's own error, on day ${L.gap.day}, where ${L.gap.ahead} is the lower of the two. That closeness IS the finding — this picture cannot separate them, and the skill panel's numbers barely can. The band labels print ${m.primary ? m.primary.label : 'the first curve'}'s skill, and the panels below — which carry one number per gauge — speak for it too; switch the others off to read this sheet for one of them alone.` } : null,
       L.station === 'pooled' ? { note: 'Pooled here means the median of the five regime gauges — of their day-by-day ratios in the curve and of their block skills in the band labels — so the Rhine and the Elbe do not outvote the Saar by their centimetres. Clause A1 in the facts pools centimetres instead; the blend MAE in the readout is that cm-pooled figure.' } : null,
     ]) + table + '</section>';
 }
@@ -427,14 +549,33 @@ function renderIndex(m) {
 // them. The panels below read the same state; the index is what leads into them.
 function renderControls(m) {
   const s = m.state;
-  return ctlRow('target', [
+  const on = m.models.filter(mo => mo.on).map(mo => mo.key);
+  // one independent on/off per model. The last one on renders disabled rather
+  // than vanishing: a chip that disappears when you use it is a chip nobody
+  // trusts, and an empty sheet is not a state this page can be in.
+  const modelChips = m.models.length < 2 ? [] : [
+    ...m.models.map(mo => {
+      const label = mo.label + (mo.shippable === false ? ` ${NC_GLYPH}` : '');
+      if (mo.on && on.length === 1) return { ctl: 'model', off: label, title: `${mo.label} is the only model in view — switch another on first` };
+      const next = mo.on ? on.filter(k => k !== mo.key) : m.models.filter(x => x.on || x.key === mo.key).map(x => x.key);
+      return {
+        ctl: 'model',
+        href: stateHref(s, { models: next.length === m.models.length ? null : next, panel: 'lead' }),
+        label, on: mo.on, focus: 'lead',
+        title: mo.on ? `stop drawing ${mo.label}` : `draw ${mo.label} too${mo.shippable === false ? ' — measured, never shipped' : ''}`,
+      };
+    }),
+    { lbl: '· target' },
+  ];
+  return ctlRow(m.models.length < 2 ? 'target' : 'model', [
+    ...modelChips,
     ...m.targets.map(t => t.available
-      ? { href: stateHref(s, { target: t.k, panel: 'lead' }), label: t.label, on: s.target === t.k, focus: 'lead', title: t.k === 'mid' ? 'the day’s (min+max)/2 — what the archive stores' : 'the day’s maximum — the crest is what matters in a flood' }
-      : { off: t.label, title: `the ${t.label} report did not load` }),
+      ? { ctl: 'target', href: stateHref(s, { target: t.k, panel: 'lead' }), label: t.label, on: s.target === t.k, focus: 'lead', title: t.k === 'mid' ? 'the day’s (min+max)/2 — what the archive stores' : 'the day’s maximum — the crest is what matters in a flood' }
+      : { ctl: 'target', off: t.label, title: `the ${t.label} report did not load` }),
     { lbl: 'horizon' },
-    ...BLOCKS.map(b => ({ href: stateHref(s, { block: b, panel: 'lead' }), label: BLOCK_LABEL[b], on: s.block === b, focus: 'lead' })),
+    ...BLOCKS.map(b => ({ ctl: 'block', href: stateHref(s, { block: b, panel: 'lead' }), label: BLOCK_LABEL[b], on: s.block === b, focus: 'lead' })),
     { lbl: '· every chart on this sheet' },
-  ], 'target and horizon block');
+  ], m.models.length < 2 ? 'target and horizon block' : 'model, target and horizon block');
 }
 
 // a panel: the summary is the focus and click target; the visually hidden h2
@@ -487,7 +628,7 @@ function renderError(m) {
     `<div class="rows">${rows}</div>` + axis([0.5, 0.75, 1, 1.25, 1.5, 1.75, 2], RATIO_DOMAIN, v => '×' + v.toFixed(2)) +
     `<p class="p-readout" data-readout><span class="hint">Hover or pick a row for the MAE of every method in cm.</span></p>` +
     plateKey([
-      { sw: sw('tfm'), label: 'TimesFM 2.5' },
+      ...m.drawn.map(mo => ({ sw: sw(mo.mark), label: `${mo.label}${mo.shippable === false ? ` ${NC_GLYPH} — measured, never shipped` : ''}` })),
       { sw: swRule('one'), label: 'the blend, ×1.00' },
       { sw: sw('persist'), label: 'persistence — the MASE denominator, not the bar' },
       { sw: sw('clim'), label: 'climatology (day-of-year mean of earlier years)' },
@@ -569,13 +710,13 @@ function renderShort(m) {
 function renderBasics(m) {
   const k = m.story;
   return `<div class="prose">` +
-    `<p><b>Model and question.</b> ${a(LINKS.card, 'TimesFM 2.5')} is Google's 200-million-parameter foundation model for time series; it forecasts <em>zero-shot</em>, untrained on the series at hand. Could it beat something trivial on 26 years of daily archive? ${esc(thousands(k.windows))} windows on seven gauges, run twice to prove it reproduces.</p>` +
+    `<p><b>Model and question.</b> ${a(cardOf(m.primary), nameOf(m.primary))} is Google's ${esc((m.primary && m.primary.params) || '')}-parameter foundation model for time series; it forecasts <em>zero-shot</em>, untrained on the series at hand. Could it beat something trivial on 26 years of daily archive? ${esc(thousands(k.windows))} windows on seven gauges, run twice to prove it reproduces.</p>` +
     `<p><b>The bar.</b> Not persistence: a two-line blend, today's level decaying into the day-of-year norm, already beats it by ${esc(k.persistGain)} at KÖLN over three months. The model had to beat that blend by ten percent, pooled, in every block; the Rhine trio votes once.</p>` +
-    `<p><b>The verdict.</b> ${esc(k.verdict)}. At two weeks TimesFM beats the blend by ${esc(k.h1)}, under the bar; at a month it draws; at three months it is ${esc(k.h90)} ${esc(k.h90sign)}. Its bands are honest. Beyond a month climatology alone sits within ${esc(k.climRest)} of the bar everywhere but ${esc(k.climWorst)}: the long horizon needs a calendar, not a model.</p>` +
+    `<p><b>The verdict.</b> ${esc(k.verdict)}. At two weeks ${esc(nameOf(m.primary))} beats the blend by ${esc(k.h1)}, under the bar; at a month it draws; at three months it is ${esc(k.h90)} ${esc(k.h90sign)}. Its bands are honest. Beyond a month climatology alone sits within ${esc(k.climRest)} of the bar everywhere but ${esc(k.climWorst)}: the long horizon needs a calendar, not a model.</p>` +
     `<p class="p-dim">Code: <a href="https://github.com/bmmmm/pegel-visual/tree/main/scripts/forecast">scripts/forecast</a>; the markdown reports sit beside this page.</p></div>`;
 }
 
-// The model panel: what TimesFM 2.5 is, and the chain this repo runs it in.
+// The model panel: what the model in view is, and the chain this repo runs it in.
 // Every number here comes out of the run's own header — protocol, ForecastConfig
 // and versions — so a re-run with another context length redraws the chain
 // instead of leaving a stale literal on the page.
@@ -587,7 +728,7 @@ function renderModel(m) {
     step('src', 'PEGELONLINE daily archive', `one min and one max per day, from the ${a(LINKS.archive, 'archive branch')} — closed years only, because the running year is still being rewritten and a gate built on it would not reproduce`) +
     step('step', 'loaders.py — windows', `gaps of up to three days interpolated, longer ones drop the window; a new origin every ${esc(pr.step)} days, ${esc(thousands(pr.context))} days of context, ${esc(pr.horizon)} days to forecast`) +
     step('step', 'baselines.py — the bar', 'persistence, day-of-year climatology, the blend between them, seasonal naive 365, an upstream OLS — computed first, on exactly these windows') +
-    step('model', 'tfm.py — TimesFM 2.5', `the same windows, nothing else: no rain, no upstream gauge, no calendar feature. ${esc(c.per_core_batch_size)} per batch on CPU in float32, seed 0, ${esc(h.threads)} threads; of the ten output channels the point forecast is the median, and that is what gets scored`) +
+    step('model', `tfm.py — ${nameOf(m.primary)}`, `the same windows, nothing else: no rain, no upstream gauge, no calendar feature. ${esc(c.per_core_batch_size)} per batch on CPU in float32, seed 0, ${esc(h.threads)} threads; of its quantile channels the point forecast is the median — which channel that is differs between the lines, so tfm.py asserts it on every call — and the median is what gets scored`) +
     step('step', 'metrics.py — the scores', 'MAE and CRPS per lead day, the 80 % coverage, the PIT histogram, and a Diebold-Mariano test that knows the windows overlap') +
     step('step', 'gate.py — the clauses', `each pre-registered threshold checked in turn; a run whose ForecastConfig does not hash to ${esc(h.fingerprint)}, or whose origin grid was truncated, is VOID rather than a verdict`) +
     step('out', 'report.json — this page', 'the same file in every panel here, and its markdown twin beside it; nothing on this sheet is typed by hand') +
@@ -596,11 +737,14 @@ function renderModel(m) {
     esc('uv run python backtest.py --horizon ' + (h.kind || 'seasonal') + ' --target ' + m.target + ' \\\n    --archive ../../archive --out ../../tmp-forecast/results/' + (h.kind || 'seasonal') + '-' + m.target + '\n' +
         'uv run python gate.py --results ../../tmp-forecast/results/' + (h.kind || 'seasonal') + '-' + m.target + ' \\\n    --compare ../../tmp-forecast/results/' + (h.kind || 'seasonal') + '-' + m.target + '-repeat') +
     `</code></pre><p class="p-dim">Weights are pulled once from the model card and cached locally; the run took ${esc(num(h.elapsed, 0))} s on a laptop CPU. CI installs the same environment <em>without</em> the model group and runs the window, baseline and licence tests only — the gate itself is run by hand, because a re-run consumes the test set.</p></div></details>`;
-  return `<div class="prose"><p>${a(LINKS.card, 'TimesFM 2.5')} is Google's foundation model for time series: decoder-only, 200 million parameters, ` +
+  return `<div class="prose"><p>${a(cardOf(m.primary), nameOf(m.primary))} is Google's foundation model for time series: decoder-only, ${esc((m.primary && m.primary.params) || '')} parameters, ` +
     `pre-trained on other people's series and applied here <em>zero-shot</em> — it saw no gauge of this archive in training, and nothing was fitted to one. ` +
     `<em>Decoder-only</em> means it continues a series the way a language model continues a sentence, reading it in patches of days rather than words. ` +
-    `The architecture is the ${a(LINKS.paper, 'ICML 2024 paper')}'s; the weights carried here are ${esc(h.license)}, checkpoint ${a(LINKS.card, h.checkpoint)}, loaded through the ` +
-    `${a(LINKS.pkg, 'timesfm package')} pinned to ${esc(v.timesfm)} — that pin is deliberate, the newer line's weights are non-commercial and this repo is GPL-3.0.</p>` +
+    `The architecture is the ${a(LINKS.paper, 'ICML 2024 paper')}'s; the weights carried here are ${esc(h.license)}, checkpoint ${a(cardOf(m.primary), h.checkpoint)}, loaded through the ` +
+    `${a(LINKS.pkg, 'timesfm package')} pinned to ${esc(v.timesfm)} — both pins are deliberate. ` +
+    (m.primary && m.primary.shippable === false
+      ? `These weights are <b>non-commercial</b> ${NC_GLYPH}: this repo is GPL-3.0, so this line is measured here and its numbers published, but it can never be the model the site ships, however it scores.`
+      : `The 3.0 line's weights are non-commercial and this repo is GPL-3.0, so that line is measured beside this one but never shipped.`) + `</p>` +
     `<p class="p-dim">What follows is the chain the ${esc(thousands(h.windows))} scored windows travel, from the archive to the picture at the top of this sheet. Only one link in it is the model.</p></div>` +
     chain +
     plateKey([
@@ -620,7 +764,7 @@ function renderMethod(m) {
     `<p>Rolling-origin backtest on the daily archive, closed years 2000–2025: 1 024 days of context, 90 days of horizon, one origin every 7 days. Origins before 2016 (676 per gauge) fit the blend's τ and its residual deciles; origins from 2016 (${esc(h.windows / h.stations)} per gauge, ${esc(h.windows)} in all) are scored. A 90-day embargo separates the two.</p>` +
     `<p>The bar is the <b>blend</b> — e<sup>−h/τ</sup>·today + (1 − e<sup>−h/τ</sup>)·climatology(day) — not persistence: at days 31–90 the blend already beats persistence by a quarter, so a win over persistence would be a win over nothing. Overlapping windows are not independent samples: significance comes from Diebold-Mariano tests with a Newey-West variance (lag 13) and a moving-block bootstrap over origins (block 26), and the Rhine trio votes once, by its median.</p>` +
     `<ul><li>Every threshold and the ForecastConfig were fixed before the first model run; a run with a different config, a truncated grid, or one that does not reproduce bit for bit is VOID, not a verdict.</li>` +
-    `<li>TimesFM 2.5 has no published corpus manifest. PEGELONLINE is open and CAMELS-DE covers German basins, so 2000–2024 may be in its training data. Clause A7 compares recent against old origins; it is a probe, not a proof.</li>` +
+    `<li>${esc(nameOf(m.primary))} has no published corpus manifest. PEGELONLINE is open and CAMELS-DE covers German basins, so the archive may be in its training data — and the later the checkpoint, the more of A7's own recent side can sit inside that window. Clause A7 compares recent against old origins; it is a probe, not a proof.</li>` +
     `<li>The blend's τ and residual deciles are fitted on the pre-2016 origins, which favours the blend slightly on A7's old side.</li>` +
     `<li>The daily-max target run (switch the target chip above) tells the same story: the crest is no easier to forecast than the mid.</li></ul></div>`;
 }
@@ -629,7 +773,13 @@ function renderFoot(m) {
   const h = m.head;
   const v = h.versions || {};
   return `<footer id="plate-foot">` +
-    `<p><span class="lbl">model</span>${esc(h.model)} · ${a(LINKS.card, h.checkpoint)} · ${esc(h.license)} · ${a(LINKS.pkg, 'timesfm')} ${esc(v.timesfm)} · torch ${esc(v.torch)} · numpy ${esc(v.numpy)} · config ${esc(h.fingerprint)}</p>` +
+    m.verdicts.map(mv => {
+      const vh = mv.head, vv = vh.versions || {};
+      const card = mv.licenseUrl || LINKS.card;
+      return `<p><span class="lbl">model</span>${esc(vh.model)} · ${a(card, vh.checkpoint)} · ${esc(vh.model_license)}` +
+        (mv.shippable ? '' : ` ${NC_GLYPH} measured, never shipped`) +
+        ` · ${a(LINKS.pkg, 'timesfm')} ${esc(vv.timesfm)} · torch ${esc(vv.torch)} · numpy ${esc(vv.numpy)} · config ${esc(vh.config_fingerprint)}</p>`;
+    }).join('') +
     `<p><span class="lbl">run</span>${esc(h.generated)} · git ${esc(h.git)} · ${esc(num(h.elapsed, 0))} s on CPU, float32` +
     (h.reproduced ? ` · reproduced bit for bit by a second full run at ${esc(h.reproduced)}` : ' · second full run: not compared') + `</p>` +
     `<p><span class="lbl">source</span>PEGELONLINE (WSV) daily archive on the <a href="https://github.com/bmmmm/pegel-visual/tree/archive">archive branch</a> · ` +
@@ -642,7 +792,7 @@ function renderFoot(m) {
 
 export function screenSummary(m) {
   const k = m.skill;
-  return `Forecast gate, ${m.verdict}. TimesFM 2.5 against the persistence-to-climatology blend, ${TARGETS[m.target]} target, ${BLOCK_LABEL[m.block]}: pooled skill ${signed(k.pooled.ss)} with a 95 % interval from ${signed(k.pooled.lo)} to ${signed(k.pooled.hi)}. ` +
+  return `Forecast gate, ${m.verdict}. ${nameOf(m.primary)} against the persistence-to-climatology blend, ${TARGETS[m.target]} target, ${BLOCK_LABEL[m.block]}: pooled skill ${signed(k.pooled.ss)} with a 95 % interval from ${signed(k.pooled.lo)} to ${signed(k.pooled.hi)}. ` +
     `${m.clauses.filter(c => c.pass).length} of ${m.clauses.length} clauses passed.`;
 }
 
@@ -672,6 +822,7 @@ async function getJson(url) {
 let reports = null;
 let root = null;
 let known = [];
+let modelKeys = [];
 // draw() reopens panels itself, and that must not read as the reader opening one.
 // A time flag cannot do it: `toggle` fires in a task of its own, long after the
 // restore loop has finished, so the element is marked instead and cleared when
@@ -804,20 +955,20 @@ function wire() {
       panel = last ? last.id : null;
     } else return;                                              // closing a panel the URL never named changes nothing
     if ((panel ? '#' + panel : '') === location.hash) return;
-    history.replaceState(null, '', stateHref(parseState(location.search, location.hash, known), { panel }));
+    history.replaceState(null, '', stateHref(parseState(location.search, location.hash, known, modelKeys), { panel }));
   }, true);
   root.addEventListener('click', e => {
     const a = e.target.closest('.p-tabs a, .index a, .lead-bands a');
     if (!a || e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
     e.preventDefault();
     if (a.href !== location.href) history.pushState(null, '', a.getAttribute('href'));  // the active chip again: no duplicate history entry
-    draw({ focus: a.dataset.focus || parseState(location.search, location.hash, known).panel, scroll: true });
+    draw({ focus: a.dataset.focus || parseState(location.search, location.hash, known, modelKeys).panel, scroll: true });
   });
 }
 
 function draw(opts = {}) {
   if (!reports) return;
-  const state = parseState(location.search, location.hash, known);
+  const state = parseState(location.search, location.hash, known, modelKeys);
   const m = buildModel(reports, state);
   // what the reader had open stays open: the panels, and the table twins inside them (by position)
   const open = [...root.querySelectorAll('details[open]')].map(d => {
@@ -837,15 +988,32 @@ function draw(opts = {}) {
   if (opts.focus) focusTo(opts.focus, opts.scroll);
 }
 
+// models.json says which candidates exist and where their reports are; without
+// it the page falls back to addressing the shipped model the way it did before
+// there was a manifest, so a deploy that predates it still renders.
+export async function loadReports() {
+  const manifest = (await getJson('models.json')) || LEGACY_MANIFEST;
+  const listed = Array.isArray(manifest.models) && manifest.models.length ? manifest.models : LEGACY_MANIFEST.models;
+  const byKey = {};
+  await Promise.all(listed.map(async mo => {
+    const f = mo.files || {};
+    const at = name => (f[name] && f[name].json ? getJson(f[name].json) : Promise.resolve(null));
+    const [mid, max, short] = await Promise.all([at('seasonal-mid'), at('seasonal-max'), at('short-mid')]);
+    byKey[mo.key] = { seasonal: { mid, max: max || undefined }, short: short || undefined };
+  }));
+  // a model whose mid report did not answer cannot be offered at all
+  return { models: listed.filter(mo => byKey[mo.key] && byKey[mo.key].seasonal.mid), byKey };
+}
+
 export async function main() {
   root = document.getElementById('plate');
-  const [mid, max, short] = await Promise.all([getJson('seasonal-mid/report.json'), getJson('seasonal-max/report.json'), getJson('short-mid/report.json')]);
-  if (!mid) {
+  reports = await loadReports();
+  if (!reports.models.length) {
     root.innerHTML = '<div class="p-empty"><p>The gate report could not be loaded.</p><p class="p-dim">seasonal-mid/report.json did not answer — the deploy may still be running.</p></div>';
     return;
   }
-  reports = { seasonal: { mid, max: max || undefined }, short: short || undefined };
-  known = Object.keys(mid.stations);
+  modelKeys = reports.models.map(mo => mo.key);
+  known = Object.keys(reports.byKey[modelKeys[0]].seasonal.mid.stations);
   wire();
   // back/forward: the browser restores the scroll position itself. It also
   // processes the URL's fragment after popstate — and Chrome CLEARS the focus
@@ -853,11 +1021,11 @@ export async function main() {
   // so the focus goes on after the next frame has done that, not inside the handler.
   window.addEventListener('popstate', () => {
     draw();
-    const panel = parseState(location.search, location.hash, known).panel;
+    const panel = parseState(location.search, location.hash, known, modelKeys).panel;
     requestAnimationFrame(() => requestAnimationFrame(() => focusTo(panel, false)));  // no panel: the h1
   });
   // the reports arrive after the load, so a #panel in the URL opens only now
-  draw({ focus: parseState(location.search, location.hash, known).panel, scroll: true });
+  draw({ focus: parseState(location.search, location.hash, known, modelKeys).panel, scroll: true });
 }
 
 if (typeof document !== 'undefined' && document.getElementById('plate')) main();

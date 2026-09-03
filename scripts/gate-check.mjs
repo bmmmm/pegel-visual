@@ -111,7 +111,8 @@ async function run(cdp, url, { name, width, height, mobile }) {
   const sw2 = await s.evaluate('({ scroll: document.documentElement.scrollWidth, inner: window.innerWidth })');
   check(wideOpen.length === 0 && sw2.scroll <= sw2.inner, 'nothing sticks out with every panel and table open either', wideOpen.join(', ') + ` scrollWidth ${sw2.scroll}`);
   await s.evaluate('for (const d of document.querySelectorAll("details")) d.open = false');
-  check(await s.evaluate('document.querySelector("#lead [data-readout]").textContent.startsWith("day 14: TimesFM ×")'), 'the readout starts on day 14');
+  check(await s.evaluate('/^day 14: TimesFM/.test(document.querySelector("#lead [data-readout]").textContent)'), 'the readout starts on day 14 and names its model',
+    await s.evaluate('document.querySelector("#lead [data-readout]").textContent.slice(0, 60)'));
   const plot = await rect('#lead svg[data-lead]');
   check(plot && plot.h >= 90, 'the curve has height', `${Math.round(plot.w)}×${Math.round(plot.h)} px`);
   await s.send('Page.captureScreenshot', {}).then(r => writeFileSync(join(shots, `${name}-load.png`), Buffer.from(r.data, 'base64')));
@@ -119,9 +120,9 @@ async function run(cdp, url, { name, width, height, mobile }) {
   // 2. the filter row sits against the curve, and a chip keeps the reader on it.
   //    (Before this order: the chips were 1 121 px below the curve's head on desktop,
   //    2 173 on a phone, and a click scrolled the curve clean off the top.)
-  const rowY = await rect('nav[aria-label="target and horizon block"]');
+  const rowY = await rect('nav.p-tabs[aria-label$="target and horizon block"]');
   check(rowY.y < plot.y, 'the filter row is above the curve it relabels', `row ${Math.round(rowY.y)} px, curve ${Math.round(plot.y)} px`);
-  await click('nav[aria-label="target and horizon block"] a[href*="block=h31-90"]');
+  await click('nav.p-tabs a[data-ctl="block"][href*="block=h31-90"]');
   check((await s.evaluate('location.search + location.hash')) === '?block=h31-90#lead', 'the URL carries block and the drawing it shows', await s.evaluate('location.search + location.hash'));
   check(!(await s.evaluate('document.querySelector("details#skill").open')), 'no panel is thrown open behind the reader');
   check((await active()) === 'h2 in section#lead', 'focus stays on the curve heading', await active());
@@ -132,6 +133,38 @@ async function run(cdp, url, { name, width, height, mobile }) {
   check(await s.evaluate('document.querySelector("details#skill summary").textContent.includes("days 31–90")'), 'and the panels below carry the new block in their titles');
   check(await s.evaluate('getComputedStyle(document.activeElement).outlineStyle === "solid"'), 'the focus ring is drawn', await s.evaluate('getComputedStyle(document.activeElement).outline'));
   await s.send('Page.captureScreenshot', {}).then(r => writeFileSync(join(shots, `${name}-block.png`), Buffer.from(r.data, 'base64')));
+
+  // 2b. the model chips: one independent on/off each, the last one on disabled,
+  //     and the WHOLE sheet — curve, panel titles, prose — follows what is left.
+  const chipRow = 'nav.p-tabs';
+  const modelChips = await s.evaluate(`document.querySelectorAll('${chipRow} [data-ctl="model"]').length`);
+  if (modelChips >= 2) {
+    const paths = () => s.evaluate('document.querySelectorAll("#lead svg[data-lead] path.ln").length');
+    check((await paths()) === 4, 'both models are drawn beside the two baselines', `${await paths()} lines`);
+    // the two model lines must not be told apart by colour alone
+    const dashes = await s.evaluate('JSON.stringify([...document.querySelectorAll("#lead path.ln-tfm, #lead path.ln-tfm-alt")].map(p => getComputedStyle(p).strokeDasharray))');
+    const dash = JSON.parse(dashes);
+    check(dash.length === 2 && dash[0] !== dash[1], 'and told apart by their dash, not their hue', dashes);
+    // every swatch in the key must actually show ink — a dasharray that starts on
+    // a gap, or a mark placed off its own viewBox, leaves an empty 12 px box that
+    // no Node test can see
+    const inked = await s.evaluate('JSON.stringify([...document.querySelectorAll("#lead .p-key .sw svg line")].map(l => { const r = l.getBoundingClientRect(); return [Math.round(r.width), Math.round(r.height)]; }))');
+    check(JSON.parse(inked).every(([w, h]) => Math.max(w, h) >= 8), 'every line swatch in the key is drawn, not an empty box', inked);
+
+    await click(`${chipRow} a[data-ctl="model"][href*="models="]`);
+    const url = await s.evaluate('location.search + location.hash');
+    check(/[?&]models=/.test(url), 'a model chip puts the selection in the URL', url);
+    check((await paths()) === 3, 'one model fewer is one line fewer', `${await paths()} lines`);
+    check((await active()) === 'h2 in section#lead', 'and the focus stays on the drawing it changed', await active());
+    const left = await s.evaluate(`document.querySelector('${chipRow} span.off[data-ctl="model"]') && document.querySelector('${chipRow} span.off[data-ctl="model"]').textContent`);
+    check(!!left, 'the last model on cannot be switched off — its chip is disabled, not gone', String(left));
+    const title = await s.evaluate('document.querySelector("details#skill summary").textContent');
+    check(title.includes(String(left).replace(/[^\x20-\x7e].*$/, '').trim()), 'and the panels below name the model they now speak for', title);
+    await s.send('Page.captureScreenshot', {}).then(r => writeFileSync(join(shots, `${name}-one-model.png`), Buffer.from(r.data, 'base64')));
+    await s.evaluate('history.back()');
+    await sleep(400);
+    check((await paths()) === 4, 'back restores both curves', `${await paths()} lines`);
+  }
 
   // 3. a gauge chip on the curve: focus on the curve's heading, panel stays open,
   //    and — the chip sits ON its drawing — the page does not move under the reader.
@@ -214,9 +247,9 @@ async function run(cdp, url, { name, width, height, mobile }) {
   await s.evaluate('history.back()'); await sleep(700);
   check((await s.evaluate('location.search + location.hash')) === '', 'back to the start: a bare URL', await s.evaluate('location.search + location.hash'));
   check((await active()) === 'h1', 'with no panel to name, the focus lands on the h1', await active());
-  await click('nav[aria-label="target and horizon block"] a[href*="block=h31-90"]');
+  await click('nav.p-tabs a[data-ctl="block"][href*="block=h31-90"]');
   const entries = await s.evaluate('history.length');
-  await click('nav[aria-label="target and horizon block"] a[href*="block=h31-90"]');
+  await click('nav.p-tabs a[data-ctl="block"][href*="block=h31-90"]');
   check((await s.evaluate('history.length')) === entries, 'clicking the active chip again adds no history entry');
 
   // 7. a deep link opens its panel on load
@@ -260,7 +293,7 @@ async function run(cdp, url, { name, width, height, mobile }) {
   // a chip re-renders the whole sheet; what the reader unfolded has to survive it
   await click('details#method > summary');
   await click('details#short > summary');
-  await click('nav[aria-label="target and horizon block"] a[href*="block=h15-30"]');
+  await click('nav.p-tabs[aria-label$="target and horizon block"] a[href*="block=h15-30"]');
   check(await s.evaluate('document.querySelector("details#short").open && document.querySelector("details#method").open'), 'both open panels survive a chip’s re-render');
   check((await s.evaluate('location.hash')) === '#lead', 'and the chip names the drawing it changed, not a panel it merely reopened', await s.evaluate('location.hash'));
   // a sent URL arrives on the right sheet: same data, that panel open and focused
@@ -269,7 +302,7 @@ async function run(cdp, url, { name, width, height, mobile }) {
   await sleep(300);
   check(await s.evaluate('document.querySelector("details#short").open'), 'a sent link opens the panel it names');
   check((await active()) === 'summary in details#short', 'and focuses it', await active());
-  check((await s.evaluate('document.querySelector(\'nav[aria-label="target and horizon block"] a.on\').textContent')) === 'daily max', 'with the target the link carried');
+  check((await s.evaluate('document.querySelector(\'nav.p-tabs a[data-ctl="target"].on\').textContent')) === 'daily max', 'with the target the link carried');
 
   await s.close();
 }
