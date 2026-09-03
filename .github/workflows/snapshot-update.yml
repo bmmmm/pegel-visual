@@ -25,7 +25,7 @@ on:
     # 739 of them every day on a hole that may well be unhealable.
     inputs:
       heal_days:
-        description: 'Self-heal lookback in days (empty = 7)'
+        description: 'Self-heal lookback in whole days, counted back from the dispatch instant in MEZ days (empty = 7)'
         required: false
         default: ''
       heal_source:
@@ -75,8 +75,12 @@ jobs:
         # shard (a force-push reset base stays weeks behind), totals really
         # rebuilt this run (the append skips silently without units.json),
         # station coverage, and no regression against the branch HEAD — the
-        # failure() step below already reports a red run to the issue
-        run: node scripts/check-archive-consistency.mjs --tree archive-branch/archive --git archive-branch
+        # failure() step below already reports a red run to the issue.
+        # R6 (running-year continuity) is skipped here on purpose: this job
+        # never writes current.json, so a red R6 would block a push it cannot
+        # fix, and a blocked snapshot loses its day slot for good once the hole
+        # ages past the 7-day self-heal. archive-update owns that rule.
+        run: node scripts/check-archive-consistency.mjs --tree archive-branch/archive --git archive-branch --skip R6
       - name: Commit and push
         id: push
         run: |

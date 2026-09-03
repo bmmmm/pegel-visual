@@ -25,6 +25,12 @@
 //   R5 shapes         changed JSONs parse; shard days/station arrays sized to
 //                     the month, current.json arrays to the year; manifest
 //                     >= 700 stations, overview >= 80 rivers
+//   R6 running year   across the stations with pre-running-year history, the
+//                     running current.json starts in the first week of the
+//                     year, still reaches the last few days, and holds few
+//                     null days in between — the rule that would have caught
+//                     Jan-Jul 2026 sitting empty in every file for half a year
+//                     while R1-R5 stayed green. Opt out with --skip R6.
 //
 // Deliberate limits: the diff part (R4/R5) compares against the branch's own
 // HEAD, so a base poisoned by a force-push looks clean to it — branch
@@ -51,6 +57,8 @@ const opt = (name, fallback) => {
   const i = args.indexOf('--' + name);
   return i >= 0 && args[i + 1] && !args[i + 1].startsWith('--') ? args[i + 1] : fallback;
 };
+// --skip R6[,R…]: for a caller that cannot act on a rule's finding (see R6)
+const SKIP = new Set(opt('skip', '').split(',').map(s => s.trim().toUpperCase()).filter(Boolean));
 
 // absolute day number of a shard slot — comparable across month boundaries
 export const dayNum = (y, m, dayIdx) => Date.UTC(y, m - 1, dayIdx + 1) / 864e5;
@@ -124,6 +132,92 @@ export function checkCoverage(days, { minStations = 400, ratio = 0.9, window = 7
   return latest.count < threshold
     ? [`R3: only ${latest.count} stations reported on ${latest.day} (threshold ${threshold}, median of ${prior.length} prior days ${median})`]
     : [];
+}
+
+// day index of a date inside its own year — the coordinate current.json uses
+const dayOfYear = d => Math.floor((Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate())
+  - Date.UTC(d.getUTCFullYear(), 0, 1)) / 864e5);
+
+// R6 — the running year is continuous, across the whole fleet at once.
+//
+// R1/R3 watch the SNAPSHOTS and R4 only forbids regressions against HEAD, so
+// nothing ever asked whether current.json actually covers the year. It did not:
+// on 2026-09-03 the running year of every WSV station began on 2026-07-10,
+// half a year after Jan 1, because two cancelled runs had torn a hole the
+// REST refresh's ~31-day window could never reach back over. 628 candidates,
+// 10 of them continuous — the ten Rijkswaterstaat gauges a different adapter
+// feeds. Everything below is measured on that fleet, not on one station: a
+// single gauge may legitimately go dark for a month.
+//
+// `entries` are the manifest's stations that have pre-running-year history,
+// each with its parsed current.json (or null). The candidates are the ones
+// whose file is actually there and names the running year.
+//
+// The thresholds are calibrated on a year that is complete and validated:
+// closed.json for 2025, a random 120 of the 628 candidates sampled 2026-09-03.
+// 118/120 started inside the first week (the stragglers: first readings on day
+// 34 and day 125), 118/120 kept their inner null days at or below 21 (the
+// worst two: 39 and 22), and 119/120 ran to Dec 31. Two failures in 120 puts
+// the 95% interval at roughly 0.2%..5.9%, so minShare 0.9 sits clear of the
+// upper end rather than of the point estimate. The broken state scored 1.6%.
+export function checkRunningYearContinuity(entries, {
+  year, nowDate, minCandidates = 400, minShare = 0.9, maxHoles = 21, startBy = 7, maxLag = 10,
+} = {}) {
+  // In the first days of a year there is nothing to be continuous with: the
+  // January freeze graduates the completed year and leaves current.json absent
+  // until the next refresh writes the new one.
+  if (nowDate.getUTCFullYear() === year && dayOfYear(nowDate) < 14) return [];
+  const cands = entries.filter(e => e.cur && e.cur.y === year && Array.isArray(e.cur.min));
+  if (cands.length < minCandidates) {
+    return [`R6: only ${cands.length} stations carry a ${year} current.json (min ${minCandidates}) `
+      + '— the running-year check must never pass on an empty input'];
+  }
+  const measured = cands.map(e => {
+    const min = e.cur.min;
+    let first = -1, last = -1;
+    for (let i = 0; i < min.length; i++) if (min[i] != null) { if (first < 0) first = i; last = i; }
+    if (first < 0) return { first: Infinity, last: -Infinity, holes: Infinity };
+    let holes = 0;
+    for (let i = first; i <= last; i++) if (min[i] == null) holes++;
+    // a trailing edge is not a hole of its own: a decommissioned gauge simply
+    // stops. Whether the FLEET's edge keeps up is the separate check below.
+    return { first, last, holes };
+  });
+  const v = [];
+  const share = p => measured.filter(p).length / measured.length;
+  const pct = x => (x * 100).toFixed(1);
+  const floor = `min ${(minShare * 100).toFixed(0)}%`;
+  const median = xs => xs.slice().sort((a, b) => a - b)[Math.floor(xs.length / 2)];
+
+  const startShare = share(m => m.first <= startBy);
+  if (startShare < minShare) {
+    v.push(`R6: only ${pct(startShare)}% of ${measured.length} stations have ${year} data `
+      + `from day ${startBy + 1} on (${floor}), median first day `
+      + `${median(measured.map(m => m.first)) + 1} — the running year is not being backfilled`);
+  }
+  // The leading edge alone would have caught the 2026 incident and nothing
+  // else: a cron that simply STOPS leaves every file starting on Jan 1 and
+  // ending months ago, which the start check calls perfect. So the fleet's
+  // trailing edge has to keep up with the clock too. Measured on the validated
+  // 2025 bundles (120 stations): 119 of 120 ran to Dec 31, so a fleet-level
+  // floor here costs nothing against gauges that legitimately went dark.
+  const today = nowDate.getUTCFullYear() === year ? dayOfYear(nowDate) : daysInYear(year) - 1;
+  const lagShare = share(m => m.last >= today - maxLag);
+  if (lagShare < minShare) {
+    const lags = measured.map(m => today - m.last);
+    v.push(`R6: only ${pct(lagShare)}% of ${measured.length} stations carry ${year} data from the `
+      + `last ${maxLag} days (${floor}), median lag ${median(lags)} days — the running year stopped growing`);
+  }
+  // holes is the TOTAL number of null days between the first and the last
+  // reading, not the longest run — twenty scattered one-day dropouts count the
+  // same as one twenty-day outage. That is the quantity the 2025 calibration
+  // above measured, so the threshold means what it was measured against.
+  const holeShare = share(m => m.holes <= maxHoles);
+  if (holeShare < minShare) {
+    v.push(`R6: only ${pct(holeShare)}% of ${measured.length} stations keep their ${year} `
+      + `null days between first and last reading at or below ${maxHoles} (${floor})`);
+  }
+  return v;
 }
 
 // R4 — the archive only ever grows: no deletions, no renames
@@ -300,8 +394,9 @@ async function main() {
   ]);
   violations.push(...checkRecency(days, now), ...checkCoverage(days));
 
-  // R2 + the always-on shapes (single files, checked changed or not)
+  // R2 + R6 + the always-on shapes (single files, checked changed or not)
   const currentYear = now.getUTCFullYear(); // build-river-totals names the year file in UTC
+  const manifest = readJson(join(treeDir, 'manifest.json'));
   const overview = readJson(join(treeDir, 'totals', 'overview.json'));
   violations.push(...checkTotalsLiveness({
     overview,
@@ -309,8 +404,24 @@ async function main() {
     yearTotals: readJson(join(treeDir, 'totals', `${currentYear}.json`)),
     currentYear, nowDate: now,
   }));
-  violations.push(...checkManifestShape(readJson(join(treeDir, 'manifest.json'))));
+  violations.push(...checkManifestShape(manifest));
   violations.push(...checkOverviewShape(overview));
+
+  // R6 — only current.json is read (739 x 77KB of closed.json would be a
+  // minute of I/O for a question about the running year alone).
+  //
+  // Skipped by the DAILY snapshot job, deliberately: current.json is written
+  // by archive-update alone, so a red R6 there would block a push the snapshot
+  // job cannot possibly fix — and a blocked snapshot loses its day slot for
+  // good once the hole ages past the 7-day REST self-heal. The rule gates the
+  // job that owns the file, where refusing to push a half-healed year is the
+  // right answer and the workflow's failure step opens the watchdog issue.
+  if (!SKIP.has('R6')) {
+    const runningEntries = Object.entries((manifest || {}).stations || {})
+      .filter(([, e]) => e && !e.none && (e.from ?? 9999) <= currentYear - 1)
+      .map(([uuid]) => ({ uuid, cur: readJson(join(treeDir, uuid, 'current.json')) }));
+    violations.push(...checkRunningYearContinuity(runningEntries, { year: currentYear, nowDate: now }));
+  }
 
   if (violations.length) {
     for (const v of violations.slice(0, 40)) console.log(`::error::${v}`);

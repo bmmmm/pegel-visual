@@ -17,7 +17,7 @@ const {
   capturedDays, checkRecency, checkTotalsLiveness, checkCoverage,
   checkChangeStatuses, compareShard, compareCurrent, compareClosed,
   checkShardShape, checkCurrentShape, checkClosedShape,
-  checkManifestShape, checkOverviewShape,
+  checkManifestShape, checkOverviewShape, checkRunningYearContinuity,
 } = await import('../scripts/check-archive-consistency.mjs');
 
 // shard fixture: counts[i] = stations reporting on day i, null = day not captured
@@ -218,19 +218,104 @@ test('R5: manifest and overview floors', () => {
   assert.deepEqual(checkOverviewShape(null), [], 'a missing overview is R2 business, not double-reported');
 });
 
+// ---------- R6: the running year's continuity ----------
+
+// a running year populated from day `first` to day `last`, with `holes` null
+// days in between — the exact coordinates current.json uses
+const dayOfYear = d => Math.floor((Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate())
+  - Date.UTC(d.getUTCFullYear(), 0, 1)) / 864e5);
+
+function mkCurrent(y, { first = 0, last = null, holes = [] } = {}) {
+  const n = y % 4 === 0 ? 366 : 365;
+  // a running year ends at yesterday, not at Dec 31 — the fleet's trailing
+  // edge is a rule of its own
+  const end = last ?? (y === nowDate.getUTCFullYear() ? dayOfYear(nowDate) - 1 : n - 1);
+  const cur = { y, min: Array(n).fill(null), max: Array(n).fill(null) };
+  for (let i = first; i <= end; i++) { cur.min[i] = 300; cur.max[i] = 320; }
+  for (const h of holes) { cur.min[h] = null; cur.max[h] = null; }
+  return cur;
+}
+
+const fleet = (n, mk) => Array.from({ length: n }, (_, i) => ({ uuid: 'u' + i, cur: mk(i) }));
+const R6 = (entries, opts) =>
+  checkRunningYearContinuity(entries, { year: 2026, nowDate, ...opts });
+
+test('R6: a fleet whose running year starts in January is green', () => {
+  assert.deepEqual(R6(fleet(628, () => mkCurrent(2026))), []);
+});
+
+test('R6: the 2026-09-03 finding is red — 628 candidates, data only from July 10', () => {
+  // measured against the deployed branch before the heal: 618 stations start
+  // on day 190 (2026-07-10), only the 10 Rijkswaterstaat gauges run from Jan 1
+  const entries = fleet(628, i => mkCurrent(2026, { first: i < 10 ? 0 : 190 }));
+  const v = R6(entries);
+  assert.equal(v.length, 1, v.join(' | '));
+  assert.match(v[0], /only 1\.6% of 628 stations have 2026 data from day 8 on/);
+  assert.match(v[0], /median first day 191/);
+});
+
+test('R6: a fleet full of long inner gaps is red on its own count', () => {
+  const gap = Array.from({ length: 30 }, (_, k) => 100 + k); // a lost month mid-year
+  const v = R6(fleet(628, i => mkCurrent(2026, { holes: i < 500 ? gap : [] })));
+  assert.equal(v.length, 1, v.join(' | '));
+  assert.match(v[0], /null days between first and last reading at or below 21/);
+});
+
+test('R6: a running year that simply STOPPED is red, not perfect', () => {
+  // the shape a dead cron leaves going forward: every file starts on Jan 1
+  // and ends months ago. The start check alone calls that flawless.
+  const v = R6(fleet(628, () => mkCurrent(2026, { last: 120 })));
+  assert.equal(v.length, 1, v.join(' | '));
+  assert.match(v[0], /only 0\.0% of 628 stations carry 2026 data from the last 10 days/);
+  assert.match(v[0], /median lag 112 days/);
+});
+
+test('R6: one populated day per gauge does not pass as a healed year', () => {
+  // first = last = 0, holes = 0 satisfies both edge-free checks on its own
+  const v = R6(fleet(628, () => mkCurrent(2026, { last: 0 })));
+  assert.equal(v.length, 1, v.join(' | '));
+  assert.match(v[0], /from the last 10 days/);
+});
+
+test('R6: a short outage and a decommissioned gauge are not violations', () => {
+  const entries = fleet(628, i => (i < 40
+    ? mkCurrent(2026, { holes: [50, 51, 52] })            // a week offline: fine
+    : i < 50
+      ? mkCurrent(2026, { last: 120 })                    // switched off in May: fine
+      : mkCurrent(2026)));
+  assert.deepEqual(R6(entries), []);
+});
+
+test('R6: an empty or thin candidate set is a violation, never a silent pass', () => {
+  assert.match(R6([])[0], /only 0 stations carry a 2026 current\.json/);
+  assert.match(R6(fleet(399, () => mkCurrent(2026)))[0], /only 399 stations/);
+  // a current.json for another year does not count as a candidate either
+  assert.match(R6(fleet(628, () => mkCurrent(2025)))[0], /only 0 stations/);
+});
+
+test('R6 stays inert in the first fortnight, when the freeze has emptied current.json', () => {
+  const january = new Date('2026-01-06T12:00:00Z');
+  assert.deepEqual(checkRunningYearContinuity([], { year: 2026, nowDate: january }), []);
+  const later = new Date('2026-01-15T12:00:00Z');
+  assert.match(checkRunningYearContinuity([], { year: 2026, nowDate: later })[0], /only 0 stations/);
+});
+
 // ---------- CLI integration: a real git baseline, green then sabotaged ----------
 
 const SCRIPT = new URL('../scripts/check-archive-consistency.mjs', import.meta.url).pathname;
 
+// hooksPath is not cosmetic: the machine's global template installs a
+// pre-commit scanner, and committing this fixture's ~450 station files through
+// it costs 8s per seed (measured 2026-09-03: 8486ms vs 40ms)
 function gitIn(dir, ...gitArgs) {
-  execFileSync('git', ['-C', dir, '-c', 'user.name=t', '-c', 'user.email=t@t', ...gitArgs],
-    { encoding: 'utf8' });
+  execFileSync('git', ['-C', dir, '-c', 'user.name=t', '-c', 'user.email=t@t',
+    '-c', 'core.hooksPath=/dev/null', ...gitArgs], { encoding: 'utf8' });
 }
 
-function runChecker(repo, env = {}) {
+function runChecker(repo, env = {}, extra = []) {
   try {
     const stdout = execFileSync(process.execPath,
-      [SCRIPT, '--tree', join(repo, 'archive'), '--git', repo],
+      [SCRIPT, '--tree', join(repo, 'archive'), '--git', repo, ...extra],
       { encoding: 'utf8', env: { ...process.env, PEGEL_NOW: NOW, ...env } });
     return { code: 0, stdout };
   } catch (e) {
@@ -238,7 +323,7 @@ function runChecker(repo, env = {}) {
   }
 }
 
-function seedRepo() {
+function seedRepo({ runningFirstDay = 0 } = {}) {
   const repo = mkdtempSync(join(tmpdir(), 'pegel-consistency-'));
   const arch = join(repo, 'archive');
   mkdirSync(join(arch, 'snapshots'), { recursive: true });
@@ -247,8 +332,20 @@ function seedRepo() {
     JSON.stringify(mkShard(2026, 8, Array(21).fill(450)))); // through today, 450 stations
   writeFileSync(join(arch, 'manifest.json'), JSON.stringify({
     generated: NOW,
-    stations: Object.fromEntries(Array.from({ length: 700 }, (_, i) => ['u' + i, { n: 'X', w: 'Y' }])),
+    stations: Object.fromEntries(Array.from({ length: 700 },
+      (_, i) => ['u' + i, { n: 'X', w: 'Y', from: 2000, to: 2026 }])),
   }));
+  // R6's candidate set: 450 stations, by default with a continuous running
+  // year. Without real current.json files the rule would fire on the empty
+  // input — which is the point of its minCandidates floor. The ten stations
+  // that always start on Jan 1 stand for the Rijkswaterstaat gauges a
+  // different adapter feeds.
+  const jan = JSON.stringify(mkCurrent(2026));
+  const late = JSON.stringify(mkCurrent(2026, { first: runningFirstDay }));
+  for (let i = 0; i < 450; i++) {
+    mkdirSync(join(arch, 'u' + i), { recursive: true });
+    writeFileSync(join(arch, 'u' + i, 'current.json'), i < 10 ? jan : late);
+  }
   writeFileSync(join(arch, 'totals', 'overview.json'), JSON.stringify({
     generated: '2026-08-21T15:20:00Z', fromYear: 2000, months: 324, currentYear: 2026,
     excludedStations: 0,
@@ -281,6 +378,25 @@ test('CLI: the incident replayed — reset shard + missing units.json — is red
   assert.match(stdout, /::error::R2: totals\/units\.json missing/);
   assert.match(stdout, /::error::R1: latest snapshot day is 2026-08-02, 19 days behind/);
   assert.match(stdout, /::error::R4: archive\/snapshots\/2026-08\.json: captured day 3 lost/);
+});
+
+test('CLI: R6 — a fleet whose running year starts in July is red', () => {
+  // the 2026-09-03 production shape, committed so it is the baseline and not a
+  // diff: R4 would otherwise fill the whole error budget with non-null -> null
+  const repo = seedRepo({ runningFirstDay: 190 });
+  const { code, stdout } = runChecker(repo);
+  assert.equal(code, 1);
+  assert.match(stdout, /::error::R6: only 2\.2% of 450 stations have 2026 data from day 8 on/);
+  assert.match(stdout, /median first day 191/);
+});
+
+test('CLI: --skip R6 lets the daily snapshot push through a broken running year', () => {
+  // the snapshot job never writes current.json; blocking its push would cost
+  // day slots it cannot get back, for a defect only archive-update can fix
+  const repo = seedRepo({ runningFirstDay: 190 });
+  const { code, stdout } = runChecker(repo, {}, ['--skip', 'R6']);
+  assert.equal(code, 0, stdout);
+  assert.doesNotMatch(stdout, /R6/);
 });
 
 test('CLI: a brand-new month shard (untracked) is still shape-checked', () => {
