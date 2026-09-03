@@ -12,6 +12,12 @@ the verdict. `--no-model` runs the baselines alone, `--limit N` truncates the
 origin grid for smoke tests (the header records both, and the gate refuses a
 truncated run).
 
+`--model` picks a line from tfm.MODELS. The default is the shipped one; a
+challenger writes to its own results directory and needs its own environment,
+because the two lines are the same distribution at two versions:
+
+    uv run --no-group model --group model-nc python backtest.py --model 3p0 ...
+
 The archive path differs between machines: locally the data branch is checked
 out as `archive/` (gitignored); CI lays it down as `archive-branch/archive`.
 """
@@ -132,7 +138,7 @@ def backtest_seasonal_station(uuid: str, archive: Path, target: str, model, prot
     tfm_q = np.full((len(kept), H, 9), np.nan)
     if model is not None:
         t0 = time.time()
-        tfm_point, tfm_q = run_model(model, ctx, H, tfm.FORECAST_CONFIG["per_core_batch_size"], log)
+        tfm_point, tfm_q = run_model(model, ctx, H, model.config["per_core_batch_size"], log)
         log(f"    model: {len(kept)} windows in {time.time() - t0:.0f}s")
 
     arrays = {
@@ -182,7 +188,7 @@ def backtest_short_station(uuid: str, hires: Path, model, proto: dict, log) -> t
     tfm_point = np.full_like(y, np.nan)
     tfm_q = np.full((len(kept), H, 9), np.nan)
     if model is not None:
-        tfm_point, tfm_q = run_model(model, ctx, H, tfm.FORECAST_CONFIG["per_core_batch_size"], log)
+        tfm_point, tfm_q = run_model(model, ctx, H, model.config["per_core_batch_size"], log)
     arrays = {"origins": kept, "o_times": times[kept], "y": y, "tmask": tmask, "persist": persist,
               "snaive": snaive, "drift": drift, "tidal": tidal, "rise": rise,
               "tfm_point": tfm_point, "tfm_q": tfm_q}
@@ -201,15 +207,20 @@ def main(argv=None) -> int:
     ap.add_argument("--out", default=None)
     ap.add_argument("--tmp", default=str(REPO / "tmp-forecast"))
     ap.add_argument("--stations", default=None, help="comma-separated UUIDs (default: the measured set)")
+    ap.add_argument("--model", choices=sorted(tfm.MODELS), default=tfm.SHIPPED,
+                    help="which line to run (default: the shipped one)")
     ap.add_argument("--no-model", action="store_true")
     ap.add_argument("--limit", type=int, default=None)
     args = ap.parse_args(argv)
 
-    out = Path(args.out or (Path(args.tmp) / "results" / f"{args.horizon}-{args.target}"))
+    entry = tfm.MODELS[args.model]
+    # a challenger never overwrites the shipped model's results tree
+    suffix = "" if args.model == tfm.SHIPPED else f"-{args.model}"
+    out = Path(args.out or (Path(args.tmp) / "results" / f"{args.horizon}-{args.target}{suffix}"))
     out.mkdir(parents=True, exist_ok=True)
     uuids = args.stations.split(",") if args.stations else list(st.STATIONS)
     proto = SEASONAL if args.horizon == "seasonal" else SHORT
-    config = dict(tfm.FORECAST_CONFIG)
+    config = dict(entry["config"])
     if args.horizon == "short":
         config["max_horizon"] = proto["horizon"]
 
@@ -220,8 +231,8 @@ def main(argv=None) -> int:
     model = None
     repeat_ok = None
     if not args.no_model:
-        log(f"loading {tfm.CHECKPOINT} (cache {Path(args.tmp) / 'hf'})")
-        model = tfm.load_model(Path(args.tmp), config)
+        log(f"loading {entry['checkpoint']} ({entry['license']}, cache {Path(args.tmp) / 'hf'})")
+        model = tfm.load_model(Path(args.tmp), config, args.model)
 
     per_station = {}
     hash_parts = []
@@ -258,7 +269,9 @@ def main(argv=None) -> int:
     header = {
         "horizon_kind": args.horizon, "target": args.target, "protocol": proto,
         "forecast_config": config, "config_fingerprint": tfm.config_fingerprint(config),
-        "checkpoint": tfm.CHECKPOINT, "model": tfm.MODEL_ID, "model_license": tfm.MODEL_LICENSE,
+        "checkpoint": entry["checkpoint"], "model": entry["id"], "model_license": entry["license"],
+        "model_key": args.model, "model_shippable": entry["shippable"],
+        "model_license_url": entry["license_url"], "model_params": entry["params"],
         "torch_threads": tfm.TORCH_THREADS, "versions": tfm.versions(), "git": git_head(),
         "generated": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "elapsed_s": round(time.time() - started, 1),
         "model_ran": model is not None, "limit": args.limit, "repeat_identical": repeat_ok,

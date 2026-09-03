@@ -1,0 +1,49 @@
+{
+ "shipped": "2p5",
+ "models": [
+  {
+   "key": "2p5",
+   "label": "TimesFM 2.5",
+   "id": "timesfm-2.5-200m",
+   "params": "200M",
+   "checkpoint": "google/timesfm-2.5-200m-pytorch",
+   "license": "Apache-2.0",
+   "license_url": "https://huggingface.co/google/timesfm-2.5-200m-pytorch",
+   "shippable": true,
+   "files": {
+    "seasonal-max": {
+     "json": "seasonal-max/report.json",
+     "md": "seasonal-max/report.md"
+    },
+    "seasonal-mid": {
+     "json": "seasonal-mid/report.json",
+     "md": "seasonal-mid/report.md"
+    },
+    "short-mid": {
+     "json": "short-mid/report.json",
+     "md": "short-mid/report.md"
+    }
+   }
+  },
+  {
+   "key": "3p0",
+   "label": "TimesFM 3.0",
+   "id": "timesfm-3.0",
+   "params": "330M",
+   "checkpoint": "google/timesfm-3.0-pytorch",
+   "license": "timesfm-non-commercial-license-v1.0",
+   "license_url": "https://huggingface.co/google/timesfm-3.0-pytorch/blob/main/LICENSE",
+   "shippable": false,
+   "files": {
+    "seasonal-max": {
+     "json": "seasonal-max/report-3p0.json",
+     "md": "seasonal-max/report-3p0.md"
+    },
+    "seasonal-mid": {
+     "json": "seasonal-mid/report-3p0.json",
+     "md": "seasonal-mid/report-3p0.md"
+    }
+   }
+  }
+ ]
+}

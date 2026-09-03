@@ -1,51 +1,136 @@
-"""The 3.0 line of TimesFM ships non-commercial weights, which a GPL-3.0 repo cannot
-use. Nothing in the repo may name its package, its evaluator class or its
-checkpoint — the names are assembled here so this file does not trip itself."""
-import subprocess
+"""What may be shipped, and what may only be measured.
+
+The 3.0 line of TimesFM ships weights under a non-commercial licence that also
+forbids redistribution. A GPL-3.0 repo cannot pass those terms on to its
+readers, so 3.0 may be measured and named — its numbers are facts, and running
+it here is non-commercial research the licence allows — but it may never become
+the model this repo ships.
+
+An earlier version of this file grepped every tracked file for the 3.0 package,
+class and checkpoint names. That banned the honest thing (a report naming the
+checkpoint it measured) while catching none of the real hazard. These tests
+guard the hazard instead: the shipped model's licence, the shipped reports, and
+the fact that a plain `uv run` can never even install the non-commercial line.
+"""
+import json
+import tomllib
 from pathlib import Path
 
 import tfm
 
 REPO = Path(__file__).resolve().parents[3]
-FORBIDDEN = [
-    "timesfm" + "3",
-    "TimesFM3" + "Evaluator",
-    "google/timesfm-" + "3.0-pytorch",
-    "timesfm-non-commercial",
-]
+PYPROJECT = REPO / "scripts" / "forecast" / "pyproject.toml"
 
 
-def tracked_files():
-    out = subprocess.run(["git", "ls-files", "-z"], cwd=REPO, capture_output=True, check=True).stdout
-    return [REPO / p.decode() for p in out.split(b"\0") if p]
+def pyproject() -> dict:
+    return tomllib.loads(PYPROJECT.read_text(encoding="utf-8"))
 
 
-def test_no_forbidden_names_anywhere_in_the_repo():
-    hits = []
-    for path in tracked_files():
-        if path.resolve() == Path(__file__).resolve() or not path.is_file():
-            continue
-        text = path.read_text(encoding="utf-8", errors="ignore")
-        for token in FORBIDDEN:
-            if token in text:
-                hits.append(f"{path.relative_to(REPO)}: {token}")
-    assert not hits, "\n".join(hits)
+def model_of(header: dict) -> str:
+    """The registry key a report was produced with. Headers written before the
+    registry carry no model_key, so fall back to matching the checkpoint."""
+    key = header.get("model_key")
+    if key:
+        assert key in tfm.MODELS, f"unknown model_key {key!r}"
+        return key
+    for k, entry in tfm.MODELS.items():
+        if entry["checkpoint"] == header.get("checkpoint"):
+            return k
+    raise AssertionError(f"report names an unregistered checkpoint: {header.get('checkpoint')!r}")
 
 
-def test_checkpoint_guard_holds():
+# ---------- the registry ----------
+
+def test_shipped_model_is_permissively_licensed():
     tfm.license_guard()
-    assert tfm.CHECKPOINT == "google/timesfm-2.5-200m-pytorch"
-    assert tfm.MODEL_LICENSE == "Apache-2.0"
+    shipped = tfm.MODELS[tfm.SHIPPED]
+    assert shipped["checkpoint"] == "google/timesfm-2.5-200m-pytorch"
+    assert shipped["license"] == "Apache-2.0"
+    assert shipped["shippable"] is True
+    assert [k for k, e in tfm.MODELS.items() if e["shippable"]] == [tfm.SHIPPED], \
+        "exactly one model may be shippable, and it must be the shipped one"
 
 
-def test_pin_is_exact_and_pre_3():
-    text = (REPO / "scripts" / "forecast" / "pyproject.toml").read_text(encoding="utf-8")
+def test_non_commercial_models_are_marked_and_never_shipped():
+    others = {k: e for k, e in tfm.MODELS.items() if e["license"] not in tfm.PERMISSIVE}
+    assert others, "this test is vacuous unless a non-permissive model is registered"
+    for key, entry in others.items():
+        assert entry["shippable"] is False, f"{key}: non-permissive weights marked shippable"
+        assert entry["license_url"], f"{key}: no link to the licence that forbids shipping"
+        tfm.license_guard(key)  # loading it is allowed; being SHIPPED is not
+
+
+def test_output_layout_is_registered_per_line_not_copied():
+    # 2.5 returns ten channels with the point on 5, 3.0 nine with the point on 4.
+    # A copy-paste that gave both the same layout would score a wrong MAE that
+    # still looks plausible, so the difference itself is asserted.
+    layouts = {k: (e["point_channel"], e["quantile_channels"], tuple(e["decile_slice"]))
+               for k, e in tfm.MODELS.items()}
+    assert layouts["2p5"] == (5, 10, (1, 10))
+    assert layouts["3p0"] == (4, 9, (0, 9))
+    for key, (_, _, (lo, hi)) in layouts.items():
+        assert hi - lo == 9, f"{key}: the gate scores nine deciles"
+
+
+# ---------- the environment ----------
+
+def test_pin_is_exact_and_the_shipped_line_stays_pre_3():
+    text = PYPROJECT.read_text(encoding="utf-8")
     assert '"timesfm[torch]==2.0.2"' in text
     assert "timesfm>=" not in text and "timesfm~=" not in text
+    groups = pyproject()["dependency-groups"]
+    assert any(d.startswith("timesfm[torch]==2.0.2") for d in groups[tfm.MODELS[tfm.SHIPPED]["group"]])
 
 
-def test_forecast_config_is_the_pre_registered_one():
-    # the fingerprint gate.py compares against; change deliberately, with a header note
-    assert tfm.config_fingerprint() == "362b77bd29350df5"
-    assert tfm.FORECAST_CONFIG["infer_is_positive"] is False
-    assert tfm.FORECAST_CONFIG["max_context"] == 1024
+def test_the_non_commercial_line_is_opt_in_only():
+    """A plain `uv run` must not be able to install it, let alone download it."""
+    pp = pyproject()
+    groups, uv = pp["dependency-groups"], pp["tool"]["uv"]
+    shipped_group = tfm.MODELS[tfm.SHIPPED]["group"]
+    for key, entry in tfm.MODELS.items():
+        if entry["shippable"]:
+            continue
+        group = entry["group"]
+        assert group in groups, f"{key}: group {group!r} is not declared"
+        assert group not in uv["default-groups"], f"{key}: {group!r} must not be a default group"
+        pins = [d for d in groups[group] if d.startswith("timesfm")]
+        assert len(pins) == 1 and "==" in pins[0], f"{group}: timesfm must be pinned exactly, got {pins}"
+        # the same distribution at two versions: uv must know they exclude each other
+        assert any({shipped_group, group} <= {m.get("group") for m in pair} for pair in uv["conflicts"]), \
+            f"{group} and {shipped_group} are not declared as conflicting"
+
+
+def test_forecast_configs_are_the_pre_registered_ones():
+    # the fingerprints gate.py compares against; change deliberately, with a header note
+    assert tfm.config_fingerprint(tfm.MODELS["2p5"]["config"]) == "362b77bd29350df5"
+    assert tfm.config_fingerprint(tfm.MODELS["3p0"]["config"]) == "9fc34ab62295c07f"
+    assert tfm.config_fingerprint() == "362b77bd29350df5"  # the alias still means the shipped one
+    assert tfm.MODELS["2p5"]["config"]["infer_is_positive"] is False
+    assert tfm.MODELS["3p0"]["config"]["make_positive"] is False
+    for entry in tfm.MODELS.values():
+        assert entry["config"]["max_context"] == 1024, "both lines are fed the same context"
+
+
+# ---------- what is published ----------
+
+def test_the_shipped_reports_name_a_shippable_model():
+    """gate/<kind>-<target>/report.json is THE report — the one the page and the
+    landing text speak for. A challenger writes report-<key>.json beside it."""
+    reports = sorted((REPO / "gate").glob("*/report.json"))
+    assert reports, "no committed gate report found"
+    for path in reports:
+        header = json.loads(path.read_text(encoding="utf-8"))["header"]
+        key = model_of(header)
+        assert tfm.MODELS[key]["shippable"], \
+            f"{path.relative_to(REPO)} is the shipped report but was measured with {key}"
+
+
+def test_challenger_reports_declare_the_model_they_ran():
+    for path in sorted((REPO / "gate").glob("*/report-*.json")):
+        header = json.loads(path.read_text(encoding="utf-8"))["header"]
+        key = path.stem.removeprefix("report-")
+        assert key in tfm.MODELS, f"{path.relative_to(REPO)}: {key!r} is not a registered model"
+        assert header.get("model_key") == key, f"{path.relative_to(REPO)}: header says {header.get('model_key')!r}"
+        assert header.get("model_shippable") is tfm.MODELS[key]["shippable"]
+        if not tfm.MODELS[key]["shippable"]:
+            assert header.get("model_license_url"), f"{path.relative_to(REPO)}: no licence link in the header"

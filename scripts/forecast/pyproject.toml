@@ -18,20 +18,36 @@ dev = [
 # backtest.py …` on a laptop syncs everything it needs on first use — no
 # separate bootstrap step to remember (default-groups below).
 #
-# timesfm is pinned EXACTLY to 2.0.2 — the last release before the 3.0 line.
-# 3.0.0 (2026-08-28) adds a second package for the 3.0 model whose weights are
-# under Google's non-commercial licence, which is incompatible with this
-# repo's GPL-3.0. 3.0.x still exports the 2.5 class, but only through
-# try/except blocks that can silently drop it, and a bare `pip install timesfm`
-# today resolves to 3.0.x. 2.0.2 contains only the 2.5 model code (Apache-2.0
-# code, Apache-2.0 weights). The one code change between 2.0.2 and 3.0.1 in the
-# 2.5 path (flipping the quantile channels of autoregressive output patches
-# under force_flip_invariance) only applies to horizons > 128 steps and is
-# neutralised anyway by use_continuous_quantile_head, which overwrites those
-# channels — see tfm.py. tests/test_license.py greps the repo for the 3.0
-# package, class and checkpoint names, so they are not spelled out here either.
+# timesfm is pinned EXACTLY to 2.0.2 — the last release before the 3.0 line, and
+# the version the shipped reports were measured with. Both pins here are
+# pre-registered experiment parameters, not dependencies to keep fresh.
+#
+# 3.0.0 (2026-08-28) did NOT add a second distribution: the same `timesfm` wheel
+# gained a second top-level package holding the 3.0 model and its forecaster,
+# beside the 2.5 one. So 2.0.2 and 3.0.1 are one distribution at two versions
+# and cannot coexist in an environment — hence the conflicting groups. 3.0.x
+# still exports the 2.5 class, but through a try/except that drops it silently
+# on any import error (tfm.py checks rather than trusts), and a bare
+# `pip install timesfm` today resolves to 3.0.x. 2.0.2 contains only the 2.5
+# model code (Apache-2.0 code, Apache-2.0 weights).
+#
+# The one code change between 2.0.2 and 3.0.1 in the 2.5 path (flipping the
+# quantile channels of autoregressive output patches under force_flip_invariance)
+# only applies to horizons > 128 steps and is neutralised anyway by
+# use_continuous_quantile_head, which overwrites those channels — see tfm.py.
 model = [
   "timesfm[torch]==2.0.2",
+  "torch>=2.4",
+]
+# The 3.0 line, measured but never shipped. It is the SAME distribution at a
+# different version — 3.0.x adds a second top-level package (the 3.0 model and
+# its forecaster) beside the 2.5 one inside the same wheel — so 2.0.2 and 3.0.1
+# cannot share an environment. Hence a conflicting group below rather than a
+# second dependency: `uv run --no-group model --group model-nc`. It is NOT in
+# default-groups, so a plain `uv run` never pulls it and never downloads the
+# non-commercial weights. Pinned exactly, for the same reason 2.0.2 is.
+model-nc = [
+  "timesfm[torch]==3.0.1",
   "torch>=2.4",
 ]
 
@@ -41,6 +57,11 @@ package = false
 # `uv run` / `uv sync` install both groups unless told otherwise — the laptop
 # gets the working tool, CI opts out of the model
 default-groups = ["dev", "model"]
+# `model` and `model-nc` are the same distribution at two versions and can never
+# be installed together; uv resolves and locks them separately.
+conflicts = [
+  [{ group = "model" }, { group = "model-nc" }],
+]
 # A repo-local cache (gitignored via tmp-*): the default ~/.cache/uv is not
 # writable inside the Claude Code sandbox, which made every uv call need a
 # bypass. CI is unaffected — setup-uv exports UV_CACHE_DIR, and the env var

@@ -9,6 +9,13 @@ own script tree, needed when working on it and not before. Moved verbatim.
   h31–90; calibration fine). Re-running the gate consumes the test set — read
   the report and the plan (`~/.claude/plans/mache-den-plan-wie-linked-puddle.md`)
   before touching a threshold, and list every tried variant in the header.
+- **TimesFM 3.0 was measured on 2026-09-03 and does not clear the bar either.**
+  `report-3p0.md` beside each shipped report: NO-SHIP, the same 2 of 7 clauses,
+  pooled skill +0.076 / +0.013 / −0.015 (mid) against 2.5's +0.072 / +0.014 /
+  −0.036. It is consistently a little better — most at h31–90, and on CRPS
+  everywhere — and nowhere near A1's 0.10. Both reports now say in their own
+  caveats that TWO candidates have been measured on the SAME test origins;
+  a third look needs that count raised, not quietly reused.
 - **`gate/` is deployed** (`pages.yml` excludes only `scripts/`, `tests/`,
   `.github/`): `gate/index.html` + `gate.js` render the committed `report.json`
   files as an interactive plate at `/pegel-visual/gate/`. `gate.py` writes there
@@ -33,10 +40,23 @@ own script tree, needed when working on it and not before. Moved verbatim.
   loopback) is the gate for all of this — run it before every deploy of the
   page. `(pointer: coarse)` comes from `Emulation.setTouchEmulationEnabled`;
   `setEmulatedMedia` cannot override it.
-- **`timesfm` is pinned to 2.0.2 and the pin is load-bearing.** The 3.0 line's
-  weights are non-commercial and GPL-incompatible; `tests/test_license.py`
-  greps the whole repo for the 3.0 package, class and checkpoint names, so do
-  not spell them out even in comments. Dependabot is told to ignore `>=3`.
+- **Two lines are registered in `tfm.py`, and only one may ship.** `2p5` is
+  Apache-2.0 and is `SHIPPED`; `3p0` carries non-commercial weights that forbid
+  redistribution and production use, so it is measured and named but can never
+  become the shipped model, however it scores. Both `timesfm` pins are exact
+  and pre-registered (Dependabot ignores the package outright) — and they are
+  the SAME distribution at two versions, so they live in the conflicting `model`
+  / `model-nc` groups and can never share an environment. A challenger run needs
+  `uv run --no-group model --group model-nc`. `tests/test_license.py` no longer
+  greps for names (that banned the honest thing and caught none of the hazard);
+  it guards the shipped model's licence, the shipped `report.json` files, and
+  the fact that a plain `uv run` cannot install the non-commercial line — all
+  nine break scenarios were measured red on 2026-09-03.
+- **The output layout differs per line and is asserted on every call.** 2.5
+  returns ten channels with the point forecast on 5 (channel 0 is the mean
+  head); 3.0 returns nine deciles with the point on **4** and no mean head. A
+  copied index would score a wrong MAE that still looks plausible, so
+  `forecast_batch` checks the channel it was registered with.
 - **`uv run python <script>` is the whole bootstrap.** `[tool.uv]` points the
   cache at `tmp-forecast/uv-cache` (the default `~/.cache/uv` is not writable in
   the sandbox) and makes `model` a default group, so the first `uv run` syncs

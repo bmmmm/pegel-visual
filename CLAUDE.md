@@ -101,5 +101,6 @@ there 2026-09-03). Read it before touching the gate, the model pin or the hires
 collector. The two things worth knowing without opening it: the 2026-09-02 run
 of TimesFM 2.5 against the persistence/climatology blend is a **NO-SHIP**, and
 that verdict lives in `gate/seasonal-mid/report.md`, not in anyone's memory —
-re-running the gate consumes the test set. And `timesfm` is **pinned to 2.0.2
-for licence reasons**; `tests/test_license.py` enforces it.
+re-running the gate consumes the test set — TimesFM 3.0 was measured on
+2026-09-03 and is NO-SHIP too. And two model lines are registered, of which
+only the Apache-2.0 one may ever **ship**; `tests/test_license.py` enforces it.

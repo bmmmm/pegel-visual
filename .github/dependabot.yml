@@ -18,9 +18,12 @@ updates:
     labels:
       - dependencies
 
-  # the forecast gate (scripts/forecast, uv-managed). timesfm stays below 3:
-  # the 3.0 line's weights are non-commercial and GPL-incompatible, see
-  # scripts/forecast/pyproject.toml — a bump PR there would be the wrong bump.
+  # the forecast gate (scripts/forecast, uv-managed). BOTH timesfm pins are
+  # frozen: 2.0.2 runs the shipped 2.5 weights, 3.0.1 the non-commercial 3.0
+  # line that is measured but never shipped. Neither is a dependency to keep
+  # fresh — they are pre-registered experiment parameters, and moving one
+  # invalidates the report measured with it. A bump belongs in a deliberate
+  # re-run, never in an automated PR. See scripts/forecast/pyproject.toml.
   - package-ecosystem: uv
     directory: /scripts/forecast
     schedule:
@@ -31,4 +34,3 @@ updates:
       - dependencies
     ignore:
       - dependency-name: timesfm
-        versions: [">=3"]

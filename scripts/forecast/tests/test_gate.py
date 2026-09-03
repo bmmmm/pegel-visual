@@ -166,3 +166,75 @@ def test_a_column_one_pooled_station_has_is_not_pooled():
     assert all(v is None for v in gate._clean(rep["pooled"]["per_h"]["upstream"]))
     assert all(v is None for v in gate._clean(rep["pooled"]["per_h_ratio_median"]["upstream"]))
     assert all(v is not None for v in gate._clean(rep["pooled"]["per_h"]["tfm_point"])), "a complete column is still pooled"
+
+
+# ---------- more than one candidate ----------
+
+def test_a_challenger_header_is_gated_against_its_own_config():
+    """The void check must read the config the report's OWN model was registered
+    with. Before the registry it compared every run against the shipped one,
+    which would VOID every 3.0 run for the wrong reason."""
+    rng = np.random.default_rng(3)
+    data = {u: synth_station(rng, model_sigma=5.0) for u in st.STATIONS}
+    challenger = tfm.MODELS["3p0"]
+    h = header_for(data, model_key="3p0", model_shippable=False,
+                   model_license=challenger["license"], model_license_url=challenger["license_url"],
+                   checkpoint=challenger["checkpoint"], model=challenger["id"],
+                   forecast_config=challenger["config"],
+                   config_fingerprint=tfm.config_fingerprint(challenger["config"]))
+    assert tfm.expected_config(h) is challenger["config"]
+    assert gate.void_reasons(h, data, tfm.expected_config(h), thresholds()) == []
+    # and the shipped model's config would VOID it — the check is not vacuous
+    assert any("fingerprint" in r for r in gate.void_reasons(h, data, tfm.FORECAST_CONFIG, thresholds()))
+
+
+def test_a_header_without_a_model_key_is_still_the_shipped_model():
+    """Every report committed before the registry carries no model_key."""
+    rng = np.random.default_rng(4)
+    data = {u: synth_station(rng, model_sigma=5.0) for u in st.STATIONS}
+    h = header_for(data)
+    assert "model_key" not in h
+    assert tfm.expected_config(h) is tfm.MODELS[tfm.SHIPPED]["config"]
+
+
+def test_a_run_that_may_not_ship_says_so_in_its_own_report():
+    challenger = tfm.MODELS["3p0"]
+    note = "\n".join(gate.shipping_note({"model_shippable": False, "model_license": challenger["license"],
+                                         "model_license_url": challenger["license_url"]}))
+    assert challenger["license"] in note and challenger["license_url"] in note
+    assert "never become the model" in note
+    assert gate.shipping_note({"model_shippable": True}) == []
+    assert gate.shipping_note({}) == []  # an old header is the shipped model
+
+
+def test_the_manifest_lists_only_reports_that_exist(tmp_path):
+    gate_dir = tmp_path / "gate"
+    (gate_dir / "seasonal-mid").mkdir(parents=True)
+    (gate_dir / "seasonal-mid" / "report.json").write_text("{}", encoding="utf-8")
+    (gate_dir / "seasonal-mid" / "report.md").write_text("#", encoding="utf-8")
+    (gate_dir / "not-a-dir-file.json").write_text("{}", encoding="utf-8")
+
+    one = gate.write_models_manifest(tmp_path)
+    assert one["shipped"] == tfm.SHIPPED
+    assert [m["key"] for m in one["models"]] == [tfm.SHIPPED], "a model with no report is not offered"
+    assert one["models"][0]["files"] == {"seasonal-mid": {"json": "seasonal-mid/report.json", "md": "seasonal-mid/report.md"}}
+
+    (gate_dir / "seasonal-mid" / "report-3p0.json").write_text("{}", encoding="utf-8")
+    two = gate.write_models_manifest(tmp_path)
+    keys = [m["key"] for m in two["models"]]
+    assert keys == [tfm.SHIPPED, "3p0"], keys
+    nc = next(m for m in two["models"] if m["key"] == "3p0")
+    assert nc["shippable"] is False and nc["license_url"]
+    assert json.loads((gate_dir / "models.json").read_text(encoding="utf-8")) == two
+
+
+def test_the_caveat_counts_the_candidates_measured_on_one_test_set(tmp_path, monkeypatch):
+    monkeypatch.setattr(gate, "REPO", tmp_path)
+    d = tmp_path / "gate" / "seasonal-mid"
+    d.mkdir(parents=True)
+    rep = {"header": {"horizon_kind": "seasonal", "target": "mid", "model_key": tfm.SHIPPED}}
+    assert gate.candidate_note(rep) == [], "one candidate needs no warning"
+    (d / "report.json").write_text("{}", encoding="utf-8")
+    (d / "report-3p0.json").write_text("{}", encoding="utf-8")
+    note = "\n".join(gate.candidate_note(rep))
+    assert "2 candidates" in note and tfm.MODELS["3p0"]["id"] in note and "SAME TEST origins" in note

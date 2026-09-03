@@ -350,7 +350,7 @@ def seasonal_report(header: dict, data: dict, th: dict) -> dict:
     reg = regimes(per_station, blocks)
     contam = contamination(data, [1, 30])
     cl = clauses(pool, reg, contam, blocks, th)
-    void = void_reasons(header, data, tfm.FORECAST_CONFIG, th)
+    void = void_reasons(header, data, tfm.expected_config(header), th)
     if void:
         verdict = "VOID"
     else:
@@ -388,7 +388,7 @@ def short_report(header: dict, data: dict, th: dict) -> dict:
             entry["blocks"][bname] = {"mae": maes, "best_baseline": best,
                                       "ss_vs_best": metrics.skill(maes["tfm_point"], base[best]) if best else float("nan")}
         stations_out[name] = entry
-    void = void_reasons(header, data, {**tfm.FORECAST_CONFIG, "max_horizon": header["protocol"]["horizon"]}, th) if data else []
+    void = void_reasons(header, data, {**tfm.expected_config(header), "max_horizon": header["protocol"]["horizon"]}, th) if data else []
     if reasons:
         verdict = "PROVISIONAL"
     elif void:
@@ -398,6 +398,55 @@ def short_report(header: dict, data: dict, th: dict) -> dict:
         verdict = "SHIP" if ok else "NO-SHIP"
     return {"verdict": verdict, "provisional_reasons": reasons, "void": void, "stations": stations_out,
             "thresholds": th, "header": {k: header[k] for k in header if k != "stations"}, "station_info": header["stations"]}
+
+
+def shipping_note(h: dict) -> list[str]:
+    """A run with weights this repo may not ship says so where the numbers are,
+    not in a footnote. Its measurements are facts and stand; what cannot follow
+    from them is a deployment."""
+    if h.get("model_shippable", True):
+        return []
+    return [f"> Measured, not shipped. These weights are licensed {h['model_license']} "
+            f"({h.get('model_license_url', 'no link')}), which forbids redistribution and any commercial or "
+            f"production use — so this line can be measured here but can never become the model this "
+            f"GPL-3.0 repo ships, however it scores.", ""]
+
+
+def candidate_note(rep: dict) -> list[str]:
+    """Every candidate measured on this TEST set, named. The thresholds were
+    pre-registered for one; a second look at the same origins is a second
+    hypothesis test, and a reader must be able to see how many were taken."""
+    kind, target = rep["header"]["horizon_kind"], rep["header"]["target"]
+    found = sorted({p.stem.removeprefix("report-") if p.stem != "report" else tfm.SHIPPED
+                    for p in (REPO / "gate" / f"{kind}-{target}").glob("report*.json")}
+                   | {rep["header"].get("model_key") or tfm.SHIPPED})
+    if len(found) < 2:
+        return []
+    names = ", ".join(tfm.MODELS[k]["id"] if k in tfm.MODELS else k for k in found)
+    return [f"- {len(found)} candidates have now been measured on the SAME TEST origins ({names}). "
+            f"The clause thresholds were pre-registered for a single candidate; read the significances "
+            f"as {len(found)} looks at one test set, not one."]
+
+
+def write_models_manifest(repo: Path) -> dict:
+    """gate/models.json — what the page may offer. Rebuilt from the registry and
+    from what is actually on disk, so it cannot drift from either."""
+    models = []
+    for key, entry in tfm.MODELS.items():
+        files = {}
+        stem = "report" if key == tfm.SHIPPED else f"report-{key}"
+        for d in sorted(x for x in (repo / "gate").glob("*-*") if x.is_dir()):
+            if (d / f"{stem}.json").exists():
+                files[d.name] = {"json": f"{d.name}/{stem}.json", "md": f"{d.name}/{stem}.md"}
+        if not files:
+            continue
+        models.append({"key": key, "label": entry["label"], "id": entry["id"], "params": entry["params"],
+                       "checkpoint": entry["checkpoint"], "license": entry["license"],
+                       "license_url": entry["license_url"], "shippable": entry["shippable"],
+                       "files": files})
+    out = {"shipped": tfm.SHIPPED, "models": models}
+    (repo / "gate" / "models.json").write_text(json.dumps(out, indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
+    return out
 
 
 def render_seasonal(rep: dict) -> str:
@@ -410,6 +459,7 @@ def render_seasonal(rep: dict) -> str:
              f"{h['elapsed_s']} s · repeat identical: {fmt(h['repeat_identical'])} · tfm sha256 {str(h['tfm_sha256'])[:16]}"
              + (f" · reproduced bit for bit by a second full run at {h['reproduced_by_run']}" if h.get("reproduced_by_run") else
                 " · second full run: not compared"), ""]
+    lines += shipping_note(h)
     if rep["void"]:
         lines += ["VOID because:"] + [f"- {r}" for r in rep["void"]] + [""]
     lines += ["## Clauses", "", "| clause | pass | detail |", "|---|---|---|"]
@@ -449,13 +499,15 @@ def render_seasonal(rep: dict) -> str:
               "- TimesFM 2.5 has no published corpus manifest; PEGELONLINE is open and CAMELS-DE (2024) covers German basins. "
               "Assume 2000-2024 MAY be in the training data. A7 is a probe, not a proof.",
               "- The blend's τ and residual deciles are fitted on TRAIN; A7's 2003-2015 side therefore favours the blend slightly.",
-              "- Persistence is reported for the MASE denominators only. The bar is the blend.", ""]
+              "- Persistence is reported for the MASE denominators only. The bar is the blend."]
+    lines += candidate_note(rep) + [""]
     return "\n".join(lines)
 
 
 def render_short(rep: dict) -> str:
     h = rep["header"]
     lines = [f"# Forecast gate — short horizon (15-minute grid)", "", f"Verdict: **{rep['verdict']}**", ""]
+    lines += shipping_note(h)
     if rep["provisional_reasons"]:
         lines += ["PROVISIONAL — cannot be SHIP before:"] + [f"- {r}" for r in rep["provisional_reasons"]] + [""]
     if rep["void"]:
@@ -496,9 +548,14 @@ def main(argv=None) -> int:
     print(text)
     out = Path(args.report) if args.report else REPO / "gate" / f"{header['horizon_kind']}-{header['target']}"
     out.mkdir(parents=True, exist_ok=True)
-    (out / "report.md").write_text(text + "\n", encoding="utf-8")
-    (out / "report.json").write_text(json.dumps(_clean(rep), indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
-    print(f"report: {out}")
+    # report.json is THE report — the shipped model's. A challenger writes
+    # report-<key>.json beside it and leaves every existing link standing.
+    key = header.get("model_key") or tfm.SHIPPED
+    stem = "report" if key == tfm.SHIPPED else f"report-{key}"
+    (out / f"{stem}.md").write_text(text + "\n", encoding="utf-8")
+    (out / f"{stem}.json").write_text(json.dumps(_clean(rep), indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
+    write_models_manifest(REPO)
+    print(f"report: {out / stem}.json")
     return {"SHIP": 0, "NO-SHIP": 1, "VOID": 2, "PROVISIONAL": 3}[rep["verdict"]]
 
 
