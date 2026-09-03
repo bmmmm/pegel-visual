@@ -17,11 +17,25 @@
 export const BLOCKS = ['h1-14', 'h15-30', 'h31-90'];
 export const BLOCK_LABEL = { 'h1-14': 'days 1–14', 'h15-30': 'days 15–30', 'h31-90': 'days 31–90' };
 export const TARGETS = { mid: 'daily mid', max: 'daily max' };
+
+// Everything this page points at off-site. The model card, the paper and the
+// package are the three things a reader needs to check the model claim itself;
+// keeping them here means the foot, the basics and the model panel cannot drift
+// apart. Verified 2026-09-03: the card states 0.2B params, decoder-only,
+// apache-2.0 weights and cites arXiv 2310.10688 (Das, Kong, Sen, Zhou).
+export const LINKS = {
+  card: 'https://huggingface.co/google/timesfm-2.5-200m-pytorch',
+  paper: 'https://arxiv.org/abs/2310.10688',
+  pkg: 'https://github.com/google-research/timesfm',
+  code: 'https://github.com/bmmmm/pegel-visual/tree/main/scripts/forecast',
+  archive: 'https://github.com/bmmmm/pegel-visual/tree/archive',
+};
+const a = (href, text) => `<a${attr('href', href)}>${esc(text)}</a>`;
 export const SKILL_DOMAIN = [-0.2, 0.2];   // fixed across blocks and targets, so bars stay comparable
 export const RATIO_DOMAIN = [0.5, 2.0];    // error relative to the blend; 1.0 is the bar
 export const PICP_DOMAIN = [0.6, 1.0];
 export const LEAD_DOMAIN = [0.5, 4];       // the curve's y, log2: ×0.5 and ×2 sit symmetric about the blend
-export const PANEL_IDS = ['lead', 'skill', 'error', 'calib', 'clim', 'short', 'method', 'basics'];
+export const PANEL_IDS = ['lead', 'skill', 'error', 'calib', 'clim', 'short', 'model', 'method', 'basics'];
 
 export const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 export const attr = (name, v) => v == null || v === '' ? '' : ` ${name}="${esc(v)}"`;
@@ -216,6 +230,9 @@ export function buildModel({ seasonal, short }, parsed) {
       generated: h.generated, model: h.model, license: h.model_license, checkpoint: h.checkpoint, git: h.git,
       fingerprint: h.config_fingerprint, versions: h.versions, elapsed: h.elapsed_s, reproduced: h.reproduced_by_run,
       windows, stations: nStations, regimes: nRegimes,
+      // the model panel draws the run's own protocol and config — never a literal
+      protocol: h.protocol, config: h.forecast_config || {}, threads: h.torch_threads,
+      sha: h.tfm_sha256, repeat: h.repeat_identical, kind: h.horizon_kind,
     },
     lead: leadModel(report, state),
     skill, error, calib, clim, short: shortModel,
@@ -228,6 +245,7 @@ export function buildModel({ seasonal, short }, parsed) {
     { id: 'calib', title: `Calibration · ${BLOCK_LABEL[block]}`, hook: 'how often the 80 % band held, and the PIT histograms', render: renderCalib },
     { id: 'clim', title: `Climatology alone · ${BLOCK_LABEL[block]}`, hook: 'Finding 2: the calendar against the blend', render: renderClim },
     shortModel ? { id: 'short', title: `Short horizon · ${shortModel.verdict}`, hook: 'hours to two days — still collecting, no verdict yet', render: renderShort } : null,
+    { id: 'model', title: 'The model, and the chain it runs in', hook: 'what TimesFM 2.5 is, where the weights come from, and the seven steps from archive to this sheet', render: renderModel },
     { id: 'method', title: 'Method', hook: 'how it was measured, and what it cannot prove', render: renderMethod },
     { id: 'basics', title: 'Basics', hook: 'the model, the bar and the verdict in three short paragraphs', render: renderBasics },
   ].filter(Boolean);
@@ -249,6 +267,8 @@ const SHAPES = {
 const mark = (kind, x, extra = '') => `<span class="mk mk-${kind}"${attr('style', `left:${x.toFixed(2)}%`)}${extra}><svg viewBox="0 0 12 12" aria-hidden="true">${SHAPES[kind]}</svg></span>`;
 const sw = kind => `<span class="sw mk-${kind}"><svg viewBox="0 0 12 12" aria-hidden="true">${SHAPES[kind]}</svg></span>`;
 const swBar = cls => `<span class="sw bar ${cls}"></span>`;
+// a flow-node swatch: the node's own classes, layout neutralised in .sw.fn
+const swNode = cls => `<span class="sw fn ${cls}"></span>`;
 // a vertical hairline swatch: the drawing's own class (zero, one, thr) on a 12 px box
 const swRule = cls => `<span class="sw"><span class="${cls}" style="position:relative;display:block;height:12px;left:6px"></span></span>`;
 // a line swatch: the curve's own class on a 12-unit stroke, so dash and colour follow the drawing
@@ -542,10 +562,49 @@ function renderShort(m) {
 function renderBasics(m) {
   const k = m.story;
   return `<div class="prose">` +
-    `<p><b>Model and question.</b> TimesFM 2.5 is Google's 200-million-parameter foundation model for time series; it forecasts <em>zero-shot</em>, untrained on the series at hand. Could it beat something trivial on 26 years of daily archive? ${esc(thousands(k.windows))} windows on seven gauges, run twice to prove it reproduces.</p>` +
+    `<p><b>Model and question.</b> ${a(LINKS.card, 'TimesFM 2.5')} is Google's 200-million-parameter foundation model for time series; it forecasts <em>zero-shot</em>, untrained on the series at hand. Could it beat something trivial on 26 years of daily archive? ${esc(thousands(k.windows))} windows on seven gauges, run twice to prove it reproduces.</p>` +
     `<p><b>The bar.</b> Not persistence: a two-line blend, today's level decaying into the day-of-year norm, already beats it by ${esc(k.persistGain)} at KÖLN over three months. The model had to beat that blend by ten percent, pooled, in every block; the Rhine trio votes once.</p>` +
     `<p><b>The verdict.</b> ${esc(k.verdict)}. At two weeks TimesFM beats the blend by ${esc(k.h1)}, under the bar; at a month it draws; at three months it is ${esc(k.h90)} ${esc(k.h90sign)}. Its bands are honest. Beyond a month climatology alone sits within ${esc(k.climRest)} of the bar everywhere but ${esc(k.climWorst)}: the long horizon needs a calendar, not a model.</p>` +
     `<p class="p-dim">Code: <a href="https://github.com/bmmmm/pegel-visual/tree/main/scripts/forecast">scripts/forecast</a>; the markdown reports sit beside this page.</p></div>`;
+}
+
+// The model panel: what TimesFM 2.5 is, and the chain this repo runs it in.
+// Every number here comes out of the run's own header — protocol, ForecastConfig
+// and versions — so a re-run with another context length redraws the chain
+// instead of leaving a stale literal on the page.
+function renderModel(m) {
+  const h = m.head, c = h.config || {}, pr = h.protocol || {};
+  const v = h.versions || {};
+  const step = (cls, name, detail) => `<li class="fn ${cls}"><b>${esc(name)}</b><span>${detail}</span></li>`;
+  const chain = `<ol class="flow">` +
+    step('src', 'PEGELONLINE daily archive', `one min and one max per day, from the ${a(LINKS.archive, 'archive branch')} — closed years only, because the running year is still being rewritten and a gate built on it would not reproduce`) +
+    step('step', 'loaders.py — windows', `gaps of up to three days interpolated, longer ones drop the window; a new origin every ${esc(pr.step)} days, ${esc(thousands(pr.context))} days of context, ${esc(pr.horizon)} days to forecast`) +
+    step('step', 'baselines.py — the bar', 'persistence, day-of-year climatology, the blend between them, seasonal naive 365, an upstream OLS — computed first, on exactly these windows') +
+    step('model', 'tfm.py — TimesFM 2.5', `the same windows, nothing else: no rain, no upstream gauge, no calendar feature. ${esc(c.per_core_batch_size)} per batch on CPU in float32, seed 0, ${esc(h.threads)} threads; of the ten output channels the point forecast is the median, and that is what gets scored`) +
+    step('step', 'metrics.py — the scores', 'MAE and CRPS per lead day, the 80 % coverage, the PIT histogram, and a Diebold-Mariano test that knows the windows overlap') +
+    step('step', 'gate.py — the clauses', `each pre-registered threshold checked in turn; a run whose ForecastConfig does not hash to ${esc(h.fingerprint)}, or whose origin grid was truncated, is VOID rather than a verdict`) +
+    step('out', 'report.json — this page', 'the same file in every panel here, and its markdown twin beside it; nothing on this sheet is typed by hand') +
+    `</ol>`;
+  const cmds = `<details class="cmds"><summary>the two commands behind this sheet</summary><div class="tblwrap"><pre><code>` +
+    esc('uv run python backtest.py --horizon ' + (h.kind || 'seasonal') + ' --target ' + m.target + ' \\\n    --archive ../../archive --out ../../tmp-forecast/results/' + (h.kind || 'seasonal') + '-' + m.target + '\n' +
+        'uv run python gate.py --results ../../tmp-forecast/results/' + (h.kind || 'seasonal') + '-' + m.target + ' \\\n    --compare ../../tmp-forecast/results/' + (h.kind || 'seasonal') + '-' + m.target + '-repeat') +
+    `</code></pre><p class="p-dim">Weights are pulled once from the model card and cached locally; the run took ${esc(num(h.elapsed, 0))} s on a laptop CPU. CI installs the same environment <em>without</em> the model group and runs the window, baseline and licence tests only — the gate itself is run by hand, because a re-run consumes the test set.</p></div></details>`;
+  return `<div class="prose"><p>${a(LINKS.card, 'TimesFM 2.5')} is Google's foundation model for time series: decoder-only, 200 million parameters, ` +
+    `pre-trained on other people's series and applied here <em>zero-shot</em> — it saw no gauge of this archive in training, and nothing was fitted to one. ` +
+    `<em>Decoder-only</em> means it continues a series the way a language model continues a sentence, reading it in patches of days rather than words. ` +
+    `The architecture is the ${a(LINKS.paper, 'ICML 2024 paper')}'s; the weights carried here are ${esc(h.license)}, checkpoint ${a(LINKS.card, h.checkpoint)}, loaded through the ` +
+    `${a(LINKS.pkg, 'timesfm package')} pinned to ${esc(v.timesfm)} — that pin is deliberate, the newer line's weights are non-commercial and this repo is GPL-3.0.</p>` +
+    `<p class="p-dim">What follows is the chain the ${esc(thousands(h.windows))} scored windows travel, from the archive to the picture at the top of this sheet. Only one link in it is the model.</p></div>` +
+    chain +
+    plateKey([
+      { sw: swNode('src'), label: 'data this run reads' },
+      { sw: swNode('step'), label: `a step in this repo (${'scripts/forecast'})` },
+      { sw: swNode('model'), label: 'the foreign model — the only link that is not ours' },
+      { sw: swNode('out'), label: 'what every panel on this page is drawn from' },
+      { note: `Run ${h.generated}, git ${h.git}, timesfm ${v.timesfm} · torch ${v.torch} · numpy ${v.numpy}. ` +
+        (h.repeat ? 'The same batch forecast twice gave identical numbers, ' : 'The repeat check did not run, ') +
+        (h.reproduced ? `and a second full run reproduced every number (sha256 ${String(h.sha || '').slice(0, 12)}…).` : 'and no second full run was compared.') },
+    ]) + cmds + `<p class="p-dim">All of it: ${a(LINKS.code, 'scripts/forecast')}.</p>`;
 }
 
 function renderMethod(m) {
@@ -563,7 +622,7 @@ function renderFoot(m) {
   const h = m.head;
   const v = h.versions || {};
   return `<footer id="plate-foot">` +
-    `<p><span class="lbl">model</span>${esc(h.model)} · ${esc(h.checkpoint)} · ${esc(h.license)} · timesfm ${esc(v.timesfm)} · torch ${esc(v.torch)} · numpy ${esc(v.numpy)} · config ${esc(h.fingerprint)}</p>` +
+    `<p><span class="lbl">model</span>${esc(h.model)} · ${a(LINKS.card, h.checkpoint)} · ${esc(h.license)} · ${a(LINKS.pkg, 'timesfm')} ${esc(v.timesfm)} · torch ${esc(v.torch)} · numpy ${esc(v.numpy)} · config ${esc(h.fingerprint)}</p>` +
     `<p><span class="lbl">run</span>${esc(h.generated)} · git ${esc(h.git)} · ${esc(num(h.elapsed, 0))} s on CPU, float32` +
     (h.reproduced ? ` · reproduced bit for bit by a second full run at ${esc(h.reproduced)}` : ' · second full run: not compared') + `</p>` +
     `<p><span class="lbl">source</span>PEGELONLINE (WSV) daily archive on the <a href="https://github.com/bmmmm/pegel-visual/tree/archive">archive branch</a> · ` +

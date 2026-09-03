@@ -6,7 +6,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { BLOCKS, PANEL_IDS, TARGETS, buildModel, leadSay, parseState, renderPage, screenSummary, stateHref } from '../gate/gate.js';
+import { BLOCKS, LINKS, PANEL_IDS, TARGETS, buildModel, leadSay, parseState, renderPage, screenSummary, stateHref } from '../gate/gate.js';
 
 const ROOT = new URL('../gate/', import.meta.url).pathname;
 const load = name => JSON.parse(readFileSync(join(ROOT, name, 'report.json'), 'utf8'));
@@ -110,13 +110,14 @@ test('the curve draws three lines, the bands, the bar and a cursor, each named i
 const classesIn = html => { const out = new Set(); for (const m of html.matchAll(/class="([^"]+)"/g)) for (const c of m[1].split(/\s+/)) if (c) out.add(c); return out; };
 // not marks: layout, text, hit targets and states the key spells out in words (▸ ◂ ▴ ▾ are glyphs in the notes)
 const NOT_A_MARK = new Set(['p-block', 'row', 'pooled', 'head', 'lbl', 'rg', 'track', 'val', 'axis', 'ticks', 'mk', 'sw', 'hint', 'p-readout', 'p-dim', 'p-tabs', 'p-tabs-lbl', 'on', 'off', 'rows', 'pits', 'pit', 'nm',
-  'plot', 'vscale', 'plot-box', 'lead-bands', 'lbn', 'lead-ticks', 'clip', 'lo', 'hi', 'up', 'dn', 'vh', 'p-h2']);
+  'plot', 'vscale', 'plot-box', 'lead-bands', 'lbn', 'lead-ticks', 'clip', 'lo', 'hi', 'up', 'dn', 'vh', 'p-h2',
+  'prose', 'flow', 'fn']);  // prose/flow/fn are the model chain's containers; its four node kinds ARE marks
 test('every mark a section draws is named in that section’s key — mechanically', () => {
   let drawings = 0;
   for (const state of [...everyState, parseState('?lead=DRESDEN', '', STATIONS)]) {
     const html = renderPage(buildModel(reports, state));
-    const sections = html.split(/<details class="panel"|<section id="lead"/).slice(1).filter(s => s.includes('class="rows"') || s.includes('class="pits"') || s.includes('class="plot"'));
-    assert.ok(sections.length >= 5, 'lead, skill, error, calibration, finding 2 (and short)');
+    const sections = html.split(/<details class="panel"|<section id="lead"/).slice(1).filter(s => s.includes('class="rows"') || s.includes('class="pits"') || s.includes('class="plot"') || s.includes('class="flow"'));
+    assert.ok(sections.length >= 6, 'lead, skill, error, calibration, finding 2, the model chain (and short)');
     for (const s of sections) {
       const key = (s.match(/<dl class="p-key">[\s\S]*?<\/dl>/) || [''])[0];
       assert.ok(key, 'a section with a drawing has a key');
@@ -179,7 +180,7 @@ test('every chip and index link says what to focus, and the way back is there tw
   const index = (html.match(/<nav class="index"[\s\S]*?<\/nav>/) || [''])[0];
   assert.ok(index, 'an index');
   const links = index.match(/<a href="[^"]+" data-focus="[^"]+">/g) || [];
-  assert.equal(links.length, 7);
+  assert.equal(links.length, 8, 'one per panel');
   assert.equal((html.match(/<nav class="p-back" aria-label="back"><a href="\.\.\/">/g) || []).length, 2, 'above the title and in the foot');
   assert.ok(html.indexOf('class="p-back"') < html.indexOf('<h1'), 'the first way back precedes the title');
   assert.ok(html.includes('<h1 tabindex="-1">'), 'the h1 can take the fallback focus');
@@ -193,7 +194,7 @@ test('the panels come closed, in the order of the index, every summary a link ta
   const m = buildModel(reports, parseState(''));
   const html = renderPage(m);
   const ids = [...html.matchAll(/<details class="panel" id="([\w-]+)">/g)].map(x => x[1]);
-  assert.deepEqual(ids, ['skill', 'error', 'calib', 'clim', 'short', 'method', 'basics']);
+  assert.deepEqual(ids, ['skill', 'error', 'calib', 'clim', 'short', 'model', 'method', 'basics']);
   assert.deepEqual(m.panels.map(p => p.id), ids, 'the index is built from what is rendered');
   for (const id of ids) assert.ok(PANEL_IDS.includes(id), `${id} is a known hash`);
   assert.ok(!html.includes('<details class="panel" id="skill" open'), 'nothing is open on load');
@@ -234,7 +235,7 @@ test('the page survives a missing max or short report — one panel fewer, no de
   assert.ok(html.includes('<a href="./#skill" class="on" aria-current="true"'), 'the mid chip is current');
   assert.ok(!html.includes('Short horizon'), 'no short panel without its report');
   assert.ok(!html.includes('#short"'), 'and no index link to it');
-  assert.deepEqual(m.panels.map(p => p.id), ['skill', 'error', 'calib', 'clim', 'method', 'basics']);
+  assert.deepEqual(m.panels.map(p => p.id), ['skill', 'error', 'calib', 'clim', 'model', 'method', 'basics']);
   assert.ok(html.includes('FORECAST GATE'));
   assert.equal((html.match(/data-readout/g) || []).length, 5);
 });
@@ -291,6 +292,63 @@ test('gist, facts and basics quote the report, not a remembered number', () => {
   assert.ok(!footNav.includes('gate'), 'and the footer no longer does');
   assert.ok(page.includes('<dt>forecast gate</dt>'), 'the feature guide explains it');
   assert.equal((page.match(/href="gate\/"/g) || []).length, 2, 'app bar and guide, relative — the site lives on a subpath');
+});
+
+test('the model panel names the model, links its three sources, and never invents a number', () => {
+  const m = buildModel(reports, parseState(''));
+  const html = renderPage(m);
+  const panel = html.slice(html.indexOf('<details class="panel" id="model">'), html.indexOf('<details class="panel" id="method">'));
+  const h = reports.seasonal.mid.header;
+  // the model, said in the page's own words and backed by the run's header
+  assert.match(panel, /decoder-only, 200 million parameters/, 'what it is');
+  assert.match(panel, /<em>zero-shot<\/em>/, 'and how it was applied');
+  assert.ok(panel.includes(h.checkpoint) && panel.includes(h.model_license), 'checkpoint and licence come from the header');
+  assert.ok(panel.includes(`pinned to ${h.versions.timesfm}`), 'and the pinned package version');
+  // the three off-site sources a reader needs to check the model claim itself
+  for (const [what, href] of [['model card', LINKS.card], ['paper', LINKS.paper], ['package', LINKS.pkg], ['our code', LINKS.code]]) {
+    assert.ok(panel.includes(`href="${href}"`), `${what} is linked`);
+  }
+  assert.match(LINKS.card, /huggingface\.co\/google\/timesfm-2\.5-200m-pytorch$/, 'the card is the 2.5 checkpoint we actually load');
+  assert.match(LINKS.paper, /arxiv\.org\/abs\/2310\.10688$/, 'the decoder-only paper');
+  // every figure in the chain is the run's own, so a re-run redraws instead of lying
+  for (const [what, v] of [['context', h.protocol.context], ['horizon', h.protocol.horizon], ['step', h.protocol.step],
+    ['batch', h.forecast_config.per_core_batch_size], ['threads', h.torch_threads], ['fingerprint', h.config_fingerprint]]) {
+    assert.ok(panel.includes(String(v)) || panel.includes(String(v).replace(/\B(?=(\d{3})+(?!\d))/g, ' ')), `${what} (${v}) is drawn from the header`);
+  }
+  assert.ok(!panel.includes('2000–2025'), 'the header carries no year range, so the chain does not claim one');
+  // greping for the right number would also pass on a hard-coded one: bend the
+  // header and demand the drawing follows it
+  const bent = structuredClone(reports.seasonal.mid);
+  bent.header.protocol.context = 777;
+  bent.header.forecast_config.per_core_batch_size = 3;
+  bent.header.config_fingerprint = 'deadbeefdeadbeef';
+  const bentPanel = (html => html.slice(html.indexOf('<details class="panel" id="model">'), html.indexOf('<details class="panel" id="method">')))(
+    renderPage(buildModel({ seasonal: { mid: bent }, short: reports.short }, parseState(''))));
+  assert.ok(bentPanel.includes('777 days of context'), 'the context length is the run’s, not a literal');
+  assert.ok(bentPanel.includes('3 per batch'), 'so is the batch size');
+  assert.ok(bentPanel.includes('deadbeefdeadbeef') && !bentPanel.includes(h.config_fingerprint), 'and the fingerprint');
+});
+
+test('the chain says what our workflow does with the model, in order, and marks the one foreign link', () => {
+  const html = renderPage(buildModel(reports, parseState('')));
+  const panel = html.slice(html.indexOf('<details class="panel" id="model">'), html.indexOf('<details class="panel" id="method">'));
+  const chain = panel.slice(panel.indexOf('<ol class="flow">'), panel.indexOf('</ol>'));
+  const nodes = [...chain.matchAll(/<li class="fn (\w+)"><b>([^<]+)<\/b>/g)].map(x => [x[1], x[2]]);
+  assert.deepEqual(nodes.map(n => n[1]), [
+    'PEGELONLINE daily archive', 'loaders.py — windows', 'baselines.py — the bar',
+    'tfm.py — TimesFM 2.5', 'metrics.py — the scores', 'gate.py — the clauses', 'report.json — this page',
+  ], 'archive to page, every step of ours named by its file');
+  assert.deepEqual(nodes.map(n => n[0]), ['src', 'step', 'step', 'model', 'step', 'step', 'out']);
+  assert.equal(nodes.filter(n => n[0] === 'model').length, 1, 'exactly one foreign link');
+  // what the model is NOT given is as much a result as what it is
+  assert.match(chain, /no rain, no upstream gauge, no calendar feature/);
+  assert.match(chain, /the point forecast is the median/, 'which channel gets scored');
+  // and the commands, so a reader can re-run it — in their own fold, not counted as a table twin
+  const cmds = panel.slice(panel.indexOf('<details class="cmds">'));
+  assert.match(cmds, /uv run python backtest\.py --horizon seasonal --target mid/);
+  assert.match(cmds, /uv run python gate\.py --results/);
+  assert.match(cmds, /--compare/, 'including the second run that must reproduce it');
+  assert.match(cmds, /CI installs the same environment <em>without<\/em> the model group/, 'and that CI does not run the model');
 });
 
 test('nothing the deploy stamps appears here, and no closing script tag is ever emitted', () => {

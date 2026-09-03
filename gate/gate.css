@@ -224,8 +224,8 @@ main {
 .meter > span { position: absolute; inset: 0 auto 0 0; background: repeating-linear-gradient(45deg, var(--water) 0 3px, var(--water-line) 3px 4px); }
 
 /* ---- tables: the accessible twin of every chart ---- */
-details.tbl { margin-top: 0.8em; font-size: 0.8em; }
-details.tbl summary { cursor: pointer; color: var(--mid); font-family: var(--font-data); }
+details.tbl, details.cmds { margin-top: 0.8em; font-size: 0.8em; }
+details.tbl summary, details.cmds summary { cursor: pointer; color: var(--mid); font-family: var(--font-data); }
 table { border-collapse: collapse; margin-top: 0.5em; font-family: var(--font-data); font-variant-numeric: tabular-nums; }
 th, td { text-align: right; padding: 0.15em 0.9ch; border-bottom: 1px solid var(--rule); white-space: nowrap; }
 th:first-child, td:first-child { text-align: left; }
@@ -311,6 +311,44 @@ th:first-child, td:first-child { text-align: left; }
 .index a:hover, .index a:focus-visible { background: var(--ink); color: var(--paper); }
 .index a::before { content: '→ '; }
 .index .hook { color: var(--mid); font-size: 0.88em; }
+
+/* ---- the chain: archive -> windows -> baselines -> model -> scores -> verdict
+   One node per step, drawn as a list so a screen reader hears the order. The
+   four kinds differ by BORDER, not by hue — dashed for what comes in, a
+   hairline for our own steps, a double rule for the one foreign link, and the
+   result carries a fill as well. The swatches in the key are the same classes
+   on a 12 px box, so a node that changes changes in both places. ---- */
+.flow { list-style: none; margin: 0.9em 0 1.1em; padding: 0; display: grid; gap: 0.75em; max-width: 56rem; }
+.fn {
+  position: relative;
+  border: 1px solid var(--rule);
+  padding: 0.5em 0.75em;
+  display: grid;
+  gap: 0.1em;
+  font-size: 0.9em;
+}
+/* the link of the chain: a hairline from the node above into this one */
+.fn + .fn::before {
+  content: '';
+  position: absolute;
+  left: 1.1em;
+  top: -0.75em;
+  height: 0.75em;
+  border-left: 1px solid var(--ink);
+}
+.fn b { font-family: var(--font-data); font-weight: 600; }
+.fn > span { color: var(--mid); line-height: 1.45; }
+.fn a { color: inherit; }
+.fn.src { border-style: dashed; }
+.fn.model { border: 2px solid var(--ink); background: color-mix(in oklab, var(--water) 40%, transparent); }
+.fn.out { background: color-mix(in oklab, var(--dry) 40%, transparent); }
+/* the swatch is the same node at 12 px: no padding, no chain link, no text */
+.sw.fn { padding: 0; display: inline-block; width: 12px; height: 12px; gap: 0; }
+.sw.fn::before { content: none; }
+.flow + .p-key { margin-top: 0.2em; }
+/* the commands, in the same fold the tables use */
+.tblwrap pre { margin: 0.2em 0 0.6em; overflow-x: auto; }
+.tblwrap code { font-family: var(--font-data); font-size: 0.85em; line-height: 1.6; white-space: pre; }
 
 /* ---- panels: closed sheets with a heading for a lid ---- */
 details.panel { margin-top: 1.2em; }
