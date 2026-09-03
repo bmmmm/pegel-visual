@@ -370,7 +370,7 @@ function renderLead(m) {
     Array.from({ length: L.H }, (_, i) => `<tr><td>${i + 1}</td><td>×${r2(L.series.tfm[i])}</td><td>×${r2(L.series.clim[i])}</td><td>×${r2(L.series.persist[i])}</td><td>${num(L.blendCm[i], 1)}</td></tr>`).join('') +
     `</tbody></table></div></details>`;
   return `<section id="lead" class="p-block">${head}` +
-    `<p class="p-dim">Each method's error divided by the blend's, day by day out to ${esc(L.H)}: below the line is better than the blend. The model wins early and hands over to the calendar; persistence never recovers. The hatched band is the block the filter row picked; the vertical rule is a cursor — drag it, or use the arrow keys.</p>` +
+    `<p class="p-dim">Each method's error divided by the blend's, day by day out to ${esc(L.H)}: below the line is better than the blend. The model wins early and hands over to the calendar; persistence never recovers. The hatched band is the horizon block in view — the band labels switch it, as does the filter row further down; the vertical rule is a cursor — drag it, or use the arrow keys.</p>` +
     chips +
     `<div class="plot"><div class="lead-bands">${bandLabels}</div><div class="vscale" aria-hidden="true">${vscale}</div><div class="plot-box">${bands}${svg}${clips}</div>` +
     `<div class="ticks lead-ticks" aria-hidden="true">${ticks}</div></div>` +
@@ -380,7 +380,7 @@ function renderLead(m) {
       { sw: swLine('ln ln-clim'), label: 'climatology (day-of-year mean of earlier years)' },
       { sw: swLine('ln ln-persist'), label: 'persistence — today’s level, held' },
       { sw: swLine('ln-blend'), label: 'the blend, ×1.00 — the bar' },
-      { sw: '<span class="sw"><span class="lb on" style="position:relative;display:block;height:12px;width:12px"></span></span>', label: 'the horizon block picked in the filter row' },
+      { sw: '<span class="sw"><span class="lb on" style="position:relative;display:block;height:12px;width:12px"></span></span>', label: 'the horizon block in view — pick one by its label, or in the filter row' },
       { sw: '<span class="sw"><span class="lb" style="position:relative;display:block;height:12px;width:12px"></span></span>', label: 'block boundaries — days 14 and 30, each labelled with its skill' },
       { sw: '<span class="sw"><svg viewBox="0 0 12 12" aria-hidden="true"><line class="ln-cur" x1="6" y1="0" x2="6" y2="12"/></svg></span>', label: 'the cursor; the line under the chart reads its day' },
       { note: `The y axis is logarithmic, ×${LEAD_DOMAIN[0]} to ×${LEAD_DOMAIN[1]}; a ▴ or ▾ marks days a curve runs above or below the frame (climatology in its first days).` },

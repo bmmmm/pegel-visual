@@ -54,6 +54,12 @@
   measured ≥4.5:1 on paper. Never give a mark only a fill token.
 - **Meaning never rides on hue alone** — bands carry a hatch, states carry a
   glyph, directions carry both. The heat ramp stays a lightness ramp.
+- **One picture, one estimator.** A number printed over a drawing comes from
+  the same pooling as the drawing: the gate's lead curve is the median of five
+  gauges' ratios, so its band labels are the median of their block skills, not
+  clause A1's cm-pooled figure — a review caught the curve sitting on ×1.00
+  under a label that said −0.04. Where two estimators must coexist, the key
+  says which is which.
 - **A gauge does not necessarily report centimetres.** 69 of 737 W series are
   metres above a datum (`m+NN`, `m+PNP`); the unit rides in the same `W.json`
   the client fetches. Print a level with `fmtLevel`/`levelWithUnit` in the

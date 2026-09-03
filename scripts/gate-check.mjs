@@ -48,16 +48,20 @@ async function chrome() {
   if (args.cdp) return args.cdp;
   const port = await freePort();
   const profile = mkdtempSync(join(tmpdir(), 'gate-check-'));
+  // CI runners: no user namespace for Chrome's own sandbox, and /dev/shm is tiny
   const p = spawn(CHROME, ['--headless=new', '--disable-gpu', '--no-first-run', '--no-default-browser-check', `--user-data-dir=${profile}`,
-    `--remote-debugging-port=${port}`, '--remote-allow-origins=*', ...(process.env.CI ? ['--no-sandbox'] : []), 'about:blank'], { stdio: ['ignore', 'ignore', 'pipe'] });
+    `--remote-debugging-port=${port}`, '--remote-allow-origins=*', ...(process.env.CI ? ['--no-sandbox', '--disable-dev-shm-usage'] : []), 'about:blank'], { stdio: ['ignore', 'ignore', 'pipe'] });
   children.push(p);
-  p.on('exit', () => rmSync(profile, { recursive: true, force: true }));
-  console.log(`chrome pid ${p.pid} on port ${port}`);
-  for (let i = 0; i < 50; i++) {
-    await sleep(200);
+  let stderr = '';
+  p.stderr.on('data', d => { stderr += d; if (stderr.length > 20000) stderr = stderr.slice(-20000); });  // drained, or a chatty Chrome blocks on a full pipe
+  let exited = null;
+  p.on('exit', (code, signal) => { exited = `${code ?? signal}`; rmSync(profile, { recursive: true, force: true }); });
+  console.log(`chrome ${CHROME} pid ${p.pid} on port ${port}`);
+  for (let i = 0; i < 120 && exited == null; i++) {
+    await sleep(250);
     try { await fetch(`http://127.0.0.1:${port}/json/version`); return `http://127.0.0.1:${port}`; } catch { /* not up yet */ }
   }
-  throw new Error('Chrome did not open its debugging port');
+  throw new Error(`Chrome did not open its debugging port (exit ${exited ?? 'still running'}); stderr:\n${stderr.trim().split('\n').slice(-25).join('\n')}`);
 }
 
 // a forty-line CDP client over the global WebSocket
