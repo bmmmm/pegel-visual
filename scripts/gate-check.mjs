@@ -144,10 +144,14 @@ async function run(cdp, url, { name, width, height, mobile }) {
     const BASELINES = 2;  // persistence and climatology, drawn once for every model
     const paths = () => s.evaluate('document.querySelectorAll("#lead svg[data-lead] path.ln").length');
     check((await paths()) === modelChips + BASELINES, `all ${modelChips} models are drawn beside the two baselines`, `${await paths()} lines`);
-    // no two model lines may be told apart by colour alone
-    const dashes = await s.evaluate('JSON.stringify([...document.querySelectorAll("#lead path.ln:not(.ln-persist):not(.ln-clim)")].map(p => getComputedStyle(p).strokeDasharray))');
-    const dash = JSON.parse(dashes);
-    check(dash.length === modelChips && new Set(dash).size === dash.length, 'and each told apart by its own dash, not its hue', dashes);
+    // no two model lines may be told apart by colour alone — nor by dash alone:
+    // where two candidates lie on each other a dash pattern is unreadable, so
+    // each carries BOTH. This resolves the real cascade, which is the only place
+    // `--m2: var(--water-line)` — the state this sheet shipped in — shows up.
+    const strokes = await s.evaluate('JSON.stringify([...document.querySelectorAll("#lead path.ln:not(.ln-persist):not(.ln-clim)")].map(p => [getComputedStyle(p).strokeDasharray, getComputedStyle(p).stroke]))');
+    const drawn = JSON.parse(strokes);
+    check(drawn.length === modelChips && new Set(drawn.map(d => d[0])).size === drawn.length, 'and each told apart by its own dash', strokes);
+    check(new Set(drawn.map(d => d[1])).size === drawn.length, 'and by its own colour, so the two survive lying on each other', strokes);
     // every swatch in the key must actually show ink — a dasharray that starts on
     // a gap, or a mark placed off its own viewBox, leaves an empty 12 px box that
     // no Node test can see
@@ -164,12 +168,19 @@ async function run(cdp, url, { name, width, height, mobile }) {
     // and it must still LOOK like the model in view. Painted like an ordinary
     // unavailable chip it reads as greyed out while the model switched off beside
     // it reads as available — the state inverted, which no class assertion sees.
-    const paint = await s.evaluate(`JSON.stringify({
-      locked: getComputedStyle(document.querySelector('${chipRow} span.off[data-ctl="model"]')).backgroundColor,
-      active: getComputedStyle(document.querySelector('${chipRow} a[data-ctl="block"].on')).backgroundColor,
-      off: getComputedStyle(document.querySelector('${chipRow} a[data-ctl="block"]:not(.on)')).backgroundColor })`);
+    // Its ground is the model's own hue, so this measures the chip against the
+    // CURVE it names rather than against some other lit chip: the one assertion
+    // that catches a name and a line drifting onto different colours.
+    const paint = await s.evaluate(`JSON.stringify((() => {
+      const chip = document.querySelector('${chipRow} span.off[data-ctl="model"]');
+      const mark = [...chip.classList].find(c => c.startsWith('m-'));
+      const line = mark && document.querySelector('#lead svg[data-lead] path.ln-' + mark.slice(2));
+      return { mark, locked: getComputedStyle(chip).backgroundColor,
+        curve: line ? getComputedStyle(line).stroke : null,
+        off: getComputedStyle(document.querySelector('${chipRow} a[data-ctl="block"]:not(.on)')).backgroundColor };
+    })())`);
     const paints = JSON.parse(paint);
-    check(paints.locked === paints.active && paints.locked !== paints.off, 'and it is painted like the chip that is on, not like one that is unavailable', paint);
+    check(paints.locked === paints.curve && paints.locked !== paints.off, 'and it is painted in the colour of the curve it names, not like one that is unavailable', paint);
     const title = await s.evaluate('document.querySelector("details#skill summary").textContent');
     check(title.includes(String(left).replace(/[^\x20-\x7e].*$/, '').trim()), 'and the panels below name the model they now speak for', title);
     const cols = await s.evaluate('(() => { const d = document.querySelector("details#error details.tbl"); d.open = true; const th = [...d.querySelectorAll("thead th")].map(x => x.textContent); const td = [...d.querySelectorAll("tbody tr:first-child td")].map(x => x.textContent); d.open = false; return JSON.stringify({ th, dash: td.filter(x => x === "—").length }); })()');
@@ -323,6 +334,64 @@ async function run(cdp, url, { name, width, height, mobile }) {
   await s.close();
 }
 
+// The palette, resolved by the real cascade, in BOTH schemes. The Node test can
+// only compare declaration text — `--m2: light-dark(#8c0f42, #9fd4ec)` puts two
+// candidates in one blue for every dark-mode reader while every string in the
+// stylesheet still differs. Only a browser sees that, and only if it is asked in
+// the scheme where it happens: the runner's own scheme is whatever the machine
+// reports (dark on this laptop, light on a CI runner), so neither is assumed.
+async function palette(cdp, url) {
+  for (const scheme of ['light', 'dark']) {
+    console.log(`\n== palette (${scheme})`);
+    const s = await session(cdp);
+    await s.send('Page.enable');
+    await s.send('Runtime.enable');
+    await s.send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: scheme }] });
+    await s.send('Emulation.setDeviceMetricsOverride', { width: 1240, height: 900, deviceScaleFactor: 1, mobile: false });
+    await s.send('Page.navigate', { url });
+    for (let i = 0; i < 40 && !(await s.evaluate('!!document.querySelector("#lead svg[data-lead]")')); i++) await sleep(250);
+    check(await s.evaluate(`matchMedia("(prefers-color-scheme: ${scheme})").matches`), `the page really is in ${scheme}`);
+    // one row per model: its chip, its curve, the name in the verdict list
+    const seen = await s.evaluate(`JSON.stringify([...document.querySelectorAll('nav.p-tabs [data-ctl="model"]')].map(chip => {
+      const mark = ([...chip.classList].find(c => c.startsWith('m-')) || '').slice(2);
+      const line = document.querySelector('#lead svg[data-lead] path.ln-' + mark);
+      const name = [...document.querySelectorAll('.vmodels li')].find(li => li.classList.contains('m-' + mark));
+      const cs = getComputedStyle(chip), lit = chip.classList.contains('on');
+      return { mark, label: chip.textContent.trim(),
+        chip: lit ? cs.backgroundColor : cs.color,
+        curve: line ? getComputedStyle(line).stroke : null,
+        dash: line ? getComputedStyle(line).strokeDasharray : null,
+        name: name ? getComputedStyle(name.querySelector('.nm')).color : null };
+    }))`);
+    const rows = JSON.parse(seen);
+    check(rows.length >= 1 && rows.every(r => r.mark), `every model chip carries a mark class`, seen);
+    for (const r of rows) {
+      check(r.curve && r.chip === r.curve, `${r.label}: the chip and the curve are one colour`, `${r.chip} vs ${r.curve}`);
+      check(r.name === r.curve, `${r.label}: and so is its name in the verdict list`, `${r.name} vs ${r.curve}`);
+    }
+    const curves = rows.map(r => r.curve).filter(Boolean);
+    check(new Set(curves).size === curves.length, 'no two candidates resolve to one colour in this scheme', JSON.stringify(curves));
+    const dashes = rows.map(r => r.dash).filter(Boolean);
+    check(new Set(dashes).size === dashes.length, 'nor to one dash', JSON.stringify(dashes));
+    // `--mc` inherits, and the locked-on chip falls back to the ink only when
+    // nobody set it. No report reaches "a target chip that is locked on", so the
+    // state is built here: a block chip must never come out in a model's hue.
+    const spill = await s.evaluate(`JSON.stringify((() => {
+      const c = document.querySelector('nav.p-tabs a[data-ctl="block"]:not(.on)');
+      const was = c.className;
+      c.className = 'off on';
+      const bg = getComputedStyle(c).backgroundColor;
+      c.className = was;
+      const ink = getComputedStyle(document.body).color;
+      const model = getComputedStyle(document.querySelector('#lead svg[data-lead] path.ln-tfm')).stroke;
+      return { bg, ink, model };
+    })())`);
+    const sp = JSON.parse(spill);
+    check(sp.bg === sp.ink && sp.bg !== sp.model, 'a locked-on chip that is not a model keeps the ink, not a candidate’s hue', spill);
+    await s.close();
+  }
+}
+
 const url = await serve();
 const cdp = await chrome();
 console.log(`page ${url}\ncdp  ${cdp}\nshots ${shots}`);
@@ -330,6 +399,7 @@ try {
   for (const vp of [{ name: 'desktop', width: 1240, height: 900, mobile: false }, { name: 'phone', width: 390, height: 844, mobile: true }]) {
     try { await run(cdp, url, vp); } catch (e) { check(false, `${vp.name}: the run threw`, String(e.stack || e).split('\n').slice(0, 3).join(' | ')); }
   }
+  try { await palette(cdp, url); } catch (e) { check(false, 'the palette pass threw', String(e.stack || e).split('\n').slice(0, 3).join(' | ')); }
 } finally {
   for (const c of children) c.kill();
 }

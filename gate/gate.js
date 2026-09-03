@@ -51,8 +51,11 @@ export const PANEL_IDS = ['lead', 'skill', 'error', 'calib', 'clim', 'short', 'm
 // carry one number per gauge, speak for the primary and say its name.
 //
 // A model's mark is bound to the MODEL, not to its position, so a line does not
-// change shape when its neighbour is switched off. Meaning never rides on hue
-// alone: the second model's curve is dashed and its error mark is hollow.
+// change shape when its neighbour is switched off. Each mark carries a shape, a
+// dash pattern AND a hue of its own (gate.css binds `--m1…--m4` to these names),
+// because neither half is enough on its own: hue alone dies in greyscale, and a
+// dash pattern is unreadable exactly where two candidates lie on each other —
+// which on this sheet is everywhere.
 export const MODEL_MARKS = ['tfm', 'tfm-alt', 'tfm-3', 'tfm-4'];
 // what the page falls back to when models.json is missing — the shipped model as
 // it was addressed before there was a manifest
@@ -394,12 +397,18 @@ function plateKey(items) {
     `<dd><span class="lg">${it.sw}<span class="lgn">${esc(it.label)}</span></span></dd>`).join('') + '</dl>';
 }
 
+// `cls` adds the chip's own classes (a model chip carries its `m-<mark>`, which
+// is where its hue comes from) and `sw` a swatch the caller already built — the
+// same swatch the key draws, so a chip names the line it switches.
 function ctlRow(label, items, aria) {
+  // ONE class join for both branches: the state-inversion bug the chip tests
+  // guard against came from a link and a disabled span drifting apart
+  const cls = (it, state) => [it.cls, state].filter(Boolean).join(' ');
   return `<nav class="p-tabs"${attr('aria-label', aria || label)}>` +
     (label ? `<span class="p-tabs-lbl">${esc(label)}</span>` : '') +
     items.map(it => it.lbl ? `<span class="p-tabs-lbl">${esc(it.lbl)}</span>` :
-      it.off ? `<span${attr('class', it.on ? 'off on' : 'off')} aria-disabled="true"${it.on ? ' aria-current="true"' : ''}${attr('title', it.title)}${attr('data-ctl', it.ctl)}>${esc(it.off)}</span>` :
-      `<a${attr('href', it.href)}${attr('class', it.on ? 'on' : '')}${it.on ? ' aria-current="true"' : ''}${attr('title', it.title)}${attr('data-focus', it.focus)}${attr('data-ctl', it.ctl)}>${esc(it.label)}</a>`).join('') +
+      it.off ? `<span${attr('class', cls(it, it.on ? 'off on' : 'off'))} aria-disabled="true"${it.on ? ' aria-current="true"' : ''}${attr('title', it.title)}${attr('data-ctl', it.ctl)}>${it.sw || ''}${esc(it.off)}</span>` :
+      `<a${attr('href', it.href)}${attr('class', cls(it, it.on ? 'on' : ''))}${it.on ? ' aria-current="true"' : ''}${attr('title', it.title)}${attr('data-focus', it.focus)}${attr('data-ctl', it.ctl)}>${it.sw || ''}${esc(it.label)}</a>`).join('') +
     '</nav>';
 }
 
@@ -440,7 +449,8 @@ function renderVerdict(m) {
   // with more than one candidate in view the headline verdict is the primary's,
   // and each model states its own underneath rather than sharing one word
   const others = m.verdicts.length > 1 ? `<ul class="vmodels" aria-label="verdict per model">` + m.verdicts.map(v =>
-    `<li><span class="nm">${esc(v.label)}${v.shippable ? '' : ` <span class="nc" title="non-commercial weights: measured, never shipped">${NC_GLYPH}</span>`}</span>` +
+    `<li${attr('class', v.mark ? `m-${v.mark}` : '')}>${v.mark ? swLine(`ln ln-${v.mark}`) : ''}` +
+    `<span class="nm">${esc(v.label)}${v.shippable ? '' : ` <span class="nc" title="non-commercial weights: measured, never shipped">${NC_GLYPH}</span>`}</span>` +
     `<span class="vw ${v.verdict === 'SHIP' ? 'pass' : 'fail'}">${esc(v.verdict)}</span>` +
     `<span class="vn">${esc(v.passed)} of ${esc(v.total)} clauses</span></li>`).join('') + `</ul>` : '';
   return `<div class="verdict"><span class="word">${esc(m.verdict)}</span><span class="why">${esc(why)}</span></div>` + others +
@@ -499,7 +509,7 @@ function renderLead(m) {
   // the band labels are the block chips of this chart: each one is the same link the filter row carries
   const bandLabels = L.blocks.map(b => `<a${attr('href', stateHref(s, { block: b.name, panel: 'lead' }))}${attr('class', b.on ? 'on' : '')}${b.on ? ' aria-current="true"' : ''} data-focus="lead"${attr('style', `left:${((b.from - 1) / L.H * 100).toFixed(2)}%;width:${((b.to - b.from + 1) / L.H * 100).toFixed(2)}%`)}${attr('title', `${BLOCK_LABEL[b.name]}: ${L.curves.length > 1 ? `${m.primary ? m.primary.label : 'the primary model'} skill` : 'skill'} ${signed(b.ss, 3)}${L.station === 'pooled' ? ', median of the five gauges' : ''}`)}><span class="lbn">${esc(`${b.from}–${b.to}`)}</span><b>${esc(signed(b.ss, 2))}</b></a>`).join('');
   // the baselines are the same windows for every model, so they are drawn once;
-  // each model in view adds its own line, told apart by its dash, not its hue
+  // each model in view adds its own line, told apart by its dash and its hue
   const paths = [
     ...['persist', 'clim'].map(k => ({ cls: `ln-${k}`, name: k === 'clim' ? 'climatology' : 'persistence', ...leadPath(L.series[k], L.H) })),
     ...L.curves.map(c => ({ cls: `ln-${c.mark}`, name: c.label, ...leadPath(c.ratios, L.H) })),
@@ -540,7 +550,7 @@ function renderLead(m) {
       { sw: '<span class="sw"><span class="lb" style="position:relative;display:block;height:12px;width:12px"></span></span>', label: 'block boundaries — days 14 and 30, each labelled with its skill' },
       { sw: '<span class="sw"><svg viewBox="0 0 12 12" aria-hidden="true"><line class="ln-cur" x1="6" y1="0" x2="6" y2="12"/></svg></span>', label: 'the cursor; the line under the chart reads its day' },
       { note: `The y axis is logarithmic, ×${LEAD_DOMAIN[0]} to ×${LEAD_DOMAIN[1]}; a ▴ or ▾ marks days a curve runs above or below the frame (climatology in its first days).` },
-      L.curves.length > 1 && L.gap ? { note: `Both candidates are drawn here, and they lie on each other: their widest daily gap is ${(L.gap.d * 100).toFixed(1)} points of the blend's own error, on day ${L.gap.day}, where ${L.gap.ahead} is the lower of the two. That closeness IS the finding — this picture cannot separate them, and the skill panel's numbers barely can. The band labels print ${m.primary ? m.primary.label : 'the first curve'}'s skill, and the panels below — which carry one number per gauge — speak for it too; switch the others off to read this sheet for one of them alone.` } : null,
+      L.curves.length > 1 && L.gap ? { note: `Both candidates are drawn here, and they lie on each other: their widest daily gap is ${(L.gap.d * 100).toFixed(1)} points of the blend's own error, on day ${L.gap.day}, where ${L.gap.ahead} is the lower of the two. That closeness IS the finding — a hue and a dash each tell you WHICH curve you are on, but nothing separates them by value, and the skill panel's numbers barely can. The band labels print ${m.primary ? m.primary.label : 'the first curve'}'s skill, and the panels below — which carry one number per gauge — speak for it too; switch the others off to read this sheet for one of them alone.` } : null,
       L.station === 'pooled' ? { note: 'Pooled here means the median of the five regime gauges — of their day-by-day ratios in the curve and of their block skills in the band labels — so the Rhine and the Elbe do not outvote the Saar by their centimetres. Clause A1 in the facts pools centimetres instead; the blend MAE in the readout is that cm-pooled figure.' } : null,
     ]) + table + '</section>';
 }
@@ -571,11 +581,19 @@ function renderControls(m) {
   const modelChips = m.models.length < 2 ? [] : [
     ...m.models.map(mo => {
       const label = mo.label + (mo.shippable === false ? ` ${NC_GLYPH}` : '');
-      if (mo.missing) return { ctl: 'model', off: label, title: `${mo.label} has no ${TARGETS[s.target]} report — it cannot be drawn here` };
-      if (mo.on && on.length === 1) return { ctl: 'model', off: label, on: true, title: `${mo.label} is the only model in view — switch another on first` };
+      // the chip wears the model's hue and its curve: `m-<mark>` sets --mc for
+      // the whole chip, the swatch repeats the dash the drawing uses, so the
+      // name and the line it switches are the same mark in two places
+      const cls = mo.mark ? `mchip m-${mo.mark}` : null;
+      const sw = mo.mark ? swLine(`ln ln-${mo.mark}`) : '';
+      // a model with no report for this target has no curve on the sheet, so its
+      // chip carries no swatch either — a line swatch pointing at nothing drawn
+      // is the one thing worse than a chip with no mark at all
+      if (mo.missing) return { ctl: 'model', cls, off: label, title: `${mo.label} has no ${TARGETS[s.target]} report — it cannot be drawn here` };
+      if (mo.on && on.length === 1) return { ctl: 'model', cls, sw, off: label, on: true, title: `${mo.label} is the only model in view — switch another on first` };
       const next = mo.on ? on.filter(k => k !== mo.key) : m.models.filter(x => x.on || x.key === mo.key).map(x => x.key);
       return {
-        ctl: 'model',
+        ctl: 'model', cls, sw,
         href: stateHref(s, { models: next.length === m.models.length ? null : next, panel: 'lead' }),
         label, on: mo.on, focus: 'lead',
         title: mo.on ? `stop drawing ${mo.label}` : `draw ${mo.label} too${mo.shippable === false ? ' — measured, never shipped' : ''}`,

@@ -425,6 +425,13 @@ test('the model chips are state in the URL, and the last one on cannot be switch
   const row = chipRow(renderPage(buildModel(reports, parseState('', '', null, MODEL_KEYS))));
   assert.ok(row, 'the chips live in the one filter row, not a nav of their own');
   for (const mo of MANIFEST.models) assert.ok(row.includes(mo.label), `${mo.key} has a chip`);
+  // and each carries the curve it switches — the chip's hue alone would be a
+  // colour with nothing to attach it to, and hue alone is not how this sheet means
+  for (const mo of MANIFEST.models) {
+    const mark = markOf(MANIFEST.models, mo.key);
+    assert.match(row, new RegExp(`class="mchip m-${mark}[^"]*"[^>]*>\\s*<span class="sw"><svg[^>]*><line class="ln ln-${mark}"`),
+      `${mo.key}'s chip shows its own line, in its own dash`);
+  }
 
   // with one model left on, its own chip is disabled rather than gone: a control
   // that vanishes when you use it cannot be found again, and an empty sheet is
@@ -432,13 +439,17 @@ test('the model chips are state in the URL, and the last one on cannot be switch
   const alone = renderPage(buildModel(reports, parseState('?models=3p0', '', null, MODEL_KEYS)));
   // disabled AND still marked current: the model in view must not be painted
   // like an unavailable one while the model switched off looks available
-  assert.match(chipRow(alone), /<span class="off on" aria-disabled="true" aria-current="true" title="TimesFM 3\.0 is the only model in view[^"]*" data-ctl="model">TimesFM 3\.0/);
+  assert.match(chipRow(alone), /<span class="mchip m-[a-z0-9-]+ off on" aria-disabled="true" aria-current="true" title="TimesFM 3\.0 is the only model in view[^"]*" data-ctl="model">.*?TimesFM 3\.0/);
   // an UNAVAILABLE chip stays plainly off — the two states must not look alike
   const noMax = JSON.parse(JSON.stringify(reports));
   delete noMax.byKey[MODEL_KEYS.find(k => k !== MANIFEST.shipped)].seasonal.max;
   const rowMax = chipRow(renderPage(buildModel(noMax, parseState('?target=max', '', null, MODEL_KEYS))));
-  assert.ok(rowMax.includes('<span class="off" aria-disabled="true"'), 'unavailable is a different state from locked-on');
-  assert.ok(!rowMax.includes('class="off on"'), 'and it is not marked current');
+  assert.match(rowMax, /<span class="mchip m-[a-z0-9-]+ off" aria-disabled="true"/, 'unavailable is a different state from locked-on');
+  const dead = (rowMax.match(/<span class="mchip[^"]*off"[\s\S]*?<\/span>/) || [''])[0];
+  assert.ok(dead, 'the dead chip is one element, and these read it, not the row around it');
+  assert.ok(!/aria-current/.test(dead), 'and it is not marked current');
+  // …and it shows no curve swatch: the model it names is not drawn on this sheet
+  assert.ok(!dead.includes('class="sw"'), 'a dead chip does not advertise a line that is nowhere in the drawing');
   assert.ok(chipRow(alone).includes('title="draw TimesFM 2.5 too"'), 'and the other one invites you back');
   // switching the second one on returns to the parameter-free default
   assert.ok(chipRow(alone).includes('href="./#lead"'), 'the way back is the bare URL');
@@ -576,6 +587,148 @@ test('every candidate gets a mark of its own, or none at all', () => {
   assert.ok(MODEL_MARKS.length >= MANIFEST.models.length, 'the manifest fits inside the marks that exist');
 });
 
+// A mark of its own is only half of it. For as long as there were two candidates
+// all four marks resolved to the SAME --water-line, so the sheet drew two curves
+// that lie on each other in one hue and asked the reader to follow a dash pattern
+// through the overlap. This reads the stylesheet the browser reads and demands a
+// colour of its own per mark — for the line, for the point, and for the `--mc`
+// every label that names the model inherits.
+const CSS = readFileSync(join(ROOT, 'gate.css'), 'utf8');
+function modelColours(css) {
+  // comments first, or every selector comes back with the paragraph above it attached
+  const flat = css.replace(/\/\*[\s\S]*?\*\//g, ' ');
+  const rules = [];
+  for (const r of flat.matchAll(/([^{}]+)\{([^{}]*)\}/g)) for (const sel of r[1].split(',').map(s => s.trim())) rules.push([sel, r[2]]);
+  // LAST wins, both ways the cascade does: a later declaration inside one body,
+  // and a later rule for the same selector. Reading the first of either is how a
+  // parser stays green while the browser paints something else.
+  const declOf = (body, name) => {
+    let last = null;
+    for (const d of body.matchAll(new RegExp(`(?:^|;)\\s*${name}\\s*:\\s*([^;]+)`, 'g'))) last = d[1].trim();
+    return last;
+  };
+  const prop = (sel, name) => {
+    const hits = rules.filter(([s]) => s === sel);
+    assert.ok(hits.length, `gate.css has no rule for ${sel}`);
+    let last = null;
+    for (const [, body] of hits) { const d = declOf(body, name); if (d != null) last = d; }
+    return last;
+  };
+  // every rule that could repaint a CURVE, whatever its selector — a more
+  // specific `.plot-box .ln-tfm-alt { stroke: … }` bypasses a lookup keyed on
+  // the plain class name. Only `.ln-*`: on a point mark the stroke is the ink
+  // outline around the fill, not the model's identity.
+  const touching = mk => rules
+    .filter(([s]) => new RegExp(`(?:^|[\\s>+~.])ln-${mk}(?![a-z0-9-])`).test(s))
+    .map(([s, body]) => [s, declOf(body, 'stroke')])
+    .filter(([, d]) => d != null);
+  const rootBody = rules.filter(([s]) => s === ':root').map(([, b]) => b).join(';');
+  const tokens = {};
+  for (const t of rootBody.matchAll(/(--m\d)\s*:\s*([^;]+)/g)) tokens[t[1]] = t[2].trim();
+  // the token's own two hex values, so the test can measure colour, not text
+  const hexes = {};
+  for (const [k, v] of Object.entries(tokens)) {
+    const src = v.startsWith('var(') ? (rootBody.match(new RegExp(`${v.slice(4, -1).trim()}\\s*:\\s*([^;]+)`)) || [, ''])[1] : v;
+    const hit = String(src).match(/light-dark\(\s*(#[0-9a-f]{6})\s*,\s*(#[0-9a-f]{6})\s*\)/i);
+    if (hit) hexes[k] = { light: hit[1].toLowerCase(), dark: hit[2].toLowerCase() };
+  }
+  return { tokens, hexes,
+    marks: MODEL_MARKS.map(mk => ({
+      mk,
+      mc: prop(`.m-${mk}`, '--mc'),
+      line: prop(`.ln-${mk}`, 'stroke'),
+      // the fourth mark is drawn as strokes, not a filled shape, so its colour rides there
+      point: prop(`.mk-${mk}`, 'fill') === 'none' ? prop(`.mk-${mk}`, 'stroke') : prop(`.mk-${mk}`, 'fill'),
+      strokes: touching(mk),
+    })),
+  };
+}
+const distinct = (list, pick) => new Set(list.map(pick)).size;
+
+// WCAG 2.x relative luminance, and OKLCH hue for how far two marks sit apart on
+// the wheel. Both live here rather than in a comment in gate.css: a number a
+// stylesheet only claims is a number nothing keeps true.
+const chan = h => [1, 3, 5].map(i => parseInt(h.slice(i, i + 2), 16) / 255);
+const lin = c => c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+const relLum = h => { const [r, g, b] = chan(h).map(lin); return 0.2126 * r + 0.7152 * g + 0.0722 * b; };
+const wcag = (a, b) => { const [hi, lo] = [relLum(a), relLum(b)].sort((x, y) => y - x); return (hi + 0.05) / (lo + 0.05); };
+function oklchHue(h) {
+  const [r, g, b] = chan(h).map(lin);
+  const l = Math.cbrt(0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b);
+  const m = Math.cbrt(0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b);
+  const s = Math.cbrt(0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b);
+  const A = 1.9779984951 * l - 2.4285922050 * m + 0.4505937099 * s;
+  const B = 0.0259040371 * l + 0.7827717662 * m - 0.8086757660 * s;
+  return (Math.atan2(B, A) * 180 / Math.PI + 360) % 360;
+}
+const hueGap = (a, b) => { const d = Math.abs(oklchHue(a) - oklchHue(b)) % 360; return d > 180 ? 360 - d : d; };
+
+test('every mark carries a colour of its own, and no two candidates share one', () => {
+  const { tokens, marks } = modelColours(CSS);
+  assert.equal(Object.keys(tokens).length, MODEL_MARKS.length, 'one --m token per mark slot, declared on :root');
+  for (const m of marks) {
+    assert.ok(m.mc && m.line && m.point, `${m.mk}: --mc, its line and its point all name a colour`);
+    assert.equal(m.mc, m.line, `${m.mk}: the label's hue IS the curve's hue`);
+    assert.equal(m.mc, m.point, `${m.mk}: and the point mark's too`);
+    assert.match(m.mc, /^var\(--m\d\)$/, `${m.mk} resolves to one of the model tokens, not to a shared one`);
+    // …and NOTHING else repaints it. A rule with a longer selector wins in the
+    // browser and is invisible to a lookup keyed on the plain class name.
+    assert.deepEqual(m.strokes.filter(([, d]) => d !== m.line), [],
+      `${m.mk}: a second rule paints its stroke something else`);
+  }
+  assert.equal(distinct(marks, m => m.mc), MODEL_MARKS.length, 'no two marks resolve to the same token');
+
+  // and it can go red, four ways it broke or could break. A curve pointed at its
+  // neighbour's token — the drawing and the labels drift apart:
+  const bentLine = modelColours(CSS.replace('.ln-tfm-alt { stroke: var(--m2)', '.ln-tfm-alt { stroke: var(--m1)'));
+  assert.notEqual(bentLine.marks[1].mc, bentLine.marks[1].line, 'the equality above is one an edit can break');
+  // a SECOND declaration in the same body, which the browser takes and a
+  // first-match parser does not:
+  const bentDup = modelColours(CSS.replace('.ln-tfm-alt { stroke: var(--m2);', '.ln-tfm-alt { stroke: var(--m2); stroke: var(--m1);'));
+  assert.notEqual(bentDup.marks[1].mc, bentDup.marks[1].line, 'the LAST declaration is the one read');
+  // a more specific rule elsewhere in the sheet:
+  const bentSpec = modelColours(CSS + '\n.plot-box .ln-tfm-alt { stroke: var(--m1); }\n');
+  assert.ok(bentSpec.marks[1].strokes.some(([, d]) => d !== bentSpec.marks[1].line), 'a repaint under any selector is seen');
+  // and two tokens holding one colour, which is how all four marks were one blue:
+  const bentTok = modelColours(CSS.replace(/--m2:[^;]+/, '--m2: var(--water-line)'));
+  assert.equal(bentTok.hexes['--m2'].light, bentTok.hexes['--m1'].light, 'two tokens can hold one colour — the test below is what catches that');
+});
+
+// The stylesheet used to CLAIM its separations in a comment, and one of the
+// claims was measurably false. The numbers live here instead, off the token hex
+// values themselves: a contrast against both papers, and how far apart the marks
+// sit on the OKLCH wheel — including from the ochre the climatology baseline
+// draws in, which shares the axis with every candidate curve.
+test('the model hues are far enough apart, and each is readable on both papers', () => {
+  const { hexes } = modelColours(CSS);
+  const paper = { light: '#fbfbf9', dark: '#121417' };
+  const dry = { light: '#8f6410', dark: '#e3bb63' };   // --dry-line: climatology, drawn on the same axis
+  const slots = MODEL_MARKS.map((_, i) => `--m${i + 1}`);
+  assert.deepEqual(Object.keys(hexes).sort(), [...slots].sort(), 'every slot resolves to a light/dark hex pair');
+
+  for (const scheme of ['light', 'dark']) {
+    for (const s of slots) {
+      const r = wcag(hexes[s][scheme], paper[scheme]);
+      assert.ok(r >= 4.5, `${s} on ${scheme} paper is ${r.toFixed(2)}:1 — a mark that also carries text needs 4.5`);
+    }
+    // the pair that is actually drawn together today
+    const drawn = hueGap(hexes['--m1'][scheme], hexes['--m2'][scheme]);
+    assert.ok(drawn >= 120, `m1 vs m2 on ${scheme} is ${drawn.toFixed(0)}° — the two candidates on one axis need the wide gap`);
+    // and every other pair, the ochre baseline included. Five marks on one wheel
+    // cannot all sit 90° apart; 55° is what this palette actually holds, and the
+    // dash patterns carry the rest.
+    const all = { ...Object.fromEntries(slots.map(s => [s, hexes[s][scheme]])), '--dry-line': dry[scheme] };
+    const names = Object.keys(all);
+    for (let i = 0; i < names.length; i++) for (let j = i + 1; j < names.length; j++) {
+      const g = hueGap(all[names[i]], all[names[j]]);
+      assert.ok(g >= 55, `${names[i]} vs ${names[j]} on ${scheme} is only ${g.toFixed(0)}° apart`);
+    }
+  }
+  // red-proof: the state this sheet shipped in — the second candidate in the first's blue
+  const bent = modelColours(CSS.replace(/--m2:[^;]+/, '--m2: light-dark(#2f6d8f, #9fd4ec)'));
+  assert.equal(hueGap(bent.hexes['--m1'].light, bent.hexes['--m2'].light), 0, 'one blue for two candidates is 0° apart, and this test is what says so');
+});
+
 test('a model with no report for the target in view has a dead chip, not a lit one', () => {
   const other = MODEL_KEYS.find(k => k !== MANIFEST.shipped);
   const half = JSON.parse(JSON.stringify(reports));
@@ -585,8 +738,9 @@ test('a model with no report for the target in view has a dead chip, not a lit o
   assert.deepEqual(m.drawn.map(mo => mo.key), [MANIFEST.shipped], 'only what can be drawn is drawn');
   const row = chipRow(renderPage(m));
   const label = MANIFEST.models.find(mo => mo.key === other).label;
-  assert.match(row, new RegExp(`<span class="off"[^>]*title="${label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} has no daily max report[^"]*"`),
+  assert.match(row, new RegExp(`<span class="mchip m-[a-z0-9-]+ off"[^>]*title="${label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} has no daily max report[^"]*"`),
     'its chip is dead and says why, instead of staying lit over a sheet that is silent about it');
+  assert.ok(!/class="mchip m-[a-z0-9-]+ off on"/.test(row), 'dead is not the locked-on state, whatever hue the chip wears');
   // and on the target it does have, it is a live chip again
   assert.ok(chipRow(renderPage(buildModel(half, parseState('', '', null, MODEL_KEYS)))).includes(label), 'on the target it does have, it is live again');
 });
