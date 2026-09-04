@@ -235,8 +235,6 @@ main {
 .thr { width: 0; border-left: 1px dashed var(--ink); opacity: 0.75; }
 /* skill bars: direction by hue AND hatch, so the sign survives greyscale */
 .bar { top: 15%; height: 70%; border: 1px solid var(--ink); forced-color-adjust: none; }
-.bar.pos { background: repeating-linear-gradient(45deg, var(--water) 0 3px, var(--water-line) 3px 4px); }
-.bar.neg { background: repeating-linear-gradient(135deg, var(--dry) 0 3px, var(--dry-line) 3px 4px); }
 .bar.tie { background: color-mix(in oklab, var(--ink) 14%, var(--paper)); border-style: dashed; }
 /* two candidates in one row: the first sits above the second and keeps the pale
    fill; the second inverts to the saturated line colour. Position, fill and the
@@ -246,12 +244,16 @@ main {
 .track.two .bar { height: 30%; }
 .track.two .bar.m1 { top: 11%; }
 .track.two .bar.m2 { top: 59%; }
-/* the second candidate is a SOLID fill in the same sign colour, against the
-   first's hatch — inverting the hatch instead only swapped two shades of the
-   same blue and read as one bar drawn twice (measured 2026-09-04). The sign
-   still travels with the hue and with the side of zero the bar grows from. */
-.bar.m2.pos { background: var(--water-line); }
-.bar.m2.neg { background: var(--dry-line); }
+/* A bar wears its model's `--mc`, the same hue as that candidate's curve, chip
+   and verdict line — so the colour means the MODEL everywhere on the plate, and
+   never the model here and the sign there. The sign is left to the hatch angle
+   and to the side of zero the bar grows from, which is why the second candidate
+   is a SOLID fill rather than an inverted hatch: two weights of one hue read as
+   one bar drawn twice (measured 2026-09-04). */
+.bar.pos, .bar.neg { background-color: var(--mc, var(--water-line)); }
+.bar.pos { background-image: repeating-linear-gradient(45deg, var(--paper) 0 1px, transparent 1px 4px); }
+.bar.neg { background-image: repeating-linear-gradient(135deg, var(--paper) 0 1px, transparent 1px 4px); }
+.bar.m2.pos, .bar.m2.neg { background-image: none; }
 .bar.m2.tie { background: color-mix(in oklab, var(--ink) 45%, var(--paper)); }
 .ci { top: 48%; height: 0; border-top: 2px solid var(--ink); }
 .track.two .ci.m1 { top: 26%; }

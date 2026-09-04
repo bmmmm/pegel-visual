@@ -374,7 +374,22 @@ export function buildModel(reports, parsed) {
   const pb = b => report.pooled.blocks[b].ss;
   const rel = v => Math.abs(v) < 0.02 ? 'draws' : `is ${pctStr(v)} ${v < 0 ? 'behind' : 'ahead'}`;
   const climLongT = Object.entries(report.stations).map(([n, s]) => ({ n, v: Math.abs(s.blocks['h31-90'].ss_clim_vs_blend) })).sort((a, b) => b.v - a.v);
-  const gist = `On the ${TARGETS[state.target]} target ${(drawn[0] || {}).label || 'the model'} beats the blend by ${pctStr(pb('h1-14'))} at two weeks, ${rel(pb('h15-30'))} at a month and ${rel(pb('h31-90'))} by three months — the bar was ${pctStr(report.thresholds.A1_pooled_ss_min)} in every block, and beyond a month a calendar does as well.`;
+  // The gist names every candidate in view with ITS OWN pooled numbers, and puts
+  // the one that cannot ship first: it is the newer measurement and the reason
+  // this sheet has two bars at all. Drawing a model and then writing the shipped
+  // model's numbers under it — which is what one label plus `pb()` did — is the
+  // same failure as a curve labelled with another curve's skill.
+  const ssOf = (mo, b) => mo.report.pooled.blocks[b].ss;
+  const arc = mo => `${pctStr(ssOf(mo, 'h1-14'))} at two weeks, ${rel(ssOf(mo, 'h15-30'))} at a month and ${rel(ssOf(mo, 'h31-90'))} by three months`;
+  const focus = [...drawn].sort((a, b) => (a.shippable === b.shippable ? 0 : a.shippable ? 1 : -1));
+  const barStr = pctStr(report.thresholds.A1_pooled_ss_min);
+  const noneClears = drawn.length > 0 && drawn.every(mo => !(mo.report.clauses.A1 || {}).pass);
+  const gist = focus.length > 1
+    ? `On the ${TARGETS[state.target]} target ${focus[0].label} beats the blend by ${arc(focus[0])}` +
+      `${focus[0].shippable ? '' : ' — measured here, never shipped'}; ` +
+      focus.slice(1).map(mo => `${mo.shippable ? 'the shipped ' : ''}${mo.label} by ${arc(mo)}`).join('; ') +
+      `. The bar was ${barStr} in every block${noneClears ? ', which neither reaches' : ''}, and beyond a month a calendar does as well.`
+    : `On the ${TARGETS[state.target]} target ${(focus[0] || {}).label || 'the model'} beats the blend by ${focus[0] ? arc(focus[0]) : `${pctStr(pb('h1-14'))} at two weeks, ${rel(pb('h15-30'))} at a month and ${rel(pb('h31-90'))} by three months`} — the bar was ${barStr} in every block, and beyond a month a calendar does as well.`;
   const positive = regimes.filter(r => r.ss > 0).length;
   const B = v => `<b>${esc(v)}</b>`;
   const facts = [
@@ -500,12 +515,12 @@ const lbl = (station, regime) => `<span class="lbl">${esc(station)}${regime ? `<
 // the colour follows the model too (light fill for the first, dark for the
 // second) — position, fill and the mark on the value all say the same thing, so
 // none of them carries the difference alone. The hatch angle stays the sign.
-function skillBar(ss, tie, slot = '') {
+function skillBar(ss, tie, slot = '', mark = '') {
   const { x, clipped } = clampInfo(ss, SKILL_DOMAIN);
   const zero = pct(0, SKILL_DOMAIN);
   const left = Math.min(x, zero), width = Math.abs(x - zero);
   const cls = tie ? 'tie' : ss >= 0 ? 'pos' : 'neg';
-  return `<span class="bar ${cls}${slot ? ' ' + slot : ''}"${attr('style', `left:${left.toFixed(2)}%;width:${width.toFixed(2)}%`)}></span>` +
+  return `<span class="bar ${cls}${slot ? ' ' + slot : ''}${mark ? ` m-${mark}` : ''}"${attr('style', `left:${left.toFixed(2)}%;width:${width.toFixed(2)}%`)}></span>` +
     (clipped ? `<span class="clip ${clipped}"${attr('style', `left:${x.toFixed(2)}%`)}></span>` : '');
 }
 
@@ -518,13 +533,17 @@ function renderBack() {
 function renderVerdict(m) {
   // the sentence is assembled from the clauses that actually passed, so a re-run
   // that flips one cannot leave the page praising something that failed
-  const passed = id => (m.clauses.find(c => c.id === id) || {}).pass;
+  // "both are honest" has to hold in BOTH reports, not in the primary's alone —
+  // the sentence is about every candidate the plural claims for
+  const passed = id => m.drawn.length
+    ? m.drawn.every(mo => (mo.report.clauses[id] || {}).pass)
+    : (m.clauses.find(c => c.id === id) || {}).pass;
   const honest = [passed('A5') ? 'calibrated' : null, passed('A7') ? 'no better on the recent years than on the old ones' : null].filter(Boolean);
   const why = m.verdict === 'SHIP'
     ? 'Every pre-registered clause held. The model may ship.'
     : m.verdict === 'VOID'
       ? 'The run is invalid; no verdict was formed.'
-      : `At least one pre-registered clause failed.${honest.length ? ` The model is honest — ${honest.join(', and ')} — but` : ' It is'} not better than the blend past two weeks.`;
+      : `At least one pre-registered clause failed.${honest.length ? ` ${m.drawn.length > 1 ? 'Both candidates are' : 'The model is'} honest — ${honest.join(', and ')} — but` : ' It is'} not better than the blend past two weeks.`;
   // with more than one candidate in view the headline verdict is the primary's,
   // and each model states its own underneath rather than sharing one word
   const others = m.verdicts.length > 1 ? `<ul class="vmodels" aria-label="verdict per model">` + m.verdicts.map(v =>
@@ -642,7 +661,7 @@ function renderLead(m) {
       L.curves.map(c => `<td>×${r2(c.ratios[i])}</td>`).join('') +
       `<td>×${r2(L.series.clim[i])}</td><td>×${r2(L.series.persist[i])}</td><td>${num(L.blendCm[i], 1)}</td></tr>`).join('') +
     `</tbody></table></div></details>`;
-  const keyBody = `<p class="p-dim">Each method's error divided by the blend's, day by day out to ${esc(L.H)}: below the line is better than the blend. The model wins early and hands over to the calendar; persistence never recovers. The hatched band is the horizon block in view — the band labels switch it, as does the settings fold above the chart; the vertical rule is a cursor — drag it, or use the arrow keys.</p>`;
+  const keyBody = `<p class="p-dim">Each method's error divided by the blend's, day by day out to ${esc(L.H)}: below the line is better than the blend. ${L.curves.length > 1 ? 'Both candidates win' : 'The model wins'} early and ${L.curves.length > 1 ? 'hand' : 'hands'} over to the calendar; persistence never recovers. The hatched band is the horizon block in view — the band labels switch it, as does the settings fold above the chart; the vertical rule is a cursor — drag it, or use the arrow keys.</p>`;
   // the settings sit directly above the drawing they relabel, folded shut with
   // their state on the lid: a control a screen away from its chart is a control
   // nobody connects to it, and a shut fold that does not say "daily max, days
@@ -779,10 +798,10 @@ function renderSkill(m) {
     k.pooled.bars.map(b => `${signed(b.ss)} for ${b.label}, moving-block bootstrap 95 % CI ${signed(b.lo)} to ${signed(b.hi)}`).join('; ') +
     `. Clause A1 asks for ${signed(k.threshold, 2)}.`;
   const rows = rowOpen('pooled', pooledSay) + `<span class="lbl">pooled · 5 regimes</span>` +
-    trk(k.pooled.bars.map((b, i) => skillBar(b.ss, false, slot(i)) + ciBar(b, i)).join('')) +
+    trk(k.pooled.bars.map((b, i) => skillBar(b.ss, false, slot(i), b.mark) + ciBar(b, i)).join('')) +
     `<span class="val">${k.pooled.bars.map(b => val(b, signed(b.ss), false)).join('')}</span></div>` +
     k.rows.map(r => rowOpen('', r.say) + lbl(r.station, r.regime) +
-      trk(r.bars.map((b, i) => skillBar(b.ss, b.tie, slot(i))).join('')) +
+      trk(r.bars.map((b, i) => skillBar(b.ss, b.tie, slot(i), b.mark)).join('')) +
       `<span class="val">${r.bars.map(b => val(b, signed(b.ss), b.sig)).join('')}</span></div>`).join('');
   const regimeLine = k.regimes.map(r => `${r.name} ${signed(r.ss)}`).join(' · ');
   // one row per gauge AND model, rather than a column pair per model: the columns
@@ -795,13 +814,13 @@ function renderSkill(m) {
     `<p class="p-readout" data-readout><span class="hint">Hover or pick a row for the numbers behind it.</span></p>` +
     plateKey([
       ...(many ? m.drawn.map((mo, i) => ({
-        sw: swBar(`pos m${i + 1}`) + sw(mo.mark),
+        sw: swBar(`pos m${i + 1} m-${mo.mark}`) + sw(mo.mark),
         // "hatched" and "solid" hold in both colour schemes; "pale"/"dark" would
         // swap over, because the line colour is the DARKER one only on paper
-        label: `${mo.label} — ${i === 0 ? 'the upper bar, hatched' : 'the lower bar, solid'}, and this mark beside its number`,
+        label: `${mo.label} — ${i === 0 ? 'the upper bar, hatched' : 'the lower bar, solid'}, in its own colour, and this mark beside its number`,
       })) : []),
-      { sw: swBar('pos'), label: 'better than the blend — the hatch leans right' },
-      { sw: swBar('neg'), label: 'worse than the blend — the hatch leans left' },
+      { sw: swBar(`pos${many ? '' : ` m-${(m.drawn[0] || {}).mark || 'tfm'}`}`), label: 'better than the blend — the hatch leans right, and the bar grows right of zero' },
+      { sw: swBar(`neg${many ? '' : ` m-${(m.drawn[0] || {}).mark || 'tfm'}`}`), label: 'worse than the blend — the hatch leans left, and the bar grows left of zero' },
       { sw: swBar('tie'), label: 'a tie — under 2 cm apart, neither win nor loss' },
       { sw: swRule('zero'), label: 'zero — as good as the blend' },
       { sw: '<span class="sw"><span class="ci" style="position:relative;display:block;top:5px;width:12px"></span></span>', label: 'bootstrap 95 % CI (pooled row)' },
@@ -866,7 +885,7 @@ function renderCalib(m) {
   const table = `<details class="tbl"><summary>table</summary><div class="tblwrap"><table><thead><tr><th>station</th>${many ? '<th>model</th>' : ''}<th>PICP80 model</th><th>PICP80 blend</th>${Array.from({ length: 10 }, (_, i) => `<th>PIT ${i}</th>`).join('')}</tr></thead><tbody>` +
     m.calib.map(r => r.models.map(x => `<tr><td>${esc(r.station)}</td>${many ? `<td>${esc(x.label)}</td>` : ''}<td>${num(x.picp, 3)}</td><td>${num(r.blend, 3)}</td>${x.pit.map(f => `<td>${num(f * 100, 1)}</td>`).join('')}</tr>`).join('')).join('') +
     `</tbody></table></div></details>`;
-  return `<p class="p-dim">How often the model's 80 % interval actually contained the reading. Inside the shaded band is clause A5; the dashed line is the ideal 80 %. Below, the PIT histograms: a flat profile means the deciles are honest, a U means the band is too narrow, a hump too wide.</p>` +
+  return `<p class="p-dim">How often ${many ? 'each candidate’s' : 'the model’s'} 80 % interval actually contained the reading. Inside the shaded band is clause A5; the dashed line is the ideal 80 %. Below, the PIT histograms: a flat profile means the deciles are honest, a U means the band is too narrow, a hump too wide.</p>` +
     `<div class="rows">${rows}</div>` + axis([0.6, 0.7, 0.8, 0.9, 1.0], PICP_DOMAIN, v => num(v * 100, 0) + ' %') +
     `<p class="p-readout" data-readout><span class="hint">Hover or pick a row for coverage and CRPS.</span></p>` +
     `<div class="pits">${pits}</div>` +
@@ -1011,8 +1030,13 @@ function renderFoot(m) {
 
 export function screenSummary(m) {
   const k = m.skill;
-  return `Forecast gate, ${m.verdict}. ${nameOf(m.primary)} against the persistence-to-climatology blend, ${TARGETS[m.target]} target, ${BLOCK_LABEL[m.block]}: pooled skill ${signed(k.pooled.ss)} with a 95 % interval from ${signed(k.pooled.lo)} to ${signed(k.pooled.hi)}. ` +
-    `${m.clauses.filter(c => c.pass).length} of ${m.clauses.length} clauses passed.`;
+  // one clause per model drawn: a reader who cannot see the bars has to be told
+  // that there are two of them, and which number belongs to which
+  const many = k.pooled.bars.length > 1;
+  const each = k.pooled.bars.map(b => `${many ? `${b.label} ` : ''}pooled skill ${signed(b.ss)} with a 95 % interval from ${signed(b.lo)} to ${signed(b.hi)}`).join('; ');
+  return `Forecast gate, ${m.verdict}. ${many ? `${k.pooled.bars.length} candidates` : nameOf(m.primary)} against the persistence-to-climatology blend, ${TARGETS[m.target]} target, ${BLOCK_LABEL[m.block]}: ` +
+    `${each || `pooled skill ${signed(k.pooled.ss)} with a 95 % interval from ${signed(k.pooled.lo)} to ${signed(k.pooled.hi)}`}. ` +
+    `${m.clauses.filter(c => c.pass).length} of ${m.clauses.length} clauses passed${many ? ` for ${nameOf(m.primary)}` : ''}.`;
 }
 
 // The first look is a verdict and a drawing. Everything that used to stand

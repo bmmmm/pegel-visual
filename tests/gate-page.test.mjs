@@ -298,10 +298,21 @@ test('the page survives a missing max or short report — one panel fewer, no de
 });
 
 test('the summary spoken to screen readers names verdict, target, block and the interval', () => {
-  const s = screenSummary(buildModel(reports, parseState('?block=h31-90')));
+  const m = buildModel(reports, parseState('?block=h31-90'));
+  const s = screenSummary(m);
   assert.match(s, /NO-SHIP/);
   assert.match(s, /daily mid target, days 31–90/);
   assert.match(s, /95 % interval from -0\.\d+ to \+?0\.\d+/);
+  // a reader who cannot see the bars still has to be told there are two, and
+  // which pooled number belongs to which candidate
+  assert.ok(m.drawn.length > 1);
+  assert.match(s, new RegExp(`${m.drawn.length} candidates`));
+  for (const b of m.skill.pooled.bars) assert.ok(s.includes(`${b.label} pooled skill ${b.ss > 0 ? '+' : ''}${b.ss.toFixed(3)}`), `${b.label} with its own skill: ${s}`);
+  assert.equal(new Set(m.skill.pooled.bars.map(b => b.ss)).size, m.skill.pooled.bars.length, 'the two numbers differ, so the sentence cannot pass by accident');
+  // and with one model on it speaks in the singular, without the label twice
+  const one = screenSummary(buildModel(reports, parseState(`?models=${MANIFEST.shipped}`, '', null, MODEL_KEYS)));
+  const label = MANIFEST.models.find(mo => mo.key === MANIFEST.shipped).label;
+  assert.equal(one.split(label).length - 1, 1, `the shipped label appears once: ${one}`);
 });
 
 test('gist, facts and basics quote the report, not a remembered number', () => {
@@ -311,9 +322,21 @@ test('gist, facts and basics quote the report, not a remembered number', () => {
   // the gist follows the target
   const gm = buildModel(reports, parseState('')), gx = buildModel(reports, parseState('?target=max'));
   assert.notEqual(gm.gist, gx.gist);
-  assert.ok(gm.gist.startsWith(`On the daily mid target ${NAME} beats the blend by ` + pc(mid.pooled.blocks['h1-14'].ss) + ' at two weeks'), gm.gist);
-  assert.ok(gx.gist.startsWith(`On the daily max target ${NAME} beats the blend by ` + pc(max.pooled.blocks['h1-14'].ss) + ' at two weeks'), gx.gist);
+  // with two candidates the gist leads with the one that cannot ship, and quotes
+  // EACH of them out of its own report — the failure this guards is one label
+  // over another model's numbers
+  const chal = MANIFEST.models.find(mo => !mo.shippable);
+  const cm = reports.byKey[chal.key].seasonal.mid, cx = reports.byKey[chal.key].seasonal.max;
+  assert.ok(gm.gist.startsWith(`On the daily mid target ${chal.label} beats the blend by ` + pc(cm.pooled.blocks['h1-14'].ss) + ' at two weeks'), gm.gist);
+  assert.ok(gx.gist.startsWith(`On the daily max target ${chal.label} beats the blend by ` + pc(cx.pooled.blocks['h1-14'].ss) + ' at two weeks'), gx.gist);
+  assert.ok(gm.gist.includes('measured here, never shipped'), 'and says it cannot ship');
+  assert.ok(gm.gist.includes(`the shipped ${NAME} by ` + pc(mid.pooled.blocks['h1-14'].ss) + ' at two weeks'), gm.gist);
   assert.ok(gm.gist.includes(`is ${pc(mid.pooled.blocks['h31-90'].ss)} behind by three months`));
+  assert.notEqual(pc(cm.pooled.blocks['h31-90'].ss), pc(mid.pooled.blocks['h31-90'].ss), 'the two runs differ there, so the sentence cannot pass by accident');
+  // one model on: the old single-subject sentence, with that model's own numbers
+  const only = buildModel(reports, parseState(`?models=${MANIFEST.shipped}`, '', null, MODEL_KEYS));
+  assert.ok(only.gist.startsWith(`On the daily mid target ${NAME} beats the blend by ` + pc(mid.pooled.blocks['h1-14'].ss) + ' at two weeks'), only.gist);
+  assert.ok(!only.gist.includes(chal.label), 'and does not name the model it is not drawing');
   assert.ok(renderPage(gm).includes(`<p class="p-sub">${gm.gist}</p>`), 'the gist sits under the title');
   // the facts follow target and block
   const f1 = buildModel(reports, parseState('')).facts, f3 = buildModel(reports, parseState('?block=h31-90')).facts;
