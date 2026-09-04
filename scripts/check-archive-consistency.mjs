@@ -31,6 +31,11 @@
 //                     null days in between — the rule that would have caught
 //                     Jan-Jul 2026 sitting empty in every file for half a year
 //                     while R1-R5 stayed green. Opt out with --skip R6.
+//   R7 no-archive     the manifest still marks the gauges WSV keeps no archive
+//                     for. The marker used to be derived from the file listing,
+//                     so the weekly REST refresh erased it by succeeding — 0 of
+//                     739 marked, and the client caveat that depends on it dead
+//                     site-wide. Opt out with --skip R7 (same reason as R6).
 //
 // Deliberate limits: the diff part (R4/R5) compares against the branch's own
 // HEAD, so a base poisoned by a force-push looks clean to it — branch
@@ -325,6 +330,32 @@ export function checkManifestShape(manifest, minStations = 700) {
   return n < minStations ? [`R5: manifest.json lists ${n} stations (min ${minStations})`] : [];
 }
 
+// R7 — the manifest still knows which gauges WSV keeps no archive for.
+//
+// This one has a scar. `none` was derived from the file listing ("no
+// closed.json years and no current.json"), so the weekly REST refresh erased it
+// simply by succeeding: it writes a current.json for the ~111 lock, weir and
+// foreign gauges WSV serves live but never archived. The deployed manifest
+// marked 0 of 739, the client's "WSV keeps no multi-year archive" caveat was
+// dead code site-wide, and readers of a gauge like Neuwied Stadt were told to
+// "import the WSV archive" — an import that answers 303 to an error page.
+// Nothing went red. The fetcher's own summary printed `0 without WSV archive`
+// in every run and no one reads a log line.
+//
+// The marker is a recorded fact now (markNoArchive -> meta.json -> manifest),
+// and this is the rule that notices when it stops being one. The floor is
+// deliberately far below the count it guards: the real quantity is a property
+// of WSV's station set and drifts by ones, while the failure mode this exists
+// for is a collapse to zero.
+export function checkNoArchiveMarkers(manifest, minMarked = 80) {
+  if (!manifest || typeof manifest.stations !== 'object') return []; // R5 already flags that
+  const n = Object.values(manifest.stations).filter(e => e && (e.noArchive || e.none)).length;
+  return n < minMarked
+    ? [`R7: manifest.json marks ${n} stations as having no WSV archive (min ${minMarked}) `
+      + '— the marker is being derived away again, and the client caveat that depends on it is dead']
+    : [];
+}
+
 export function checkOverviewShape(overview, minRivers = 80) {
   if (!overview || typeof overview.rivers !== 'object') return []; // R2 already flags a missing overview
   const n = Object.keys(overview.rivers).length;
@@ -405,6 +436,10 @@ async function main() {
     currentYear, nowDate: now,
   }));
   violations.push(...checkManifestShape(manifest));
+  // R7 belongs to archive-update for the same reason R6 does: only that job
+  // writes manifest.json, so a red R7 in the daily snapshot job would block a
+  // push it cannot fix and cost that day's slot for good.
+  if (!SKIP.has('R7')) violations.push(...checkNoArchiveMarkers(manifest));
   violations.push(...checkOverviewShape(overview));
 
   // R6 — only current.json is read (739 x 77KB of closed.json would be a
