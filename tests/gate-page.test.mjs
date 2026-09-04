@@ -330,9 +330,11 @@ test('gist, facts and basics quote the report, not a remembered number', () => {
   assert.ok(gm.gist.startsWith(`On the daily mid target ${chal.label} beats the blend by ` + pc(cm.pooled.blocks['h1-14'].ss) + ' at two weeks'), gm.gist);
   assert.ok(gx.gist.startsWith(`On the daily max target ${chal.label} beats the blend by ` + pc(cx.pooled.blocks['h1-14'].ss) + ' at two weeks'), gx.gist);
   assert.ok(gm.gist.includes('measured here, never shipped'), 'and says it cannot ship');
-  assert.ok(gm.gist.includes(`the shipped ${NAME} by ` + pc(mid.pooled.blocks['h1-14'].ss) + ' at two weeks'), gm.gist);
-  assert.ok(gm.gist.includes(`is ${pc(mid.pooled.blocks['h31-90'].ss)} behind by three months`));
-  assert.notEqual(pc(cm.pooled.blocks['h31-90'].ss), pc(mid.pooled.blocks['h31-90'].ss), 'the two runs differ there, so the sentence cannot pass by accident');
+  // the shipped run gets one number, not a second full arc: the subtitle has to
+  // leave the lead plot whole on a 390x844 phone, which gate-check measures
+  assert.ok(gm.gist.includes(`the shipped ${NAME} manages ` + pc(mid.pooled.blocks['h1-14'].ss)), gm.gist);
+  assert.notEqual(pc(cm.pooled.blocks['h1-14'].ss), pc(mid.pooled.blocks['h1-14'].ss), 'the two runs differ there, so the sentence cannot pass by accident');
+  assert.ok(gm.gist.length < 260, `the gist stays inside its line budget: ${gm.gist.length} chars`);
   // one model on: the old single-subject sentence, with that model's own numbers
   const only = buildModel(reports, parseState(`?models=${MANIFEST.shipped}`, '', null, MODEL_KEYS));
   assert.ok(only.gist.startsWith(`On the daily mid target ${NAME} beats the blend by ` + pc(mid.pooled.blocks['h1-14'].ss) + ' at two weeks'), only.gist);

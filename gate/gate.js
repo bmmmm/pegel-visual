@@ -384,11 +384,15 @@ export function buildModel(reports, parsed) {
   const focus = [...drawn].sort((a, b) => (a.shippable === b.shippable ? 0 : a.shippable ? 1 : -1));
   const barStr = pctStr(report.thresholds.A1_pooled_ss_min);
   const noneClears = drawn.length > 0 && drawn.every(mo => !(mo.report.clauses.A1 || {}).pass);
+  // The subtitle is on a budget: the lead plot has to stay whole on a 390x844
+  // phone, and gate-check measures it there. So the candidate in focus gets the
+  // full arc and the others one number each — a second full arc cost three lines
+  // on the CI runner's wider glyphs and pushed the drawing off the first screen.
   const gist = focus.length > 1
     ? `On the ${TARGETS[state.target]} target ${focus[0].label} beats the blend by ${arc(focus[0])}` +
       `${focus[0].shippable ? '' : ' — measured here, never shipped'}; ` +
-      focus.slice(1).map(mo => `${mo.shippable ? 'the shipped ' : ''}${mo.label} by ${arc(mo)}`).join('; ') +
-      `. The bar was ${barStr} in every block${noneClears ? ', which neither reaches' : ''}, and beyond a month a calendar does as well.`
+      focus.slice(1).map(mo => `${mo.shippable ? 'the shipped ' : ''}${mo.label} manages ${pctStr(ssOf(mo, 'h1-14'))}`).join('; ') +
+      `. ${noneClears ? `Neither reaches the ${barStr} bar.` : `The bar was ${barStr} in every block.`}`
     : `On the ${TARGETS[state.target]} target ${(focus[0] || {}).label || 'the model'} beats the blend by ${focus[0] ? arc(focus[0]) : `${pctStr(pb('h1-14'))} at two weeks, ${rel(pb('h15-30'))} at a month and ${rel(pb('h31-90'))} by three months`} — the bar was ${barStr} in every block, and beyond a month a calendar does as well.`;
   const positive = regimes.filter(r => r.ss > 0).length;
   const B = v => `<b>${esc(v)}</b>`;
