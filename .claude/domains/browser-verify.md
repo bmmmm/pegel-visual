@@ -55,3 +55,11 @@ memory `browser-verify-cdp-recipe` points here as the source.
   A second trap: with browser zoom on, the extension's screenshot is a crop in
   device pixels, so image coordinates are `css * devicePixelRatio` — click by
   element `ref`, not by pixels read off the picture.
+- **A layout measured on this Mac is not a measurement of the CI runner.** The
+  same subtitle wrapped to three lines more on the runner's fonts, and
+  `gate-check`'s "the drawing is whole on the first screen" went from 819 px of
+  844 locally to 884 on the runner — green here, red on main (2026-09-04). Chrome
+  is the same build; the fonts are not. So when prose grows against a measured
+  edge, leave room for a third of the block again, and cap the string's length in
+  a unit test — that check runs the same everywhere, which is the whole point of
+  putting the budget there rather than in the browser.
