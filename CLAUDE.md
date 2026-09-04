@@ -37,6 +37,14 @@
   `keySw`) instead of scaling it, and switch its animation off for `.sw` at a
   specificity that actually wins. Neither failure is visible to the tests —
   only a real browser catches an empty swatch.
+- **Two marks of one family, inverted, are not two marks.** Drawing a second
+  candidate's bar as the first's hatch with its two colours swapped looked
+  separable in the CSS and read as one bar drawn twice in the browser — the
+  fills are the same hue at two weights. What separates at a glance is a change
+  of KIND: hatched against solid, keeping the sign on the hue and on the side of
+  zero the bar grows from. Same trap in words: `pale` / `dark` swap over between
+  the colour schemes, `hatched` / `solid` do not. And a value column only the
+  tests have seen will have its glyphs on the wrong lines.
 - **A test that greps the whole page proves less than it looks.** `renderTotal:
   falling days are hatched` passed for months on the class name while no hatch
   existed; rewritten as `includes('fill="url(#tb-fell)"')` it would then have
