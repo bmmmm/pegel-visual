@@ -365,8 +365,16 @@ test('gist, facts and basics quote the report, not a remembered number', () => {
   const basics = panel(renderPage(m), 'basics');
   assert.equal(m.story.verdict, mid.verdict);
   assert.equal(m.story.h1, pc(mid.pooled.blocks['h1-14'].ss));
-  assert.ok(basics.includes(`beats the blend by ${m.story.h1}`));
-  assert.ok(basics.includes(`at three months it is ${m.story.h90} ${m.story.h90sign}`));
+  // Basics follows the model chips too: every candidate drawn is named with its
+  // OWN mid-run numbers, and the shipped run's are still among them
+  assert.ok(m.story.each.length > 1);
+  for (const x of m.story.each) {
+    const own = reports.byKey[x.key].seasonal.mid.pooled.blocks;
+    assert.equal(x.h1, pc(own['h1-14'].ss), `${x.key}: its own two-week number`);
+    assert.equal(x.h90, pc(own['h31-90'].ss), `${x.key}: its own three-month number`);
+    assert.ok(basics.includes(`${x.label} beats the blend by ${x.h1}`), `${x.key} named with its own number: ${basics.slice(basics.indexOf('The verdict'), basics.indexOf('The verdict') + 260)}`);
+  }
+  assert.notEqual(m.story.each[0].h1, m.story.each[1].h1, 'the candidates differ there, so the sentence cannot pass by accident');
   assert.equal(m.story.climWorst, 'DRESDEN');
   assert.ok(basics.includes('TimesFM 2.5') && basics.includes('zero-shot'));
   assert.equal((basics.match(/<p><b>/g) || []).length, 3, 'three paragraphs');
@@ -388,10 +396,19 @@ test('the model panel names the model, links its three sources, and never invent
   const panel = html.slice(html.indexOf('<details class="panel" id="model">'), html.indexOf('<details class="panel" id="method">'));
   const h = MID.header;
   // the model, said in the page's own words and backed by the run's header
-  assert.match(panel, /decoder-only, 200M parameters/, 'what it is');
+  assert.match(panel, /decoder-only/, 'what it is');
   assert.match(panel, /<em>zero-shot<\/em>/, 'and how it was applied');
+  // every candidate drawn is described out of its OWN run header — size,
+  // checkpoint, licence and package pin, none of them the primary's repeated
+  for (const mo of m.drawn) {
+    const hh = readReport(mo.files['seasonal-mid'].json).header;
+    assert.ok(panel.includes(`${mo.params} parameters`), `${mo.key}: its own size`);
+    assert.ok(panel.includes(hh.checkpoint), `${mo.key}: its own checkpoint`);
+    assert.ok(panel.includes(hh.model_license), `${mo.key}: its own licence`);
+    assert.ok(panel.includes(`pinned to ${hh.versions.timesfm}`), `${mo.key}: its own package pin`);
+  }
+  assert.notEqual(m.drawn[0].params, m.drawn[1].params, 'the candidates differ in size, so the check cannot pass by accident');
   assert.ok(panel.includes(h.checkpoint) && panel.includes(h.model_license), 'checkpoint and licence come from the header');
-  assert.ok(panel.includes(`pinned to ${h.versions.timesfm}`), 'and the pinned package version');
   // the three off-site sources a reader needs to check the model claim itself
   for (const [what, href] of [['model card', LINKS.card], ['paper', LINKS.paper], ['package', LINKS.pkg], ['our code', LINKS.code]]) {
     assert.ok(panel.includes(`href="${href}"`), `${what} is linked`);
@@ -423,9 +440,12 @@ test('the chain says what our workflow does with the model, in order, and marks 
   const panel = html.slice(html.indexOf('<details class="panel" id="model">'), html.indexOf('<details class="panel" id="method">'));
   const chain = panel.slice(panel.indexOf('<ol class="flow">'), panel.indexOf('</ol>'));
   const nodes = [...chain.matchAll(/<li class="fn (\w+)"><b>([^<]+)<\/b>/g)].map(x => [x[1], x[2]]);
+  // the model link names every candidate drawn — the chain is the same windows
+  // for all of them, and only that one step differs
+  const both = MANIFEST.models.map(mo => mo.label).join(' and ');
   assert.deepEqual(nodes.map(n => n[1]), [
     'PEGELONLINE daily archive', 'loaders.py — windows', 'baselines.py — the bar',
-    'tfm.py — TimesFM 2.5', 'metrics.py — the scores', 'gate.py — the clauses', 'report.json — this page',
+    `tfm.py — ${both}`, 'metrics.py — the scores', 'gate.py — the clauses', 'report.json — this page',
   ], 'archive to page, every step of ours named by its file');
   assert.deepEqual(nodes.map(n => n[0]), ['src', 'step', 'step', 'model', 'step', 'step', 'out']);
   assert.equal(nodes.filter(n => n[0] === 'model').length, 1, 'exactly one foreign link');

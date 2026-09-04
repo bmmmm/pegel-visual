@@ -284,8 +284,22 @@ export function buildModel(reports, parsed) {
     const r = reports.byKey[k];
     return r && r.seasonal ? (r.seasonal[state.target] || null) : null;
   };
+  // every candidate carries its OWN run header, so the model panel can describe
+  // each line it draws — checkpoint, licence, config hash, versions, timings —
+  // instead of describing the primary's run under two names
+  const headOf = rep => {
+    const hh = rep.header;
+    return {
+      generated: hh.generated, model: hh.model, license: hh.model_license, checkpoint: hh.checkpoint, git: hh.git,
+      fingerprint: hh.config_fingerprint, versions: hh.versions || {}, elapsed: hh.elapsed_s, reproduced: hh.reproduced_by_run,
+      windows: Object.values(rep.station_info || {}).reduce((a, s) => a + (s.test || 0), 0),
+      stations: Object.keys(rep.stations || {}).length, regimes: Object.keys(rep.regimes || {}).length,
+      protocol: hh.protocol, config: hh.forecast_config || {}, threads: hh.torch_threads,
+      sha: hh.tfm_sha256, repeat: hh.repeat_identical, kind: hh.horizon_kind,
+    };
+  };
   const drawn = all.filter(mo => enabled.includes(mo.key) && repOf(mo.key))
-    .map(mo => ({ ...mo, mark: markOf(all, mo.key), report: repOf(mo.key) }));
+    .map(mo => ({ ...mo, mark: markOf(all, mo.key), report: repOf(mo.key), head: headOf(repOf(mo.key)) }));
   const models = all.map(mo => ({
     ...mo, mark: markOf(all, mo.key), on: enabled.includes(mo.key),
     // a model with no report for the target in view cannot be drawn at all, so
@@ -417,6 +431,14 @@ export function buildModel(reports, parsed) {
     climWorst: climLong[0] ? climLong[0].n : '—',
     climRest: climLong[1] ? pctStr(climLong[1].v) : '—',
     windows: Object.values(mid.station_info).reduce((a, s) => a + (s.test || 0), 0),
+    // the same three numbers for every candidate in view, each out of its own mid
+    // run — the basics follow the model chips like the rest of the sheet
+    each: drawn.map(mo => {
+      const r = (reports.byKey[mo.key].seasonal || {}).mid || mo.report;
+      const b1 = r.pooled.blocks['h1-14'].ss, b90 = r.pooled.blocks['h31-90'].ss;
+      return { key: mo.key, label: mo.label, shippable: mo.shippable !== false, params: mo.params,
+        h1: pctStr(b1), h90: pctStr(b90), h90sign: b90 < 0 ? 'behind' : 'ahead' };
+    }),
   };
   const m = {
     state, targets, verdict: report.verdict, clauses, block, target: state.target, gist, facts, story,
@@ -453,7 +475,7 @@ export function buildModel(reports, parsed) {
     { id: 'calib', title: `Calibration · ${drawnLabel} · ${BLOCK_LABEL[block]}`, hook: 'how often the 80 % band held, and the PIT histograms', render: renderCalib },
     { id: 'clim', title: `Climatology alone · ${BLOCK_LABEL[block]}`, hook: 'Finding 2: the calendar against the blend', render: renderClim },
     shortModel ? { id: 'short', title: `Short horizon · ${primaryLabel} · ${shortModel.verdict}`, hook: 'hours to two days — still collecting, no verdict yet', render: renderShort } : null,
-    { id: 'model', title: `The model, and the chain it runs in · ${primaryLabel}`, hook: `what ${primaryLabel} is, where the weights come from, and the seven steps from archive to this sheet`, render: renderModel },
+    { id: 'model', title: `The model${m.drawn.length > 1 ? 's' : ''}, and the chain ${m.drawn.length > 1 ? 'they run' : 'it runs'} in · ${drawnLabel}`, hook: `what ${drawnLabel} ${m.drawn.length > 1 ? 'are' : 'is'}, where the weights come from, and the seven steps from archive to this sheet`, render: renderModel },
     { id: 'method', title: 'Method', hook: 'how it was measured, and what it cannot prove', render: renderMethod },
     { id: 'basics', title: 'Basics', hook: 'the model, the bar and the verdict in three short paragraphs', render: renderBasics },
   ].filter(Boolean);
@@ -950,9 +972,19 @@ function renderShort(m) {
 function renderBasics(m) {
   const k = m.story;
   return `<div class="prose">` +
-    `<p><b>Model and question.</b> ${a(cardOf(m.primary), nameOf(m.primary))} is Google's ${esc((m.primary && m.primary.params) || '')}-parameter foundation model for time series; it forecasts <em>zero-shot</em>, untrained on the series at hand. Could it beat something trivial on 26 years of daily archive? ${esc(thousands(k.windows))} windows on seven gauges, run twice to prove it reproduces.</p>` +
+    // subject and verdict follow the model chips; the bar does not, because the
+    // blend is the same bar for every candidate
+    `<p><b>Model and question.</b> ${(k.each.length ? k.each : [{ label: nameOf(m.primary), params: (m.primary || {}).params }]).map((x, i) =>
+      `${i ? ' and ' : ''}${a(cardOf(m.drawn[i] || m.primary), x.label)}${x.shippable === false ? ` ${NC_GLYPH}` : ''} (${esc(x.params || '')})`).join('')} ` +
+      `${k.each.length > 1 ? 'are' : 'is'} Google's foundation model${k.each.length > 1 ? 's' : ''} for time series, forecasting <em>zero-shot</em> — untrained here. Could ${k.each.length > 1 ? 'either' : 'it'} beat something trivial on 26 years of archive? ${esc(thousands(k.windows))} windows on seven gauges, each run twice.</p>` +
     `<p><b>The bar.</b> Not persistence: a two-line blend, today's level decaying into the day-of-year norm, already beats it by ${esc(k.persistGain)} at KÖLN over three months. The model had to beat that blend by ten percent, pooled, in every block; the Rhine trio votes once.</p>` +
-    `<p><b>The verdict.</b> ${esc(k.verdict)}. At two weeks ${esc(nameOf(m.primary))} beats the blend by ${esc(k.h1)}, under the bar; at a month it draws; at three months it is ${esc(k.h90)} ${esc(k.h90sign)}. Its bands are honest. Beyond a month climatology alone sits within ${esc(k.climRest)} of the bar everywhere but ${esc(k.climWorst)}: the long horizon needs a calendar, not a model.</p>` +
+    // the candidates share one sentence rather than one each: Basics is capped at
+    // 150 words, and a second full verdict paragraph blew through it
+    `<p><b>The verdict.</b> ${esc(k.verdict)}. ` +
+      (k.each.length > 1
+        ? `At two weeks ${k.each.map(x => `${esc(x.label)} beats the blend by ${esc(x.h1)}`).join(', ')} — all under the bar; at three months ${esc(k.each.map(x => `${x.h90} ${x.h90sign}`).join(' and '))}.`
+        : `At two weeks ${esc(nameOf(m.primary))} beats the blend by ${esc(k.h1)}, under the bar; at a month it draws; at three months it is ${esc(k.h90)} ${esc(k.h90sign)}.`) +
+      ` ${k.each.length > 1 ? 'Both are calibrated' : 'Its bands are honest'}. Beyond a month climatology alone sits within ${esc(k.climRest)} of the bar everywhere but ${esc(k.climWorst)}: the long horizon needs a calendar, not a model.</p>` +
     `<p class="p-dim">Code: <a href="https://github.com/bmmmm/pegel-visual/tree/main/scripts/forecast">scripts/forecast</a>; the markdown reports sit beside this page.</p></div>`;
 }
 
@@ -963,38 +995,72 @@ function renderBasics(m) {
 function renderModel(m) {
   const h = m.head, c = h.config || {}, pr = h.protocol || {};
   const v = h.versions || {};
+  // every candidate in view, each with its own run header
+  const who = (m.drawn.length ? m.drawn : [m.primary].filter(Boolean));
   const step = (cls, name, detail) => `<li class="fn ${cls}"><b>${esc(name)}</b><span>${detail}</span></li>`;
   const chain = `<ol class="flow">` +
     step('src', 'PEGELONLINE daily archive', `one min and one max per day, from the ${a(LINKS.archive, 'archive branch')} — closed years only, because the running year is still being rewritten and a gate built on it would not reproduce`) +
     step('step', 'loaders.py — windows', `gaps of up to three days interpolated, longer ones drop the window; a new origin every ${esc(pr.step)} days, ${esc(thousands(pr.context))} days of context, ${esc(pr.horizon)} days to forecast`) +
     step('step', 'baselines.py — the bar', 'persistence, day-of-year climatology, the blend between them, seasonal naive 365, an upstream OLS — computed first, on exactly these windows') +
-    step('model', `tfm.py — ${nameOf(m.primary)}`, `the same windows, nothing else: no rain, no upstream gauge, no calendar feature. ${esc(c.per_core_batch_size)} per batch on CPU in float32, seed 0, ${esc(h.threads)} threads; of its quantile channels the point forecast is the median — which channel that is differs between the lines, so tfm.py asserts it on every call — and the median is what gets scored`) +
+    step('model', `tfm.py — ${m.drawn.length ? m.drawn.map(mo => mo.label).join(' and ') : nameOf(m.primary)}`, `the same windows, nothing else: no rain, no upstream gauge, no calendar feature. ${esc(c.per_core_batch_size)} per batch on CPU in float32, seed 0, ${esc(h.threads)} threads; of its quantile channels the point forecast is the median — which channel that is differs between the lines, so tfm.py asserts it on every call — and the median is what gets scored`) +
     step('step', 'metrics.py — the scores', 'MAE and CRPS per lead day, the 80 % coverage, the PIT histogram, and a Diebold-Mariano test that knows the windows overlap') +
     step('step', 'gate.py — the clauses', `each pre-registered threshold checked in turn; a run whose ForecastConfig does not hash to ${esc(h.fingerprint)}, or whose origin grid was truncated, is VOID rather than a verdict`) +
     step('out', 'report.json — this page', 'the same file in every panel here, and its markdown twin beside it; nothing on this sheet is typed by hand') +
     `</ol>`;
-  const cmds = `<details class="cmds"><summary>the two commands behind this sheet</summary><div class="tblwrap"><pre><code>` +
-    esc('uv run python backtest.py --horizon ' + (h.kind || 'seasonal') + ' --target ' + m.target + ' \\\n    --archive ../../archive --out ../../tmp-forecast/results/' + (h.kind || 'seasonal') + '-' + m.target + '\n' +
-        'uv run python gate.py --results ../../tmp-forecast/results/' + (h.kind || 'seasonal') + '-' + m.target + ' \\\n    --compare ../../tmp-forecast/results/' + (h.kind || 'seasonal') + '-' + m.target + '-repeat') +
+  // the commands that produced what is drawn — one pair per candidate, and the
+  // challenger's carries the flags that actually run it: a copied command line
+  // would silently rerun the shipped model
+  const kind = h.kind || 'seasonal';
+  const cmdFor = mo => {
+    const dir = `../../tmp-forecast/results/${kind}-${m.target}${mo.shippable === false ? `-${mo.key}` : ''}`;
+    const grp = mo.shippable === false ? 'uv run --no-group model --group model-nc python' : 'uv run python';
+    const sel = mo.shippable === false ? ` --model ${mo.key}` : '';
+    return `${grp} backtest.py --horizon ${kind} --target ${m.target}${sel} \\\n    --archive ../../archive --out ${dir}\n` +
+      `${grp} gate.py --results ${dir} \\\n    --compare ${dir}-repeat`;
+  };
+  const cmds = `<details class="cmds"><summary>the commands behind this sheet</summary><div class="tblwrap"><pre><code>` +
+    esc(who.map(mo => (who.length > 1 ? `# ${mo.label}\n` : '') + cmdFor(mo)).join('\n')) +
     `</code></pre><p class="p-dim">Weights are pulled once from the model card and cached locally; the run took ${esc(num(h.elapsed, 0))} s on a laptop CPU. CI installs the same environment <em>without</em> the model group and runs the window, baseline and licence tests only — the gate itself is run by hand, because a re-run consumes the test set.</p></div></details>`;
-  return `<div class="prose"><p>${a(cardOf(m.primary), nameOf(m.primary))} is Google's foundation model for time series: decoder-only, ${esc((m.primary && m.primary.params) || '')} parameters, ` +
-    `pre-trained on other people's series and applied here <em>zero-shot</em> — it saw no gauge of this archive in training, and nothing was fitted to one. ` +
-    `<em>Decoder-only</em> means it continues a series the way a language model continues a sentence, reading it in patches of days rather than words. ` +
-    `The architecture is the ${a(LINKS.paper, 'ICML 2024 paper')}'s; the weights carried here are ${esc(h.license)}, checkpoint ${a(cardOf(m.primary), h.checkpoint)}, loaded through the ` +
-    `${a(LINKS.pkg, 'timesfm package')} pinned to ${esc(v.timesfm)} — both pins are deliberate. ` +
-    (m.primary && m.primary.shippable === false
-      ? `These weights are <b>non-commercial</b> ${NC_GLYPH}: this repo is GPL-3.0, so this line is measured here and its numbers published, but it can never be the model the site ships, however it scores.`
-      : `These weights are permissively licensed, which is why this line is the one the site ships.`) + `</p>` +
-    `<p class="p-dim">What follows is the chain the ${esc(thousands(h.windows))} scored windows travel, from the archive to the picture at the top of this sheet. Only one link in it is the model.</p></div>` +
+  // one paragraph per candidate in view, out of that candidate's own header: the
+  // panel is what the reader opens to check the model claim, so a line that is
+  // drawn and not described here is a claim with no evidence behind it
+  // what the lines share is said once; each candidate then gets the four things
+  // that actually differ — size, licence, checkpoint, package pin — because two
+  // paragraphs that open with the same clause read as one paragraph repeated
+  const many = who.length > 1;
+  const licence = mo => (mo.shippable === false
+    ? `<b>non-commercial</b> ${NC_GLYPH} — this repo is GPL-3.0, so this line is measured here and its numbers published, but it can never be the model the site ships, however it scores`
+    : `permissively licensed, which is why this line is the one the site ships`);
+  const para = mo => {
+    const hh = mo.head || h, vv = (hh.versions || {});
+    return many
+      ? `<p>${a(cardOf(mo), nameOf(mo))} — ${esc(mo.params || '')} parameters, checkpoint ${a(cardOf(mo), hh.checkpoint)}, through the ${a(LINKS.pkg, 'timesfm package')} pinned to ${esc(vv.timesfm)}. ` +
+        `The weights are ${esc(hh.license)}: ${licence(mo)}.</p>`
+      : `<p>${a(cardOf(mo), nameOf(mo))} is Google's foundation model for time series: decoder-only, ${esc(mo.params || '')} parameters, ` +
+        `pre-trained on other people's series and applied here <em>zero-shot</em> — it saw no gauge of this archive in training, and nothing was fitted to one. ` +
+        `<em>Decoder-only</em> means it continues a series the way a language model continues a sentence, reading it in patches of days rather than words. ` +
+        `The architecture is the ${a(LINKS.paper, 'ICML 2024 paper')}'s; the weights carried here are ${esc(hh.license)}, checkpoint ${a(cardOf(mo), hh.checkpoint)}, loaded through the ` +
+        `${a(LINKS.pkg, 'timesfm package')} pinned to ${esc(vv.timesfm)} — both pins are deliberate. These weights are ${licence(mo)}.</p>`;
+  };
+  const shared = many
+    ? `<p>TimesFM is Google's foundation model for time series: decoder-only, pre-trained on other people's series and applied here <em>zero-shot</em> — neither line saw a gauge of this archive in training, and nothing was fitted to one. ` +
+      `<em>Decoder-only</em> means it continues a series the way a language model continues a sentence, reading it in patches of days rather than words. ` +
+      `The architecture is the ${a(LINKS.paper, 'ICML 2024 paper')}'s. Two of its lines are measured here, on the same windows, and both pins are deliberate.</p>`
+    : '';
+  return `<div class="prose">${shared}${who.map(para).join('')}` +
+    `<p class="p-dim">What follows is the chain the ${esc(thousands(h.windows))} scored windows travel, from the archive to the picture at the top of this sheet — the same windows for every candidate; only the model link changes.</p></div>` +
     chain +
     plateKey([
       { sw: swNode('src'), label: 'data this run reads' },
       { sw: swNode('step'), label: `a step in this repo (${'scripts/forecast'})` },
       { sw: swNode('model'), label: 'the foreign model — the only link that is not ours' },
       { sw: swNode('out'), label: 'what every panel on this page is drawn from' },
-      { note: `Run ${h.generated}, git ${h.git}, timesfm ${v.timesfm} · torch ${v.torch} · numpy ${v.numpy}. ` +
-        (h.repeat ? 'The same batch forecast twice gave identical numbers, ' : 'The repeat check did not run, ') +
-        (h.reproduced ? `and a second full run reproduced every number (sha256 ${String(h.sha || '').slice(0, 12)}…).` : 'and no second full run was compared.') },
+      ...who.map(mo => {
+        const hh = mo.head || h, vv = (hh.versions || {});
+        return { note: `${who.length > 1 ? `${mo.label}: ` : ''}run ${hh.generated}, git ${hh.git}, timesfm ${vv.timesfm} · torch ${vv.torch} · numpy ${vv.numpy}. ` +
+          (hh.repeat ? 'The same batch forecast twice gave identical numbers, ' : 'The repeat check did not run, ') +
+          (hh.reproduced ? `and a second full run reproduced every number (sha256 ${String(hh.sha || '').slice(0, 12)}…).` : 'and no second full run was compared.') };
+      }),
     ]) + cmds + `<p class="p-dim">All of it: ${a(LINKS.code, 'scripts/forecast')}.</p>`;
 }
 
