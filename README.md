@@ -10,9 +10,18 @@ PEGELONLINE station set — most stations from WSV (raw values since
 Layout: `archive/<station-uuid>/closed.json` (one immutable bundle of all
 completed years, `[{y, min[], max[]}, …]`, extended only by the January
 freeze), `current.json` (running year, refreshed monthly by the
-`archive-update` workflow) and `meta.json` (station name + resume marker).
-`archive/manifest.json` maps every station to its year range (`from`/`to`,
-plus a `gaps` day count as inspection metadata) or marks it `none`.
+`archive-update` workflow) and `meta.json` (station name, resume marker, and
+`noArchive` where the WSV download endpoint has said it keeps no series for
+this gauge). `archive/manifest.json` maps every station to its year range
+(`from`/`to`, plus a `gaps` day count as inspection metadata), marks it `none`
+when there is no data file at all, and carries `noArchive` through from
+`meta.json`.
+
+Those last two are different claims and both are needed: `none` is about this
+branch (nothing here), `noArchive` is about WSV (nothing there, ever). A gauge
+can be `noArchive` and still hold a running year — the REST refresh reaches
+~31 days back and accumulates, so the record grows forward from the day we
+first caught it and can never reach further back.
 
 Data: © Wasserstraßen- und Schifffahrtsverwaltung des Bundes (WSV),
 provided as unvalidated raw data under
@@ -48,12 +57,19 @@ offset 0 cm), so no datum shift is applied.
 | KRIMPEN | LEK | krimpenaandelek.lek |
 | ROTTERDAM | NEUE_MAAS | rotterdam.nieuwemaas.boerengat |
 
-## Stations without a WSV archive (110 of 738)
+## Stations without a WSV archive (111 of 739)
 
-These stations are marked `none` in `archive/manifest.json` — WSV keeps no
+These stations are marked `noArchive` in `archive/manifest.json` — WSV keeps no
 pre-30-day history for them (lock/weir operating gauges, foreign partner
 gauges, some harbor and barrage gauges; re-verified individually). The page
-falls back to the live API for them.
+falls back to the live API for them, and says so on the plate instead of
+offering an archive import that cannot deliver.
+
+Until 2026-09-04 the marker was `none`, derived from the file listing — so the
+weekly REST refresh erased it simply by writing these gauges a `current.json`,
+and the count here read 0. The verdict is a recorded fact now (the endpoint's
+303), and `R7` in `check-archive-consistency.mjs` goes red if it stops being
+one. Keep this list in step with the manifest; it is maintained by hand.
 
 | Water | Stations |
 |---|---|
@@ -76,5 +92,5 @@ falls back to the live API for them.
 | KÜSTENKANAL (1) | Hilkenbrook |
 | BODENSEE (1) | KONSTANZ |
 | OSTSEE (1) | Prerow |
-| DEK (1) | VERSEN TRENNSPITZE |
+| DEK (2) | GROPPENBRUCH, VERSEN TRENNSPITZE |
 | MLK (1) | WARBER GRABEN |
