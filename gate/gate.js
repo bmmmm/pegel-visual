@@ -212,16 +212,43 @@ function leadModel(models, state) {
 
 // Direct labels: every line says its own name at the end of its run, so the
 // first look needs no legend at all. Two curves that finish a hair apart would
-// print their names on top of each other, so the stack is spread — from the top
-// down, then pushed back up if the last one runs off the bottom. The y a label
-// ends up at is therefore NOT its value; it points at a line, it does not read
-// one, which is why the drawing keeps its own scale on the left.
+// print their names on top of each other, so the stack is spread — and a spread
+// label's y is therefore NOT its value.
+//
+// Which is fine until the drawing shades one half of the frame with a MEANING.
+// The first version of this only ever pushed DOWN, and down is exactly the half
+// painted "better than the blend": measured on the committed reports, 13 of 40
+// labels printed on the wrong side of that boundary — climatology ends at ×1.005,
+// worse than the blend, and its name sat 16 points inside the shaded half of a
+// sheet whose verdict is NO-SHIP. A reader taking the two things at face value
+// read the opposite of the finding.
+//
+// So `split` is a wall the stack may not cross: names for lines above the bar
+// stack upwards inside [lo, split], names for lines below it downwards inside
+// [split, hi]. A label can still be some way from its line — it cannot be on the
+// wrong side of the one boundary this picture gives a meaning to. When a band
+// holds more names than it has room for, they crowd rather than escape the
+// frame: an overlap is legible as an overlap, a label outside the plot is not.
 export const LABEL_GAP = 8.5;   // per cent of the plot's height, ≈ one line of the label type
-export function stackLabels(items, gap = LABEL_GAP, lo = 0, hi = 100) {
-  const out = items.filter(it => it.y != null && !Number.isNaN(it.y)).sort((a, b) => a.y - b.y).map(it => ({ ...it }));
-  for (let i = 0; i < out.length; i++) out[i].y = Math.max(out[i].y, (i === 0 ? lo : out[i - 1].y + gap));
-  for (let i = out.length - 1; i >= 0; i--) out[i].y = Math.min(out[i].y, (i === out.length - 1 ? hi : out[i + 1].y - gap));
+function spread(sorted, gap, lo, hi) {
+  const out = sorted.map(it => ({ ...it }));
+  for (let i = 0; i < out.length; i++) out[i].y = Math.max(lo, Math.max(out[i].y, i === 0 ? lo : out[i - 1].y + gap));
+  for (let i = out.length - 1; i >= 0; i--) out[i].y = Math.max(lo, Math.min(out[i].y, i === out.length - 1 ? hi : out[i + 1].y - gap));
   return out;
+}
+export function stackLabels(items, gap = LABEL_GAP, lo = 0, hi = 100, split = null) {
+  const clean = items.filter(it => typeof it.y === 'number' && Number.isFinite(it.y))
+    .map(it => ({ ...it, y: Math.max(lo, Math.min(hi, it.y)) }))
+    .sort((a, b) => a.y - b.y);
+  if (split == null) return spread(clean, gap, lo, hi);
+  // the bands stop half a point SHORT of the wall, not on it: a label clamped to
+  // exactly `split` renders at the rounded `top:66.67%` of a boundary at
+  // 66.666…%, which reads — and measures — as being on the other side of it
+  const edge = 0.5;
+  return [
+    ...spread(clean.filter(it => it.y <= split), gap, lo, split - edge),
+    ...spread(clean.filter(it => it.y > split), gap, split + edge, hi),
+  ];
 }
 
 // what the readout says for one lead day — the slider's value text, too
@@ -523,7 +550,14 @@ function renderLead(m) {
   const L = m.lead;
   const s = m.state;
   const head = `<h2 class="p-h2" tabindex="-1">Error by lead day · ${esc(L ? (L.station === 'pooled' ? 'five regimes, one vote each' : L.station) : '')}</h2>`;
-  if (!L) return `<section id="lead" class="p-block">${head}<p class="p-empty p-dim">This report carries no per-day curve; re-run gate.py to add it.</p></section>`;
+  // The control row moved inside this section when it moved into a fold, so this
+  // early return now owns it too: a report with no per-day curve is a state the
+  // page supports, and returning without the chips left the reader stuck on
+  // whatever ?target= and ?block= the URL carried, with nothing to change them.
+  if (!L) return `<section id="lead" class="p-block">${head}` +
+    fold('settings', 'model, target and horizon',
+      renderControls(m), `${m.models.filter(mo => mo.on).map(mo => mo.label).join(' + ')} · ${TARGETS[s.target]} · ${BLOCK_LABEL[s.block]}`) +
+    `<p class="p-empty p-dim">This report carries no per-day curve; re-run gate.py to add it.</p></section>`;
   const chips = ctlRow('gauge', [
     { href: stateHref(s, { lead: 'pooled', panel: 'lead' }), label: 'five regimes', on: L.station === 'pooled', focus: 'lead', title: 'the median of the five pooled gauges’ ratios, day by day' },
     ...L.stations.map(n => ({ href: stateHref(s, { lead: n, panel: 'lead' }), label: n, on: L.station === n, focus: 'lead' })),
@@ -549,9 +583,9 @@ function renderLead(m) {
     return null;
   };
   // the blend gets no end label: it IS the ×1 line of the scale and the edge of
-  // the shaded half, so a fourth name crowding the same height would only push
+  // the shaded zone, so one more name crowding that height would only push
   // the three that mean something further from where they actually end
-  const ends = stackLabels(paths.map(p => ({ cls: p.cls, name: p.name, y: endY(p.vals) })))
+  const ends = stackLabels(paths.map(p => ({ cls: p.cls, name: p.name, y: endY(p.vals) })), LABEL_GAP, 0, 100, leadY(1) / LEAD_HGT * 100)
     .map(e => `<span class="end"${attr('style', `top:${e.y.toFixed(2)}%`)}>${swLine(`ln ${e.cls}`)}<b>${esc(e.name)}</b></span>`).join('');
   const clips = paths.flatMap(p => p.clips.map(c => `<span class="clip ${c.dir} ${p.cls}"${attr('style', `left:${leadXpct(c.day, L.H)}%`)}${attr('title', `${p.name} beyond ×${LEAD_DOMAIN[c.dir === 'up' ? 1 : 0]} on ${c.from === c.to ? `day ${c.from}` : `days ${c.from}–${c.to}`}`)}></span>`)).join('');
   const cx = leadX(L.cursor, L.H).toFixed(2);
@@ -583,11 +617,15 @@ function renderLead(m) {
     // the half of the frame that means "better than the blend" is shaded, so the
     // sign of the whole picture is readable before a single number is
     `<div class="plot"><div class="lead-bands">${bandLabels}</div><div class="vscale" aria-hidden="true">${vscale}</div>` +
-    `<div class="plot-box">${bands}<span class="better"${attr('style', `top:${(leadY(1) / LEAD_HGT * 100).toFixed(2)}%`)}><i>better than the blend</i></span>${svg}${clips}</div>` +
+    `<div class="plot-box">${bands}<span class="better" aria-hidden="true"${attr('style', `top:${(leadY(1) / LEAD_HGT * 100).toFixed(2)}%`)}><i>better than the blend</i></span>${svg}${clips}</div>` +
     `<div class="ends" aria-hidden="true">${ends}</div>` +
     `<div class="ticks lead-ticks" aria-hidden="true">${ticks}</div></div>` +
     `<p class="p-readout" data-readout><b>${esc(say)}</b></p>` +
-    fold('leadkey', 'what each line is, and what this picture cannot prove', keyBody + plateKey([
+    // the lid carries the caveat, not the body: the sentence that keeps the end
+    // labels honest is no use to a first look if it is behind the disclosure a
+    // first look never opens
+    fold('leadkey', 'what each line is, and what this picture cannot prove',
+      keyBody + plateKey([
       ...L.curves.map(c => ({
         sw: swLine(`ln ln-${c.mark}`),
         label: `${c.label}${c.shippable === false ? ` ${NC_GLYPH} — measured here, never shipped: its weights are non-commercial` : ''}`,
@@ -595,15 +633,15 @@ function renderLead(m) {
       { sw: swLine('ln ln-clim'), label: 'climatology (day-of-year mean of earlier years)' },
       { sw: swLine('ln ln-persist'), label: 'persistence — today’s level, held' },
       { sw: swLine('ln-blend'), label: 'the blend, ×1.00 — the bar' },
-      { sw: '<span class="sw"><span class="better" style="position:relative;display:block;height:12px;width:12px;top:0"></span></span>', label: 'the shaded half: a line in here beat the blend that day' },
-      { sw: '<span class="sw"><span class="lb on" style="position:relative;display:block;height:12px;width:12px"></span></span>', label: 'the horizon block in view — pick one by its label, or in the row above the chart' },
+      { sw: '<span class="sw"><span class="better" style="position:relative;display:block;height:12px;width:12px;top:0"></span></span>', label: 'the shaded zone below the bar: a line in here beat the blend that day' },
+      { sw: '<span class="sw"><span class="lb on" style="position:relative;display:block;height:12px;width:12px"></span></span>', label: 'the horizon block in view — pick one by its label, or in the settings fold above the chart' },
       { sw: '<span class="sw"><span class="lb" style="position:relative;display:block;height:12px;width:12px"></span></span>', label: 'block boundaries — days 14 and 30, each labelled with its skill' },
       { sw: '<span class="sw"><svg viewBox="0 0 12 12" aria-hidden="true"><line class="ln-cur" x1="6" y1="0" x2="6" y2="12"/></svg></span>', label: 'the cursor; the line under the chart reads its day' },
       { note: `The y axis is logarithmic, ×${LEAD_DOMAIN[0]} to ×${LEAD_DOMAIN[1]}; a ▴ or ▾ marks days a curve runs above or below the frame (climatology in its first days).` },
       L.curves.length > 1 && L.gap ? { note: `Both candidates are drawn here, and they lie on each other: their widest daily gap is ${(L.gap.d * 100).toFixed(1)} points of the blend's own error, on day ${L.gap.day}, where ${L.gap.ahead} is the lower of the two. That closeness IS the finding — a hue and a dash each tell you WHICH curve you are on, but nothing separates them by value, and the skill panel's numbers barely can. The band labels print ${m.primary ? m.primary.label : 'the first curve'}'s skill, and the panels below — which carry one number per gauge — speak for it too; switch the others off to read this sheet for one of them alone.` } : null,
       L.station === 'pooled' ? { note: 'Pooled here means the median of the five regime gauges — of their day-by-day ratios in the curve and of their block skills in the band labels — so the Rhine and the Elbe do not outvote the Saar by their centimetres. Clause A1 in the facts pools centimetres instead; the blend MAE in the readout is that cm-pooled figure.' } : null,
-      { note: 'The names on the right sit at the end of their own line, spread apart where two would otherwise print on top of each other — so a name points at a line, it does not read a value off the scale.' },
-    ]) + table) + '</section>';
+      { note: 'The names on the right sit at the end of their own line, spread apart where two would otherwise print on top of each other — so a name points at a line, it does not read a value off the scale. They never cross the ×1.00 bar, though: a name in the shaded half belongs to a line that ended in it.' },
+    ]) + table, 'names sit beside their line, not on its value') + '</section>';
 }
 
 function renderFacts(m) {
@@ -617,12 +655,15 @@ function renderIndex(m) {
     `</ul></nav>`;
 }
 
-// The one row that relabels the whole sheet. It sits directly above the curve
-// because that is the drawing it changes first: measured in Chrome before this
-// move, the chips sat 1 121 px below the curve's head (2 173 on a phone) and a
-// click scrolled the curve 1 166 px off the top of the screen. Now the chip
-// focuses the curve, and the drawing the reader is comparing stays in front of
-// them. The panels below read the same state; the index is what leads into them.
+// The one row that relabels the whole sheet. It lives in the `settings` fold,
+// shut, directly above the curve — never below it and never on its own screen:
+// measured in Chrome before that move, the chips sat 1 121 px below the curve's
+// head (2 173 on a phone) and a click scrolled the curve 1 166 px off the top.
+// A chip still focuses the curve, so the drawing the reader is comparing stays
+// in front of them, and the fold survives the re-render its own click causes.
+// The lid states what the row is set to, because a shut drawer is the only
+// place the sheet still says which target and horizon the picture is drawn for.
+// The panels below read the same state; the index is what leads into them.
 function renderControls(m) {
   const s = m.state;
   const on = m.models.filter(mo => mo.on).map(mo => mo.key);

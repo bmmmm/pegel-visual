@@ -58,7 +58,7 @@ body {
 a { color: var(--ink); }
 :where(a, button, [tabindex]):focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
 /* what a chip or index link just opened: the ring must show whatever the focus heuristic thinks */
-details.panel > summary:focus, #lead h2[tabindex]:focus, h1[tabindex]:focus { outline: 2px solid var(--ink); outline-offset: 3px; }
+details.panel > summary:focus, details.fold > summary:focus, #lead h2[tabindex]:focus, h1[tabindex]:focus { outline: 2px solid var(--ink); outline-offset: 3px; }
 main {
   margin: 5vh auto 4vh;
   padding: 1.6em 1.8em;
@@ -395,8 +395,12 @@ th:first-child, td:first-child { text-align: left; }
    paper and a slab on dark ground, where it swallowed half the frame */
 .better {
   position: absolute; left: 0; right: 0; bottom: 0; pointer-events: none;
-  background: light-dark(color-mix(in oklab, #a8cede 34%, transparent), color-mix(in oklab, #5b8aa3 16%, transparent));
+  /* --water resolves per scheme, so the two mixes each get the hue their own
+     scheme already uses — no hex repeated here to drift from the token */
+  background: color-mix(in oklab, var(--water) var(--better-a), transparent);
+  --better-a: 34%;
 }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .better { --better-a: 16%; } }
 /* the zone says what it is inside itself, bottom left, where no curve of this
    sheet has ever run — the picture then needs no key to state its sign */
 .better i {

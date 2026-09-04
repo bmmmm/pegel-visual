@@ -143,6 +143,26 @@ async function run(cdp, url, { name, width, height, mobile }) {
   const sweep = () => s.evaluate('[...document.querySelectorAll("#plate *")].filter(e => e.checkVisibility() && !e.closest(".tblwrap") && e.getBoundingClientRect().right > window.innerWidth + 1).map(e => e.tagName + "." + e.className).slice(0, 5)');
   const wide = await sweep();
   check(wide.length === 0, 'no visible element sticks out on the right', wide.join(', '));
+
+  // 1b. THE FIRST LOOK — asserted HERE, on the page as delivered, before this
+  //     script forces every <details> open and shut again. Downstream of that
+  //     reset "every fold comes shut" would be testing a state the harness had
+  //     just imposed: green even if the page shipped every fold open.
+  //     The sheet's whole claim is a verdict and a drawing; if the drawing is
+  //     not on the first screen, the claim is not made. Measured before the
+  //     folds went in: the plot started 661 px down a 900 px desktop (cut off
+  //     at the bottom) and 1 213 px down an 844 px phone — not there at all.
+  const foldState = await s.evaluate(`JSON.stringify([...document.querySelectorAll('details.fold')].map(d => ({ id: d.id, open: d.open, lid: d.querySelector('summary').textContent.trim() })))`);
+  const folds = JSON.parse(foldState);
+  check(folds.length >= 3 && folds.every(f => !f.open), 'every fold arrives shut, as delivered', foldState);
+  const lidOf = async id => (JSON.parse(await s.evaluate(`JSON.stringify((() => { const d = document.getElementById(${JSON.stringify(id)}); return d ? d.querySelector('summary').textContent.trim() : null; })())`)));
+  const settingsLid = folds.find(f => f.id === 'settings');
+  check(!!settingsLid && /daily mid/.test(settingsLid.lid) && /days 1–14/.test(settingsLid.lid),
+    'and the shut settings lid still says which target and horizon the picture is drawn for', settingsLid && settingsLid.lid);
+  const plot0 = await rect('#lead svg[data-lead]');
+  const vh = await s.evaluate('innerHeight');
+  check(plot0 && plot0.y + plot0.h <= vh, 'the drawing is whole on the first screen', `plot ${Math.round(plot0.y)}–${Math.round(plot0.y + plot0.h)} px of ${vh}`);
+
   await s.evaluate('for (const d of document.querySelectorAll("details")) d.open = true');
   const wideOpen = await sweep();
   // Measured against the EMULATED width, not window.innerWidth: on a phone
@@ -164,26 +184,17 @@ async function run(cdp, url, { name, width, height, mobile }) {
   // 2. the filter row sits against the curve, and a chip keeps the reader on it.
   //    (Before this order: the chips were 1 121 px below the curve's head on desktop,
   //    2 173 on a phone, and a click scrolled the curve clean off the top.)
-  // 1b. THE FIRST LOOK. The sheet's whole claim is a verdict and a drawing; if
-  //     the drawing is not on the first screen, the claim is not made. Measured
-  //     before the folds went in: the plot started 661 px down a 900 px desktop
-  //     (cut off at the bottom) and 1 213 px down an 844 px phone — not there at
-  //     all. Everything else on this sheet is now one fold away from the reader.
-  const foldState = await s.evaluate(`JSON.stringify([...document.querySelectorAll('details.fold')].map(d => ({ id: d.id, open: d.open, lid: d.querySelector('summary').textContent.trim() })))`);
-  const folds = JSON.parse(foldState);
-  check(folds.length >= 3 && folds.every(f => !f.open), 'every fold comes shut', foldState);
-  const settings = folds.find(f => f.id === 'settings');
-  check(!!settings && /daily mid/.test(settings.lid) && /days 1–14/.test(settings.lid),
-    'and the shut settings lid still says which target and horizon the picture is drawn for', settings && settings.lid);
-  const vh = await s.evaluate('innerHeight');
-  check(plot.y + plot.h <= vh, 'the drawing is whole on the first screen', `plot ${Math.round(plot.y)}–${Math.round(plot.y + plot.h)} px of ${vh}`);
-
   const openFold = async id => { await s.evaluate(`(() => { const d = document.getElementById(${JSON.stringify(id)}); if (d && !d.open) d.open = true; })()`); await settle(); };
   await openFold('settings');
   const rowY = await rect('nav.p-tabs[aria-label$="target and horizon block"]');
   check(rowY.y < plot.y, 'the filter row is above the curve it relabels', `row ${Math.round(rowY.y)} px, curve ${Math.round(plot.y)} px`);
   await click('nav.p-tabs a[data-ctl="block"][href*="block=h31-90"]');
   check(await s.evaluate('document.getElementById("settings").open'), 'and the fold it lives in survives its own click');
+  // the lid must FOLLOW the state, not merely happen to spell the defaults: a lid
+  // frozen on "daily mid · days 1–14" passes every check that only ever loads the
+  // default URL, and is then the one place the sheet lies about what it is drawing
+  const movedLid = await lidOf('settings');
+  check(/days 31–90/.test(movedLid) && !/days 1–14/.test(movedLid), 'and its lid now names the block that is drawn, not the default', movedLid);
   check((await s.evaluate('location.search + location.hash')) === '?block=h31-90#lead', 'the URL carries block and the drawing it shows', await s.evaluate('location.search + location.hash'));
   check(!(await s.evaluate('document.querySelector("details#skill").open')), 'no panel is thrown open behind the reader');
   check((await active()) === 'h2 in section#lead', 'focus stays on the curve heading', await active());
@@ -213,7 +224,12 @@ async function run(cdp, url, { name, width, height, mobile }) {
     const drawn = JSON.parse(strokes);
     check(drawn.length === modelChips && new Set(drawn.map(d => d[0])).size === drawn.length, 'and each told apart by its own dash', strokes);
     check(new Set(drawn.map(d => d[1])).size === drawn.length, 'and by its own colour, so the two survive lying on each other', strokes);
-    // every swatch in the key must actually show ink — a dasharray that starts on
+    // Every swatch in the key must actually show INK, and paint is the point: a
+    // closed <details> keeps its layout, so these rects are real even while the
+    // key is folded away — and the check would pass on geometry alone while the
+    // subtree is never painted. Open it first, or this measures nothing.
+    await openFold('leadkey');
+    // a dasharray that starts on
     // a gap, or a mark placed off its own viewBox, leaves an empty 12 px box that
     // no Node test can see
     const inked = await s.evaluate('JSON.stringify([...document.querySelectorAll("#lead .p-key .sw svg line")].map(l => { const r = l.getBoundingClientRect(); return [Math.round(r.width), Math.round(r.height)]; }))');
@@ -352,6 +368,7 @@ async function run(cdp, url, { name, width, height, mobile }) {
   await s.send('Page.captureScreenshot', { captureBeyondViewport: true, clip: { x: 0, y: 0, width: full.w, height: Math.min(full.h, 6000), scale: 1 } })
     .then(r => writeFileSync(join(shots, `${name}-full.png`), Buffer.from(r.data, 'base64')));
   // clip coordinates are page coordinates: the viewport rect plus the scroll
+  await openFold('leadkey');   // layout survives a shut fold, paint does not — an unopened key crops to blank
   const key = await s.evaluate('(() => { const r = document.querySelector("#lead .p-key").getBoundingClientRect(); return { x: r.x + scrollX, y: r.y + scrollY, w: r.width, h: r.height }; })()');
   await s.send('Page.captureScreenshot', { captureBeyondViewport: true, clip: { x: key.x, y: key.y, width: key.w, height: key.h, scale: 3 } })
     .then(r => writeFileSync(join(shots, `${name}-key.png`), Buffer.from(r.data, 'base64')));

@@ -6,7 +6,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { BLOCKS, LINKS, MODEL_MARKS, NC_GLYPH, PANEL_IDS, TARGETS, buildModel, leadSay, markOf, parseState, renderPage, screenSummary, stateHref } from '../gate/gate.js';
+import { BLOCKS, LABEL_GAP, LINKS, MODEL_MARKS, NC_GLYPH, PANEL_IDS, TARGETS, buildModel, leadSay, markOf, parseState, renderPage, screenSummary, stackLabels, stateHref } from '../gate/gate.js';
 
 const ROOT = new URL('../gate/', import.meta.url).pathname;
 // the page is manifest-driven, so its tests read the same manifest the browser does
@@ -745,6 +745,71 @@ test('the model hues are far enough apart, and each is readable on both papers',
   // red-proof: the state this sheet shipped in — the second candidate in the first's blue
   const bent = modelColours(CSS.replace(/--m2:[^;]+/, '--m2: light-dark(#2f6d8f, #9fd4ec)'));
   assert.equal(hueGap(bent.hexes['--m1'].light, bent.hexes['--m2'].light), 0, 'one blue for two candidates is 0° apart, and this test is what says so');
+});
+
+// The end labels are the picture's own key, so what they may and may not do to a
+// value is a contract. The one that matters: a spread label may sit some way from
+// its line, but never on the wrong side of the ×1 bar — the boundary the shaded
+// half gives a meaning to. Shipped without this, 13 of 40 labels crossed it.
+test('a spread label never crosses the bar it is spread around', () => {
+  const at = y => ({ y });
+  const SPLIT = 66.67;   // leadY(1) as a percentage, with LEAD_DOMAIN = [0.5, 4]
+  // four names all ending a hair apart, two either side of the bar
+  const packed = stackLabels([at(66.0), at(66.4), at(67.0), at(67.2)], LABEL_GAP, 0, 100, SPLIT);
+  assert.equal(packed.length, 4, 'every label survives the spread');
+  for (const p of packed) assert.ok(p.y >= 0 && p.y <= 100, `${p.y} stays inside the frame`);
+  const [above, below] = [packed.filter(p => p.y <= SPLIT), packed.filter(p => p.y > SPLIT)];
+  assert.equal(above.length, 2, 'the two worse-than-the-blend names stay above the bar');
+  assert.equal(below.length, 2, 'and the two better-than-the-blend names below it');
+
+  // and it can go red: without the wall, everything is pushed downwards — into
+  // the shaded half — whatever side of the bar the line itself ended on
+  const noWall = stackLabels([at(66.0), at(66.4), at(67.0), at(67.2)], LABEL_GAP, 0, 100);
+  assert.ok(noWall.filter(p => p.y > SPLIT).length > 2, 'unwalled, names cross the bar — which is the bug this guards');
+
+  // the ordering is honest whatever happens: names never swap relative to each other
+  const many = stackLabels([at(80), at(10), at(50), at(50), at(51)], LABEL_GAP, 0, 100, SPLIT);
+  for (let i = 1; i < many.length; i++) assert.ok(many[i].y >= many[i - 1].y, 'the stack stays monotonic');
+
+  // degenerate input is dropped, not rendered as NaN%
+  assert.deepEqual(stackLabels([], LABEL_GAP, 0, 100, SPLIT), []);
+  assert.equal(stackLabels([{ y: null }, { y: NaN }, { y: undefined }, { y: '40' }], LABEL_GAP, 0, 100, SPLIT).length, 0,
+    'null, NaN, undefined and a string are all not a position');
+  // more names than a band can hold crowd, they do not escape the plot
+  const crowded = stackLabels(Array.from({ length: 13 }, () => at(50)), LABEL_GAP, 0, 100, SPLIT);
+  for (const p of crowded) assert.ok(p.y >= 0 && p.y <= 100, `${p.y} is still inside the frame`);
+});
+
+// The whole sheet, not three states: for every gauge × target × block, take each
+// end label's rendered top:%, take the value its own line actually ended on, and
+// demand they agree about which side of the ×1 bar they are on. Shipped without
+// this, 33 of 192 disagreed — climatology ending at ×1.004, worse than the blend,
+// with its name printed inside the half painted "better than the blend".
+const SPLIT_PCT = 200 / 3;   // leadY(1) as a percentage of the plot height, LEAD_DOMAIN [0.5, 4]
+test('no end label sits on the other side of the bar from the line it names', () => {
+  let checked = 0, wrong = [];
+  for (const target of Object.keys(TARGETS)) for (const block of BLOCKS) for (const lead of ['pooled', ...STATIONS]) {
+    const q = `?target=${target}&block=${block}` + (lead === 'pooled' ? '' : `&lead=${encodeURIComponent(lead)}`);
+    const m = buildModel(reports, parseState(q, '', STATIONS));
+    const lead2 = section(renderPage(m), 'lead');
+    const ends = [...lead2.matchAll(/<span class="end" style="top:([\d.]+)%"><span class="sw"><svg[^>]*><line class="ln (ln-[a-z0-9-]+)"/g)]
+      .map(x => ({ y: Number(x[1]), cls: x[2] }));
+    const drawn = [...lead2.matchAll(/<path class="ln (ln-[a-z0-9-]+)"/g)].map(x => x[1]);
+    assert.deepEqual(new Set(ends.map(e => e.cls)), new Set(drawn), `${q}: one name per drawn line, and nothing named that is not drawn`);
+    const series = { 'ln-persist': m.lead.series.persist, 'ln-clim': m.lead.series.clim };
+    for (const c of m.lead.curves) series['ln-' + c.mark] = c.ratios;
+    for (const e of ends) {
+      assert.ok(e.y >= 0 && e.y <= 100, `${q}: ${e.cls} at ${e.y}% is outside the plot`);
+      const vals = series[e.cls];
+      let last = null;
+      for (let i = vals.length - 1; i >= 0; i--) { const v = vals[i]; if (v != null && !Number.isNaN(v) && v > 0) { last = v; break; } }
+      if (last == null) continue;
+      checked++;
+      if ((last < 1) !== (e.y > SPLIT_PCT)) wrong.push(`${q} ${e.cls}: ends ×${last.toFixed(3)}, name at ${e.y}%`);
+    }
+  }
+  assert.ok(checked >= 150, `the sweep saw ${checked} labels`);
+  assert.deepEqual(wrong, [], 'a name in the shaded half belongs to a line that ended in it');
 });
 
 test('a model with no report for the target in view has a dead chip, not a lit one', () => {
