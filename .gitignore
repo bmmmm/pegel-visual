@@ -1,6 +1,10 @@
 .DS_Store
 # local backfill output — the data lives on the `archive` branch, not on main
 /archive/
+# LANUK NRW mirrors — `nrw` (daily, mounted by pages.yml) and `nrw-hires`
+# (fine resolution, never deployed) are GitHub-only data branches too
+/nrw/
+/nrw-hires/
 /tmp/
 tmp-*
 # scripts/forecast — uv environment and Python caches

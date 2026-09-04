@@ -94,6 +94,19 @@
   And measure a time series at **both** edges: the newest point against the
   clock, not only the oldest against the window.
 
+## LANUK NRW (`scripts/fetch-nrw-archive.mjs`, `nrw-update.yml`, branches `nrw`/`nrw-hires`)
+
+Its own file: **`.claude/domains/lanuk-nrw.md`** — read it before touching
+the collector, the N1–N7 gate, the two data branches or the LANUK seam in
+`index.html`. Three things worth knowing without opening it: the source has
+**no CORS and no live feed** (a daily export, ~24 h old, mirrored by a daily
+Actions run into two GitHub-only orphan branches; only `nrw` is mounted);
+the source window **rolls** (730 days daily, **63 days** at 15 minutes), so a
+missed day is gone for good and the merge policy is the inverse of the WSV
+extreme-union; and WeatherNext was evaluated on 2026-09-04 and rejected on
+four independent grounds that are written down there — do not reopen it
+without new facts.
+
 ## Forecast gate (`scripts/forecast/`, `gate/`)
 
 Its own subsystem, its own file: **`.claude/domains/forecast-gate.md`** (moved

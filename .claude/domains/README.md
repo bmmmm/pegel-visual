@@ -9,3 +9,4 @@ touch — and inject it into a subagent's prompt when you delegate that work.
 |---|---|
 | `browser-verify.md` | any "verify in a real browser" task — the CDP recipe, the Firefox/BiDi second engine, console and network capture, tab-visibility traps, and how to put real archive data under a local server |
 | `forecast-gate.md` | anything under `scripts/forecast/` or `gate/` — the NO-SHIP verdict on file, the load-bearing `timesfm` pin, the uv bootstrap, the gate page's focus contract, the hires collector |
+| `lanuk-nrw.md` | the LANUK NRW source (`scripts/fetch-nrw-archive.mjs`, `check-nrw-consistency.mjs`, `nrw-update.yml`, the `nrw`/`nrw-hires` branches, the LANUK seam in `index.html`) — the eight measurements, the basin assignment rule, the merge policy, and why WeatherNext was rejected |

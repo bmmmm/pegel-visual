@@ -75,6 +75,20 @@ jobs:
           else
             echo "no archive branch on this remote — deploying the site without data"
           fi
+      - name: Add LANUK NRW data (when the nrw branch exists)
+        # same distinction as above, for the second data branch. Only `nrw`
+        # (daily level, ~3.4 MB/year) is mounted; `nrw-hires` (15-minute
+        # series, ~75 MB/year) is kept on GitHub and never deployed — that is
+        # the whole reason the two are separate branches.
+        run: |
+          set -euo pipefail
+          if git ls-remote --exit-code --heads origin nrw >/dev/null; then
+            git fetch origin nrw --depth 1
+            git worktree add /tmp/nrw-branch FETCH_HEAD
+            cp -R /tmp/nrw-branch/nrw /tmp/site/nrw
+          else
+            echo "no nrw branch on this remote — deploying the site without LANUK data"
+          fi
       - uses: actions/upload-pages-artifact@v5
         with:
           path: /tmp/site

@@ -77,6 +77,20 @@ _      _      _      _      _      _      _      _
   verified seamless with the live PEGELONLINE feed (identical NAP datum). See
   the [`archive` branch README](../../tree/archive) for the per-source
   attribution
+- **beyond federal waterways:** the Erft, the Sieg and the rest of North
+  Rhine-Westphalia's state gauges are not on PEGELONLINE at all. They come
+  from the [LANUK NRW](https://hochwasserportal.nrw) open-data export
+  (dl-de/zero-2.0): ~300 gauges with daily mean and maximum (the minimum is
+  computed from the 15-minute series, so seeded history draws its lower edge
+  at the daily mean and the legend says so), ~310 rain gauges and ~110
+  water-temperature stations, plus the official alert stages. The source is a
+  daily export with a rolling window (730 days daily, 63 days at 15-minute
+  resolution) and sends no CORS header, so `scripts/fetch-nrw-archive.mjs`
+  mirrors it once a day into two GitHub-only branches: `nrw` (the daily
+  level, mounted under `/nrw/`) and `nrw-hires` (the fine resolution, kept but
+  never deployed). These stations have no live feed — their plate says
+  *kein Live-Feed* and names the export time instead of refreshing.
+  `?station=MENDEN_1`, `?river=SIEG`, `?river=ERFT`
 - **years view** (`▦ YEARS` chip or `?view=years`) — the station as a
   multi-year statistics terminal, built from the same daily archive:
   a heatmap of every year by month (`absolute` shades the level itself,
@@ -368,7 +382,10 @@ CI runs the same suite on every push and pull request, and a deploy only
 follows a green run — see `.github/workflows/pages.yml`.
 
 Data: © Wasserstraßen- und Schifffahrtsverwaltung des Bundes (WSV),
-[PEGELONLINE](https://www.pegelonline.wsv.de), refreshed every 5 minutes.
+[PEGELONLINE](https://www.pegelonline.wsv.de), refreshed every 5 minutes;
+NRW state gauges: Landesamt für Natur, Umwelt und Klima NRW (LANUK),
+[hochwasserportal.nrw](https://hochwasserportal.nrw), dl-de/zero-2.0,
+mirrored daily.
 
 ## License
 

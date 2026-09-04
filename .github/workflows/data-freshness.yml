@@ -6,10 +6,12 @@ name: data-freshness
 # silently stops running (schedule disabled, token expiry, a hung run eating
 # its timeout unnoticed) nothing else would ever say so. This runs a few
 # hours after the daily snapshot slot and checks (a) how old the archive
-# branch's last commit is (past 36h = stale) and (b) whether the DEPLOYED
+# branch's last commit is (past 36h = stale), (b) whether the DEPLOYED
 # site's overview.json is more than 6h behind that commit — the branch can be
 # healthy while the pages dispatch never happened, and nothing else notices a
-# repaired branch that never reached the site. Either finding opens (or
+# repaired branch that never reached the site —, (c) the archive refresh's
+# own heartbeat (manifest.json age, 10 d) and (d) the LANUK NRW mirror's
+# `nrw` branch (nrw-update.yml, daily; 30 h). Any finding opens (or
 # comments on) a single tracking issue labeled data-freshness. It never
 # closes issues itself — closing the loop once the pipeline has caught up is
 # a manual step.
@@ -71,6 +73,18 @@ jobs:
           MANIFEST_DAYS=$(( (NOW_EPOCH - MGEN_EPOCH) / 86400 ))
           echo "deployed manifest.generated: ${MGEN:-unfetchable} (${MANIFEST_DAYS}d old)"
 
+          # the LANUK NRW mirror (nrw-update.yml, daily at 17:41 UTC) pushes
+          # to its own orphan branch `nrw`, which none of the checks above
+          # look at. Its source window rolls daily, so a dead job costs data
+          # nobody can refetch: 30 h is one missed run plus the cron drift.
+          # A branch that does not exist yet (before the first seed) is
+          # reported as stale rather than skipped — a watchdog that is
+          # silent about a missing branch is silent about a deleted one.
+          NRW_DATE=$(gh api "repos/${{ github.repository }}/branches/nrw" --jq '.commit.commit.committer.date' 2>/dev/null || true)
+          if [ -n "$NRW_DATE" ]; then NRW_EPOCH=$(date -d "$NRW_DATE" +%s); else NRW_EPOCH=0; fi
+          NRW_HOURS=$(( (NOW_EPOCH - NRW_EPOCH) / 3600 ))
+          echo "nrw branch last commit: ${NRW_DATE:-missing} (${NRW_HOURS}h ago)"
+
           NL=$'\n'
           PROBLEMS=""
           if [ "$AGE_HOURS" -gt 36 ]; then
@@ -81,6 +95,9 @@ jobs:
           fi
           if [ "$MANIFEST_DAYS" -gt 10 ]; then
             PROBLEMS="$PROBLEMS${PROBLEMS:+$NL$NL}The archive refresh has not completed in ${MANIFEST_DAYS} days (manifest.json generated: ${MGEN:-unfetchable}). It runs weekly (Monday) and monthly (the 3rd). The daily snapshot keeps the branch and the deploy looking fresh, so only this check sees a dead archive-update.yml. Check its recent runs — the 2026-07/08 misses ended as CANCELLED timeouts, not failures."
+          fi
+          if [ "$NRW_HOURS" -gt 30 ]; then
+            PROBLEMS="$PROBLEMS${PROBLEMS:+$NL$NL}The nrw branch's last commit is ${NRW_HOURS}h old (committed ${NRW_DATE:-never}), past the 30h threshold for the daily LANUK mirror (nrw-update.yml). The source window rolls daily — 63 days for the 15-minute series — so every missed day is lost for good. Check its recent runs."
           fi
 
           if [ -z "$PROBLEMS" ]; then
@@ -95,14 +112,16 @@ jobs:
             TITLE="Data pipeline stale: archive branch last updated $COMMIT_DATE"
           elif [ "$DRIFT_HOURS" -gt 6 ]; then
             TITLE="Data pipeline stale: deployed site behind the archive branch"
-          else
+          elif [ "$MANIFEST_DAYS" -gt 10 ]; then
             TITLE="Data pipeline stale: archive refresh ${MANIFEST_DAYS}d overdue"
+          else
+            TITLE="Data pipeline stale: nrw branch last updated ${NRW_DATE:-never}"
           fi
           ISSUE_NUM=$(gh issue list --label data-freshness --state open --json number --jq '.[0].number')
 
           if [ -n "$ISSUE_NUM" ]; then
             gh issue comment "$ISSUE_NUM" --body "Still stale: $PROBLEMS"
           else
-            BODY="$PROBLEMS$NL$NL""Expected cadence: snapshot-update.yml runs daily, archive-update.yml runs monthly. Check both workflows' recent runs for failures or a disabled schedule."$NL$NL"This issue was opened automatically by data-freshness.yml and is never closed automatically — close it once the pipeline is confirmed caught up."
+            BODY="$PROBLEMS$NL$NL""Expected cadence: snapshot-update.yml runs daily, archive-update.yml weekly and monthly, nrw-update.yml daily. Check the workflows' recent runs for failures or a disabled schedule."$NL$NL"This issue was opened automatically by data-freshness.yml and is never closed automatically — close it once the pipeline is confirmed caught up."
             gh issue create --title "$TITLE" --label data-freshness --body "$BODY"
           fi

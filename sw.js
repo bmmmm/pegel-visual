@@ -49,6 +49,7 @@ self.addEventListener('fetch', e => {
   const url = new URL(req.url);
   if (url.origin !== self.location.origin) return;   // PEGELONLINE, open-meteo: never ours to cache
   if (url.pathname.includes('/archive/')) return;    // data, not shell
+  if (url.pathname.includes('/nrw/')) return;        // LANUK data, same rule
 
   e.respondWith(
     fetch(req)

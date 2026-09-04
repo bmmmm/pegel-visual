@@ -1,0 +1,117 @@
+name: nrw-update
+
+# Daily mirror of the LANUK NRW gauge, rain and water-temperature data
+# (hochwasserportal.nrw, dl-de/zero-2.0) into two GitHub-only orphan data
+# branches: `nrw` (daily level — what pages.yml mounts under /nrw/) and
+# `nrw-hires` (15-minute gauges, hourly rain and temperature — kept, never
+# deployed). One collector, one gate, two pushes.
+#
+# Daily, because the source is a daily export with a ROLLING window: 730 days
+# for the daily products, only 63 for the fine resolution. A day that has
+# rolled out of the window can never be fetched again. The daily level would
+# survive a missed run for two years; the fine resolution loses 1.6 % of its
+# stock per missed day, so the cron is daily and the retry/watchdog wiring of
+# Actions (not a sleeping laptop) carries it. 17:41 UTC is ~2 h after the
+# export's inner timestamps (14:10-15:45 UTC measured 2026-09-04) and clear of
+# snapshot-update (05:17/15:17) and archive-update (Mon 04:23).
+#
+# Its OWN concurrency group: the `archive-branch-write` group serialises the
+# WSV jobs because they push to the same branch, and GitHub cancels the
+# PENDING member of a group when a third run joins it — a daily run in that
+# group would have been the one cancelled. This job pushes to different
+# branches and shares nothing with them.
+on:
+  schedule:
+    - cron: '41 17 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: write # to dispatch the pages deploy afterwards
+  issues: write # to report a failed run to the data-freshness issue
+
+concurrency:
+  group: nrw-branch-write
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    # a healthy run is four bulk downloads (~14 MB), ~120 single-station
+    # requests at a polite throttle, and two small commits: minutes, not
+    # hours. 40 turns a hang into a red run the failure step below reports.
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7
+        with:
+          ref: nrw
+          path: nrw-branch
+      - uses: actions/checkout@v7
+        with:
+          ref: nrw-hires
+          path: nrw-hires-branch
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - name: Collect from hochwasserportal.nrw
+        # Tier 1 (four bulk products, the explicitly licensed primary source)
+        # plus Tier 2 (index.json-driven single-station series for the gauges
+        # no bulk product carries). The pruning levers (--max-years,
+        # --max-months, --allow-prune) are deliberately NOT passed: the mirror
+        # only grows.
+        run: node scripts/fetch-nrw-archive.mjs --out nrw-branch/nrw --out-hires nrw-hires-branch/nrw-hires
+      - name: Consistency gate (N1-N7)
+        # content-level guard before anything is pushed: fleet completeness,
+        # recency, window coverage, no regression against the branch HEAD,
+        # shapes and plausibility, alert-stage integrity, and bulk coverage
+        # against the high-water mark — the silent failure where the ZIP loses
+        # stations while every single series still looks healthy
+        run: node scripts/check-nrw-consistency.mjs --tree nrw-branch/nrw --git nrw-branch
+      - name: Commit and push nrw
+        id: push
+        run: |
+          cd nrw-branch
+          git config user.name 'github-actions[bot]'
+          git config user.email 'github-actions[bot]@users.noreply.github.com'
+          git add nrw
+          git diff --cached --quiet && { echo 'no changes'; exit 0; }
+          git commit -m "nrw: mirror $(date -u +%Y-%m-%d)"
+          git push
+          echo "pushed=true" >> "$GITHUB_OUTPUT"
+      - name: Commit and push nrw-hires
+        # the fine resolution is the most perishable layer, so its push does
+        # not wait on whether the daily level changed; it is never deployed,
+        # so it needs no pages dispatch either
+        run: |
+          cd nrw-hires-branch
+          git config user.name 'github-actions[bot]'
+          git config user.email 'github-actions[bot]@users.noreply.github.com'
+          git add nrw-hires
+          git diff --cached --quiet && { echo 'no changes'; exit 0; }
+          git commit -m "nrw-hires: mirror $(date -u +%Y-%m-%d)"
+          git push
+      - name: Redeploy pages
+        # a push to a data branch cannot trigger pages.yml itself — the orphan
+        # branch carries no workflow files — so dispatch it here
+        if: steps.push.outputs.pushed == 'true'
+        run: gh workflow run pages.yml --ref main
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - name: Report a failed run to the data-freshness issue
+        # same wiring as archive-update.yml: `cancelled()` is load-bearing,
+        # because a timeout ends the run as CANCELLED, not failed
+        if: failure() || cancelled()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh label create data-freshness --force --color B60205 \
+            --description "Data pipeline freshness / failure watchdog" >/dev/null
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          ISSUE_NUM=$(gh issue list --label data-freshness --state open --json number --jq '.[0].number')
+          if [ -n "$ISSUE_NUM" ]; then
+            gh issue comment "$ISSUE_NUM" --body "nrw-update run failed: $RUN_URL"
+          else
+            BODY="The nrw-update workflow run failed: $RUN_URL"$'\n\n'"The LANUK source window rolls daily (63 days for the fine resolution); every missed day is gone for good. This issue was opened automatically and is never closed automatically — close it once the pipeline is confirmed caught up."
+            gh issue create --title "Data pipeline stale: nrw-update run failed" --label data-freshness --body "$BODY"
+          fi
