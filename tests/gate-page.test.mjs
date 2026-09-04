@@ -52,7 +52,7 @@ test('every target × block renders, and the numbers follow the chips', () => {
     const m = buildModel(reports, state);
     const html = renderPage(m);
     assert.ok(html.includes(`<span class="word">${m.verdict}</span>`));
-    assert.ok(html.includes(`Skill by gauge · ${m.primary.label} · ${state.target === 'mid' ? 'daily mid' : 'daily max'} ·`), 'the skill panel names the model AND the target');
+    assert.ok(html.includes(`Skill by gauge · ${m.drawn.map(x => x.label).join(' + ')} · ${state.target === 'mid' ? 'daily mid' : 'daily max'} ·`), 'the skill panel names every model it draws AND the target');
     seen.add(m.skill.pooled.ss.toFixed(4) + state.target);
   }
   assert.equal(seen.size, 6, 'six distinct pooled skills — one per target and block');
@@ -134,7 +134,7 @@ test('the curve draws three lines, the bands, the bar and a cursor, each named i
 // fourth curve, a new bar state — turns this red without anyone editing a list.
 const classesIn = html => { const out = new Set(); for (const m of html.matchAll(/class="([^"]+)"/g)) for (const c of m[1].split(/\s+/)) if (c) out.add(c); return out; };
 // not marks: layout, text, hit targets and states the key spells out in words (▸ ◂ ▴ ▾ are glyphs in the notes)
-const NOT_A_MARK = new Set(['p-block', 'row', 'pooled', 'head', 'lbl', 'rg', 'track', 'val', 'axis', 'ticks', 'mk', 'sw', 'hint', 'p-readout', 'p-dim', 'p-tabs', 'p-tabs-lbl', 'on', 'off', 'rows', 'pits', 'pit', 'nm',
+const NOT_A_MARK = new Set(['p-block', 'row', 'pooled', 'head', 'lbl', 'rg', 'track', 'two', 'val', 'vm', 'axis', 'ticks', 'mk', 'sw', 'hint', 'p-readout', 'p-dim', 'p-tabs', 'p-tabs-lbl', 'on', 'off', 'rows', 'pits', 'pit', 'nm', 'mn',
   'plot', 'vscale', 'plot-box', 'lead-bands', 'lbn', 'lead-ticks', 'clip', 'lo', 'hi', 'up', 'dn', 'vh', 'p-h2',
   'prose', 'flow', 'fn']);  // prose/flow/fn are the model chain's containers; its four node kinds ARE marks
 test('every mark a section draws is named in that section’s key — mechanically', () => {
@@ -502,6 +502,35 @@ test('switching a model off makes the WHOLE sheet speak for the other one', () =
     const foot = (html.match(/<footer id="plate-foot">[\s\S]*?<\/footer>/) || [''])[0];
     for (const [, f] of Object.entries(mo.files)) if (f.md) assert.ok(foot.includes(f.md), `${mo.key}: the foot links ${f.md}`);
   }
+});
+
+test('skill and calibration draw one bar per model, each out of its own report', () => {
+  const both = buildModel(reports, parseState(''));
+  assert.ok(both.drawn.length > 1, 'the default sheet draws every candidate');
+  const html = renderPage(both);
+  const skill = panel(html, 'skill');
+  // two bars per gauge row, and the slot classes that place and colour them
+  const bars = skill.match(/<span class="bar [^"]*"/g) || [];
+  assert.equal(bars.length, (both.skill.rows.length + 1) * both.drawn.length, 'a bar per gauge and per model, plus the pooled row');
+  assert.ok(bars.every(b => /\bm[12]\b/.test(b)), 'every bar says which model it is');
+  assert.equal((skill.match(/class="ci m[12]"/g) || []).length, both.drawn.length, 'a bootstrap interval per model');
+  // the numbers are each model's own, not the primary's repeated
+  for (const r of both.skill.rows) {
+    const own = both.drawn.map(mo => readReport(mo.files['seasonal-mid'].json).stations[r.station].blocks[both.block].ss);
+    assert.deepEqual(r.bars.map(b => b.ss), own, `${r.station}: each bar is its model's own skill`);
+  }
+  assert.deepEqual(both.skill.pooled.bars.map(b => b.key), both.drawn.map(mo => mo.key));
+  assert.notEqual(both.skill.pooled.bars[0].ss, both.skill.pooled.bars[1].ss, 'the pooled bars are not the same number twice');
+  // calibration: a mark and a PIT histogram per model, named
+  const calib = panel(html, 'calib');
+  assert.equal((calib.match(/<div class="pit">/g) || []).length, both.calib.length * both.drawn.length, 'a PIT histogram per gauge and model');
+  // the visible caption, not just the aria-label: the model sits on its own line
+  for (const mo of both.drawn) assert.ok(calib.includes(`${both.calib[0].station}<span class="mn">${mo.label}</span>`), `the histograms name ${mo.key} where a reader can see it`);
+  // and with one model on, the row goes back to a single bar with no slot class
+  const one = buildModel(reports, parseState(`?models=${MANIFEST.shipped}`, '', null, MODEL_KEYS));
+  const oneSkill = panel(renderPage(one), 'skill');
+  assert.equal((oneSkill.match(/<span class="bar [^"]*"/g) || []).length, one.skill.rows.length + 1);
+  assert.ok(!/\bbar [a-z]+ m[12]\b/.test(oneSkill), 'no slot class when there is nothing to tell apart');
 });
 
 test('the short-horizon panel draws the run of the model in view, not the shipped one', () => {

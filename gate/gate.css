@@ -186,9 +186,31 @@ main {
 .bar.pos { background: repeating-linear-gradient(45deg, var(--water) 0 3px, var(--water-line) 3px 4px); }
 .bar.neg { background: repeating-linear-gradient(135deg, var(--dry) 0 3px, var(--dry-line) 3px 4px); }
 .bar.tie { background: color-mix(in oklab, var(--ink) 14%, var(--paper)); border-style: dashed; }
+/* two candidates in one row: the first sits above the second and keeps the pale
+   fill; the second inverts to the saturated line colour. Position, fill and the
+   mark beside the number all say which is which, so none of them carries the
+   difference alone — the hatch angle stays free to mean the sign. */
+.track.two { height: 1.7em; }
+.track.two .bar { height: 30%; }
+.track.two .bar.m1 { top: 11%; }
+.track.two .bar.m2 { top: 59%; }
+/* the second candidate is a SOLID fill in the same sign colour, against the
+   first's hatch — inverting the hatch instead only swapped two shades of the
+   same blue and read as one bar drawn twice (measured 2026-09-04). The sign
+   still travels with the hue and with the side of zero the bar grows from. */
+.bar.m2.pos { background: var(--water-line); }
+.bar.m2.neg { background: var(--dry-line); }
+.bar.m2.tie { background: color-mix(in oklab, var(--ink) 45%, var(--paper)); }
 .ci { top: 48%; height: 0; border-top: 2px solid var(--ink); }
+.track.two .ci.m1 { top: 26%; }
+.track.two .ci.m2 { top: 74%; }
 .ci::before, .ci::after { content: ''; position: absolute; top: -4px; width: 0; height: 9px; border-left: 2px solid var(--ink); }
 .ci::before { left: -1px; } .ci::after { right: -1px; }
+/* the value column when two models are drawn: one line each, its own mark first */
+.val .vm { display: block; white-space: nowrap; }
+.val .vm .sw { vertical-align: -1px; margin-right: 0.3ch; }
+/* the significance dot is round like one of the model marks — keep it off them */
+.val .vm .sig { margin-left: 0.4ch; }
 .clip { width: 0; height: 100%; }
 .clip::after { content: '▸'; position: absolute; right: -0.2em; top: -0.15em; font-size: 0.8em; color: var(--ink); }
 .clip.lo::after { content: '◂'; right: auto; left: -0.2em; }
@@ -228,6 +250,8 @@ main {
 .pits { display: grid; grid-template-columns: repeat(auto-fill, minmax(9rem, 1fr)); gap: 0.8em 1.2em; margin-top: 0.6em; }
 .pit { font-family: var(--font-data); font-size: 0.72em; }
 .pit .nm { display: block; color: var(--mid); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* the model gets its own line: side by side, the ellipsis would eat it whole */
+.pit .nm .mn { display: block; color: var(--ink); }
 .pit svg { display: block; width: 100%; height: 3.6rem; }
 /* unscoped on purpose: the key's swatch draws the same two classes */
 .pb { fill: var(--water); stroke: var(--ink); stroke-width: 0.5; vector-effect: non-scaling-stroke; }
