@@ -374,8 +374,16 @@ export function buildManifest(stations, out) {
     // meta.json; surface it so the client can attribute correctly. Absent = WSV,
     // so the 618 WSV stations stay untouched and this rebuild never strips a
     // source a sibling adapter wrote (order-independent with the RWS refresh).
-    const src = (readJson(join(dir, 'meta.json')) || {}).source;
-    if (src) entry.source = src;
+    const meta = readJson(join(dir, 'meta.json')) || {};
+    if (meta.source) entry.source = meta.source;
+    // `none` above is derived from the file listing and therefore says only
+    // "nothing on disk". Whether WSV HAS an archive is a different question,
+    // answered by the ZIP endpoint and recorded by markNoArchive — a station can
+    // carry a running year built purely from the REST window and still have no
+    // archive at all (Neuwied Stadt, Basel-Rheinhalle, ~111 lock and weir
+    // gauges). Both facts travel, so the client can keep fetching the data that
+    // does exist while still naming what will never arrive.
+    if (meta.noArchive) entry.noArchive = true;
     return entry;
   };
 
@@ -499,6 +507,31 @@ export function isFrozen(dir, y) {
 export function hasClosedYears(dir) {
   const closed = readJson(join(dir, 'closed.json'));
   return Array.isArray(closed) && closed.length > 0;
+}
+
+// The noArchive verdict, made durable. Until 2026-09-04 it was reached in the
+// run loop, logged, counted and then dropped, so buildManifest had to guess the
+// same fact back out of the file listing ("no closed.json and no current.json")
+// — a guess the weekly REST refresh defeats the moment it writes a current.json
+// for one of the ~111 gauges WSV serves live but never archived. Result: 0 of
+// 739 stations marked, and the client's precise caveat dead for every gauge.
+// The endpoint's own 303 is the fact; meta.json is where it now lives.
+export function markNoArchive(dir) {
+  mkdirSync(dir, { recursive: true });
+  const metaPath = join(dir, 'meta.json');
+  const meta = readJson(metaPath) || {};
+  meta.noArchive = true;
+  writeFileSync(metaPath, JSON.stringify(meta));
+}
+
+// Only a ZIP answer can withdraw the verdict — see the call site for why a
+// successful --current run must not.
+export function clearNoArchive(dir) {
+  const metaPath = join(dir, 'meta.json');
+  const meta = readJson(metaPath);
+  if (!meta || meta.noArchive === undefined) return;
+  delete meta.noArchive;
+  writeFileSync(metaPath, JSON.stringify(meta));
 }
 
 // What a January --current run does with the year that just completed. Either the
@@ -710,6 +743,12 @@ async function main() {
         // measured 2026-09-03, the endpoint accepts a future end date and simply
         // returns everything up to the last reading)
         : await fetchCondensed(s.uuid, startYear, requestEnd(RUNNING ? CURRENT_YEAR : TO));
+      // A ZIP answer is the only thing that can withdraw a standing noArchive
+      // verdict, so this sits above the RUNNING/CURRENT_ONLY split rather than
+      // inside writeStation: --current reaches these gauges over REST every
+      // week and succeeds, and REST success says nothing about the ZIP archive.
+      // Clearing on "any successful write" would erase the marker every Monday.
+      if (!CURRENT_ONLY) clearNoArchive(dir);
       if (RUNNING) {
         const healed = healRunningYearFromZip(dir, s.shortname, CURRENT_YEAR, years.get(CURRENT_YEAR));
         console.log(`${tag} · ${pts} pts -> ${healed ? 'running year healed' : 'left alone'}`);
@@ -742,6 +781,7 @@ async function main() {
       // would push a run that healed almost nothing, green.
       if (e.noArchive && !hasClosedYears(dir)) {
         console.log(`${tag} · no ZIP archive at WSV`);
+        markNoArchive(dir); // the verdict outlives the run — see markNoArchive
         noArchive++;
       } else {
         console.log(`${tag} · FAILED: ${e.message}`);

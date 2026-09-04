@@ -649,6 +649,63 @@ test('loadRepoArchive: a manifest none-entry skips archive fetches and flags the
   delete globalThis.__unexpected;
 });
 
+// The test that would have caught the 2026-09 regression, and the reason it is
+// shaped like this: every OTHER manifest test feeds the client a hand-written
+// entry and feeds buildManifest a directory shape production never has (a dir
+// with no data files at all). Both sides stayed green for weeks while the
+// deployed manifest marked 0 of 739 stations and the client's no-archive
+// caveat was dead code for every gauge on the site. So this one runs the REAL
+// buildManifest over Neuwied Stadt's REAL on-disk shape and hands its output to
+// the client unedited — producer and consumer meet exactly once, here.
+test('manifest seam: a REST-only gauge survives buildManifest and reaches the client as rest-only', async () => {
+  const { buildManifest } = await import('../scripts/fetch-wsv-archive.mjs');
+  const { mkdtempSync, mkdirSync, writeFileSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const out = mkdtempSync(join(tmpdir(), 'pegel-seam-'));
+  const year = new Date(NOON).getUTCFullYear();
+  const days = 365 + (((year % 4 === 0 && year % 100 !== 0) || year % 400 === 0) ? 1 : 0);
+
+  // Neuwied Stadt as it actually sits on the archive branch: a running year
+  // built purely from the ~31-day REST window, no closed.json ever, and
+  // meta.json carrying the ZIP endpoint's 303 verdict.
+  // one archived day, placed before the harness clock (mid-January): the real
+  // gauge's days sit in July, but loadRepoArchive drops anything dated past
+  // now, and which day it is has no bearing on the seam under test
+  const min = Array(days).fill(null), max = Array(days).fill(null);
+  min[5] = -34; max[5] = 91;
+  mkdirSync(join(out, 'neuwied'));
+  const current = { y: year, min, max };
+  writeFileSync(join(out, 'neuwied', 'current.json'), JSON.stringify(current));
+  writeFileSync(join(out, 'neuwied', 'meta.json'),
+    JSON.stringify({ name: 'Neuwied Stadt', fetchedThrough: 0, noArchive: true }));
+
+  const manifest = buildManifest(
+    [{ uuid: 'neuwied', shortname: 'Neuwied Stadt', water: { shortname: 'RHEIN' } }], out);
+  const entry = manifest.stations.neuwied;
+  assert.equal(entry.noArchive, true, 'the ZIP endpoint verdict survives into the manifest');
+  assert.equal(entry.none, undefined, 'but it is not `none` — there IS a running year worth fetching');
+  assert.equal(entry.from, year, 'and the year range still describes what we hold');
+
+  // the real manifest, unedited, straight into the client
+  const app = loadApp({ now: NOON });
+  app.run(`state.info = { uuid: 'neuwied' }`);
+  app.run('globalThis.__asked = []');
+  app.run(`getJson = async url => {
+    __asked.push(url);
+    if (url === 'archive/manifest.json') return ${JSON.stringify(manifest)};
+    if (url === 'archive/neuwied/current.json') return ${JSON.stringify(current)};
+    throw new Error('404 ' + url);
+  }`);
+  await app.run('loadRepoArchive()');
+  assert.equal(app.run('state.repoArchive'), 'rest-only',
+    'the client names the state the manifest actually describes');
+  assert.ok(globalThis.__asked.includes('archive/neuwied/current.json'),
+    'and still fetches the days that DO exist — collapsing this into `none` would blank the chart');
+  assert.ok(app.run('state.archive.length') > 0, 'which land in the archive');
+  delete globalThis.__asked;
+});
+
 test('loadRepoArchive: lazily merges current.json into the local archive', async () => {
   const app = loadApp({ now: NOON });
   const year = new Date(NOON).getUTCFullYear();
@@ -1103,6 +1160,45 @@ test('historyViewModel: a record that stops short of the clock says so', () => {
   assert.ok(!fresh.html.includes('no reading after'), 'and nothing about a stale edge in the key');
 });
 
+// The start-of-window note had no test at all, which is how a caveat could go
+// dead site-wide unnoticed. All three branches, anchored to the rendered <dd>.
+test('historyViewModel: the start-of-window note names the right reason', () => {
+  const app = loadApp({ now: NOON });
+  // 56 days at two points a day — Neuwied Stadt's real depth against a 10Y ask
+  const pts = [];
+  for (let d = 55; d >= 0; d--) pts.push([NOON - d * 864e5 - 12 * 36e5, 20], [NOON - d * 864e5, 60]);
+  const run = repoArchive => {
+    app.run(`state.archive = ${JSON.stringify(pts)}`);
+    app.run(`state.repoArchive = ${JSON.stringify(repoArchive)}`);
+    app.run(`historyKey = '10y'`);
+    const h = app.run('historyViewModel()');
+    return { h, html: app.run('renderHistory(historyViewModel())') };
+  };
+
+  const restOnly = run('rest-only');
+  assert.equal(restOnly.h.note.kind, 'rest-only');
+  assert.ok(restOnly.h.note.text.includes('keeps no multi-year archive'),
+    `the reason is named, not the symptom: ${restOnly.h.note.text}`);
+  const first = new Date(pts[0][0]).toISOString().slice(0, 10);
+  assert.ok(restOnly.h.note.text.includes(first),
+    `and the record's own first day: ${restOnly.h.note.text}`);
+  assert.ok(!restOnly.h.note.text.includes('import the WSV archive'),
+    'never an import that cannot deliver — that was the whole bug');
+  assert.ok(restOnly.html.includes(`<dd class="warn">${restOnly.h.note.text}</dd>`),
+    'and it reaches the key as its own warning entry');
+
+  // a gauge whose archive is merely still filling gets the opposite advice
+  const short = run('available');
+  assert.equal(short.h.note.kind, 'short');
+  assert.ok(short.html.includes('import the WSV archive below'));
+
+  // nothing on disk at all: no date to name, because there is no record
+  const none = run('none');
+  assert.equal(none.h.note.kind, 'none');
+  assert.ok(none.html.includes('keeps no multi-year archive'));
+  assert.ok(!none.h.note.text.includes(first), 'and no start date it cannot honestly claim');
+});
+
 // The archive changes cadence inside a window — 15-minutely for 16 days, hourly
 // to a year, 6-hourly beyond — and by index that dense stretch claimed as many
 // columns as a sparse one, so the same days were drawn at different slopes
@@ -1311,7 +1407,7 @@ test('buildReportBody: covers everything the renderer branches on, redacts recei
   assert.match(body, /river km: 654\.8/);
   assert.match(body, /history range: 7d/);
   assert.match(body, /points in local archive: 2/);
-  assert.match(body, /hosted archive loaded: true \(source: WSV\)/);
+  assert.match(body, /hosted archive: available \(source: WSV\)/);
   assert.match(body, /plate: \d+px (narrow|wide)/);
   assert.match(body, /flowLowKm: true/);
   assert.match(body, /neighbors: 3/);
