@@ -140,7 +140,7 @@ function stationOrder(report) {
 
 const SIG_P = 0.10;
 
-export function skillRows(report, block, key = 'ss') {
+export function skillRows(report, block, key = 'ss', modelLabel = 'TimesFM') {
   const th = report.thresholds || {};
   return stationOrder(report).map(({ station, regime }) => {
     const b = report.stations[station].blocks[block];
@@ -149,8 +149,10 @@ export function skillRows(report, block, key = 'ss') {
     const tie = key === 'ss' ? b.tie : Math.abs(mae.clim - mae.blend) < (th.tie_cm ?? 2);
     const sig = key === 'ss' && b.dm && b.dm.p != null && b.dm.p < SIG_P && b.dm.z > 0;
     const model = key === 'ss' ? mae.tfm_point : mae.clim;
-    const label = key === 'ss' ? 'TimesFM' : 'climatology';
-    const say = `${station}, ${BLOCK_LABEL[block]}: ${label} ${num(model, 1)} cm vs blend ${num(mae.blend, 1)} cm — skill ${signed(ss)}` +
+    const label = key === 'ss' ? modelLabel : 'climatology';
+    // the centimetres before the name: "TimesFM 2.5 cm" spells a candidate's
+    // label out of a word and a number that only look adjacent
+    const say = `${station}, ${BLOCK_LABEL[block]}: ${num(model, 1)} cm for ${label} vs blend ${num(mae.blend, 1)} cm — skill ${signed(ss)}` +
       (tie ? ' (a tie: under 2 cm apart)' : '') +
       (key === 'ss' && b.dm ? `; DM z ${num(b.dm.z, 2)}, p ${pval(b.dm.p)}, n_eff ${num(b.dm.n_eff, 0)} of ${b.dm.n}` : '') +
       `; MASE ${num(b.mase, 2)}.`;
@@ -298,9 +300,27 @@ export function buildModel(reports, parsed) {
     text: (CLAUSE_TEXT[id] || (d => JSON.stringify(d)))(c.detail),
   }));
   const regimes = Object.entries(report.regimes).map(([name, r]) => ({ name, members: r.members, ...r.blocks[block] }));
+  // one bar per model in view, each read out of its own report and carrying its
+  // own mark — the drawing and the sentence under it must agree on which is which
+  const perModelRows = drawn.map(mo => ({ mo, rows: skillRows(mo.report, block, 'ss', mo.label) }));
   const skill = {
-    rows: skillRows(report, block, 'ss'),
-    pooled: { ss: pooled.ss, lo: pooled.ci95[0], hi: pooled.ci95[1], n: report.pooled.n_origins, stations: report.pooled.stations },
+    rows: stationOrder(report).map(({ station, regime }) => {
+      const bars = perModelRows.map(({ mo, rows }) => {
+        const r = rows.find(x => x.station === station);
+        return r ? { key: mo.key, label: mo.label, mark: mo.mark, ...r } : null;
+      }).filter(Boolean);
+      return { station, regime, bars, say: bars.map(b => b.say).join(' ') };
+    }),
+    pooled: {
+      bars: drawn.map(mo => {
+        const p = mo.report.pooled.blocks[block];
+        return { key: mo.key, label: mo.label, mark: mo.mark, ss: p.ss, lo: p.ci95[0], hi: p.ci95[1] };
+      }),
+      // the sheet's own pooled number stays the primary run's, for the prose and
+      // the screen-reader summary that speak in the singular
+      ss: pooled.ss, lo: pooled.ci95[0], hi: pooled.ci95[1],
+      n: report.pooled.n_origins, stations: report.pooled.stations,
+    },
     threshold: report.thresholds.A1_pooled_ss_min,
     regimes,
   };
@@ -322,12 +342,23 @@ export function buildModel(reports, parsed) {
     return { station, regime, blend: m.blend, marks, say };
   });
   const calib = stationOrder(report).map(({ station, regime }) => {
-    const b = report.stations[station].blocks[block];
-    const pit = b.pit || [];
-    const total = pit.reduce((a, c) => a + c, 0) || 1;
+    // the blend's band is the same fit for every candidate — read once, from the
+    // primary; each model's own coverage and PIT come out of its own report
+    const blend = report.stations[station].blocks[block].picp80.blend;
+    const models = drawn.map(mo => {
+      const b = mo.report.stations[station] && mo.report.stations[station].blocks[block];
+      if (!b) return null;
+      const pit = b.pit || [];
+      const total = pit.reduce((a, c) => a + c, 0) || 1;
+      return {
+        key: mo.key, label: mo.label, mark: mo.mark, picp: b.picp80.tfm, pit: pit.map(c => c / total),
+        say: `${num(b.picp80.tfm * 100, 0)} % for ${mo.label} (60 % interval ${num(b.picp60.tfm * 100, 0)} %, CRPS ${num(b.crps.tfm, 1)} cm, CRPS skill ${signed(b.ss_crps)})`,
+      };
+    }).filter(Boolean);
     return {
-      station, regime, tfm: b.picp80.tfm, blend: b.picp80.blend, pit: pit.map(c => c / total),
-      say: `${station}, ${BLOCK_LABEL[block]}: the 80 % interval covered ${num(b.picp80.tfm * 100, 0)} % of days (blend band ${num(b.picp80.blend * 100, 0)} %), the 60 % interval ${num(b.picp60.tfm * 100, 0)} %; CRPS ${num(b.crps.tfm, 1)} vs ${num(b.crps.blend, 1)} cm, CRPS skill ${signed(b.ss_crps)}.`,
+      station, regime, blend, models,
+      say: `${station}, ${BLOCK_LABEL[block]}: the 80 % interval covered ` + models.map(x => x.say).join('; ') +
+        `; the blend's own band ${num(blend * 100, 0)} %.`,
     };
   });
   const shortModel = short ? {
@@ -393,13 +424,16 @@ export function buildModel(reports, parsed) {
   };
   // the panels actually rendered, in order — the index is built from this list
   const primaryLabel = m.primary ? m.primary.label : 'the model';
+  // the panels that now draw a bar per model name every model they draw; the
+  // ones that still speak for one run (the chain, the short grid) name that one
+  const drawnLabel = m.drawn.length ? m.drawn.map(mo => mo.label).join(' + ') : primaryLabel;
   m.panels = [
     // the panels that print ONE number per gauge say whose number it is
-    { id: 'skill', title: `Skill by gauge · ${primaryLabel} · ${TARGETS[state.target]} · ${BLOCK_LABEL[block]}`, hook: 'seven gauges, five regime votes, the bootstrap interval', render: renderSkill },
+    { id: 'skill', title: `Skill by gauge · ${drawnLabel} · ${TARGETS[state.target]} · ${BLOCK_LABEL[block]}`, hook: 'seven gauges, five regime votes, the bootstrap interval', render: renderSkill },
     { id: 'error', title: `Error by method · ${BLOCK_LABEL[block]}`, hook: 'every baseline’s MAE next to the blend’s, gauge by gauge', render: renderError },
-    { id: 'calib', title: `Calibration · ${primaryLabel} · ${BLOCK_LABEL[block]}`, hook: 'how often the 80 % band held, and the PIT histograms', render: renderCalib },
+    { id: 'calib', title: `Calibration · ${drawnLabel} · ${BLOCK_LABEL[block]}`, hook: 'how often the 80 % band held, and the PIT histograms', render: renderCalib },
     { id: 'clim', title: `Climatology alone · ${BLOCK_LABEL[block]}`, hook: 'Finding 2: the calendar against the blend', render: renderClim },
-    shortModel ? { id: 'short', title: `Short horizon · ${shortModel.verdict}`, hook: 'hours to two days — still collecting, no verdict yet', render: renderShort } : null,
+    shortModel ? { id: 'short', title: `Short horizon · ${primaryLabel} · ${shortModel.verdict}`, hook: 'hours to two days — still collecting, no verdict yet', render: renderShort } : null,
     { id: 'model', title: `The model, and the chain it runs in · ${primaryLabel}`, hook: `what ${primaryLabel} is, where the weights come from, and the seven steps from archive to this sheet`, render: renderModel },
     { id: 'method', title: 'Method', hook: 'how it was measured, and what it cannot prove', render: renderMethod },
     { id: 'basics', title: 'Basics', hook: 'the model, the bar and the verdict in three short paragraphs', render: renderBasics },
@@ -462,12 +496,16 @@ function axis(ticks, domain, fmt) {
 const rowOpen = (cls, say) => `<div class="row ${cls}" tabindex="0" role="button"${attr('data-say', say)}>`;
 const lbl = (station, regime) => `<span class="lbl">${esc(station)}${regime ? `<span class="rg">${esc(regime)}</span>` : ''}</span>`;
 
-function skillBar(ss, tie) {
+// `slot` places the bar when a row carries more than one: m1 sits above m2, and
+// the colour follows the model too (light fill for the first, dark for the
+// second) — position, fill and the mark on the value all say the same thing, so
+// none of them carries the difference alone. The hatch angle stays the sign.
+function skillBar(ss, tie, slot = '') {
   const { x, clipped } = clampInfo(ss, SKILL_DOMAIN);
   const zero = pct(0, SKILL_DOMAIN);
   const left = Math.min(x, zero), width = Math.abs(x - zero);
   const cls = tie ? 'tie' : ss >= 0 ? 'pos' : 'neg';
-  return `<span class="bar ${cls}"${attr('style', `left:${left.toFixed(2)}%;width:${width.toFixed(2)}%`)}></span>` +
+  return `<span class="bar ${cls}${slot ? ' ' + slot : ''}"${attr('style', `left:${left.toFixed(2)}%;width:${width.toFixed(2)}%`)}></span>` +
     (clipped ? `<span class="clip ${clipped}"${attr('style', `left:${x.toFixed(2)}%`)}></span>` : '');
 }
 
@@ -730,21 +768,40 @@ function renderSkill(m) {
   const k = m.skill;
   const zero = pct(0, SKILL_DOMAIN), thr = pct(k.threshold, SKILL_DOMAIN);
   const refs = `<span class="zero"${attr('style', `left:${zero.toFixed(2)}%`)}></span><span class="thr"${attr('style', `left:${thr.toFixed(2)}%`)}></span>`;
-  const ci = `<span class="ci"${attr('style', `left:${pct(Math.max(SKILL_DOMAIN[0], k.pooled.lo), SKILL_DOMAIN).toFixed(2)}%;width:${(pct(Math.min(SKILL_DOMAIN[1], k.pooled.hi), SKILL_DOMAIN) - pct(Math.max(SKILL_DOMAIN[0], k.pooled.lo), SKILL_DOMAIN)).toFixed(2)}%`)}></span>`;
-  const pooledSay = `Pooled over ${k.pooled.stations.join(', ')} (${k.pooled.n} test origins each, ${BLOCK_LABEL[m.block]}): skill ${signed(k.pooled.ss)}, moving-block bootstrap 95 % CI ${signed(k.pooled.lo)} to ${signed(k.pooled.hi)}. Clause A1 asks for ${signed(k.threshold, 2)}.`;
-  const rows = rowOpen('pooled', pooledSay) + `<span class="lbl">pooled · 5 regimes</span><span class="track">${refs}${skillBar(k.pooled.ss, false)}${ci}</span><span class="val">${esc(signed(k.pooled.ss))}</span></div>` +
-    k.rows.map(r => rowOpen('', r.say) + lbl(r.station, r.regime) + `<span class="track">${refs}${skillBar(r.ss, r.tie)}</span>` +
-      `<span class="val">${esc(signed(r.ss))}${r.sig ? ' <span class="sig" title="DM p below 0.10">●</span>' : ''}</span></div>`).join('');
+  const many = k.pooled.bars.length > 1;
+  const slot = i => (many ? `m${i + 1}` : '');
+  const trk = inner => `<span class="track${many ? ' two' : ''}">${refs}${inner}</span>`;
+  // the value column carries the model's own mark when more than one is drawn,
+  // so a number never depends on the reader remembering which bar sits on top
+  const val = (b, text, sig) => `<span class="vm">${many ? sw(b.mark) : ''}${esc(text)}${sig ? '<span class="sig" title="DM p below 0.10">●</span>' : ''}</span>`;
+  const ciBar = (b, i) => `<span class="ci ${slot(i)}"${attr('style', `left:${pct(Math.max(SKILL_DOMAIN[0], b.lo), SKILL_DOMAIN).toFixed(2)}%;width:${(pct(Math.min(SKILL_DOMAIN[1], b.hi), SKILL_DOMAIN) - pct(Math.max(SKILL_DOMAIN[0], b.lo), SKILL_DOMAIN)).toFixed(2)}%`)}></span>`;
+  const pooledSay = `Pooled over ${k.pooled.stations.join(', ')} (${k.pooled.n} test origins each, ${BLOCK_LABEL[m.block]}): ` +
+    k.pooled.bars.map(b => `${signed(b.ss)} for ${b.label}, moving-block bootstrap 95 % CI ${signed(b.lo)} to ${signed(b.hi)}`).join('; ') +
+    `. Clause A1 asks for ${signed(k.threshold, 2)}.`;
+  const rows = rowOpen('pooled', pooledSay) + `<span class="lbl">pooled · 5 regimes</span>` +
+    trk(k.pooled.bars.map((b, i) => skillBar(b.ss, false, slot(i)) + ciBar(b, i)).join('')) +
+    `<span class="val">${k.pooled.bars.map(b => val(b, signed(b.ss), false)).join('')}</span></div>` +
+    k.rows.map(r => rowOpen('', r.say) + lbl(r.station, r.regime) +
+      trk(r.bars.map((b, i) => skillBar(b.ss, b.tie, slot(i))).join('')) +
+      `<span class="val">${r.bars.map(b => val(b, signed(b.ss), b.sig)).join('')}</span></div>`).join('');
   const regimeLine = k.regimes.map(r => `${r.name} ${signed(r.ss)}`).join(' · ');
-  const table = `<details class="tbl"><summary>table</summary><div class="tblwrap"><table><thead><tr><th>station</th><th>regime</th><th>TimesFM MAE</th><th>blend MAE</th><th>skill</th><th>tie</th><th>DM z</th><th>p</th></tr></thead><tbody>` +
-    k.rows.map(r => `<tr><td>${esc(r.station)}</td><td>${esc(r.regime)}</td><td>${num(r.model, 1)}</td><td>${num(r.blend, 1)}</td><td>${signed(r.ss)}</td><td>${r.tie ? 'yes' : 'no'}</td><td>${num(r.z, 2)}</td><td>${pval(r.p)}</td></tr>`).join('') +
+  // one row per gauge AND model, rather than a column pair per model: the columns
+  // that follow (tie, DM z, p) belong to one model's run, not to a comparison
+  const table = `<details class="tbl"><summary>table</summary><div class="tblwrap"><table><thead><tr><th>station</th><th>regime</th>${many ? '<th>model</th>' : ''}<th>model MAE</th><th>blend MAE</th><th>skill</th><th>tie</th><th>DM z</th><th>p</th></tr></thead><tbody>` +
+    k.rows.map(r => r.bars.map(b => `<tr><td>${esc(r.station)}</td><td>${esc(r.regime)}</td>${many ? `<td>${esc(b.label)}</td>` : ''}<td>${num(b.model, 1)}</td><td>${num(b.blend, 1)}</td><td>${signed(b.ss)}</td><td>${b.tie ? 'yes' : 'no'}</td><td>${num(b.z, 2)}</td><td>${pval(b.p)}</td></tr>`).join('')).join('') +
     `</tbody></table></div></details>`;
-  return `<p class="p-dim">1 − MAE<sub>TimesFM</sub> / MAE<sub>blend</sub>. Positive means the model beat the persistence-to-climatology blend; the bar had to reach ${esc(signed(k.threshold, 2))} pooled. Regime medians: ${esc(regimeLine)}.</p>` +
+  return `<p class="p-dim">1 − MAE<sub>model</sub> / MAE<sub>blend</sub>. Positive means the model beat the persistence-to-climatology blend; the bar had to reach ${esc(signed(k.threshold, 2))} pooled. Regime medians for ${esc(nameOf(m.primary))}: ${esc(regimeLine)}.</p>` +
     `<div class="rows">${rows}</div>` + axis([-0.2, -0.1, 0, 0.1, 0.2], SKILL_DOMAIN, v => signed(v, 1)) +
     `<p class="p-readout" data-readout><span class="hint">Hover or pick a row for the numbers behind it.</span></p>` +
     plateKey([
-      { sw: swBar('pos'), label: 'better than the blend' },
-      { sw: swBar('neg'), label: 'worse than the blend' },
+      ...(many ? m.drawn.map((mo, i) => ({
+        sw: swBar(`pos m${i + 1}`) + sw(mo.mark),
+        // "hatched" and "solid" hold in both colour schemes; "pale"/"dark" would
+        // swap over, because the line colour is the DARKER one only on paper
+        label: `${mo.label} — ${i === 0 ? 'the upper bar, hatched' : 'the lower bar, solid'}, and this mark beside its number`,
+      })) : []),
+      { sw: swBar('pos'), label: 'better than the blend — the hatch leans right' },
+      { sw: swBar('neg'), label: 'worse than the blend — the hatch leans left' },
       { sw: swBar('tie'), label: 'a tie — under 2 cm apart, neither win nor loss' },
       { sw: swRule('zero'), label: 'zero — as good as the blend' },
       { sw: '<span class="sw"><span class="ci" style="position:relative;display:block;top:5px;width:12px"></span></span>', label: 'bootstrap 95 % CI (pooled row)' },
@@ -786,25 +843,35 @@ function renderError(m) {
 
 function renderCalib(m) {
   const band = `<span class="band"${attr('style', `left:${pct(0.72, PICP_DOMAIN).toFixed(2)}%;width:${(pct(0.88, PICP_DOMAIN) - pct(0.72, PICP_DOMAIN)).toFixed(2)}%`)}></span><span class="thr"${attr('style', `left:${pct(0.8, PICP_DOMAIN).toFixed(2)}%`)}></span>`;
+  const many = m.drawn.length > 1;
   const rows = m.calib.map(r => {
-    const xt = pct(r.tfm, PICP_DOMAIN), xb = pct(r.blend, PICP_DOMAIN);
+    const xb = pct(r.blend, PICP_DOMAIN);
+    const xs = [xb, ...r.models.map(x => pct(x.picp, PICP_DOMAIN))];
+    const lo = Math.min(...xs), hi = Math.max(...xs);
     return rowOpen('', r.say) + lbl(r.station, r.regime) + `<span class="track">${band}` +
-      `<span class="link"${attr('style', `left:${Math.min(xt, xb).toFixed(2)}%;width:${Math.abs(xt - xb).toFixed(2)}%`)}></span>` +
-      mark('picp-b', xb) + mark('picp-t', xt) + `</span><span class="val">${esc(num(r.tfm * 100, 0))} %</span></div>`;
+      `<span class="link"${attr('style', `left:${lo.toFixed(2)}%;width:${(hi - lo).toFixed(2)}%`)}></span>` +
+      mark('picp-b', xb) + r.models.map(x => mark(x.mark, pct(x.picp, PICP_DOMAIN))).join('') +
+      `</span><span class="val">${r.models.map(x => `<span class="vm">${many ? sw(x.mark) : ''}${esc(num(x.picp * 100, 0))} %</span>`).join('')}</span></div>`;
   }).join('');
-  const pits = m.calib.map(r => {
-    const bars = r.pit.map((f, i) => `<rect class="pb" x="${(i * 10 + 0.8).toFixed(1)}" y="${(30 - f * 100).toFixed(2)}" width="8.4" height="${(f * 100).toFixed(2)}"/>`).join('');
-    return `<div class="pit"><span class="nm">${esc(r.station)}</span><svg viewBox="0 0 100 30" preserveAspectRatio="none" role="img"${attr('aria-label', `${r.station}: PIT histogram, ten bins, ` + r.pit.map(f => num(f * 100, 0) + '%').join(' '))}>${bars}<line class="pu" x1="0" y1="20" x2="100" y2="20"/></svg></div>`;
-  }).join('');
-  const table = `<details class="tbl"><summary>table</summary><div class="tblwrap"><table><thead><tr><th>station</th><th>PICP80 TimesFM</th><th>PICP80 blend</th>${Array.from({ length: 10 }, (_, i) => `<th>PIT ${i}</th>`).join('')}</tr></thead><tbody>` +
-    m.calib.map(r => `<tr><td>${esc(r.station)}</td><td>${num(r.tfm, 3)}</td><td>${num(r.blend, 3)}</td>${r.pit.map(f => `<td>${num(f * 100, 1)}</td>`).join('')}</tr>`).join('') +
+  // one histogram per gauge AND model: the deciles are the model's own, and a
+  // profile under a name that is not its own would be the worst kind of wrong
+  const pits = m.calib.flatMap(r => r.models.map(x => {
+    const name = many ? `${r.station} · ${x.label}` : r.station;
+    const bars = x.pit.map((f, i) => `<rect class="pb" x="${(i * 10 + 0.8).toFixed(1)}" y="${(30 - f * 100).toFixed(2)}" width="8.4" height="${(f * 100).toFixed(2)}"/>`).join('');
+    // the model on its own line: side by side, the ellipsis eats exactly the half
+    // that says which run this profile belongs to
+    const head = many ? `<span class="nm">${esc(r.station)}<span class="mn">${esc(x.label)}</span></span>` : `<span class="nm">${esc(r.station)}</span>`;
+    return `<div class="pit">${head}<svg viewBox="0 0 100 30" preserveAspectRatio="none" role="img"${attr('aria-label', `${name}: PIT histogram, ten bins, ` + x.pit.map(f => num(f * 100, 0) + '%').join(' '))}>${bars}<line class="pu" x1="0" y1="20" x2="100" y2="20"/></svg></div>`;
+  })).join('');
+  const table = `<details class="tbl"><summary>table</summary><div class="tblwrap"><table><thead><tr><th>station</th>${many ? '<th>model</th>' : ''}<th>PICP80 model</th><th>PICP80 blend</th>${Array.from({ length: 10 }, (_, i) => `<th>PIT ${i}</th>`).join('')}</tr></thead><tbody>` +
+    m.calib.map(r => r.models.map(x => `<tr><td>${esc(r.station)}</td>${many ? `<td>${esc(x.label)}</td>` : ''}<td>${num(x.picp, 3)}</td><td>${num(r.blend, 3)}</td>${x.pit.map(f => `<td>${num(f * 100, 1)}</td>`).join('')}</tr>`).join('')).join('') +
     `</tbody></table></div></details>`;
   return `<p class="p-dim">How often the model's 80 % interval actually contained the reading. Inside the shaded band is clause A5; the dashed line is the ideal 80 %. Below, the PIT histograms: a flat profile means the deciles are honest, a U means the band is too narrow, a hump too wide.</p>` +
     `<div class="rows">${rows}</div>` + axis([0.6, 0.7, 0.8, 0.9, 1.0], PICP_DOMAIN, v => num(v * 100, 0) + ' %') +
     `<p class="p-readout" data-readout><span class="hint">Hover or pick a row for coverage and CRPS.</span></p>` +
     `<div class="pits">${pits}</div>` +
     plateKey([
-      { sw: sw('picp-t'), label: 'TimesFM, 80 % interval coverage' },
+      ...m.drawn.map(mo => ({ sw: sw(mo.mark), label: `${mo.label}, 80 % interval coverage` })),
       { sw: sw('picp-b'), label: 'the blend with its own residual deciles' },
       { sw: '<span class="sw"><span class="band" style="position:relative;display:block;height:12px;width:12px"></span></span>', label: 'accepted range 72–88 %' },
       { sw: swRule('thr'), label: 'ideal 80 %' },
@@ -832,14 +899,18 @@ function renderClim(m) {
 function renderShort(m) {
   const s = m.short;
   if (!s) return '';
+  // the model's own name, and the cm value BEFORE it: "TimesFM 3.0 2.5 cm" would
+  // spell the other candidate's label out of a name and a number that only look
+  // adjacent — a sheet read for one model must not contain the other's name at all
+  const label = nameOf(m.primary);
   const rows = s.stations.map(st => {
     const o = Math.min(100, (st.origins / s.need) * 100);
     const say = `${st.name}: ${st.origins} of ${s.need} independent 48-hour origins collected, ${st.rises} rise events (${s.needRises} needed). ` +
-      Object.entries(st.blocks).map(([b, v]) => `${b}: TimesFM ${num(v.mae.tfm_point, 1)} cm vs best simple baseline (${v.best_baseline}) ${num(v.mae[v.best_baseline], 1)} cm, skill ${signed(v.ss_vs_best)}`).join('; ') + '.';
+      Object.entries(st.blocks).map(([b, v]) => `${b}: ${num(v.mae.tfm_point, 1)} cm for ${label}, best simple baseline (${v.best_baseline}) ${num(v.mae[v.best_baseline], 1)} cm, skill ${signed(v.ss_vs_best)}`).join('; ') + '.';
     return rowOpen('', say) + `<span class="lbl">${esc(st.name)}</span><span class="track"><span class="meter" style="position:relative;display:block;height:100%"><span${attr('style', `width:${o.toFixed(1)}%`)}></span></span></span><span class="val">${esc(st.origins)} / ${esc(s.need)}</span></div>`;
   }).join('');
   const blocks = s.stations.length ? Object.keys(s.stations[0].blocks) : [];
-  const table = `<details class="tbl"><summary>first-week numbers (no verdict)</summary><div class="tblwrap"><table><thead><tr><th>station</th><th>origins</th><th>rises</th>${blocks.map(b => `<th>${esc(b)} TimesFM</th><th>best baseline</th><th>skill</th>`).join('')}</tr></thead><tbody>` +
+  const table = `<details class="tbl"><summary>first-week numbers (no verdict)</summary><div class="tblwrap"><table><thead><tr><th>station</th><th>origins</th><th>rises</th>${blocks.map(b => `<th>${esc(b)} ${esc(label)}</th><th>best baseline</th><th>skill</th>`).join('')}</tr></thead><tbody>` +
     s.stations.map(st => `<tr><td>${esc(st.name)}</td><td>${esc(st.origins)}</td><td>${esc(st.rises)}</td>${blocks.map(b => { const v = st.blocks[b]; return `<td>${num(v.mae.tfm_point, 1)}</td><td>${esc(v.best_baseline)} ${num(v.mae[v.best_baseline], 1)}</td><td>${signed(v.ss_vs_best)}</td>`; }).join('')}</tr>`).join('') +
     `</tbody></table></div></details>`;
   return `<p class="p-dim">The daily archive keeps day extremes only, so 15-minute readings are being collected weekly since 2026-09-02. The verdict stays PROVISIONAL until every gauge has ${esc(s.need)} independent origins (about sixteen weeks) and ${esc(s.needRises)} rise events; it can never be SHIP before that.</p>` +

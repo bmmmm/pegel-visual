@@ -42,6 +42,10 @@
     "seasonal-mid": {
      "json": "seasonal-mid/report-3p0.json",
      "md": "seasonal-mid/report-3p0.md"
+    },
+    "short-mid": {
+     "json": "short-mid/report-3p0.json",
+     "md": "short-mid/report-3p0.md"
     }
    }
   }

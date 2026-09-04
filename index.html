@@ -2815,7 +2815,10 @@ const T = {
   yearsHeat: 'MONTHLY HEAT',
   yearsHeatCap: 'monthly mean water level by year',
   yearsHint: 'Pick a month cell for its hard numbers.',
-  yearsNoArchive: 'WSV keeps no multi-year archive for this gauge',
+  // one sentence, two plates (history + years). It used to be a T entry here
+  // and a byte-identical inline literal in historyViewModel; a mark that means
+  // the same thing in two places has to change in one.
+  noArchive: 'WSV keeps no multi-year archive for this gauge',
   yearsGrows: 'The local archive also grows with every visit.',
   yearsRange: 'LONG-TERM MONTHLY RANGE',
   yearsRangeThin: 'Needs at least one completed year — the archive reaches back decades:',
@@ -3612,7 +3615,17 @@ function historyViewModel() {
   const coveredDays = (Date.now() - arch[0][0]) / 864e5;
   let note = null;
   if (wd && coveredDays < wd * 0.8 && state.repoArchive === 'none') {
-    note = { kind: 'none', text: 'WSV keeps no multi-year archive for this gauge' };
+    note = { kind: 'none', text: T.noArchive };
+  } else if (wd && coveredDays < wd * 0.8 && state.repoArchive === 'rest-only') {
+    // WSV archives nothing for this gauge, but the hosted running year still
+    // carries what our own REST accumulation caught — so the window is short
+    // for a reason that will never resolve, and saying "import the archive"
+    // (the branch below) would promise an import that cannot deliver. The date
+    // comes from the FULL archive, not the windowed slice: on a 24H view
+    // arch[0][0] is yesterday, which is not when the record starts.
+    const first = state.archive.length ? state.archive[0][0] : arch[0][0];
+    note = { kind: 'rest-only',
+      text: `${T.noArchive} — this record starts ${new Date(first).toISOString().slice(0, 10)} and only grows forward` };
   } else if (wd && coveredDays < wd * 0.8) {
     note = { kind: 'short', text: `covers ${Math.round(coveredDays)} days so far — import the WSV archive below` };
   } else if ((wd || spanDays) > API_MAX_DAYS) {
@@ -4334,8 +4347,11 @@ function yearsViewModel() {
     source: `${archiveSource()} daily archive · unvalidated raw data`, thin: false };
   if (st.daily.length < HIST_MIN_DAYS) {
     vm.thin = true;
-    vm.reason = state.repoArchive === 'none'
-      ? T.yearsNoArchive
+    // 'rest-only' means the same thing here as 'none': there is no multi-year
+    // archive to wait for. Only the history plate cares about the difference
+    // (one gauge has days to draw, the other has nothing at all).
+    vm.reason = state.repoArchive === 'none' || state.repoArchive === 'rest-only'
+      ? T.noArchive
       : `not enough history yet — fetching the ${archiveSource()} archive…`;
     return vm;
   }
@@ -7037,7 +7053,15 @@ async function loadRepoArchive() {
   const entry = (await loadRepoManifest() || {})[info.uuid];
   if (station !== forStation) return; // switched away while the manifest loaded
   if (entry) {
-    state.repoArchive = entry.none ? 'none' : 'available';
+    // three states, not two. `none` = nothing on disk at all, so the year
+    // fetches below are pointless. `noArchive` = WSV has no ZIP archive for
+    // this gauge (its prepare-download answers 303 to the error page), but the
+    // hosted running year still holds what our own REST accumulation caught —
+    // ~111 lock, weir and foreign gauges, Neuwied Stadt among them. Collapsing
+    // that into `none` would skip the fetch and blank a chart that has 56 real
+    // days to draw; collapsing it into `available` is what told readers to
+    // "import the WSV archive below" for months.
+    state.repoArchive = entry.none ? 'none' : entry.noArchive ? 'rest-only' : 'available';
     state.archiveSource = entry.source || null;
     scheduleRender();
     if (entry.none) return; // known gap — skip the pointless fetches
@@ -7239,7 +7263,10 @@ function buildReportSections(note) {
   const archive = [
     `- history range: ${historyKey}`,
     `- points in local archive: ${state.archive.length}`,
-    `- hosted archive loaded: ${state.repoArchive === 'available'}${state.repoArchive === 'available' ? ` (source: ${archiveSource()})` : ''}`,
+    // the raw state, not a boolean: 'none', 'rest-only' and "manifest still
+    // loading" all used to report `false` here, so a bug report could not say
+    // whether a gauge has no archive or simply had not finished fetching one
+    `- hosted archive: ${state.repoArchive || 'not resolved'}${state.repoArchive === 'available' ? ` (source: ${archiveSource()})` : ''}`,
   ];
 
   const viewport = [

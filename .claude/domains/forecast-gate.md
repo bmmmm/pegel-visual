@@ -15,7 +15,30 @@ own script tree, needed when working on it and not before. Moved verbatim.
   −0.036. It is consistently a little better — most at h31–90, and on CRPS
   everywhere — and nowhere near A1's 0.10. Both reports now say in their own
   caveats that TWO candidates have been measured on the SAME test origins;
-  a third look needs that count raised, not quietly reused.
+  a third look needs that count raised, not quietly reused. Re-derived from the
+  raw `results/*.npz` on 2026-09-04 without importing `gate.py` or `metrics.py`:
+  A1, A2, A4 (all 30 regime z included), A5, A6 and A7 match to 1e-9, and the
+  15 shared arrays are bit-identical between the 2.5 and 3.0 runs, so the
+  comparison is on the same windows. Only A3 is reproduced rather than
+  recomputed — its bootstrap rides on the RNG, and a re-run of `gate.py` returns
+  the committed report byte for byte (bar the `candidates` key a temp directory
+  cannot know).
+- **The 15-minute grid is its own test set, and 3.0 is on it since 2026-09-04.**
+  `short-mid/report-3p0.md`: PROVISIONAL like 2.5 (10 of 60 origins), ahead in
+  13 of the 21 cells — +0.44 at DRESDEN h1-6h, −0.34 at KOBLENZ h24-48h. Before
+  measuring the challenger there, 2.5 was re-run: `collect-hires.mjs` had added
+  two steps since 2026-09-02, but the origin grid did not move and all eleven
+  arrays came back bit-identical, so the published 2.5 numbers still stand. A
+  challenger run on a grid that HAS moved would need the incumbent re-run and
+  re-published alongside it — compare only what shares its windows.
+- **A model label made of a generic word and a number can be spelled out of
+  prose.** The short panel's readout said `TimesFM 2.5 cm vs …` — the word plus
+  KOBLENZ's 2.5 cm MAE — and the "a sheet read for one model must not contain
+  the other's name" test went red the day 3.0 landed on that value. The fix is
+  in the sentence, not the assertion: the centimetres go BEFORE the name
+  (`2.5 cm for TimesFM 3.0`), which no value can reproduce. Any renderer that
+  prints a bare number next to `TimesFM` is one measurement away from the same
+  collision.
 - **`gate/` is deployed** (`pages.yml` excludes only `scripts/`, `tests/`,
   `.github/`): `gate/index.html` + `gate.js` render the committed `report.json`
   files as an interactive plate at `/pegel-visual/gate/`. `gate.py` writes there

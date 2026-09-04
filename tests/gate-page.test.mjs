@@ -52,7 +52,7 @@ test('every target × block renders, and the numbers follow the chips', () => {
     const m = buildModel(reports, state);
     const html = renderPage(m);
     assert.ok(html.includes(`<span class="word">${m.verdict}</span>`));
-    assert.ok(html.includes(`Skill by gauge · ${m.primary.label} · ${state.target === 'mid' ? 'daily mid' : 'daily max'} ·`), 'the skill panel names the model AND the target');
+    assert.ok(html.includes(`Skill by gauge · ${m.drawn.map(x => x.label).join(' + ')} · ${state.target === 'mid' ? 'daily mid' : 'daily max'} ·`), 'the skill panel names every model it draws AND the target');
     seen.add(m.skill.pooled.ss.toFixed(4) + state.target);
   }
   assert.equal(seen.size, 6, 'six distinct pooled skills — one per target and block');
@@ -145,7 +145,7 @@ const drawingOf = s => s.slice(0, s.indexOf('<dl class="p-key">'))
   .replace(/<details class="tbl">[\s\S]*?<\/details>/g, '')
   .replace(/<nav class="p-tabs"[\s\S]*?<\/nav>/g, '');
 // not marks: layout, text, hit targets and states the key spells out in words (▸ ◂ ▴ ▾ are glyphs in the notes)
-const NOT_A_MARK = new Set(['p-block', 'row', 'pooled', 'head', 'lbl', 'rg', 'track', 'val', 'axis', 'ticks', 'mk', 'sw', 'hint', 'p-readout', 'p-dim', 'p-tabs', 'p-tabs-lbl', 'on', 'off', 'rows', 'pits', 'pit', 'nm',
+const NOT_A_MARK = new Set(['p-block', 'row', 'pooled', 'head', 'lbl', 'rg', 'track', 'two', 'val', 'vm', 'axis', 'ticks', 'mk', 'sw', 'hint', 'p-readout', 'p-dim', 'p-tabs', 'p-tabs-lbl', 'on', 'off', 'rows', 'pits', 'pit', 'nm', 'mn',
   'plot', 'vscale', 'plot-box', 'lead-bands', 'lbn', 'lead-ticks', 'clip', 'lo', 'hi', 'up', 'dn', 'vh', 'p-h2',
   'ends', 'end',   // the direct labels: containers for a swatch whose OWN class is a mark and is in the key
   'fold', 'fl', 'fs', 'foldbody',   // a drawer and its lid, not something the drawing draws
@@ -512,6 +512,7 @@ test('switching a model off makes the WHOLE sheet speak for the other one', () =
     const others = MANIFEST.models.filter(x => x.key !== mo.key);
     assert.ok(html.includes(`Skill by gauge · ${mo.label} ·`), `${mo.key}: the skill panel names it`);
     assert.ok(html.includes(`Calibration · ${mo.label} ·`), `${mo.key}: calibration names it`);
+    if (m.short) assert.ok(html.includes(`Short horizon · ${mo.label} ·`), `${mo.key}: the short-horizon panel names it`);
     assert.ok(screenSummary(m).startsWith(`Forecast gate, ${m.verdict}. ${mo.label} against`), `${mo.key}: the screen-reader summary names it`);
     assert.ok(m.gist.includes(`target ${mo.label} beats`), `${mo.key}: the gist names it`);
     const modelPanel = html.slice(html.indexOf('<details class="panel" id="model">'), html.indexOf('<details class="panel" id="method">'));
@@ -530,6 +531,54 @@ test('switching a model off makes the WHOLE sheet speak for the other one', () =
     const foot = (html.match(/<footer id="plate-foot">[\s\S]*?<\/footer>/) || [''])[0];
     for (const [, f] of Object.entries(mo.files)) if (f.md) assert.ok(foot.includes(f.md), `${mo.key}: the foot links ${f.md}`);
   }
+});
+
+test('skill and calibration draw one bar per model, each out of its own report', () => {
+  const both = buildModel(reports, parseState(''));
+  assert.ok(both.drawn.length > 1, 'the default sheet draws every candidate');
+  const html = renderPage(both);
+  const skill = panel(html, 'skill');
+  // two bars per gauge row, and the slot classes that place and colour them
+  const bars = skill.match(/<span class="bar [^"]*"/g) || [];
+  assert.equal(bars.length, (both.skill.rows.length + 1) * both.drawn.length, 'a bar per gauge and per model, plus the pooled row');
+  assert.ok(bars.every(b => /\bm[12]\b/.test(b)), 'every bar says which model it is');
+  assert.equal((skill.match(/class="ci m[12]"/g) || []).length, both.drawn.length, 'a bootstrap interval per model');
+  // the numbers are each model's own, not the primary's repeated
+  for (const r of both.skill.rows) {
+    const own = both.drawn.map(mo => readReport(mo.files['seasonal-mid'].json).stations[r.station].blocks[both.block].ss);
+    assert.deepEqual(r.bars.map(b => b.ss), own, `${r.station}: each bar is its model's own skill`);
+  }
+  assert.deepEqual(both.skill.pooled.bars.map(b => b.key), both.drawn.map(mo => mo.key));
+  assert.notEqual(both.skill.pooled.bars[0].ss, both.skill.pooled.bars[1].ss, 'the pooled bars are not the same number twice');
+  // calibration: a mark and a PIT histogram per model, named
+  const calib = panel(html, 'calib');
+  assert.equal((calib.match(/<div class="pit">/g) || []).length, both.calib.length * both.drawn.length, 'a PIT histogram per gauge and model');
+  // the visible caption, not just the aria-label: the model sits on its own line
+  for (const mo of both.drawn) assert.ok(calib.includes(`${both.calib[0].station}<span class="mn">${mo.label}</span>`), `the histograms name ${mo.key} where a reader can see it`);
+  // and with one model on, the row goes back to a single bar with no slot class
+  const one = buildModel(reports, parseState(`?models=${MANIFEST.shipped}`, '', null, MODEL_KEYS));
+  const oneSkill = panel(renderPage(one), 'skill');
+  assert.equal((oneSkill.match(/<span class="bar [^"]*"/g) || []).length, one.skill.rows.length + 1);
+  assert.ok(!/\bbar [a-z]+ m[12]\b/.test(oneSkill), 'no slot class when there is nothing to tell apart');
+});
+
+test('the short-horizon panel draws the run of the model in view, not the shipped one', () => {
+  // the 15-minute grid is its own test set: a second candidate measured there
+  // must reach the panel, or switching models would silently keep 2.5's numbers
+  const withShort = MANIFEST.models.filter(mo => mo.files['short-mid']);
+  assert.ok(withShort.length > 1, 'more than one candidate has been measured on the 15-minute grid');
+  const own = new Map();
+  for (const mo of withShort) {
+    const m = buildModel(reports, parseState(`?models=${mo.key}`, '', null, MODEL_KEYS));
+    const rep = readReport(mo.files['short-mid'].json);
+    assert.equal(m.short.generated, rep.header.generated, `${mo.key}: the panel reads its own run`);
+    assert.equal(rep.header.model_key || MANIFEST.shipped, mo.key, `${mo.key}: and that run is its own`);
+    const mae = rep.stations.KOBLENZ.blocks['h1-6h'].mae.tfm_point;
+    assert.equal(m.short.stations.find(s => s.name === 'KOBLENZ').blocks['h1-6h'].mae.tfm_point, mae);
+    assert.ok(panel(renderPage(m), 'short').includes(mae.toFixed(1)), `${mo.key}: and prints it`);
+    own.set(mo.key, mae);
+  }
+  assert.equal(new Set(own.values()).size, own.size, 'the candidates are not showing each other’s numbers');
 });
 
 test('the manifest decides what is offered — a model whose report did not load is not a chip', () => {

@@ -37,3 +37,7 @@ PROVISIONAL — cannot be SHIP before:
 
 collected: KÖLN: 3058 steps; BONN: 3058 steps; KOBLENZ: 3058 steps; DRESDEN: 3058 steps; PASSAU ILZSTADT: 3058 steps; FREMERSDORF: 3058 steps; CUXHAVEN STEUBENHÖFT: 3058 steps
 
+## Caveats
+
+- 2 candidates have now been measured on the SAME TEST origins (timesfm-2.5-200m, timesfm-3.0). The clause thresholds were pre-registered for a single candidate; read the significances as 2 looks at one test set, not one.
+
