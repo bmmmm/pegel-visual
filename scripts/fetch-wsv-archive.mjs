@@ -219,7 +219,11 @@ export function condense(measurements) {
 // min == max (measured 2026-08-21: ~2076 station-years, 601 of 622 stations for
 // 2025 alone). Every request therefore runs through Jan 1 of the FOLLOWING year,
 // which returns Dec 31 in full. The price is a 1-value sliver of that following
-// year, dropped again by dropSpillYears before anything is written.
+// year, dropped again by dropSpillYears before anything is written. The same
+// call is right for the RUNNING year: the endpoint accepts an end date in the
+// future and delivers up to the last measurement (measured 2026-09-03: BONN
+// 2026-01-01..09-03, 23 566 points, 0 missing days), so requestEnd(CURRENT_YEAR)
+// is what --running asks for.
 export const requestEnd = lastYear => `${lastYear + 1}-01-01`;
 
 // inverse of requestEnd: the last year a request window actually covers in full.
@@ -382,7 +386,10 @@ export function buildManifest(stations, out) {
     // carry a running year built purely from the REST window and still have no
     // archive at all (Neuwied Stadt, Basel-Rheinhalle, ~111 lock and weir
     // gauges). Both facts travel, so the client can keep fetching the data that
-    // does exist while still naming what will never arrive.
+    // does exist while still naming what will never arrive — it reads three
+    // states out of them (index.html, state.repoArchive): `none` (nothing on
+    // disk, do not fetch), `rest-only` (no WSV archive, but real days) and
+    // `available`.
     if (meta.noArchive) entry.noArchive = true;
     return entry;
   };

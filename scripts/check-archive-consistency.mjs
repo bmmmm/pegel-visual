@@ -165,6 +165,16 @@ const dayOfYear = d => Math.floor((Date.UTC(d.getUTCFullYear(), d.getUTCMonth(),
 // worst two: 39 and 22), and 119/120 ran to Dec 31. Two failures in 120 puts
 // the 95% interval at roughly 0.2%..5.9%, so minShare 0.9 sits clear of the
 // upper end rather than of the point estimate. The broken state scored 1.6%.
+//
+// What this rule does NOT see, by construction: five gauges with closed years
+// through 2025 and no running year before ~Aug 4 (KRÜCKAU-, PINNAU- and
+// STÖR-SPERRWERK AP, VELSDORF, LÜBZ OP — WSV answers an empty array for
+// 2026-03-01..2026-04-01, measured 2026-09-04). Five of 628 candidates against
+// a 90% floor is not a second defect; on the plate they explain themselves,
+// because bucketSeries counts real silences and the legend names them. And
+// two gauges carry no current.json at all any more because their series is
+// gone (ILMENAU, Koblenz UP: REST answers 404 "Timeseries does not exist") —
+// decommissioned, correctly frozen at 2025, never a candidate here.
 export function checkRunningYearContinuity(entries, {
   year, nowDate, minCandidates = 400, minShare = 0.9, maxHoles = 21, startBy = 7, maxLag = 10,
 } = {}) {
