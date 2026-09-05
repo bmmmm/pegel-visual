@@ -3810,7 +3810,9 @@ function renderHistory(h) {
     `<span class="lo">${esc(levelWithUnit(min, unit))}</span></div>`;
   const refs = h.marks.map(m => `<b>${esc(m.key)}</b> ${esc(fmtLevel(m.cm, unit))}`).join(' · ');
   const key = plateKey([
-    { sw: keySw('<polyline class="h-line" points="0,9 4,4 8,6 12,2"/>'), label: T.histDaily },
+    // line AND the water body under it: one mark of two classes, so the fill the
+    // chart draws under every reading is named here too (legend gate, 2026-09-06)
+    { sw: keySw('<polygon class="h-fill" points="0,9 4,4 8,6 12,2 12,12 0,12"/><polyline class="h-line" points="0,9 4,4 8,6 12,2"/>'), label: T.histDaily },
     h.banded && { sw: keySw('<polygon class="h-band" points="0,3 12,1 12,8 0,10"/>'), label: T.histBand },
     refs && { sw: keySw('<line class="href-line" x1="0" y1="6" x2="12" y2="6"/>'), html: refs },
     h.gaps > 0 && { sw: keySw('<polyline class="h-line" points="0,8 3,5"/><polyline class="h-line" points="9,6 12,3"/>'),

@@ -3624,9 +3624,10 @@ const svgAt = (html, from = 0) => {
   return a < 0 ? '' : html.slice(a, html.indexOf('</svg>', a));
 };
 
-// Not marks: the drawing's own container class, invisible hit targets, text
-// labels, and the two boat states the key spells out in words instead.
-const NOT_A_MARK = new Set(['scene', 'chart', 'profile', 'hit', 'craft-lbl', 'stuck', 'aground']);
+// Not marks: the drawings' own container classes (`hist` is the history
+// chart's), invisible hit targets, text labels, and the two boat states the key
+// spells out in words instead.
+const NOT_A_MARK = new Set(['scene', 'chart', 'hist', 'profile', 'hit', 'craft-lbl', 'stuck', 'aground']);
 
 const assertNamed = (drawing, key, what) => {
   const missing = [...classesIn(drawing)].filter(c => !NOT_A_MARK.has(c) && !key.has(c));
@@ -3700,6 +3701,64 @@ test('the neighbours profile names its marks and owns up to its axes', () => {
     assert.ok(key.has(c), `${c} is named in the key`);
   }
   assert.ok(html.includes('neither starts at zero'), 'and the stretched axes are admitted to');
+});
+
+// The history plate was the one plate renderer outside this gate (2026-09-03 to
+// 2026-09-06), and the first run found the water body drawn under every line
+// without a key entry. Each fixture proves it IS the case it claims before the
+// gate reads it, the way the scene test checks its weather.
+test('the history plate names every mark it draws, in every window it draws', () => {
+  const H = 36e5, D = 864e5;
+  const render = (points, key, extra = '') => loadApp({ now: NOON }).run(`(() => {
+    state.archive = ${JSON.stringify(points)};
+    historyKey = ${JSON.stringify(key)};
+    ${extra}
+    const h = historyViewModel();
+    return { h, html: renderHistory(h) };
+  })()`);
+  const hourly = (n, from, f) => Array.from({ length: n }, (_, i) => [from + i * H, f(i)]);
+  const daily = (n, f) => Array.from({ length: n }, (_, i) => [NOON - (n - i) * D, f(i)]);
+  // the section's first <svg> may be a chip swatch, so start at the drawing
+  const histSvg = html => svgAt(html, html.lastIndexOf('<svg', html.indexOf('class="chart hist"')));
+  const gate = (r, what) => {
+    assert.equal(r.h.empty, false, `${what}: the fixture draws a chart`);
+    assert.ok(r.html.includes('class="h-fill"'), `${what}: the water body is drawn`);
+    assertNamed(histSvg(r.html), keyClasses(r.html), what);
+  };
+
+  // 1. thirty days of hourly readings: more readings than columns, so a band
+  const dense = render(hourly(720, NOON - 720 * H, i => 200 + Math.round(40 * Math.sin(i / 20))), '30d');
+  assert.equal(dense.h.banded, true, 'the fixture really is denser than the columns');
+  gate(dense, '30 days, hourly');
+  // 2. one and five years of daily readings
+  for (const [key, days] of [['1y', 365], ['5y', 1825]]) {
+    const r = render(daily(days, i => 250 + (i % 50)), key);
+    assert.equal(r.h.points, days, `${key}: the window holds the whole fixture`);
+    gate(r, `${key}, daily`);
+  }
+  // 3. a real silence: a hundred hours of nothing inside hourly readings — the
+  //    line breaks and the key says so
+  const silent = render([...hourly(50, NOON - 200 * H, i => 300 + i), ...hourly(50, NOON - 50 * H, i => 300 - i)], '30d');
+  assert.ok(silent.h.gaps >= 1, 'the fixture really has an outage');
+  gate(silent, 'a silent stretch');
+  // 4. a resolution gap: two readings half an hour apart are drawn through
+  const fine = render([[NOON - 30 * 60000, 100], [NOON, 120]], '24h');
+  assert.equal(fine.h.gaps, 0, 'no outage here — the chart is just finer than the readings');
+  gate(fine, 'finer than the readings');
+  // 5. a flat series
+  gate(render(hourly(50, NOON - 50 * H, () => 77), 'all'), 'a flat series');
+  // 6. a reference level inside the window draws a dashed rule
+  const marked = render(daily(365, i => 250 + (i % 50)), '1y',
+    `state.gauge = { currentMeasurement: { value: 260, timestamp: ${NOON} }, characteristicValues: [{ shortname: 'MW', value: 270 }] };`);
+  assert.equal(marked.h.marks.length, 1, 'MW lies inside the window, so it is drawn');
+  assert.ok(marked.html.includes('class="href-line"'), 'as a rule on the chart');
+  gate(marked, 'with a reference level');
+
+  // and the gate can go red: the drawing's line comes before the key's swatch,
+  // so the first rename hits the chart and only that class goes missing
+  const ghost = marked.html.replace('class="h-line"', 'class="h-ghost"');
+  const missing = [...classesIn(histSvg(ghost))].filter(c => !NOT_A_MARK.has(c) && !keyClasses(ghost).has(c));
+  assert.deepEqual(missing, ['h-ghost']);
 });
 
 test('the year-against-climate chart gives its outliers a shape, not just a hue', () => {
