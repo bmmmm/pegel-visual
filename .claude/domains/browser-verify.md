@@ -44,6 +44,10 @@ memory `browser-verify-cdp-recipe` points here as the source.
   `closed.json` + `current.json` into `archive/<uuid>/` next to the worktree's
   `index.html`, then serve it — that is how new code meets real data before it
   is deployed. `?station=BONN&history=5y` drives the range straight from the URL.
+  In a worktree, `ln -s <main checkout>/archive archive` is the quick way to the
+  same data — but `git status` then shows it as `??`, because the ignore rule
+  `/archive/` matches a directory, not a symlink. Remove the link before the
+  commit (2026-09-06).
 - **Driving the live browser: the tab has to be VISIBLE.** A tab that is
   minimised, on another Space or fully covered by another window reports
   `document.visibilityState === 'hidden'`, and Chrome then stops serving
