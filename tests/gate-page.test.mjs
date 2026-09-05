@@ -164,7 +164,6 @@ const NOT_A_MARK = new Set(['p-block', 'row', 'pooled', 'head', 'lbl', 'rg', 'tr
   'plot', 'vscale', 'plot-box', 'lead-bands', 'lbn', 'lead-ticks', 'clip', 'lo', 'hi', 'up', 'dn', 'vh', 'p-h2',
   'ends', 'end',   // the direct labels: containers for a swatch whose OWN class is a mark and is in the key
   'fold', 'fl', 'fs', 'foldbody',   // a drawer and its lid, not something the drawing draws
-  'grp',   // ctlRow's label-plus-chips group, a wrapping unit, not a mark
   'prose', 'flow', 'fn']);  // prose/flow/fn are the model chain's containers; its four node kinds ARE marks
 test('every mark a section draws is named in that section’s key — mechanically', () => {
   let drawings = 0;

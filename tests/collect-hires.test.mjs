@@ -1,8 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
   STATIONS, STEP_MS, byMonth, collectStation, foldLegacy, gapCount, main, merge, normalize, readAllPoints, writeShards,
 } from '../scripts/forecast/collect-hires.mjs';
@@ -141,4 +143,25 @@ test('main: a run that succeeds counts the disk too, without calling it unchange
   assert.equal(code, 0);
   assert.deepEqual(errs, []);
   assert.equal(lines.at(-1), 'done · 1 stations · 15 points on disk · 0 failed');
+});
+
+// The wrapper waits for the network before it lets node run. The rig: an
+// unreachable probe host, a one-second budget, HOME moved so the wrapper's own
+// PATH prefix (~/.local/bin, where wallii lives) finds nothing, and a wallii shim
+// in front that records the post instead of making it.
+test('wrapper: a dead network is waited for and reported as a skip, before node ever runs', () => {
+  const shim = mkdtempSync(join(tmpdir(), 'hires-shim-'));
+  const wall = join(shim, 'wall.log');
+  writeFileSync(join(shim, 'wallii'), `#!/bin/sh\necho "$@" >> ${JSON.stringify(wall)}\n`, { mode: 0o755 });
+  const script = fileURLToPath(new URL('../scripts/forecast/collect-hires.sh', import.meta.url));
+  const r = spawnSync('bash', [script], {
+    encoding: 'utf8', timeout: 60000,
+    env: { ...process.env, HOME: mkdtempSync(join(tmpdir(), 'hires-home-')), PATH: `${shim}:${process.env.PATH}`,
+      NET_PROBE_URL: 'https://nonexistent.invalid/', NET_WAIT_MAX: '1', NET_WAIT_STEP: '1' },
+  });
+  assert.equal(r.status, 1, `exit 1, got ${r.status}; stderr: ${r.stderr}`);
+  assert.match(r.stdout, /waiting for the network: curl/, 'the wait is logged, with curl’s own reason');
+  assert.doesNotMatch(r.stdout, /collect-hires start/, 'node never ran');
+  assert.match(r.stderr, /network unreachable for 1s, giving up/);
+  assert.match(readFileSync(wall, 'utf8'), /--outcome failed .*network unreachable for 1s, nothing on disk touched/);
 });

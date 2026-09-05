@@ -156,5 +156,6 @@ own script tree, needed when working on it and not before. Moved verbatim.
   shards, not one file per gauge, so the weekly mirror commit stays small. The
   server clamps `P35D` to ~31 days; merges are idempotent by timestamp. A run
   that fails every fetch reports the disk as unchanged, not as empty, and the
-  wrapper waits up to 10 min for the API before it posts `failed` — `RunAtLoad`
-  fires at login, on 2026-09-05 into a network 18 h without DNS.
+  wrapper probes the API (HEAD) for ~10 min before it posts `failed` and logs
+  the wait — `RunAtLoad` fires at login, on 2026-09-05 into a network 18 h
+  without DNS.

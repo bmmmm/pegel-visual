@@ -169,6 +169,13 @@ export async function main(argv = process.argv.slice(2), { fetchImpl = fetch, lo
   };
   const out = opt('out', join(REPO, 'tmp-forecast', 'hires'));
   const uuids = opt('stations', null) ? opt('stations').split(',') : Object.keys(STATIONS);
+  // The summary is the wrapper's wall post, so "points on disk" has to be read
+  // from the disk: summed over the fetches, a run into a dead network said
+  // "0 points on disk" over 67 310 untouched points (2026-09-05). "(unchanged)"
+  // is measured the same way — disk before against disk after — not inferred
+  // from the failure count, since a station can throw after writing a shard.
+  const pointsOnDisk = () => uuids.reduce((n, uuid) => n + readAllPoints(join(out, uuid)).length, 0);
+  const before = pointsOnDisk();
   let ok = 0;
   let failed = 0;
   for (const uuid of uuids) {
@@ -181,11 +188,8 @@ export async function main(argv = process.argv.slice(2), { fetchImpl = fetch, lo
       log.error(`${STATIONS[uuid] || uuid}: ${e.message}`);
     }
   }
-  // The summary is the wrapper's wall post, so "points on disk" has to be read
-  // from the disk: summed over the fetches, a run into a dead network said
-  // "0 points on disk" over 67 310 untouched points (2026-09-05).
-  const onDisk = uuids.reduce((n, uuid) => n + readAllPoints(join(out, uuid)).length, 0);
-  const unchanged = ok === 0 && failed > 0 ? ' (unchanged)' : '';
+  const onDisk = pointsOnDisk();
+  const unchanged = ok === 0 && onDisk === before ? ' (unchanged)' : '';
   log.log(`done · ${ok} stations · ${onDisk} points on disk${unchanged} · ${failed} failed`);
   return failed ? 1 : 0;
 }
