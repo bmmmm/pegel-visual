@@ -168,6 +168,16 @@ def test_the_page_publishes_only_the_shipped_reports():
             for path in where.values():
                 assert path.rsplit("/", 1)[-1].split(".")[0] == stem, \
                     f"{m['key']} points at {path}, which is not its own {stem}.*"
+    # The second axis: which model the plate SPEAKS for by default. It is allowed
+    # to be the line that can never ship — that is the whole point of measuring a
+    # challenger — but then the page has to say so in the one place a reader of
+    # that model alone would see first, its subtitle. The manifest cannot check
+    # the sentence; it can check that the page owns one.
+    listed = [m["key"] for m in manifest["models"]]
+    assert manifest["primary"] in listed, f"the manifest's primary {manifest['primary']!r} is not a model it lists"
+    if not tfm.MODELS[manifest["primary"]]["shippable"]:
+        assert "measured here, never shipped" in js, \
+            "the primary cannot ship, and gate.js has no sentence saying so for a sheet read for it alone"
 
 
 def test_the_committed_manifest_matches_the_registry_and_disk():
@@ -178,6 +188,8 @@ def test_the_committed_manifest_matches_the_registry_and_disk():
     assert manifest["shipped"] == tfm.SHIPPED
     listed = {m["key"] for m in manifest["models"]}
     assert listed <= set(tfm.MODELS), f"manifest names an unregistered model: {listed - set(tfm.MODELS)}"
+    assert manifest["primary"] == tfm.PRIMARY and manifest["primary"] in listed, \
+        f"the committed manifest's primary {manifest['primary']!r} is not the registry's ({tfm.PRIMARY}) or not listed"
     for m in manifest["models"]:
         entry = tfm.MODELS[m["key"]]
         for field in ("checkpoint", "license", "license_url", "shippable", "id", "params", "label"):

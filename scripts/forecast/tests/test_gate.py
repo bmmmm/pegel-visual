@@ -218,11 +218,16 @@ def test_the_manifest_lists_only_reports_that_exist(tmp_path):
     assert one["shipped"] == tfm.SHIPPED
     assert [m["key"] for m in one["models"]] == [tfm.SHIPPED], "a model with no report is not offered"
     assert one["models"][0]["files"] == {"seasonal-mid": {"json": "seasonal-mid/report.json", "md": "seasonal-mid/report.md"}}
+    # the primary is a different axis from the shipped model — but it must be a
+    # model the manifest actually lists, or the page is sent to a line it cannot draw
+    assert tfm.PRIMARY != tfm.SHIPPED, "this test is vacuous unless the primary is not the shipped line"
+    assert one["primary"] == tfm.SHIPPED, "with the primary's report missing, the manifest falls back to the shipped line"
 
     (gate_dir / "seasonal-mid" / "report-3p0.json").write_text("{}", encoding="utf-8")
     two = gate.write_models_manifest(tmp_path)
     keys = [m["key"] for m in two["models"]]
     assert keys == [tfm.SHIPPED, "3p0"], keys
+    assert two["primary"] == tfm.PRIMARY, "once its report exists, the primary is the registry's"
     nc = next(m for m in two["models"] if m["key"] == "3p0")
     assert nc["shippable"] is False and nc["license_url"]
     assert json.loads((gate_dir / "models.json").read_text(encoding="utf-8")) == two

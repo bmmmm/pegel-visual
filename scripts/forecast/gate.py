@@ -461,7 +461,12 @@ def write_models_manifest(repo: Path) -> dict:
                        "checkpoint": entry["checkpoint"], "license": entry["license"],
                        "license_url": entry["license_url"], "shippable": entry["shippable"],
                        "files": files})
-    out = {"shipped": tfm.SHIPPED, "models": models}
+    # the primary must be a LISTED model — a registered line with no report on
+    # disk is skipped above, and a manifest naming it would send the page to a
+    # model it cannot draw; the shipped line is always listed once it has a report
+    listed = [m["key"] for m in models]
+    primary = tfm.PRIMARY if tfm.PRIMARY in listed else tfm.SHIPPED
+    out = {"shipped": tfm.SHIPPED, "primary": primary, "models": models}
     (repo / "gate" / "models.json").write_text(json.dumps(out, indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
     return out
 
