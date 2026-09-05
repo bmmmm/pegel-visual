@@ -154,4 +154,7 @@ own script tree, needed when working on it and not before. Moved verbatim.
   `tmp-forecast/hires-branch/`, fast-forward only, never `origin`) — the
   short-horizon gate stays PROVISIONAL until ~16 weeks have accumulated. Month
   shards, not one file per gauge, so the weekly mirror commit stays small. The
-  server clamps `P35D` to ~31 days; merges are idempotent by timestamp.
+  server clamps `P35D` to ~31 days; merges are idempotent by timestamp. A run
+  that fails every fetch reports the disk as unchanged, not as empty, and the
+  wrapper waits up to 10 min for the API before it posts `failed` — `RunAtLoad`
+  fires at login, on 2026-09-05 into a network 18 h without DNS.

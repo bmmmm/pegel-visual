@@ -91,6 +91,23 @@ sink_push() {
   printf 'sink: pushed %s\n' "$(git -C "$SINK" rev-parse --short HEAD)"
 }
 
+# RunAtLoad fires at login, often before the network is up: on 2026-09-05 the
+# FritzBox had been without DNS for 18 h and all eight stations failed within
+# one second. So wait for the API at the edge — not inside eight stations, and
+# not by retrying in Node. The env overrides exist for the test rig only.
+NET_PROBE_URL="${NET_PROBE_URL:-https://www.pegelonline.wsv.de/webservices/rest-api/v2/stations.json?limit=1}"
+NET_WAIT_MAX="${NET_WAIT_MAX:-600}"
+NET_WAIT_STEP="${NET_WAIT_STEP:-30}"
+waited=0
+until curl -sSf -o /dev/null --max-time 10 "$NET_PROBE_URL" 2>/dev/null; do
+  if (( waited >= NET_WAIT_MAX )); then
+    report failed "hires collect skipped: network unreachable for ${waited}s, nothing on disk touched"
+    exit 1
+  fi
+  sleep "$NET_WAIT_STEP"
+  waited=$(( waited + NET_WAIT_STEP ))
+done
+
 printf '%s collect-hires start\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 if ! out="$(node scripts/forecast/collect-hires.mjs 2>&1)"; then
   printf '%s\n' "$out" >&2
