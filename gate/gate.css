@@ -387,10 +387,12 @@ th:first-child, td:first-child { text-align: left; }
   .plot .end .sw, .plot .end .sw svg { width: 9px; height: 9px; }
   /* Measured on a 390 px phone: the 1–14 band is 33 px wide and "+0.08" already
      fills it, so swatch and number cannot share it, and overflow:hidden would
-     crop the swatch without a word. With two curves drawn the number goes, not
-     the name — an unnamed figure under a subtitle about the other model reads as
-     that model's; the block chips stay, and the figure stands named in the facts. */
-  .plot .lead-bands[data-many] b { display: none; }
+     crop the swatch without a word. With two curves drawn the SWATCH goes, not
+     the number: the figure is the lead plate's own estimator (the median of the
+     five gauges — the facts pool centimetres, a different number) and must stay
+     on the sheet; it is the primary's, the same model the subtitle above is
+     about, and the readout under the chart names it first. */
+  .plot .lead-bands[data-many] b .sw { display: none; }
 }
 .plot .lead-bands > a {
   position: absolute; top: 0; bottom: 0;

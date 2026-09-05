@@ -109,10 +109,14 @@ own script tree, needed when working on it and not before. Moved verbatim.
   row keeps the manifest's order even while the primary is off, because a
   control that changes places when used cannot be found again; and a target is
   available when ANY drawn model has it, with the primary stood in for by the
-  first enabled model measured on it. On a 390 px phone the 1–14 band is 33 px
-  wide: with two curves the band labels hide their NUMBER (CSS, `data-many`)
-  rather than crop the swatch — an unnamed figure under a subtitle about the
-  other model reads as that model's. `signed()` prints a rounded zero without a
+  first enabled model measured on it, and the same for the short-horizon run.
+  On a 390 px phone the 1–14 band is 33 px wide: with two curves the band labels
+  drop the SWATCH (CSS, `data-many`) and keep the number — it is this plate's own
+  estimator (the median of five gauges; the facts pool centimetres, a different
+  figure) and the primary's, the model the subtitle is about; gate-check measures
+  paint, not DOM presence, because a swatch inside a `display:none` parent is
+  "there". Names that are read aloud (`aria-label`, `data-say`) go through
+  `spoken()` — words, not the glyph. `signed()` prints a rounded zero without a
   sign ("0.00", not "-0.00"); gate-check reads the block's sign off the label's
   three-decimal title since.
 - **Two lines are registered in `tfm.py`, and only one may ship.** `2p5` is

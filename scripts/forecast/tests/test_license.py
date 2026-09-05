@@ -170,14 +170,13 @@ def test_the_page_publishes_only_the_shipped_reports():
                     f"{m['key']} points at {path}, which is not its own {stem}.*"
     # The second axis: which model the plate SPEAKS for by default. It is allowed
     # to be the line that can never ship — that is the whole point of measuring a
-    # challenger — but then the page has to say so in the one place a reader of
-    # that model alone would see first, its subtitle. The manifest cannot check
-    # the sentence; it can check that the page owns one.
+    # challenger — but it must be a model the manifest lists, or the page is sent
+    # to a line it cannot draw. That the sheet then SAYS "never shipped" for that
+    # model alone is the page's sentence to keep, and tests/gate-page.test.mjs
+    # asserts it on the rendered subtitle (a grep here matched strings the file
+    # carried before the sentence existed).
     listed = [m["key"] for m in manifest["models"]]
     assert manifest["primary"] in listed, f"the manifest's primary {manifest['primary']!r} is not a model it lists"
-    if not tfm.MODELS[manifest["primary"]]["shippable"]:
-        assert "measured here, never shipped" in js, \
-            "the primary cannot ship, and gate.js has no sentence saying so for a sheet read for it alone"
 
 
 def test_the_committed_manifest_matches_the_registry_and_disk():

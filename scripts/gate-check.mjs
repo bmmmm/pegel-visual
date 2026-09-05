@@ -168,17 +168,18 @@ async function run(cdp, url, { name, width, height, mobile }) {
   //     the curve wearing its line. The Node tests see the markup; only a
   //     browser sees whether swatch and number share a 33 px band or one of
   //     them is cropped without a word (overflow:hidden) — so on a phone the
-  //     CSS hides the number, and this measures that it did, both ways.
+  //     CSS hides the SWATCH and keeps the number, and this measures paint,
+  //     not DOM presence: a swatch inside a display:none parent is "there".
   const manifest = JSON.parse(await s.evaluate('fetch("models.json").then(r => r.json()).then(m => JSON.stringify(m))'));
   const primaryLabel = manifest.primary && (manifest.models.find(mo => mo.key === manifest.primary) || {}).label;
-  const bandState = () => s.evaluate(`JSON.stringify([...document.querySelectorAll('#lead .lead-bands a b')].map(b => ({ sw: !!b.querySelector('.sw'), shown: b.getClientRects().length > 0, fits: b.scrollWidth <= b.clientWidth + 1 })))`);
+  const bandState = () => s.evaluate(`JSON.stringify([...document.querySelectorAll('#lead .lead-bands a b')].map(b => { const sw = b.querySelector('.sw'); const r = sw && sw.getBoundingClientRect(); return { sw: !!sw, swPainted: !!r && r.width >= 8 && r.height >= 8, shown: b.getClientRects().length > 0 && /\\d/.test(b.textContent), fits: b.scrollWidth <= b.clientWidth + 1 }; }))`);
   if (primaryLabel && manifest.models.length > 1) {
     const firstVerdict = await s.evaluate('(document.querySelector(".vmodels li") || {}).textContent || ""');
     check(firstVerdict.includes(primaryLabel), 'the verdict list leads with the manifest’s primary', firstVerdict.trim());
     const bands = JSON.parse(await bandState());
-    check(bands.length === 3 && bands.every(b => b.sw), 'each band label carries the primary’s line swatch', JSON.stringify(bands));
-    check(mobile ? bands.every(b => !b.shown) : bands.every(b => b.shown && b.fits),
-      mobile ? 'on a phone the two-model band labels hide their number rather than crop it' : 'swatch and number fit inside every band', JSON.stringify(bands));
+    check(bands.length === 3 && bands.every(b => b.shown && b.fits), 'each band label shows the primary’s skill, and it fits', JSON.stringify(bands));
+    check(mobile ? bands.every(b => b.sw && !b.swPainted) : bands.every(b => b.swPainted),
+      mobile ? 'on a phone the two-model band labels drop the swatch, not the number' : 'and on the desktop each wears the primary’s line swatch, painted', JSON.stringify(bands));
   }
 
   await s.evaluate('for (const d of document.querySelectorAll("details")) d.open = true');
@@ -264,7 +265,7 @@ async function run(cdp, url, { name, width, height, mobile }) {
     const left = await s.evaluate(`document.querySelector('${chipRow} span.off[data-ctl="model"]') && document.querySelector('${chipRow} span.off[data-ctl="model"]').textContent`);
     check(!!left, 'the last model on cannot be switched off — its chip is disabled, not gone', String(left));
     const bandsOne = JSON.parse(await bandState());
-    check(bandsOne.length === 3 && bandsOne.every(b => !b.sw && b.shown && b.fits), 'with one curve the band labels show a bare number again, and it fits', JSON.stringify(bandsOne));
+    check(bandsOne.length === 3 && bandsOne.every(b => !b.sw && b.shown && b.fits), 'with one curve the band labels show a bare number, and it fits', JSON.stringify(bandsOne));
     // and it must still LOOK like the model in view. Painted like an ordinary
     // unavailable chip it reads as greyed out while the model switched off beside
     // it reads as available — the state inverted, which no class assertion sees.

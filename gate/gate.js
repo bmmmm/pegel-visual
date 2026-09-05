@@ -42,6 +42,9 @@ const nameOf = mo => (mo && mo.label) || 'the model';
 // its own — the ONE way to spell such a label, so a new surface cannot name
 // the line bare (the key entries spell the clause out in words as well)
 const labelNC = mo => `${nameOf(mo)}${mo && mo.shippable === false ? ` ${NC_GLYPH}` : ''}`;
+// the same name for text that is READ ALOUD (aria-label, data-say): a screen
+// reader says "balance scale" for the glyph, or nothing — so the words instead
+const spoken = mo => `${nameOf(mo)}${mo && mo.shippable === false ? ' (non-commercial, never shipped)' : ''}`;
 export const SKILL_DOMAIN = [-0.2, 0.2];   // fixed across blocks and targets, so bars stay comparable
 export const RATIO_DOMAIN = [0.5, 2.0];    // error relative to the blend; 1.0 is the bar
 export const PICP_DOMAIN = [0.6, 1.0];
@@ -187,7 +190,7 @@ export function skillRows(report, block, key = 'ss', modelLabel = 'TimesFM') {
 
 // the curve over the lead day: error of every method relative to the blend,
 // pooled as the median of the five regimes' ratios or for one gauge
-// The one picture. `models` are the enabled candidates in manifest order, each
+// The one picture. `models` are the enabled candidates, primary first, each
 // with the report it was measured in; the baselines are the same windows for all
 // of them, so they are read once, from the primary.
 function leadModel(models, state) {
@@ -287,15 +290,18 @@ export function leadSay(L, day) {
 }
 
 export function buildModel(reports, parsed) {
-  // only models that actually loaded a mid report can be offered; the first one
-  // enabled is the PRIMARY and every per-gauge number on this sheet is its own
+  // only models that actually loaded a mid report can be offered; the PRIMARY
+  // (below) is the manifest's when it is on, and every per-gauge number on this
+  // sheet is its own
   const all = (reports.models || []).filter(mo => {
     const r = reports.byKey[mo.key];
     return r && r.seasonal && r.seasonal.mid;
   });
   const keys = all.map(mo => mo.key);
+  // the manifest's word on which model leads — whether or not it is on
+  const lead = keys.includes(reports.primary) ? reports.primary : keys[0];
   const wanted = parsed.models && parsed.models.length ? keys.filter(k => parsed.models.includes(k)) : keys;
-  const enabled = wanted.length ? wanted : keys.slice(0, 1);  // the last one on cannot be switched off
+  const enabled = wanted.length ? wanted : [lead];  // a selection that names nothing that loaded falls back to the primary
   // a target exists if ANY model in view was measured on it — read from the
   // primary alone, a target only the other model has would vanish from the sheet
   // while that model is drawn. A target whose report did not load falls back to
@@ -311,10 +317,14 @@ export function buildModel(reports, parsed) {
   // changes places when it is used cannot be found again — so the row leads with
   // the manifest's primary even while that model is off, and only what is DRAWN
   // (verdicts, lids, titles) follows the primary actually in view
-  const lead = keys.includes(reports.primary) ? reports.primary : keys[0];
   const chipOrder = [lead, ...keys.filter(k => k !== lead)];
   const seasonal = reports.byKey[primary].seasonal;
-  const short = reports.byKey[primary].short;
+  // the 15-minute grid is its own test set: the primary's run when it has one,
+  // else the first enabled model's — and the panel names whose it draws. Read
+  // from the primary alone, one missing short report made the whole panel vanish
+  // while the other model's was on disk.
+  const shortOf = [primary, ...enabled].map(k => ({ k, s: reports.byKey[k] && reports.byKey[k].short })).find(x => x.s) || null;
+  const short = shortOf && shortOf.s;
   const report = seasonal[state.target];
   // every enabled model's report for the target in view, primary first
   const repOf = k => {
@@ -414,6 +424,7 @@ export function buildModel(reports, parsed) {
     };
   });
   const shortModel = short ? {
+    model: all.find(mo => mo.key === shortOf.k) || null,
     verdict: short.verdict, reasons: short.provisional_reasons || [],
     need: short.thresholds.short_origins_min, needRises: short.thresholds.short_rise_events_min,
     stations: Object.entries(short.stations).map(([name, s]) => ({ name, origins: s.origins, rises: s.rise_events, blocks: s.blocks })),
@@ -434,7 +445,6 @@ export function buildModel(reports, parsed) {
   // is the same failure as a curve labelled with another curve's skill.
   const ssOf = (mo, b) => mo.report.pooled.blocks[b].ss;
   const arc = mo => `${pctStr(ssOf(mo, 'h1-14'))} at two weeks, ${rel(ssOf(mo, 'h15-30'))} at a month and ${rel(ssOf(mo, 'h31-90'))} by three months`;
-  const focus = drawn;
   const barStr = pctStr(report.thresholds.A1_pooled_ss_min);
   const noneClears = drawn.length > 0 && drawn.every(mo => !(mo.report.clauses.A1 || {}).pass);
   // a line that cannot ship says so in the subtitle whether it is read alone or
@@ -445,16 +455,19 @@ export function buildModel(reports, parsed) {
   // phone, and gate-check measures it there. So the candidate in focus gets the
   // full arc and the others one number each — a second full arc cost three lines
   // on the CI runner's wider glyphs and pushed the drawing off the first screen.
-  const gist = focus.length > 1
-    ? `On the ${TARGETS[state.target]} target ${focus[0].label} beats the blend by ${arc(focus[0])}` +
-      `${ncNote(focus[0])}; ` +
-      focus.slice(1).map(mo => `${mo.shippable ? 'the shipped ' : ''}${mo.label} manages ${pctStr(ssOf(mo, 'h1-14'))}${mo.shippable ? '' : ` ${NC_GLYPH}`}`).join('; ') +
+  const gist = drawn.length > 1
+    ? `On the ${TARGETS[state.target]} target ${drawn[0].label} beats the blend by ${arc(drawn[0])}` +
+      `${ncNote(drawn[0])}; ` +
+      drawn.slice(1).map(mo => `${mo.shippable ? 'the shipped ' : ''}${mo.label} manages ${pctStr(ssOf(mo, 'h1-14'))}${mo.shippable ? '' : ` ${NC_GLYPH}`}`).join('; ') +
       `. ${noneClears ? `Neither reaches the ${barStr} bar.` : `The bar was ${barStr} in every block.`}`
-    : `On the ${TARGETS[state.target]} target ${(focus[0] || {}).label || 'the model'} beats the blend by ${focus[0] ? arc(focus[0]) : `${pctStr(pb('h1-14'))} at two weeks, ${rel(pb('h15-30'))} at a month and ${rel(pb('h31-90'))} by three months`} — the bar was ${barStr} in every block, and beyond a month a calendar does as well${ncNote(focus[0])}.`;
+    : `On the ${TARGETS[state.target]} target ${(drawn[0] || {}).label || 'the model'} beats the blend by ${drawn[0] ? arc(drawn[0]) : `${pctStr(pb('h1-14'))} at two weeks, ${rel(pb('h15-30'))} at a month and ${rel(pb('h31-90'))} by three months`} — the bar was ${barStr} in every block, and beyond a month a calendar does as well${ncNote(drawn[0])}.`;
   const positive = regimes.filter(r => r.ss > 0).length;
   const B = v => `<b>${esc(v)}</b>`;
-  // a fact that stands for ONE run says whose it is when more than one is drawn
-  // — the colon, not "for": the name never follows a bare number (see skillRows)
+  // a fact that stands for ONE run says whose it is when more than one is drawn.
+  // Name, colon, then the figures: the colon binds the name to what follows, and
+  // no number ends up directly in front of `TimesFM` — the trap skillRows avoids
+  // the other way round, by putting the centimetres BEFORE the name (`2.5 cm for
+  // TimesFM 3.0`), because `TimesFM 2.5 cm` spells the other candidate's label
   const whose = drawn.length > 1 ? `${B(labelNC(drawn[0]))}: ` : '';
   const facts = [
     { k: 'setup', html: `${B(nStations)} gauges in ${B(nRegimes)} regimes · ${B(report.pooled.n_origins)} test origins per gauge, ${B(thousands(windows))} windows from ${B(String(h.protocol.test_from).slice(0, 4))} · ${B(thousands(h.protocol.context))} days in, ${B(h.protocol.horizon)} days out` },
@@ -520,7 +533,7 @@ export function buildModel(reports, parsed) {
     { id: 'error', title: `Error by method · ${BLOCK_LABEL[block]}`, hook: 'every baseline’s MAE next to the blend’s, gauge by gauge', render: renderError },
     { id: 'calib', title: `Calibration · ${drawnLabel} · ${BLOCK_LABEL[block]}`, hook: 'how often the 80 % band held, and the PIT histograms', render: renderCalib },
     { id: 'clim', title: `Climatology alone · ${BLOCK_LABEL[block]}`, hook: 'Finding 2: the calendar against the blend', render: renderClim },
-    shortModel ? { id: 'short', title: `Short horizon · ${primaryLabel} · ${shortModel.verdict}`, hook: 'hours to two days — still collecting, no verdict yet', render: renderShort } : null,
+    shortModel ? { id: 'short', title: `Short horizon · ${shortModel.model ? labelNC(shortModel.model) : primaryLabel} · ${shortModel.verdict}`, hook: 'hours to two days — still collecting, no verdict yet', render: renderShort } : null,
     { id: 'model', title: `The model${m.drawn.length > 1 ? 's' : ''}, and the chain ${m.drawn.length > 1 ? 'they run' : 'it runs'} in · ${drawnLabel}`, hook: `what ${drawnLabel} ${m.drawn.length > 1 ? 'are' : 'is'}, where the weights come from, and the seven steps from archive to this sheet`, render: renderModel },
     { id: 'method', title: 'Method', hook: 'how it was measured, and what it cannot prove', render: renderMethod },
     { id: 'basics', title: 'Basics', hook: 'the model, the bar and the verdict in three short paragraphs', render: renderBasics },
@@ -640,11 +653,16 @@ function renderClauses(m) {
   const many = m.drawn.length > 1;
   const groups = many ? m.drawn.map(mo => ({ mo, clauses: clauseList(mo.report) })) : [{ mo: m.primary, clauses: m.clauses }];
   const list = ({ mo, clauses }) =>
+    // the glyph is for the eye: what is announced or read out says the name
+    // and, for a line that cannot ship, the words
     (many ? `<p class="cl-model${mo.mark ? ` m-${mo.mark}` : ''}">${mo.mark ? swLine(`ln ln-${mo.mark}`) : ''}<b>${esc(labelNC(mo))}</b></p>` : '') +
-    `<ul class="clauses"${attr('aria-label', many ? `clauses, ${labelNC(mo)}` : 'clauses')}>` + clauses.map(c =>
-      `<li class="${c.pass ? 'pass' : 'fail'}"><button type="button" aria-pressed="false"${attr('data-say', `${many ? `${labelNC(mo)}: ` : ''}${c.id} ${c.pass ? 'passed' : 'failed'} — ${c.text}`)}>` +
+    `<ul class="clauses"${attr('aria-label', many ? `clauses, ${spoken(mo)}` : 'clauses')}>` + clauses.map(c =>
+      `<li class="${c.pass ? 'pass' : 'fail'}"><button type="button" aria-pressed="false"${attr('data-say', `${many ? `${spoken(mo)}: ` : ''}${c.id} ${c.pass ? 'passed' : 'failed'} — ${c.text}`)}>` +
       `<span class="g" aria-hidden="true">${c.pass ? '✓' : '✗'}</span><span class="vh">${c.pass ? 'passed' : 'failed'}</span>${esc(c.id)} ${esc(c.name)}</button></li>`).join('') + `</ul>`;
-  const lid = groups.map(g => `${g.clauses.filter(c => c.pass).length} of ${g.clauses.length} held${many ? ` · ${labelNC(g.mo)}` : ''}`).join(' · ');
+  // name, colon, count: with one separator for "between groups" and "inside a
+  // group" the lid read `2 of 7 held · TimesFM 3.0 · 5 of 7 held · TimesFM 2.5`
+  // and bound each count to the OTHER model's name
+  const lid = groups.map(g => `${many ? `${labelNC(g.mo)}: ` : ''}${g.clauses.filter(c => c.pass).length} of ${g.clauses.length} held`).join(' · ');
   return fold('clauses', 'the seven clauses, one by one',
     groups.map(list).join('') +
     `<p class="p-readout" id="clause-readout"><span class="hint">Pick a clause for what it demanded and what was measured.</span></p>`,
@@ -708,9 +726,10 @@ function renderLead(m) {
   // drawn the number wears the primary's own line swatch — a title attribute is
   // not a name a touch reader ever sees. (Inside the <b>: the label is a flex
   // column, so a swatch beside it would take a line of its own.) Where the band
-  // is too narrow for swatch and number both, the CSS hides the number rather
-  // than the name: an unnamed figure under a subtitle about the other model
-  // reads as that model's.
+  // is too narrow for swatch and number both — a 390 px phone — the CSS hides
+  // the swatch and keeps the number: it is this plate's own estimator, which no
+  // other line on the sheet repeats, and it is the primary's, the model the
+  // subtitle is about.
   const many = L.curves.length > 1;
   const pSw = many && m.primary && m.primary.mark ? swLine(`ln ln-${m.primary.mark}`) : '';
   const bandLabels = L.blocks.map(b => `<a${attr('href', stateHref(s, { block: b.name, panel: 'lead' }))}${attr('class', b.on ? 'on' : '')}${b.on ? ' aria-current="true"' : ''} data-focus="lead"${attr('style', `left:${((b.from - 1) / L.H * 100).toFixed(2)}%;width:${((b.to - b.from + 1) / L.H * 100).toFixed(2)}%`)}${attr('title', `${BLOCK_LABEL[b.name]}: ${many ? `${m.primary ? labelNC(m.primary) : 'the primary model'} skill` : 'skill'} ${signed(b.ss, 3)}${L.station === 'pooled' ? ', median of the five gauges' : ''}`)}><span class="lbn">${esc(`${b.from}–${b.to}`)}</span><b>${pSw}${esc(signed(b.ss, 2))}</b></a>`).join('');
@@ -1017,7 +1036,7 @@ function renderShort(m) {
   // the model's own name, and the cm value BEFORE it: "TimesFM 3.0 2.5 cm" would
   // spell the other candidate's label out of a name and a number that only look
   // adjacent — a sheet read for one model must not contain the other's name at all
-  const label = nameOf(m.primary);
+  const label = nameOf(s.model || m.primary);
   const rows = s.stations.map(st => {
     const o = Math.min(100, (st.origins / s.need) * 100);
     const say = `${st.name}: ${st.origins} of ${s.need} independent 48-hour origins collected, ${st.rises} rise events (${s.needRises} needed). ` +
@@ -1074,7 +1093,7 @@ function renderModel(m) {
     step('step', 'baselines.py — the bar', 'persistence, day-of-year climatology, the blend between them, seasonal naive 365, an upstream OLS — computed first, on exactly these windows') +
     step('model', `tfm.py — ${m.drawn.length ? m.drawn.map(mo => mo.label).join(' and ') : nameOf(m.primary)}`, `the same windows, nothing else: no rain, no upstream gauge, no calendar feature. ${esc(c.per_core_batch_size)} per batch on CPU in float32, seed 0, ${esc(h.threads)} threads; of its quantile channels the point forecast is the median — which channel that is differs between the lines, so tfm.py asserts it on every call — and the median is what gets scored`) +
     step('step', 'metrics.py — the scores', 'MAE and CRPS per lead day, the 80 % coverage, the PIT histogram, and a Diebold-Mariano test that knows the windows overlap') +
-    step('step', 'gate.py — the clauses', `each pre-registered threshold checked in turn; a run whose ForecastConfig does not hash to ${who.length > 1 ? who.map(mo => `${esc((mo.head || h).fingerprint)} for ${esc(nameOf(mo))}`).join(' or ') : esc(h.fingerprint)}, or whose origin grid was truncated, is VOID rather than a verdict`) +
+    step('step', 'gate.py — the clauses', `each pre-registered threshold checked in turn; a run whose ForecastConfig does not hash to ${who.length > 1 ? who.map(mo => `${esc((mo.head || h).fingerprint)} for ${esc(labelNC(mo))}`).join(' or ') : esc(h.fingerprint)}, or whose origin grid was truncated, is VOID rather than a verdict`) +
     step('out', 'report.json — this page', 'the same file in every panel here, and its markdown twin beside it; nothing on this sheet is typed by hand') +
     `</ol>`;
   // the commands that produced what is drawn — one pair per candidate, and the

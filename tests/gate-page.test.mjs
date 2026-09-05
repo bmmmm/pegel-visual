@@ -473,6 +473,7 @@ test('the chain says what our workflow does with the model, in order, and marks 
   const nodes = [...chain.matchAll(/<li class="fn (\w+)"><b>([^<]+)<\/b>/g)].map(x => [x[1], x[2]]);
   // the model link names every candidate drawn, primary first — the chain is the
   // same windows for all of them, and only that one step differs
+  assert.equal(m.drawn.length, MANIFEST.models.length, 'every model in the manifest is drawn by default');
   const both = m.drawn.map(mo => mo.label).join(' and ');
   assert.deepEqual(nodes.map(n => n[1]), [
     'PEGELONLINE daily archive', 'loaders.py — windows', 'baselines.py — the bar',
@@ -555,8 +556,9 @@ test('every model in view is drawn, named in the key, and a model that cannot sh
   const lead = section(html, 'lead');
   assert.equal(both.lead.curves.length, MODEL_KEYS.length, 'one curve per model in view');
   // by KEY, not by position: the curves come primary-first, and a mark that
-  // followed the position would swap hues the day the primary changed
-  assert.deepEqual(both.lead.curves.map(c => c.mark), both.lead.curves.map(c => markOf(MANIFEST.models, c.key)),
+  // followed the position would swap hues the day the primary changed — spelled
+  // out against MODEL_MARKS by manifest index, not through the helper under test
+  assert.deepEqual(both.lead.curves.map(c => c.mark), both.lead.curves.map(c => MODEL_MARKS[MANIFEST.models.findIndex(mo => mo.key === c.key)]),
     'the mark is bound to the model, not to its position');
   assert.notDeepEqual(both.lead.curves.map(c => c.key), MODEL_KEYS, 'the curves are NOT in manifest order, so the line above cannot pass by accident');
   for (const c of both.lead.curves) {
@@ -1016,9 +1018,14 @@ test('the sheet has ONE primary, the manifest’s, and everything that stands fo
   const clauses = html.slice(html.indexOf('<details class="fold" id="clauses">'), html.indexOf('<section class="facts-wrap">'));
   assert.equal((clauses.match(/<ul class="clauses"/g) || []).length, 2, 'a list of clauses per model');
   assert.ok(clauses.indexOf(labelNC(PRIMARY)) < clauses.indexOf(labelNC(SHIPPED)), 'the primary’s first');
+  // name, colon, count — `2 of 7 held · TimesFM 3.0 · 5 of 7 held · TimesFM 2.5`
+  // bound each count to the other model's name, and identical counts hid it
   const clauseLid = (clauses.match(/<span class="fs">([^<]+)<\/span>/) || ['', ''])[1];
-  assert.ok(clauseLid.includes(`held · ${labelNC(PRIMARY)}`) && clauseLid.includes(`held · ${labelNC(SHIPPED)}`), clauseLid);
-  assert.ok(clauses.includes(`data-say="${labelNC(PRIMARY)}: A1 failed`), 'and every readout says whose clause it is');
+  const held = mo => `${labelNC(mo)}: ${Object.values(reports.byKey[mo.key].seasonal.mid.clauses).filter(c => c.pass).length} of 7 held`;
+  assert.equal(clauseLid, `${held(PRIMARY)} · ${held(SHIPPED)}`, clauseLid);
+  // what is read aloud says the words, not the glyph
+  assert.ok(clauses.includes(`data-say="${PRIMARY.label} (non-commercial, never shipped): A1 failed`), 'and every readout says whose clause it is, in words a screen reader can say');
+  assert.ok(clauses.includes(`aria-label="clauses, ${SHIPPED.label}"`) && !clauses.includes(`aria-label="clauses, ${PRIMARY.label} ${NC_GLYPH}`), 'no glyph in an announced name');
   const oneClauses = renderPage(buildModel(reports, parseState(`?models=${SHIPPED.key}`, '', null, MODEL_KEYS)));
   assert.equal((oneClauses.match(/<ul class="clauses"/g) || []).length, 1, 'one model: one list, as before');
   assert.ok(oneClauses.includes('<span class="fs">2 of 7 held</span>'), 'and a lid with no name to give');
@@ -1060,6 +1067,19 @@ test('a primary that is off, or unmeasured on the target in view, is stood in fo
   assert.deepEqual(m.drawn.map(mo => mo.key), [SHIPPED.key]);
   assert.ok(renderPage(m).includes(`Skill by gauge · ${labelNC(SHIPPED)} · daily max ·`), 'and says so');
   assert.equal(buildModel(noMax, parseState('', '', null, MODEL_KEYS)).primary.key, MANIFEST.primary, 'on mid it leads again');
+  // the 15-minute grid too: the primary's short run missing (one failed fetch of
+  // a weekly collector file) must not take the whole panel with it while the
+  // other model's run is there — the panel draws that one and says so
+  const noShort = structuredClone(reports);
+  delete noShort.byKey[MANIFEST.primary].short;
+  const ms = buildModel(noShort, parseState('', '', null, MODEL_KEYS));
+  assert.ok(ms.short, 'the short panel survives');
+  assert.equal(ms.short.model.key, SHIPPED.key, 'and draws the run that exists');
+  assert.equal(ms.short.generated, reports.byKey[SHIPPED.key].short.header.generated);
+  assert.ok(renderPage(ms).includes(`Short horizon · ${labelNC(SHIPPED)} ·`), 'named for the model whose run it is');
+  assert.equal(buildModel(reports, parseState('', '', null, MODEL_KEYS)).short.model.key, MANIFEST.primary, 'with both runs present it is the primary’s');
+  // and a selection that names nothing that loaded falls back to the primary, not to the manifest's first line
+  assert.equal(buildModel(reports, { target: 'mid', block: 'h1-14', lead: 'pooled', panel: null, models: ['ghost'] }).primary.key, MANIFEST.primary);
 });
 
 test('a value that rounds to zero prints as zero, with no sign', () => {
