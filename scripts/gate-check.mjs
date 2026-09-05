@@ -163,6 +163,24 @@ async function run(cdp, url, { name, width, height, mobile }) {
   const vh = await s.evaluate('innerHeight');
   check(plot0 && plot0.y + plot0.h <= vh, 'the drawing is whole on the first screen', `plot ${Math.round(plot0.y)}–${Math.round(plot0.y + plot0.h)} px of ${vh}`);
 
+  // 1c. THE PRIMARY — the manifest names it (not this script), and the sheet
+  //     leads with it: the verdict list's first row, and the band labels over
+  //     the curve wearing its line. The Node tests see the markup; only a
+  //     browser sees whether swatch and number share a 33 px band or one of
+  //     them is cropped without a word (overflow:hidden) — so on a phone the
+  //     CSS hides the number, and this measures that it did, both ways.
+  const manifest = JSON.parse(await s.evaluate('fetch("models.json").then(r => r.json()).then(m => JSON.stringify(m))'));
+  const primaryLabel = manifest.primary && (manifest.models.find(mo => mo.key === manifest.primary) || {}).label;
+  const bandState = () => s.evaluate(`JSON.stringify([...document.querySelectorAll('#lead .lead-bands a b')].map(b => ({ sw: !!b.querySelector('.sw'), shown: b.getClientRects().length > 0, fits: b.scrollWidth <= b.clientWidth + 1 })))`);
+  if (primaryLabel && manifest.models.length > 1) {
+    const firstVerdict = await s.evaluate('(document.querySelector(".vmodels li") || {}).textContent || ""');
+    check(firstVerdict.includes(primaryLabel), 'the verdict list leads with the manifest’s primary', firstVerdict.trim());
+    const bands = JSON.parse(await bandState());
+    check(bands.length === 3 && bands.every(b => b.sw), 'each band label carries the primary’s line swatch', JSON.stringify(bands));
+    check(mobile ? bands.every(b => !b.shown) : bands.every(b => b.shown && b.fits),
+      mobile ? 'on a phone the two-model band labels hide their number rather than crop it' : 'swatch and number fit inside every band', JSON.stringify(bands));
+  }
+
   await s.evaluate('for (const d of document.querySelectorAll("details")) d.open = true');
   const wideOpen = await sweep();
   // Measured against the EMULATED width, not window.innerWidth: on a phone
@@ -201,7 +219,10 @@ async function run(cdp, url, { name, width, height, mobile }) {
   const curveTop = await s.evaluate('document.querySelector("#lead").getBoundingClientRect().top');
   const curveSeen = await s.evaluate('(() => { const r = document.querySelector("#lead svg[data-lead]").getBoundingClientRect(); return r.top < innerHeight && r.bottom > 0; })()');
   check(curveSeen, 'and the drawing being compared is still on screen', `#lead top ${Math.round(curveTop)} px`);
-  check(await s.evaluate('document.querySelector("#lead .lead-bands a.on b").textContent.startsWith("-")'), 'the curve hatches the block with the negative skill');
+  // the 31–90 skill rounds to 0.00 at two decimals and prints without a sign,
+  // so the sign is read off the label's three-decimal title, not its text
+  check(await s.evaluate('/skill -0\\.\\d{3}/.test(document.querySelector("#lead .lead-bands a.on").title)'), 'the curve hatches the block with the negative skill',
+    await s.evaluate('document.querySelector("#lead .lead-bands a.on").title'));
   check(await s.evaluate('document.querySelector("details#skill summary").textContent.includes("days 31–90")'), 'and the panels below carry the new block in their titles');
   check(await s.evaluate('getComputedStyle(document.activeElement).outlineStyle === "solid"'), 'the focus ring is drawn', await s.evaluate('getComputedStyle(document.activeElement).outline'));
   await s.send('Page.captureScreenshot', {}).then(r => writeFileSync(join(shots, `${name}-block.png`), Buffer.from(r.data, 'base64')));
@@ -242,6 +263,8 @@ async function run(cdp, url, { name, width, height, mobile }) {
     check((await active()) === 'h2 in section#lead', 'and the focus stays on the drawing it changed', await active());
     const left = await s.evaluate(`document.querySelector('${chipRow} span.off[data-ctl="model"]') && document.querySelector('${chipRow} span.off[data-ctl="model"]').textContent`);
     check(!!left, 'the last model on cannot be switched off — its chip is disabled, not gone', String(left));
+    const bandsOne = JSON.parse(await bandState());
+    check(bandsOne.length === 3 && bandsOne.every(b => !b.sw && b.shown && b.fits), 'with one curve the band labels show a bare number again, and it fits', JSON.stringify(bandsOne));
     // and it must still LOOK like the model in view. Painted like an ordinary
     // unavailable chip it reads as greyed out while the model switched off beside
     // it reads as available — the state inverted, which no class assertion sees.

@@ -90,6 +90,31 @@ own script tree, needed when working on it and not before. Moved verbatim.
   LAST in the sequence: replaceState edits the current history entry, so
   folding panels mid-chain rewrites the very entries the back/forward checks
   walk.
+- **The sheet has ONE primary, and it is registry state — `tfm.PRIMARY`, beside
+  `SHIPPED` and a different axis from it.** Since 2026-09-05 it is `3p0`, the
+  line that can never ship. `write_models_manifest` writes it into
+  `gate/models.json` (`primary`, falling back to the shipped line when the
+  primary has no report on disk — the manifest may only name a model it lists;
+  `test_gate.py` and `test_license.py` hold both). `buildModel` reads it: the
+  primary leads everything that reads in a row (verdict list, settings lid,
+  panel titles, readout, the gist), the panels that carry one number speak for
+  it AND say so (facts, clauses fold, band labels with its line swatch, foot run
+  line, method), and `labelNC()` is the one way such a name is printed — with ⚖
+  when it cannot ship. Before this, "primary" was whichever enabled model came
+  first in the manifest while the gist sorted "non-shippable first": two notions
+  of focus that agreed by accident, with 2.5's numbers standing unnamed under a
+  subtitle about 3.0. Three things deliberately do NOT follow the primary: the
+  MARK (hue, dash) and the skill panel's SLOT (upper+hatched / lower+solid) stay
+  bound to the manifest index, so a line keeps its look whoever leads; the CHIP
+  row keeps the manifest's order even while the primary is off, because a
+  control that changes places when used cannot be found again; and a target is
+  available when ANY drawn model has it, with the primary stood in for by the
+  first enabled model measured on it. On a 390 px phone the 1–14 band is 33 px
+  wide: with two curves the band labels hide their NUMBER (CSS, `data-many`)
+  rather than crop the swatch — an unnamed figure under a subtitle about the
+  other model reads as that model's. `signed()` prints a rounded zero without a
+  sign ("0.00", not "-0.00"); gate-check reads the block's sign off the label's
+  three-decimal title since.
 - **Two lines are registered in `tfm.py`, and only one may ship.** `2p5` is
   Apache-2.0 and is `SHIPPED`; `3p0` carries non-commercial weights that forbid
   redistribution and production use, so it is measured and named but can never

@@ -144,6 +144,10 @@ main {
    title attribute is unreachable with a finger. */
 .vmodels .nc { font-size: 1.05em; }
 .clauses { list-style: none; margin: 1em 0 0; padding: 0; display: flex; flex-wrap: wrap; gap: 0.4em 0.5ch; }
+/* with two candidates drawn, each list of clauses is headed by its model's own
+   mark — the hue through --mc, the dash through the swatch, the name in words */
+.cl-model { display: flex; align-items: center; gap: 0.6ch; margin: 1em 0 0; font-size: 0.92em; color: var(--mc, var(--ink)); }
+.cl-model + .clauses { margin-top: 0.4em; }
 .clauses button {
   font: inherit;
   font-family: var(--font-data);
@@ -381,6 +385,12 @@ th:first-child, td:first-child { text-align: left; }
   .plot .ends { font-size: 0.58rem; }
   .plot .end { gap: 0.35ch; }
   .plot .end .sw, .plot .end .sw svg { width: 9px; height: 9px; }
+  /* Measured on a 390 px phone: the 1–14 band is 33 px wide and "+0.08" already
+     fills it, so swatch and number cannot share it, and overflow:hidden would
+     crop the swatch without a word. With two curves drawn the number goes, not
+     the name — an unnamed figure under a subtitle about the other model reads as
+     that model's; the block chips stay, and the figure stands named in the facts. */
+  .plot .lead-bands[data-many] b { display: none; }
 }
 .plot .lead-bands > a {
   position: absolute; top: 0; bottom: 0;
@@ -392,7 +402,9 @@ th:first-child, td:first-child { text-align: left; }
 .plot .lead-bands > a:first-child { border-left: 0; }
 .plot .lead-bands > a:hover, .plot .lead-bands > a:focus-visible { color: var(--ink); text-decoration: underline; }
 .plot .lead-bands > a.on { color: var(--ink); }
-.plot .lead-bands b { font-weight: 600; color: var(--ink); }
+/* the number wears the primary's line swatch when two curves are drawn (gate.js
+   puts it INSIDE the <b>: the label is a flex column) */
+.plot .lead-bands b { font-weight: 600; color: var(--ink); display: inline-flex; align-items: center; gap: 0.3ch; }
 .p-tabs .off { display: inline-flex; align-items: center; border: 1px dashed var(--rule); color: var(--dim); padding: 0.15em 0.8ch; white-space: nowrap; }
 /* a chip can be disabled because it is UNAVAILABLE or because it is the last one
    still on. The second is the active chip: painting it like the first would show
