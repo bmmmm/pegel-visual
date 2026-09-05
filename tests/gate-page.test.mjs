@@ -164,6 +164,7 @@ const NOT_A_MARK = new Set(['p-block', 'row', 'pooled', 'head', 'lbl', 'rg', 'tr
   'plot', 'vscale', 'plot-box', 'lead-bands', 'lbn', 'lead-ticks', 'clip', 'lo', 'hi', 'up', 'dn', 'vh', 'p-h2',
   'ends', 'end',   // the direct labels: containers for a swatch whose OWN class is a mark and is in the key
   'fold', 'fl', 'fs', 'foldbody',   // a drawer and its lid, not something the drawing draws
+  'grp',   // ctlRow's label-plus-chips group, a wrapping unit, not a mark
   'prose', 'flow', 'fn']);  // prose/flow/fn are the model chain's containers; its four node kinds ARE marks
 test('every mark a section draws is named in that section’s key — mechanically', () => {
   let drawings = 0;
@@ -984,7 +985,7 @@ test('the sheet has ONE primary, the manifest’s, and everything that stands fo
   // it is used cannot be found again; only what is drawn follows the primary in view
   const rowOff = chipRow(renderPage(buildModel(reports, parseState(`?models=${SHIPPED.key}`, '', null, MODEL_KEYS))));
   assert.ok(rowOff.indexOf(PRIMARY.label) < rowOff.indexOf(SHIPPED.label), `the chip row keeps its order with the primary off: ${rowOff.slice(0, 200)}`);
-  assert.match(rowOff, new RegExp(`^<nav[^>]*><span class="p-tabs-lbl">model</span><a href="[^"]*"[^>]*class="mchip m-${markOf(MANIFEST.models, PRIMARY.key)}"`), 'the first chip is the primary’s, offering to draw it again');
+  assert.match(rowOff, new RegExp(`^<nav[^>]*><span class="grp"><span class="p-tabs-lbl">model</span><a href="[^"]*"[^>]*class="mchip m-${markOf(MANIFEST.models, PRIMARY.key)}"`), 'the first chip is the primary’s, offering to draw it again');
   // the verdict list, the settings lid and every title that names the models
   // read primary-first, and the model that cannot ship wears the glyph in all
   const vlist = (html.match(/<ul class="vmodels"[\s\S]*?<\/ul>/) || [''])[0];

@@ -579,11 +579,26 @@ function ctlRow(label, items, aria) {
   // ONE class join for both branches: the state-inversion bug the chip tests
   // guard against came from a link and a disabled span drifting apart
   const cls = (it, state) => [it.cls, state].filter(Boolean).join(' ');
+  const chip = it =>
+    it.off ? `<span${attr('class', cls(it, it.on ? 'off on' : 'off'))} aria-disabled="true"${it.on ? ' aria-current="true"' : ''}${attr('title', it.title)}${attr('data-ctl', it.ctl)}>${it.sw || ''}${esc(it.off)}</span>` :
+    `<a${attr('href', it.href)}${attr('class', cls(it, it.on ? 'on' : ''))}${it.on ? ' aria-current="true"' : ''}${attr('title', it.title)}${attr('data-focus', it.focus)}${attr('data-ctl', it.ctl)}>${it.sw || ''}${esc(it.label)}</a>`;
+  // A label and the chips it names travel as one group (.grp): on a phone the
+  // row wraps between groups, so "HORIZON" never stands alone at a line's end
+  // while its chips start the next one. On a wide plate the group is
+  // display:contents and the row reads exactly as before.
+  const groups = [];
+  const open = lbl => groups.push({ lbl, chips: [] });
+  if (label) open(label);
+  for (const it of items) {
+    if (it.lbl) open(it.lbl);
+    else {
+      if (!groups.length) open(null);
+      groups[groups.length - 1].chips.push(chip(it));
+    }
+  }
   return `<nav class="p-tabs"${attr('aria-label', aria || label)}>` +
-    (label ? `<span class="p-tabs-lbl">${esc(label)}</span>` : '') +
-    items.map(it => it.lbl ? `<span class="p-tabs-lbl">${esc(it.lbl)}</span>` :
-      it.off ? `<span${attr('class', cls(it, it.on ? 'off on' : 'off'))} aria-disabled="true"${it.on ? ' aria-current="true"' : ''}${attr('title', it.title)}${attr('data-ctl', it.ctl)}>${it.sw || ''}${esc(it.off)}</span>` :
-      `<a${attr('href', it.href)}${attr('class', cls(it, it.on ? 'on' : ''))}${it.on ? ' aria-current="true"' : ''}${attr('title', it.title)}${attr('data-focus', it.focus)}${attr('data-ctl', it.ctl)}>${it.sw || ''}${esc(it.label)}</a>`).join('') +
+    groups.map(g => '<span class="grp">' +
+      (g.lbl ? `<span class="p-tabs-lbl">${esc(g.lbl)}</span>` : '') + g.chips.join('') + '</span>').join('') +
     '</nav>';
 }
 

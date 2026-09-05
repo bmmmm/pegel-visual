@@ -184,7 +184,10 @@ main {
   --mc: initial;
 }
 .p-tabs-lbl { font-size: 0.8em; text-transform: uppercase; letter-spacing: 0.07em; color: var(--dim); margin-right: 0.4ch; }
-.p-tabs-lbl:not(:first-child) { margin-left: 0.8ch; }
+/* a label and its chips are one group; on a wide plate the group has no box of
+   its own, so the row lays out exactly as it did when the chips were loose */
+.p-tabs .grp { display: contents; }
+.p-tabs .grp:not(:first-child) > .p-tabs-lbl { margin-left: 0.8ch; }
 .p-tabs a {
   font: inherit;
   display: inline-flex;
@@ -581,6 +584,10 @@ details.panel > section { padding-top: 0.2em; }
      and the whole plot overflows its own plate */
   .plot { grid-template-columns: 2.1rem 1fr var(--ends); }
   .plot .plot-box svg { aspect-ratio: 5 / 3; }
+  /* on a phone the row wraps between groups, never between a label and its
+     first chip: "HORIZON" used to end one line while its chips began the next */
+  .p-tabs .grp { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 0.35em 0.5ch; }
+  .p-tabs .grp:not(:first-child) > .p-tabs-lbl { margin-left: 0; }
 }
 @media (max-width: 40rem) {
   main { padding: 1.1em 0.9em; }

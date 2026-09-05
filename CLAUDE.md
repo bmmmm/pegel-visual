@@ -41,20 +41,17 @@
   zero the bar grows from. Same trap in words: `pale` / `dark` swap over between
   the colour schemes, `hatched` / `solid` do not. And a value column only the
   tests have seen will have its glyphs on the wrong lines.
-- **A test that greps the whole page proves less than it looks.** `renderTotal:
-  falling days are hatched` passed for months on the class name while no hatch
-  existed; rewritten as `includes('fill="url(#tb-fell)"')` it would then have
-  passed on the legend's own swatch. Anchor an assertion to the element it is
-  about — `/<rect[^>]*fill="url\(#tb-fell\)"[^>]*class="db fell"/` — and put
-  the fix back OUT to watch it go red before believing it.
+- **Anchor an assertion to the element it is about, never to the whole page.**
+  A class-name grep passed for months while no hatch existed, and a plain
+  `includes()` would pass on the legend's own swatch — the `tb-fell` regex in
+  `tests/logic.test.mjs` is the form. Put the fix back OUT and watch it go red
+  before believing it.
 - **`app.fire('keydown', {key})` / `app.fire('popstate')`** reach the real
   handlers: the harness collects window/document listeners, and `app.source`
   hands you the script text for structural checks (the dead-`cmd:`-target
   guard reads the dispatcher's own branches out of it).
-- **Conventions the test harness depends on:** every `*ViewModel()` and
-  `render*()` is a **top-level `function` declaration** (a `const` arrow inside
-  a block is unreachable from `app.run`), and no renderer may ever emit the
-  literal closing `script` tag — `tests/logic.test.mjs` guards both.
+- **Every `*ViewModel()` and `render*()` is a top-level `function`
+  declaration** — a `const` arrow inside a block is unreachable from `app.run`.
 - **Never interpolate a raw value into markup** — always `${esc(v)}`, or
   `attr()` for attributes. A hostile-station-name test covers the renderers.
 - **Palette is split fill/line:** pastels (`--water`, `--bed`, `--dry`) are
@@ -69,13 +66,11 @@
   clause A1's cm-pooled figure — a review caught the curve sitting on ×1.00
   under a label that said −0.04. Where two estimators must coexist, the key
   says which is which.
-- **A gauge does not necessarily report centimetres.** 69 of 737 W series are
-  metres above a datum (`m+NN`, `m+PNP`); the unit rides in the same `W.json`
-  the client fetches. Print a level with `fmtLevel`/`levelWithUnit` in the
-  gauge's OWN unit, and convert with `toCm()` only where a threshold is
-  involved — `TREND_FLAT` and `RISING_FLAT` are noise floors for a gauge that
-  ticks in whole centimetres. Elevation goes through `elevOf()`: a metre gauge
-  IS the elevation and often carries no `gaugeZero` at all.
+- **A gauge does not necessarily report centimetres** — 69 of 737 W series are
+  metres above a datum, and the unit comes with the reading. Print a level with
+  `fmtLevel`/`levelWithUnit` in the gauge's OWN unit, convert with `toCm()`
+  only at a threshold, and take elevation from `elevOf()`; the measurement and
+  the noise-floor reasoning stand at those functions in `index.html`.
 - **The history chart's x axis is TIME.** `bucketSeries` tiles the window by
   timestamp, not by array index, because the archive changes cadence inside a
   window (15-minutely for 16 days, hourly to a year, 6-hourly beyond). An
