@@ -262,7 +262,7 @@ test('response: a single impulse puts the peak at the lag it was built at', () =
   assert.equal(r.peakLag, 2);
   assert.ok(r.rPeak > 0.99, `rPeak ${r.rPeak} is essentially 1 — one impulse, one response`);
   assert.equal(r.events.n, 1, 'one day over 10 mm');
-  assert.equal(r.events.riseCmPer10mm, null, `${MIN_EVENTS} events needed, not 1`);
+  assert.equal(r.events.risePer10mm, null, `${MIN_EVENTS} events needed, not 1`);
 });
 
 test('response: a linear rain -> level system reads r(1) = 1 and nothing at the other lags', () => {
@@ -280,7 +280,7 @@ test('response: a linear rain -> level system reads r(1) = 1 and nothing at the 
   assert.equal(r.peakLag, 1);
   assert.ok(r.rPeak > 0.999, `r(1) = ${r.rPeak}`);
   for (const l of r.lags) if (l.lag !== 1) assert.ok(Math.abs(l.r) < 0.2, `r(${l.lag}) = ${l.r} must be noise`);
-  assert.equal(r.events.riseCmPer10mm, 8, '0.8 cm per mm is 8 cm per 10 mm');
+  assert.equal(r.events.risePer10mm, 8, '0.8 cm per mm is 8 cm per 10 mm');
 });
 
 test('response: below the pair floor there is no peak, and the reason says so', () => {
@@ -302,9 +302,9 @@ test('response: 9 events is null, 10 is a number', () => {
     for (let i = 1; i < N; i++) if (level[i] === 0) level[i] = 100;
     return responseStats(rain, level, { from: 0, to: N - 1, id: 'x', nRain: 3, unit: 'cm' });
   };
-  assert.equal(mk(MIN_EVENTS - 1).events.riseCmPer10mm, null);
+  assert.equal(mk(MIN_EVENTS - 1).events.risePer10mm, null);
   assert.equal(mk(MIN_EVENTS - 1).events.n, MIN_EVENTS - 1);
-  assert.equal(typeof mk(MIN_EVENTS).events.riseCmPer10mm, 'number');
+  assert.equal(typeof mk(MIN_EVENTS).events.risePer10mm, 'number');
 });
 
 test('response: the unit rides along with the gauge, it is not assumed to be cm', () => {

@@ -803,7 +803,35 @@ test('N8b: med and mx follow mm — a value under a null day is a leak from the 
   const mm = Array(365).fill(5), n = Array(365).fill(2), med = Array(365).fill(5);
   mm[9] = null; n[9] = 0;                                          // a legitimate non-day…
   const v = checkPrecipShape(HEALTHY_INDEX, precipProduct({ shard: { mm, n, med } }), RAIN_IDS, TOPO_GAUGES);
-  assert.match(v.join('\n'), /mm null <=> n 0 violated/, '…but med still carries a number');
+  // its own finding, with its own day index: sharing a counter with the mm/n
+  // clause used to print "first at day index -1"
+  assert.match(v.join('\n'), /med\/mx do not follow mm on 1 day\(s\), first at day index 9/, '…but med still carries a number');
+  assert.doesNotMatch(v.join('\n'), /mm null <=> n 0 violated/, 'and the mm/n invariant is NOT what broke');
+});
+
+test('N8a: a mean above the day’s own maximum — the one rule that can catch the estimator', () => {
+  const mm = Array(365).fill(5), mx = Array(365).fill(5);
+  mm[4] = 30;                                     // a mean of 30 over a maximum of 5
+  const v = checkPrecipShape(HEALTHY_INDEX, precipProduct({ shard: { mm, mx } }), RAIN_IDS, TOPO_GAUGES);
+  assert.match(v.join('\n'), /mean or median above the day's maximum on 1 day\(s\), first at day index 4/);
+  const med = Array(365).fill(5); med[4] = 9;
+  const w = checkPrecipShape(HEALTHY_INDEX, precipProduct({ shard: { med } }), RAIN_IDS, TOPO_GAUGES);
+  assert.match(w.join('\n'), /above the day's maximum/, 'the median is checked too');
+});
+
+test('N8c: the same rain station listed twice in ONE set is the double count', () => {
+  const dup = precipProduct({ meta: { set: [{ no: 'r1', at: 'g1' }, { no: 'r1', at: 'g1' }] } });
+  const v = checkPrecipShape(HEALTHY_INDEX, dup, RAIN_IDS, TOPO_GAUGES);
+  assert.match(v.join('\n'), /rain station r1 is in the set twice/);
+});
+
+test('N8h: the cycle members are compared, not only how many there are', () => {
+  const withIds = ids => ({ ...HEALTHY_INDEX, counts: { ...HEALTHY_INDEX.counts, cyclicIds: ids } });
+  const head = withIds(['a', 'b']);
+  assert.deepEqual(checkPrecipDrift(withIds(['a', 'b']), head), []);
+  // the source repairs one cycle and grows another: the COUNT is still 2
+  const moved = withIds(['c', 'd']);
+  assert.match(checkPrecipDrift(moved, head).join('\n'), /the cycle members changed: a,b -> c,d/);
 });
 
 test('N8c: a rain station owned by two gauges', () => {
@@ -882,4 +910,95 @@ test('N4: precip/ may shrink — it is derived, and N8 floors are what stop it v
   const v = checkRegressionStatuses(changes);
   assert.equal(v.length, 1, 'the mirrored gauge deletion is still red');
   assert.match(v[0], /nrw\/gauges\/g1\/2025\.json/);
+});
+
+// The CLI half of N8. Without these, the whole `if (on('N8')) { … }` block can be
+// deleted and every other test stays green — measured, not assumed: mutating it
+// to `if (false && on('N8'))` left 68 of 68 tests passing while the same mutation
+// on N6 turned one red. A rule nothing dispatches is a rule that is not there.
+
+test('CLI: N8 runs — a hand-edited precip shard is red through the real dispatcher', () => {
+  const repo = cloneSeed();
+  const p = join(repo, 'nrw', 'precip', 'g0', '2026.json');
+  const doc = JSON.parse(execFileSync('cat', [p], { encoding: 'utf8' }));
+  const i = doc.mm.findIndex(v => v !== null);
+  doc.mm[i] = null;                       // mm null while n stays > 0
+  writeFileSync(p, JSON.stringify(doc));
+  const { code, stdout } = runChecker(repo);
+  assert.equal(code, 1);
+  assert.match(stdout, /::error::N8: precip\/g0\/2026\.json: mm null <=> n 0 violated/);
+  // and clause (e) sees the same edit from the other side
+  assert.match(stdout, /::error::N8: precip is not what the rule produces — differs: g0\/2026\.json/);
+});
+
+test('CLI: N8(e) alone catches a stale product the shape rules would pass', () => {
+  const repo = cloneSeed();
+  const p = join(repo, 'nrw', 'precip', 'g0', '2026.json');
+  const doc = JSON.parse(execFileSync('cat', [p], { encoding: 'utf8' }));
+  const i = doc.mm.findIndex(v => v !== null);
+  // a perfectly well-formed day that is simply not the one the rule computes:
+  // mm, med and mx moved together, n untouched — every invariant still holds
+  doc.mm[i] = doc.mm[i] + 1; doc.med[i] = doc.mm[i]; doc.mx[i] = doc.mm[i] + 1;
+  writeFileSync(p, JSON.stringify(doc));
+  const { code, stdout } = runChecker(repo);
+  assert.equal(code, 1);
+  assert.match(stdout, /::error::N8: precip is not what the rule produces — differs: g0\/2026\.json/);
+  assert.doesNotMatch(stdout, /mm null <=>/, 'the shape rules are green — only (e) can see this');
+});
+
+test('CLI: a precip tree that was never built is red, not silently skipped', () => {
+  const repo = cloneSeed();
+  rmSync(join(repo, 'nrw', 'precip'), { recursive: true });
+  const { code, stdout } = runChecker(repo);
+  assert.equal(code, 1);
+  assert.match(stdout, /::error::N8: precip\/ missing — run scripts\/build-nrw-precip\.mjs before the gate/);
+});
+
+test('CLI: --skip N8 silences it, and the rest of the gate still runs', () => {
+  const repo = cloneSeed();
+  rmSync(join(repo, 'nrw', 'precip'), { recursive: true });
+  const { code, stdout } = runChecker(repo, ['--skip', 'N8']);
+  assert.equal(code, 0, stdout);
+  assert.match(stdout, /nrw consistency ok/);
+});
+
+test('CLI: N8 counters are red when the product shrinks below its floor', () => {
+  const repo = cloneSeed();
+  const p = join(repo, 'nrw', 'precip', 'index.json');
+  const ix = JSON.parse(execFileSync('cat', [p], { encoding: 'utf8' }));
+  ix.counts.withSeries = 3;
+  writeFileSync(p, JSON.stringify(ix));
+  const { code, stdout } = runChecker(repo);
+  assert.equal(code, 1);
+  assert.match(stdout, /::error::N8: precip: only 3 gauges carry a series, floor is 80/);
+});
+
+const { buildManifest } = await import('../scripts/fetch-nrw-archive.mjs');
+
+test('the collector places every station inside the box, and no station outside it', () => {
+  // P2-1: la/lo/dc had no test at all — the manifest in the mirror predates them,
+  // so a broken entryFor would have shipped invisibly.
+  const repo = cloneSeed();
+  const m = readManifest(repo);
+  const placed = Object.values(m.gauges).filter(e => e.la != null);
+  assert.equal(placed.length, 0, 'the fixture manifest is written by the test, not by buildManifest');
+  const topo = JSON.parse(execFileSync('cat', [join(repo, 'nrw', 'topology.json')], { encoding: 'utf8' }));
+  const built = buildManifest({
+    out: join(repo, 'nrw'), registry: new Map(Array.from({ length: 617 }, (_, i) => ['s' + i, {}])),
+    topo, basinOf: () => '272', coverage: coverage(), exportAt: NOW, window: WINDOW, generated: NOW, tier2: null,
+  });
+  const g0 = built.gauges.g0;
+  assert.deepEqual([g0.la, g0.lo], [gaugeCoords(0).lat, 7], 'a gauge inside the box carries its coordinates');
+  const r0 = built.rain.r0;
+  assert.ok(r0.la != null && r0.lo != null, 'and so does a rain gauge');
+  // …and one outside it does not: Ruenderoth's Gauss-Krueger pair must not place a gauge
+  writeFileSync(join(repo, 'nrw', 'gauges', 'g1', 'meta.json'),
+    JSON.stringify({ id: 'g1', name: 'g1', lat: 5650772.5, lon: 32392464, catchmentNo: '272', distToConflKm: 12.5 }));
+  const again = buildManifest({
+    out: join(repo, 'nrw'), registry: new Map(), topo, basinOf: () => '272',
+    coverage: coverage(), exportAt: NOW, window: WINDOW, generated: NOW, tier2: null,
+  });
+  assert.equal(again.gauges.g1.la, undefined, 'a Gauss-Krueger pair places nothing');
+  assert.equal(again.gauges.g1.dc, 12.5, 'but the distance to the mouth still rides along');
+  assert.equal(again.gauges.g1.km, undefined, 'and never as `km`, which the app reads as river km from the source');
 });

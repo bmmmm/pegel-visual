@@ -329,7 +329,7 @@ export function responseStats(rainMm, level, { from, to, id, nRain, unit }) {
     schema: SCHEMA, id, window: { from: dayToISO(from), to: dayToISO(to), days: to - from + 1 },
     nRain, minCoveragePct: MIN_COVERAGE_PCT, align: ALIGN_NOTE,
     lags: [], peakLag: null, rPeak: null, nPeak: 0,
-    events: { thresholdMm: EVENT_MM, n: 0, riseCmPer10mm: null },
+    events: { thresholdMm: EVENT_MM, n: 0, risePer10mm: null },
     unit: { r: 'pearson', rise: `${unit} per 10 mm areal rain` },
   };
   const len = rainMm.length;
@@ -368,7 +368,7 @@ export function responseStats(rainMm, level, { from, to, id, nRain, unit }) {
     rises.push(rise / (rainMm[d] / 10));
   }
   out.events.n = rises.length;
-  if (rises.length >= MIN_EVENTS) out.events.riseCmPer10mm = round(median(rises), 2);
+  if (rises.length >= MIN_EVENTS) out.events.risePer10mm = round(median(rises), 2);
   else if (!out.reason) out.reason = `too few rain events (${rises.length} < ${MIN_EVENTS})`;
   return out;
 }
@@ -390,7 +390,20 @@ class Out {
   }
   // A derived product may not keep history its inputs no longer imply: a gauge that
   // drops below three rain gauges loses its files.
+  //
+  // This unlinks, so it is fenced first. `--out nrw` would otherwise delete
+  // gauges/, rain/, topology.json and the README — the one data set in the repo
+  // that cannot be re-fetched, because the source window rolls and a missed day
+  // is gone for good. The fence is on the directory NAME, not on a comment.
   prune() {
+    const leaf = this.root.replace(/\/+$/, '').split('/').pop();
+    if (leaf !== 'precip') throw new Error(`refusing to prune ${this.root}: an output directory must be named "precip", or a stray --out deletes the mirror`);
+    for (const forbidden of ['gauges', 'rain', 'temp']) {
+      if (existsSync(join(this.root, forbidden))) throw new Error(`refusing to prune ${this.root}: it holds ${forbidden}/, so it is a mirror, not a product`);
+    }
+    return this.pruneChecked();
+  }
+  pruneChecked() {
     const walk = dir => {
       for (const e of readdirSync(dir, { withFileTypes: true })) {
         const p = join(dir, e.name);
@@ -462,15 +475,38 @@ export function build({ tree, out, check = false, generated }) {
     gauges[no] = entry;
     if (set.length === 0) withoutRain++;
     if (!entry.series) continue;
-    withSeries++;
 
     const node = nodes[no];
     const loaded = set.map(s => ({ no: s.no, series: seriesOf(s.no) }));
     const ser = arealSeries(loaded, from, to);
+    // Three ASSIGNED rain gauges are not three REPORTING ones: a station can
+    // have a meta.json and no year shard at all (three do in the mirror), and
+    // then a set of three can never clear a threshold of three. The product
+    // would be 1096 null days advertised as a series, and the plate would fetch
+    // three files to draw nothing. Counted as no product, with the reason.
+    const anyDay = ser.mm.some(v => v != null);
+    if (!anyDay) {
+      const silent = loaded.filter(s => s.series.every(Number.isNaN)).map(s => s.no);
+      entry.series = false;
+      entry.why = silent.length
+        ? `${set.length} rain gauges upstream, but ${silent.length} of them report nothing (${silent.join(', ')})`
+        : `${set.length} rain gauges upstream, but no day ever reached the reporting threshold`;
+      continue;
+    }
+    withSeries++;
     writeSeries(o, `${no}`, ser, minY, maxY, from, no);
     o.put(join(no, 'meta.json'), {
       schema: SCHEMA, id: no, name: node.name, water: node.water || '', basin: node.basin ?? null,
-      km2: node.km2 ?? null, unit: 'mm/d', method: 'unweighted mean over the reporting rain gauges of the upstream closure (Thiessen with equal areas)',
+      km2: node.km2 ?? null, unit: 'mm/d',
+      // Say what the rule does, not what it sounds like: a rain gauge joins the
+      // NEAREST receiving gauge of its own basin within 100 km, and the set is
+      // the union of those over the upstream closure. That is not a catchment
+      // intersection — 17 of 94 sets hold a station further from its owner than
+      // the radius of a circle of the owner's own km², and the extreme is a
+      // 19.65 km² catchment owning a station 48.9 km away. The km² beside it is
+      // the gauge's real catchment area, which is why the two must not be read
+      // as one statement.
+      method: 'unweighted mean over the reporting rain gauges assigned to this gauge and to every gauge upstream of it; a rain gauge joins the nearest receiving gauge of its own basin (Thiessen with equal areas, not a catchment intersection)',
       dayBoundary: RAIN_DAY_BOUNDARY, levelDayBoundary: LEVEL_DAY_BOUNDARY, align: ALIGN_NOTE,
       minCoveragePct: MIN_COVERAGE_PCT, maxMmPerDay: PLAUSIBLE_MAX_MM_DAY,
       nRain: set.length, nUpstream: cl.length, upstream: cl,
@@ -480,10 +516,10 @@ export function build({ tree, out, check = false, generated }) {
     // /nrw/precip/ would make the browser check "every /nrw/ response is 2xx" red,
     // and "why not" is information the plate has to print.
     const level = readLevelSeries(tree, no, from, to);
-    o.put(join(no, 'response.json'), {
-      ...responseStats(ser.mm, level, { from, to, id: no, nRain: set.length, unit: node.unit || 'cm' }),
-      generated,
-    });
+    // no `generated` here on purpose: it would rewrite all 94 files every day
+    // for a date the run's own index.json already carries, and this branch keeps
+    // its history forever
+    o.put(join(no, 'response.json'), responseStats(ser.mm, level, { from, to, id: no, nRain: set.length, unit: node.unit || 'cm' }));
   }
 
   // Basin products: the same shape, but the set is the basin's own rain gauges,
@@ -491,20 +527,24 @@ export function build({ tree, out, check = false, generated }) {
   const basins = [];
   for (const [b, info] of Object.entries(topo.basins)) {
     const set = (info.rain || []).filter(r => rain[r] && usableCoords(rain[r])).sort(cmpNo);
+    // the same floor the gauges use: a basin of two rain gauges can never clear
+    // a threshold of three, so its series would be 1096 nulls under a name
+    const hasSeries = set.length >= MIN_SET_FOR_SERIES;
     const rel = join('basins', b);
     const mouth = info.mouth && nodes[info.mouth] ? nodes[info.mouth] : null;
     o.put(join(rel, 'meta.json'), {
       schema: SCHEMA, id: b, name: info.name || '', water: info.river || '', basin: b,
       km2: mouth ? mouth.km2 ?? null : null, unit: 'mm/d',
       method: 'unweighted mean over the reporting rain gauges of the basin (Thiessen with equal areas)',
+      note: 'a basin is the source\'s own grouping; this is not one gauge\'s catchment',
       dayBoundary: RAIN_DAY_BOUNDARY, levelDayBoundary: LEVEL_DAY_BOUNDARY, align: ALIGN_NOTE,
       minCoveragePct: MIN_COVERAGE_PCT, maxMmPerDay: PLAUSIBLE_MAX_MM_DAY,
       nRain: set.length, nUpstream: (info.gauges || []).length, upstream: info.gauges || [],
       set: set.map(r => ({ no: r, name: rain[r].name, km: kmTo.get(r) ?? null, via: via.get(r) ?? null, at: owner.get(r) ?? null })),
     });
-    const ser = set.length ? arealSeries(set.map(r => ({ no: r, series: seriesOf(r) })), from, to)
+    const ser = hasSeries ? arealSeries(set.map(r => ({ no: r, series: seriesOf(r) })), from, to)
       : { mm: new Array(to - from + 1).fill(null), n: new Array(to - from + 1).fill(0), med: [], mx: [] };
-    if (set.length) writeSeries(o, rel, ser, minY, maxY, from, b);
+    if (hasSeries) writeSeries(o, rel, ser, minY, maxY, from, b);
     basins.push({ b, info, set, ser, mouth });
   }
 
@@ -553,6 +593,16 @@ export function build({ tree, out, check = false, generated }) {
     rainUnassigned: a.unassigned.length,
     withSeries, withoutRain,
     cyclicNodes: cyclic.sort(cmpNo).length,
+    // the members, not only how many: the source could repair Erkrath/Eigen and
+    // grow a different 2-cycle in the same run, and a count would not notice
+    cyclicIds: cyclic.sort(cmpNo),
+    // The newest rain day with a READING, which is not the newest day the source
+    // window names: the export runs mid-afternoon and a rain day starts at 07:00,
+    // so the current day is always half a day old and filtered out by coverage.
+    // Both the overview and every station plate hang their right edge on this one
+    // value — one picture, one estimator, and the plate that reads it prints the
+    // date it stands for.
+    lastRainDay: dayToISO(lastDay),
   };
   o.put('index.json', {
     schema: SCHEMA, generated,
@@ -605,7 +655,13 @@ function writeSeries(o, rel, ser, minY, maxY, from, id) {
 
 function main(argv) {
   const args = argv.slice(2);
-  const flag = name => { const i = args.indexOf(name); return i >= 0 && args[i + 1] && !args[i + 1].startsWith('--') ? args[i + 1] : null; };
+  const flag = name => {
+    const i = args.indexOf(name);
+    if (i < 0) return null;
+    const v = args[i + 1];
+    if (!v || v.startsWith('--')) throw new Error(`${name} needs a value`);
+    return v;
+  };
   const tree = flag('--tree') || 'nrw';
   const out = flag('--out') || join(tree, 'precip');
   const check = args.includes('--check');

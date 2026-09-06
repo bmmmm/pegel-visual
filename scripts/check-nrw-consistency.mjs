@@ -55,31 +55,43 @@
 //                     failure no other gate sees: the ZIP silently losing
 //                     stations while every single series looks healthy.
 //   N8 areal rain     the derived `precip/` product of build-nrw-precip.mjs.
-//                     (a) shape: arrays daysInYear long, 0 <= mm <= 400,
-//                     0 <= n <= |set|; (b) `mm === null <=> n === 0` — the
-//                     invariant that lets the plate draw a no-data column and
-//                     the gate tell a thin day from a missing one; (c) every
-//                     rain station belongs to AT MOST ONE gauge (`set[].at` is
-//                     the owner; a station appearing under two owners would be
-//                     double-counted through the nesting); (d) references
+//                     (a) shape: arrays daysInYear long, 0 <= mm <= the
+//                     estimator's own PLAUSIBLE_MAX_MM_DAY (imported, never
+//                     restated), 0 <= n <= |set|, and mean/median never above
+//                     the day's own maximum — the one rule here that can catch
+//                     the ESTIMATOR being wrong, since (e) recomputes with the
+//                     same code; (b) `mm === null <=> n === 0`, and med/mx
+//                     follow mm — the invariant that lets the plate draw a
+//                     no-data column and the gate tell a thin day from a
+//                     missing one; (c) the rain sets are a partition: no
+//                     station twice in one set (it would enter the mean twice
+//                     while n and |set| both rise, so every other rule stays
+//                     green) and none under two owners; (d) references
 //                     resolve — every product gauge is in topology.json, every
 //                     `set[].no` exists under `nrw/rain/`; (e) the committed
 //                     bytes ARE what the rule produces, proven by running the
 //                     builder in --check mode (writes nothing); (f)/(g)/(h)
 //                     the three "how much reality is broken" counters may only
 //                     drift by 2 against HEAD — bad coordinates, unassignable
-//                     rain gauges, and the down-edge cycle, whose count must
-//                     equal HEAD exactly; (i) floors, not shares:
-//                     withSeries >= 80 and receivingNodes >= 260.
+//                     rain gauges, and the down-edge cycle, which must match
+//                     HEAD in COUNT and in MEMBERS (a repaired cycle plus a new
+//                     one elsewhere leaves the count at 2); (i) floors, not
+//                     shares: withSeries >= 80 and receivingNodes >= 260.
 //                     Measured 2026-09-06: 298 routing nodes, 276 receiving
 //                     (21 WSV relays + 1 Gauss-Krueger gauge excluded), rain
-//                     302 basin + 12 orphan + 5 unassigned, 94 gauges with a
+//                     302 basin + 12 orphan + 5 unassigned, 93 gauges with a
 //                     series, 60 with no rain gauge upstream, 2 cyclic nodes.
-//                     Note on (f)-(h): the two Issel-registered rain gauges in
-//                     the Eifel (55040051, 55048925 — 150 km from the nearest
-//                     Issel gauge) are assigned through the ORPHAN path by
-//                     construction, so the basin/orphan split is 302/12, not
-//                     the 304/10 a reading that ignores MAX_ASSIGN_KM predicts.
+//                     Two notes on the numbers, both measured, both surprising:
+//                     the two Issel-registered rain gauges in the Eifel
+//                     (55040051, 55048925 — 150 km from the nearest Issel
+//                     gauge) take the ORPHAN path by construction, so the
+//                     basin/orphan split is 302/12, not the 304/10 a reading
+//                     that ignores MAX_ASSIGN_KM predicts. And 93, not 94:
+//                     2828300000200 has three assigned rain gauges of which one
+//                     (51020051) has a meta.json and no year shard at all, so
+//                     three assigned can never make three REPORTING and the
+//                     builder withdraws the product rather than advertise 1096
+//                     null days.
 //
 // Deliberate limits, as in the sibling gate: N4 compares against the branch's
 // own HEAD, so a base poisoned by a force-push looks clean to it — branch
@@ -106,7 +118,7 @@ import { execFileSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 import { checkChangeStatuses, dayNum } from './check-archive-consistency.mjs';
 import { daysInYear, PLAUSIBLE_MIN_CM, PLAUSIBLE_MAX_CM } from './fetch-wsv-archive.mjs';
-import { build as buildPrecip } from './build-nrw-precip.mjs';
+import { build as buildPrecip, PLAUSIBLE_MAX_MM_DAY } from './build-nrw-precip.mjs';
 import { mezParts } from './snapshot-wsv.mjs';
 
 const now = process.env.PEGEL_NOW ? new Date(process.env.PEGEL_NOW) : new Date();
@@ -612,7 +624,10 @@ export const isYearShard = name => /^\d{4}\.json$/.test(name);
 // BUILDER is wrong — `--check` only proves "the bytes are what the generator
 // makes today", which is a different claim from "the product is coherent".
 export function checkPrecipShape(index, products, rainIds, topologyGauges, {
-  minSeries = MIN_PRECIP_SERIES, minReceiving = MIN_RECEIVING_NODES, maxMm = 400,
+  // the estimator's own bound, imported rather than restated: a gate that keeps
+  // its own copy of a threshold goes red on legitimate output the day the
+  // estimator moves, or silent the day it tightens
+  minSeries = MIN_PRECIP_SERIES, minReceiving = MIN_RECEIVING_NODES, maxMm = PLAUSIBLE_MAX_MM_DAY,
 } = {}) {
   const v = [];
   if (!index || index.schema !== 1 || !index.counts || !index.gauges) return ['N8: precip/index.json missing, unparseable or not schema 1'];
@@ -629,8 +644,14 @@ export function checkPrecipShape(index, products, rainIds, topologyGauges, {
     if (!p.meta) { v.push(`N8: precip/${no}/meta.json: missing`); continue; }
     // (d) references
     if (topologyGauges && !topologyGauges[no]) v.push(`N8: precip/${no}: not a gauge in topology.json`);
+    const seenHere = new Set();
     for (const s of p.meta.set || []) {
       if (rainIds && !rainIds.has(String(s.no))) v.push(`N8: precip/${no}/meta.json: set names rain station ${s.no}, which has no nrw/rain/ directory`);
+      // the partition test proper: one set may not name a station twice. That
+      // is the double count — it enters mean/med/mx twice while n and setSize
+      // both rise, so every other rule stays green.
+      if (seenHere.has(String(s.no))) v.push(`N8: precip/${no}/meta.json: rain station ${s.no} is in the set twice — it would be counted twice in the mean`);
+      seenHere.add(String(s.no));
       const prev = ownerOf.get(String(s.no));
       if (prev == null) ownerOf.set(String(s.no), String(s.at));
       else if (prev !== String(s.at)) v.push(`N8: rain station ${s.no} is owned by both ${prev} and ${s.at}`);
@@ -644,18 +665,27 @@ export function checkPrecipShape(index, products, rainIds, topologyGauges, {
         if (!Array.isArray(doc[k]) || doc[k].length !== n) v.push(`N8: ${path}: ${k}.length != ${n}`);
       }
       const mm = doc.mm || [], cnt = doc.n || [], med = doc.med || [], mx = doc.mx || [];
-      let bad = 0, inv = 0, cntBad = 0, firstInv = -1;
+      let bad = 0, inv = 0, cntBad = 0, sib = 0, order = 0, firstInv = -1, firstSib = -1, firstOrder = -1;
       for (let d = 0; d < n; d++) {
         // (a) shape
         if (mm[d] != null && (!isNum(mm[d]) || mm[d] < 0 || mm[d] > maxMm)) bad++;
         if (!(Number.isInteger(cnt[d]) && cnt[d] >= 0 && cnt[d] <= setSize)) cntBad++;
         // (b) the invariant the plate draws and the estimator relies on
         if ((mm[d] == null) !== (cnt[d] === 0)) { inv++; if (firstInv < 0) firstInv = d; }
-        if ((mm[d] == null) !== (med[d] == null) || (mm[d] == null) !== (mx[d] == null)) inv++;
+        if ((mm[d] == null) !== (med[d] == null) || (mm[d] == null) !== (mx[d] == null)) { sib++; if (firstSib < 0) firstSib = d; }
+        // (a) again, and this one is the only independent check on the estimator
+        // itself: a mean above its own maximum is arithmetic that cannot happen,
+        // whatever the rule. Without it, clause (e) recomputing with the SAME
+        // builder is the only thing standing between a wrong mean and the branch.
+        if (mm[d] != null && mx[d] != null && (mm[d] > mx[d] + 1e-9 || (med[d] != null && med[d] > mx[d] + 1e-9))) {
+          order++; if (firstOrder < 0) firstOrder = d;
+        }
       }
       if (bad) v.push(`N8: ${path}: mm outside 0..${maxMm} on ${bad} day(s)`);
       if (cntBad) v.push(`N8: ${path}: n outside 0..${setSize} on ${cntBad} day(s)`);
       if (inv) v.push(`N8: ${path}: mm null <=> n 0 violated on ${inv} day(s), first at day index ${firstInv}`);
+      if (sib) v.push(`N8: ${path}: med/mx do not follow mm on ${sib} day(s), first at day index ${firstSib}`);
+      if (order) v.push(`N8: ${path}: mean or median above the day's maximum on ${order} day(s), first at day index ${firstOrder}`);
     }
   }
   return v;
@@ -677,6 +707,11 @@ export function checkPrecipDrift(index, head, {
     if (c.badCoordNodes > h.badCoordNodes + maxDrift) v.push(`N8: badCoordNodes ${h.badCoordNodes} -> ${c.badCoordNodes}, drift over ${maxDrift}`);
     if (c.rainUnassigned > h.rainUnassigned + maxDrift) v.push(`N8: rainUnassigned ${h.rainUnassigned} -> ${c.rainUnassigned}, drift over ${maxDrift}`);
     if (c.cyclicNodes !== h.cyclicNodes) v.push(`N8: cyclicNodes ${h.cyclicNodes} -> ${c.cyclicNodes} — a changed cycle set is read, not mirrored`);
+    // the members, not the count: a repaired cycle plus a new one elsewhere
+    // leaves the number at 2 and would slip past
+    else if (Array.isArray(c.cyclicIds) && Array.isArray(h.cyclicIds) && c.cyclicIds.join(',') !== h.cyclicIds.join(',')) {
+      v.push(`N8: the cycle members changed: ${h.cyclicIds.join(',')} -> ${c.cyclicIds.join(',')}`);
+    }
   }
   if (c.cyclicNodes > 2) v.push(`N8: ${c.cyclicNodes} cyclic nodes, the known set is 2 (Erkrath <-> Eigen)`);
   return v;
