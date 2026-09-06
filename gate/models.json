@@ -36,6 +36,10 @@
    "license_url": "https://huggingface.co/google/timesfm-3.0-pytorch/blob/main/LICENSE",
    "shippable": false,
    "files": {
+    "nrw-mid": {
+     "json": "nrw-mid/report-3p0.json",
+     "md": "nrw-mid/report-3p0.md"
+    },
     "seasonal-max": {
      "json": "seasonal-max/report-3p0.json",
      "md": "seasonal-max/report-3p0.md"
@@ -49,6 +53,39 @@
      "md": "short-mid/report-3p0.md"
     }
    }
+  },
+  {
+   "key": "3p0-rain",
+   "label": "TimesFM 3.0 + rain",
+   "id": "timesfm-3.0",
+   "params": "330M",
+   "checkpoint": "google/timesfm-3.0-pytorch",
+   "license": "timesfm-non-commercial-license-v1.0",
+   "license_url": "https://huggingface.co/google/timesfm-3.0-pytorch/blob/main/LICENSE",
+   "shippable": false,
+   "files": {
+    "nrw-mid": {
+     "json": "nrw-mid/report-3p0-rain.json",
+     "md": "nrw-mid/report-3p0-rain.md"
+    }
+   }
+  },
+  {
+   "key": "3p0-rain-shuffled",
+   "label": "TimesFM 3.0 + shuffled rain",
+   "id": "timesfm-3.0",
+   "params": "330M",
+   "checkpoint": "google/timesfm-3.0-pytorch",
+   "license": "timesfm-non-commercial-license-v1.0",
+   "license_url": "https://huggingface.co/google/timesfm-3.0-pytorch/blob/main/LICENSE",
+   "shippable": false,
+   "files": {
+    "nrw-mid": {
+     "json": "nrw-mid/report-3p0-rain-shuffled.json",
+     "md": "nrw-mid/report-3p0-rain-shuffled.md"
+    }
+   },
+   "control": true
   }
  ]
 }

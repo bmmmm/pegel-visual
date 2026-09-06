@@ -15,8 +15,20 @@
 // re-render puts the focus on what it just opened. Nothing repaints on a timer.
 
 export const BLOCKS = ['h1-14', 'h15-30', 'h31-90'];
-export const BLOCK_LABEL = { 'h1-14': 'days 1–14', 'h15-30': 'days 15–30', 'h31-90': 'days 31–90' };
+export const BLOCK_LABEL = {
+  'h1-14': 'days 1–14', 'h15-30': 'days 15–30', 'h31-90': 'days 31–90',
+  // the NRW rain run is a different grid with a different question: 14 days, and
+  // the blocks are the days a catchment actually responds over
+  'h1-3': 'days 1–3', 'h4-7': 'days 4–7', 'h8-14': 'days 8–14',
+};
 export const TARGETS = { mid: 'daily mid', max: 'daily max' };
+// The NRW rain run's own blocks. Not a target: its report has a different shape
+// (its own clauses, no regimes, a second arm to compare against), so it reads as
+// a PANEL of its own, the way the short-horizon run does.
+export const NRW_BLOCKS = ['h1-3', 'h4-7', 'h8-14'];
+// the report a (model, target) pair reads — one function, so the places that
+// used to index `r.seasonal[target]` cannot drift apart
+export const reportFor = (r, target) => (!r ? null : (r.seasonal && r.seasonal[target]) || null);
 
 // Everything this page points at off-site. The model card, the paper and the
 // package are the three things a reader needs to check the model claim itself;
@@ -49,7 +61,7 @@ export const SKILL_DOMAIN = [-0.2, 0.2];   // fixed across blocks and targets, s
 export const RATIO_DOMAIN = [0.5, 2.0];    // error relative to the blend; 1.0 is the bar
 export const PICP_DOMAIN = [0.6, 1.0];
 export const LEAD_DOMAIN = [0.5, 4];       // the curve's y, log2: ×0.5 and ×2 sit symmetric about the blend
-export const PANEL_IDS = ['lead', 'skill', 'error', 'calib', 'clim', 'short', 'model', 'method', 'basics'];
+export const PANEL_IDS = ['lead', 'skill', 'error', 'calib', 'clim', 'short', 'rain', 'model', 'method', 'basics'];
 
 // More than one candidate can sit on this sheet. Which ones are DRAWN is state in
 // the URL — one independent on/off per model, and the last one on cannot be
@@ -293,10 +305,7 @@ export function buildModel(reports, parsed) {
   // only models that actually loaded a mid report can be offered; the PRIMARY
   // (below) is the manifest's when it is on, and every per-gauge number on this
   // sheet is its own
-  const all = (reports.models || []).filter(mo => {
-    const r = reports.byKey[mo.key];
-    return r && r.seasonal && r.seasonal.mid;
-  });
+  const all = (reports.models || []).filter(mo => !!reportFor(reports.byKey[mo.key], 'mid'));
   const keys = all.map(mo => mo.key);
   // the manifest's word on which model leads — whether or not it is on
   const lead = keys.includes(reports.primary) ? reports.primary : keys[0];
@@ -306,7 +315,7 @@ export function buildModel(reports, parsed) {
   // primary alone, a target only the other model has would vanish from the sheet
   // while that model is drawn. A target whose report did not load falls back to
   // mid — and SAYS mid everywhere, instead of labelling the mid run as the max run
-  const has = (k, t) => { const r = reports.byKey[k]; return !!(r && r.seasonal && Object.hasOwn(r.seasonal, t) && r.seasonal[t]); };
+  const has = (k, t) => !!reportFor(reports.byKey[k], t);
   const targets = Object.keys(TARGETS).map(k => ({ k, label: TARGETS[k], available: enabled.some(key => has(key, k)) }));
   const state = { ...parsed, target: targets.some(t => t.k === parsed.target && t.available) ? parsed.target : 'mid' };
   // the primary is the manifest's, when it is on and was measured on this
@@ -318,18 +327,27 @@ export function buildModel(reports, parsed) {
   // the manifest's primary even while that model is off, and only what is DRAWN
   // (verdicts, lids, titles) follows the primary actually in view
   const chipOrder = [lead, ...keys.filter(k => k !== lead)];
-  const seasonal = reports.byKey[primary].seasonal;
+  const seasonal = reports.byKey[primary].seasonal || {};
   // the 15-minute grid is its own test set: the primary's run when it has one,
   // else the first enabled model's — and the panel names whose it draws. Read
   // from the primary alone, one missing short report made the whole panel vanish
   // while the other model's was on disk.
   const shortOf = [primary, ...enabled].map(k => ({ k, s: reports.byKey[k] && reports.byKey[k].short })).find(x => x.s) || null;
   const short = shortOf && shortOf.s;
-  const report = seasonal[state.target];
+  // The NRW rain experiment: its own grid, its own arms, and the report that
+  // ANSWERS its question is the rain arm's — the one carrying `rain_verdict`.
+  // Read across every listed model, drawn or not: the arms that ran there may
+  // have no seasonal report at all, which is exactly why they are not drawn.
+  const listed = reports.listed || reports.models || [];
+  const allKeys = Object.keys(reports.byKey || {});
+  const rainKey = allKeys.find(k => reports.byKey[k].nrw && reports.byKey[k].nrw.rain_verdict)
+    || allKeys.find(k => reports.byKey[k].nrw);
+  const nrw = rainKey ? reports.byKey[rainKey].nrw : null;
+  const report = reportFor(reports.byKey[primary], state.target);
   // every enabled model's report for the target in view, primary first
   const repOf = k => {
     const r = reports.byKey[k];
-    return r && r.seasonal ? (r.seasonal[state.target] || null) : null;
+    return reportFor(r, state.target);
   };
   // every candidate carries its OWN run header, so the model panel can describe
   // each line it draws — checkpoint, licence, config hash, versions, timings —
@@ -423,6 +441,28 @@ export function buildModel(reports, parsed) {
         `; the blend's own band ${num(blend * 100, 0)} %.`,
     };
   });
+  // The rain panel's view model. It reads THREE arms — plain, rain, and the
+  // shuffled control — because the answer is a comparison, not a number: the
+  // control exists to be as good as the true arm when there is nothing there.
+  const rainModel = nrw ? {
+    key: rainKey,
+    model: listed.find(mo => mo.key === rainKey) || null,
+    against: nrw.against || null,
+    verdict: nrw.verdict,
+    rainVerdict: nrw.rain_verdict || null,
+    reasons: nrw.provisional_reasons || [],
+    void: nrw.void || [],
+    clauses: Object.entries(nrw.clauses || {}).map(([k, c]) => ({ k, pass: !!c.pass, detail: c.detail || {} })),
+    blocks: NRW_BLOCKS.filter(b => (nrw.pooled || {}).blocks && nrw.pooled.blocks[b])
+      .map(b => ({ name: b, label: BLOCK_LABEL[b], ...nrw.pooled.blocks[b] })),
+    stations: Object.entries(nrw.stations || {}).map(([name, v]) => ({ name, blocks: v.blocks })),
+    info: Object.values(nrw.station_info || {}),
+    generated: (nrw.header || {}).generated,
+    mirror: (nrw.header || {}).nrw_commit,
+    covariate: (nrw.header || {}).covariate,
+    // the control arm: listed, linked, never drawn — see `controls()`
+    control: listed.filter(mo => mo.control).map(mo => ({ label: mo.label, files: mo.files })),
+  } : null;
   const shortModel = short ? {
     model: all.find(mo => mo.key === shortOf.k) || null,
     verdict: short.verdict, reasons: short.provisional_reasons || [],
@@ -519,7 +559,7 @@ export function buildModel(reports, parsed) {
       head: mo.report.header,
     })),
     lead: leadModel(drawn, state),
-    skill, error, calib, clim, short: shortModel,
+    skill, error, calib, clim, short: shortModel, rain: rainModel,
     void: report.void || [],
   };
   // the panels actually rendered, in order — the index is built from this list
@@ -534,6 +574,7 @@ export function buildModel(reports, parsed) {
     { id: 'calib', title: `Calibration · ${drawnLabel} · ${BLOCK_LABEL[block]}`, hook: 'how often the 80 % band held, and the PIT histograms', render: renderCalib },
     { id: 'clim', title: `Climatology alone · ${BLOCK_LABEL[block]}`, hook: 'Finding 2: the calendar against the blend', render: renderClim },
     shortModel ? { id: 'short', title: `Short horizon · ${shortModel.model ? labelNC(shortModel.model) : primaryLabel} · ${shortModel.verdict}`, hook: 'hours to two days — still collecting, no verdict yet', render: renderShort } : null,
+    rainModel ? { id: 'rain', title: `NRW rain · ${rainModel.model ? labelNC(rainModel.model) : 'TimesFM 3.0 + rain'}${rainModel.rainVerdict ? ` · ${rainModel.rainVerdict}` : ''}`, hook: 'does observed areal rainfall help at all? a controlled comparison', render: renderRain } : null,
     { id: 'model', title: `The model${m.drawn.length > 1 ? 's' : ''}, and the chain ${m.drawn.length > 1 ? 'they run' : 'it runs'} in · ${drawnLabel}`, hook: `what ${drawnLabel} ${m.drawn.length > 1 ? 'are' : 'is'}, where the weights come from, and the seven steps from archive to this sheet`, render: renderModel },
     { id: 'method', title: 'Method', hook: 'how it was measured, and what it cannot prove', render: renderMethod },
     { id: 'basics', title: 'Basics', hook: 'the model, the bar and the verdict in three short paragraphs', render: renderBasics },
@@ -1071,6 +1112,65 @@ function renderShort(m) {
     ]) + table;
 }
 
+// The NRW rain experiment. Two things this panel must not do: read as a fourth
+// candidate for the seasonal question (it is a different grid and a different
+// question), and let the control arm look like a competitor.
+function renderRain(m) {
+  const r = m.rain;
+  if (!r) return '';
+  const label = r.model ? nameOf(r.model) : 'the rain arm';
+  const CLAUSE = {
+    R1: 'better than the same model without rain, at days 1–3, significantly',
+    R2: 'no worse at days 4–7',
+    R3: 'still calibrated',
+    R4: 'no single gauge much worse',
+    R5: 'the shuffled control does NOT win as much',
+  };
+  const rows = r.blocks.map(b => {
+    const vs = b.ss_vs_other;
+    const dm = (b.dm_vs_other || {}).p;
+    const say = `${b.label}: ${label} is ${signed(b.ss)} against the MW blend, and ${signed(vs)} against the same model without rain` +
+      (dm == null ? '' : ` (Diebold-Mariano p ${num(dm, 3)})`) + `, over ${b.n_pairs} scored pairs.`;
+    // the bar is the arm-vs-arm skill, which is what the panel is about; zero is
+    // the answer "no effect", and it has to be visible AS zero
+    const w = Math.max(1.5, Math.min(100, Math.abs(vs || 0) / 0.2 * 50));
+    return rowOpen('', say) + `<span class="lbl">${esc(b.label)}</span>` +
+      `<span class="track"><span class="meter ${vs < 0 ? 'neg' : ''}" style="position:relative;display:block;height:100%">` +
+      `<span${attr('style', `width:${w.toFixed(1)}%`)}></span></span></span>` +
+      `<span class="val">${signed(vs)}</span></div>`;
+  }).join('');
+  const clauses = r.clauses.length
+    ? `<details class="tbl"><summary>the five pre-registered clauses</summary><div class="tblwrap"><table>` +
+      `<thead><tr><th>clause</th><th>question</th><th>holds</th></tr></thead><tbody>` +
+      r.clauses.map(c => `<tr><td>${esc(c.k)}</td><td>${esc(CLAUSE[c.k] || '')}</td><td>${c.pass ? 'yes' : 'no'}</td></tr>`).join('') +
+      `</tbody></table></div></details>`
+    : '';
+  const table = `<details class="tbl"><summary>per gauge, per block</summary><div class="tblwrap"><table>` +
+    `<thead><tr><th>gauge</th><th>block</th><th>MW blend</th><th>rain OLS</th><th>${esc(label)}</th><th>skill</th><th>vs no rain</th></tr></thead><tbody>` +
+    r.stations.map(stn => Object.entries(stn.blocks).map(([b, v]) =>
+      `<tr><td>${esc(stn.name)}</td><td>${esc(b)}</td><td>${num(v.mae.blend, 1)}</td><td>${num(v.mae.rain_ols, 1)}</td>` +
+      `<td>${num(v.mae.tfm_point, 1)}</td><td>${signed(v.ss)}</td><td>${signed(v.ss_vs_other)}</td></tr>`).join('')).join('') +
+    `</tbody></table></div></details>`;
+  const ctrl = r.control.length
+    ? `<p class="p-dim">The negative control (${r.control.map(c => esc(c.label)).join(', ')}) ran on the same windows with real rain from a DIFFERENT origin. ` +
+      `It is not drawn anywhere on this sheet — an arm that is supposed to lose reads as a competitor — but its report is linked in the foot, ` +
+      `because clause R5 is only worth anything if you can check it.</p>`
+    : '';
+  return `<p class="p-dim">Five NRW gauges, one per basin, ${esc(r.info.length ? r.info[0].kept : '—')} weekly origins each. ` +
+    `The question is not whether this model is good, but whether the areal rainfall over each gauge's own catchment ` +
+    `— observed, not forecast — makes it better. The bar is the skill against the SAME model without the covariate: ` +
+    `zero means the rain changed nothing.</p>` +
+    `<div class="rows">${rows}</div>` +
+    `<p class="p-readout" data-readout><span class="hint">Hover or pick a block for its numbers.</span></p>` +
+    ctrl +
+    plateKey([
+      { sw: '<span class="meter sw" style="display:inline-block;width:12px;height:12px"><span style="width:60%"></span></span>', label: 'skill against the same model without rain — longer is more' },
+      { sw: '<span class="meter neg sw" style="display:inline-block;width:12px;height:12px"><span style="width:60%"></span></span>', label: 'the rain made it worse' },
+      { note: `Covariate: ${esc(r.covariate || 'none')}. Mirror: ${esc(r.mirror || '—')}. Run ${esc(r.generated || '—')}.` },
+      { note: 'Observed rain, not forecast rain: this measures the ceiling a perfect precipitation forecast would buy.' },
+    ]) + clauses + table;
+}
+
 // the basics: model and question, the bar, the verdict — three short paragraphs
 // for the reader who came from the main page, every number from the mid run
 function renderBasics(m) {
@@ -1182,7 +1282,7 @@ function renderMethod(m) {
 function renderFoot(m) {
   // a report's grid, from the directory it sits in: seasonal-mid and short-mid
   // are two test sets, and "(mid)" twice per model named neither
-  const gridOf = dir => (dir.startsWith('short-') ? 'short' : dir.replace(/^seasonal-/, ''));
+  const gridOf = dir => (dir.startsWith('short-') ? 'short' : dir.startsWith('nrw-') ? 'NRW rain' : dir.replace(/^seasonal-/, ''));
   return `<footer id="plate-foot">` +
     m.verdicts.map(mv => {
       const vh = mv.head, vv = vh.versions || {};
@@ -1430,12 +1530,28 @@ export async function loadReports() {
   await Promise.all(listed.map(async mo => {
     const f = mo.files || {};
     const at = name => (f[name] && f[name].json ? getJson(f[name].json) : Promise.resolve(null));
-    const [mid, max, short] = await Promise.all([at('seasonal-mid'), at('seasonal-max'), at('short-mid')]);
-    byKey[mo.key] = { seasonal: { mid, max: max || undefined }, short: short || undefined };
+    const [mid, max, short, nrw] = await Promise.all([at('seasonal-mid'), at('seasonal-max'), at('short-mid'), at('nrw-mid')]);
+    byKey[mo.key] = { seasonal: { mid, max: max || undefined }, short: short || undefined, nrw: nrw || undefined };
   }));
-  // a model whose mid report did not answer cannot be offered at all; the
-  // primary is the manifest's word, and buildModel falls back when it is not on
-  return { models: listed.filter(mo => byKey[mo.key] && byKey[mo.key].seasonal.mid), byKey, primary: typeof manifest.primary === 'string' ? manifest.primary : null };
+  return { models: drawable(listed, byKey), listed, byKey, primary: typeof manifest.primary === 'string' ? manifest.primary : null };
+}
+
+// Which models the sheet DRAWS. One function, exported, because the page and its
+// tests disagreeing about this is exactly how a control arm ends up on the plate.
+//
+// Two rules. A model needs a report the sheet can read — the seasonal mid one, or
+// (since the rain experiment) an nrw one, so an arm that only ran there does not
+// vanish. And a CONTROL arm is never drawn, whatever it has: it is the arm that
+// is supposed to lose, and a line on the plate reads as a competitor. It is still
+// listed in the foot with a link to its report, which is the whole point of
+// having run it.
+export function drawable(listed, byKey) {
+  return listed.filter(mo => !mo.control && byKey[mo.key] && byKey[mo.key].seasonal && byKey[mo.key].seasonal.mid);
+}
+
+// the control arms, for the foot: named and linked, never drawn
+export function controls(listed, byKey) {
+  return listed.filter(mo => mo.control && byKey[mo.key]);
 }
 
 export async function main() {

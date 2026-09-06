@@ -212,3 +212,120 @@ def load_hires(hires_dir: Path, uuid: str):
     out = np.full(len(grid), np.nan)
     out[((ts - ts[0]) / STEP_15MIN).astype(int)] = vals
     return grid, out
+
+
+# ---------- LANUK NRW: the second gauge source, and its areal rain ----------
+# A different tree and a different window from `archive/`: year shards under
+# `nrw/gauges/<no>/<YYYY>.json` carry the daily MEAN the source publishes (plus a
+# sparse `acc` of aggregation accuracy), and `nrw/precip/<no>/<YYYY>.json` the
+# areal rainfall built by scripts/build-nrw-precip.mjs. Day 0 is Jan 1 in both,
+# as in the WSV archive, but the window ROLLS: about two years, not closed years
+# since 2000.
+#
+# TWO CLOCKS. A rain day `d` runs [d 07:00, d+1 07:00) MEZ, a gauge day
+# [d 00:00, d+1 00:00). Rain day d therefore CLOSES after gauge day d has closed,
+# so at the context position of gauge day t the newest rain a forecaster may see
+# is rain day t-1. That shift is the CALLER's (backtest.py) and is asserted
+# there; these readers hand back plain calendar-aligned arrays.
+
+NRW_ACC_MIN = 95  # a level day the source aggregated below this is not observed
+
+
+def _nrw_years(station: Path):
+    # "????.json" also matches meta.json — four characters is four characters
+    return sorted(int(p.stem) for p in station.glob("????.json") if p.stem.isdigit())
+
+
+def load_nrw_series(tree: Path, kind: str, no: str, field: str, first: int | None = None,
+                    last: int | None = None, acc_min: int | None = None):
+    """One LANUK product as a contiguous daily array over whole years.
+
+    kind: 'gauges' (field 'mean', masked by the sparse `acc`) or 'precip'
+    (field 'mm'). Returns (dates datetime64[D], values with NaN for every day the
+    source did not deliver).
+    """
+    station = Path(tree) / kind / str(no)
+    years = _nrw_years(station)
+    if not years:
+        return None, None
+    y0 = years[0] if first is None else first
+    y1 = years[-1] if last is None else last
+    vals, dates = [], []
+    for y in range(y0, y1 + 1):
+        n = days_in_year(y)
+        shard = station / f"{y}.json"
+        doc = json.loads(shard.read_text(encoding="utf-8")) if shard.exists() else {}
+        arr = doc.get(field) or []
+        acc = doc.get("acc") or {}
+        for d in range(n):
+            v = arr[d] if d < len(arr) else None
+            if v is None:
+                vals.append(np.nan)
+                continue
+            if acc_min is not None:
+                a = acc.get(str(d), acc.get(d))
+                if a is not None and a < acc_min:
+                    vals.append(np.nan)
+                    continue
+            vals.append(float(v))
+        dates.append(np.arange(np.datetime64(f"{y}-01-01"), np.datetime64(f"{y + 1}-01-01")))
+    dates_arr = np.concatenate(dates)
+    assert len(dates_arr) == len(vals)
+    return dates_arr, np.array(vals)
+
+
+def load_nrw_station(tree: Path, no: str) -> Series:
+    """The gauge's daily mean as a Series, so every existing consumer works on it.
+
+    `mid` IS the source's own daily mean here — NOT (min+max)/2, which is what
+    `mid` means for the WSV archive. The two protocols never share a run and the
+    nrw report's header says which figure it is, but the shared field name is a
+    trap worth knowing about.
+    """
+    dates, mean = load_nrw_series(tree, "gauges", no, "mean", acc_min=NRW_ACC_MIN)
+    if dates is None:
+        raise FileNotFoundError(f"no year shards under {Path(tree) / 'gauges' / str(no)}")
+    _, dmin = load_nrw_series(tree, "gauges", no, "min")
+    _, dmax = load_nrw_series(tree, "gauges", no, "max")
+    meta_path = Path(tree) / "gauges" / str(no) / "meta.json"
+    meta = json.loads(meta_path.read_text(encoding="utf-8")) if meta_path.exists() else {}
+    return Series(str(no), meta.get("name", str(no)), dates, mean, dmin, dmax)
+
+
+def load_nrw_rain(tree: Path, no: str, dates: np.ndarray) -> np.ndarray:
+    """The areal rain of one gauge, aligned to `dates` day by day.
+
+    NaN where the product has no day. The array is CALENDAR-aligned: the shift
+    that keeps a forecast leak-free belongs to the caller, and it is one line
+    away from being forgotten, which is why backtest.py asserts it.
+    """
+    r_dates, mm = load_nrw_series(tree, "precip", no, "mm")
+    out = np.full(len(dates), np.nan)
+    if r_dates is None:
+        return out
+    idx = {d: i for i, d in enumerate(r_dates.astype("datetime64[D]").tolist())}
+    for i, d in enumerate(dates.astype("datetime64[D]").tolist()):
+        j = idx.get(d)
+        if j is not None:
+            out[i] = mm[j]
+    return out
+
+
+def nrw_meta(tree: Path, no: str) -> dict:
+    p = Path(tree) / "gauges" / str(no) / "meta.json"
+    return json.loads(p.read_text(encoding="utf-8")) if p.exists() else {}
+
+
+def precip_sha256(tree: Path, nos) -> str:
+    """A digest over every precip shard the run reads, sorted, so two arms can be
+    proven to have seen the same rain. A run whose covariate moved between the
+    arms is not a comparison, and this is what makes that a VOID condition rather
+    than a hope."""
+    import hashlib
+    h = hashlib.sha256()
+    for no in sorted(str(n) for n in nos):
+        station = Path(tree) / "precip" / str(no)
+        for shard in sorted(station.glob("????.json")) if station.is_dir() else []:
+            h.update(shard.name.encode())
+            h.update(shard.read_bytes())
+    return h.hexdigest()

@@ -179,3 +179,60 @@ def tidal_harmonic(t_hours: np.ndarray, x: np.ndarray, t_pred_hours: np.ndarray,
     A = X.T @ X + ridge * np.eye(X.shape[1])
     beta = np.linalg.solve(A, X.T @ x[ok])
     return design(t_pred_hours) @ beta
+
+
+# ---------- the NRW protocol's own baselines ----------
+# 729 days cannot carry a climatology: a day-of-year table built on two years is
+# two samples per day, which is noise with a seasonal shape. So the latte the
+# challenger has to beat swaps the climatology for the operator's OWN mean water
+# level (MW) — an external constant, published per gauge, not fitted here.
+
+
+def blend_mw(last: np.ndarray, mw: float, tau: float, horizon: int) -> np.ndarray:
+    """Blend(h) = e^(-h/tau) * last + (1 - e^(-h/tau)) * MW.
+
+    Same shape as `blend`, with a flat target instead of a seasonal one. tau is
+    fitted on TRAIN by `fit_tau_mw`; MW never is.
+    """
+    h = np.arange(1, horizon + 1)
+    w = np.exp(-h / tau)[None, :]
+    return w * last[:, None] + (1 - w) * mw
+
+
+def fit_tau_mw(last: np.ndarray, mw: float, y: np.ndarray, mask: np.ndarray,
+               grid=range(1, 401)) -> int:
+    """tau minimising pooled MAE on the TRAIN windows — `fit_tau` for a flat target."""
+    best, best_mae = None, np.inf
+    horizon = y.shape[1]
+    for tau in grid:
+        err = np.abs(blend_mw(last, mw, tau, horizon) - y)[mask]
+        mae = float(np.nanmean(err)) if err.size else np.inf
+        if mae < best_mae:
+            best, best_mae = tau, mae
+    return int(best)
+
+
+def rain_ols(x_target_o: np.ndarray, rain_lags: np.ndarray, y: np.ndarray,
+             mask: np.ndarray, train: np.ndarray, min_rows: int = 30) -> np.ndarray:
+    """Per-horizon OLS on [1, target(o), R0..R3], fitted on TRAIN rows.
+
+    `rain_lags` is (n, 4): the areal rain of days o-1 .. o-4, so the newest
+    column is rain day o-1 and NOTHING here can see rain day o — the same
+    one-day shift the model covariate takes, for the same reason (a rain day
+    closes seven hours into the next gauge day).
+
+    This is a COLUMN, not a clause: it says how much of the rain signal a linear
+    reader can extract, which is the number that tells you whether a model
+    beating it is doing anything a regression could not. Same shape and the same
+    guard rails as `upstream_ols`.
+    """
+    n, horizon = y.shape
+    out = np.full((n, horizon), np.nan)
+    for h in range(horizon):
+        X = np.column_stack([np.ones(n), x_target_o, rain_lags])
+        rows = train & mask[:, h] & ~np.isnan(X).any(axis=1) & ~np.isnan(y[:, h])
+        if rows.sum() < min_rows:
+            continue
+        beta, *_ = np.linalg.lstsq(X[rows], y[rows, h], rcond=None)
+        out[:, h] = X @ beta
+    return out

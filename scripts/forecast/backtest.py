@@ -58,7 +58,42 @@ SHORT = {
     "blocks": {"h1-6h": [1, 24], "h6-24h": [25, 96], "h24-48h": [97, 192]},
 }
 
+# ---------- the NRW rain protocol, fixed before the first model run ----------
+# Context 384 = 12 x the 3.0 input patch of 32: 365 would be padded silently, and
+# a padded context is a different context. Horizon 14 because the question is
+# whether observed rain helps the days a catchment actually responds over — the
+# response statistic in nrw/precip/<no>/response.json peaks at lag 1 and is gone
+# by lag 5, so 14 days is generous, not arbitrary.
+#
+# The window is what it is: the mirror rolls two years, so there is no TRAIN
+# period for a model, only for the baselines' two fitted constants (tau, the OLS
+# betas). That is stated in the report rather than papered over.
+NRW = {
+    "context": 384,
+    "horizon": 14,
+    "step": 7,
+    "blocks": {"h1-3": [1, 3], "h4-7": [4, 7], "h8-14": [8, 14]},
+    # `mid` is the FIELD NAME in Series; for a LANUK gauge it holds the source's
+    # own daily mean, not (min+max)/2. The header says so in words.
+    "target_field": "mid",
+    "target_meaning": "the source's own daily mean, not (min+max)/2",
+    "acc_min": loaders.NRW_ACC_MIN,
+    "covariate": "areal_rain_past_only_shift1",
+    "rain_lag_columns": 4,
+}
+
 REPO = Path(__file__).resolve().parents[2]
+
+
+def git_head_of(tree: Path) -> str | None:
+    """The commit of the tree the run READ, which for `nrw` is a data branch and
+    not this checkout's HEAD. A worktree copy is not in git at all, so a run
+    against a gitignored mirror records the manifest's own stamp instead."""
+    try:
+        m = json.loads((Path(tree) / "manifest.json").read_text(encoding="utf-8"))
+        return f"{m.get('generated')} / export {m.get('sourceExportAt')}"
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def git_head() -> str | None:
@@ -76,11 +111,19 @@ def sha256_arrays(parts) -> str:
     return h.hexdigest()
 
 
-def run_model(model, ctxs: np.ndarray, horizon: int, batch: int, log):
-    """Model output for every context, in fixed batches; returns (point, deciles)."""
+def run_model(model, ctxs: np.ndarray, horizon: int, batch: int, log, past_only=None):
+    """Model output for every context, in fixed batches; returns (point, deciles).
+
+    `past_only` is an optional (n, context) covariate, batched in lockstep with
+    the contexts — a covariate that fell out of step with its own context would
+    still run and still score.
+    """
     points, quants = [], []
+    if past_only is not None:
+        assert len(past_only) == len(ctxs), f"{len(past_only)} covariates for {len(ctxs)} contexts"
     for i in range(0, len(ctxs), batch):
-        p, q = tfm.forecast_batch(model, ctxs[i:i + batch], horizon)
+        cov = None if past_only is None else past_only[i:i + batch]
+        p, q = tfm.forecast_batch(model, ctxs[i:i + batch], horizon, cov)
         points.append(p)
         quants.append(q)
         if (i // batch) % 10 == 0:
@@ -157,6 +200,147 @@ def backtest_seasonal_station(uuid: str, archive: Path, target: str, model, prot
     return arrays, info
 
 
+# ---------- the NRW rain experiment ----------
+
+def _nrw_covariate(rain: np.ndarray, origins: np.ndarray, context: int) -> np.ndarray:
+    """(n, context) of areal rain, shifted one day back.
+
+    At the context position of gauge day t stands rain day t-1, so the newest
+    index any window sees is `o - 1`. That is not caution, it is arithmetic: a
+    rain day runs 07:00 -> 07:00 MEZ and therefore CLOSES seven hours into gauge
+    day t+1, which means rain day t is not knowable at the end of gauge day t.
+    """
+    out = np.full((len(origins), context), np.nan)
+    for i, o in enumerate(origins):
+        idx = np.arange(o - context, o)
+        assert idx.max() == o - 1, "the covariate reaches the origin's own rain day"
+        if idx.min() < 0:
+            continue
+        out[i] = rain[idx]
+    return out
+
+
+def backtest_nrw_station(no: str, tree: Path, model, proto: dict, arm: str, log) -> tuple[dict, dict]:
+    L, H, step = proto["context"], proto["horizon"], proto["step"]
+    series = loaders.load_nrw_station(tree, no)
+    x_raw = series.target(proto["target_field"])
+    rain = loaders.load_nrw_rain(tree, no, series.dates)
+    x, run_len = loaders.fill_gaps(x_raw)
+
+    grid = loaders.origin_grid(len(x), L, H, step)
+    test_kept, test_ctx, test_y, test_mask = loaders.windows(x, run_len, grid, L, H)
+
+    # THE COVARIATE FILTER RUNS ON EVERY ARM, including the plain one. A window
+    # the rain arm cannot take must not be scored for the plain arm either, or
+    # the two are measured on different origin sets and the pairing — every
+    # skill score, every DM test — is comparing two different questions.
+    cov = _nrw_covariate(rain, test_kept, L)
+    usable = ~np.isnan(cov).any(axis=1)
+    test_kept, test_ctx, test_y, test_mask, cov = (
+        test_kept[usable], test_ctx[usable], test_y[usable], test_mask[usable], cov[usable])
+
+    if not len(test_kept):
+        return None, {"name": st.nrw_name_of(no), "kept": 0, "reason": "no window survives the covariate filter"}
+
+    # TRAIN rows exist for the BASELINES only: two years cannot give a model a
+    # training window at context 384, but tau and the OLS betas need rows, and
+    # they need only x[o] and four rain lags. Embargoed by construction and
+    # asserted below.
+    first_test = int(test_kept.min())
+    lags = proto["rain_lag_columns"]
+    train_o = []
+    for o in range(lags, first_test - H):
+        t_idx = np.arange(o + 1, o + H + 1)
+        if run_len[o] < 0 or (run_len[t_idx] < 0).any():
+            continue
+        if np.isnan(rain[o - lags:o]).any():
+            continue
+        train_o.append(o)
+    train_o = np.array(train_o, dtype=int)
+    if len(train_o):
+        assert train_o.max() + H < first_test, "TRAIN and TEST overlap"
+
+    origins = np.concatenate([train_o, test_kept]) if len(train_o) else test_kept
+    is_train = np.concatenate([np.ones(len(train_o), bool), np.zeros(len(test_kept), bool)]) if len(train_o) else np.zeros(len(test_kept), bool)
+    is_test = ~is_train
+    n = len(origins)
+
+    y = np.array([x[np.arange(o + 1, o + H + 1)] for o in origins])
+    tmask = np.array([run_len[np.arange(o + 1, o + H + 1)] <= loaders.SHORT_GAP for o in origins])
+    last = x[origins]
+    # R0..R3 = the rain of days o-1 .. o-4, newest first — the same one-day shift
+    rain_lags = np.column_stack([rain[origins - (k + 1)] for k in range(lags)])
+
+    ctx = np.full((n, L), np.nan)
+    ctx[is_test] = test_ctx
+    cov_full = np.full((n, L), np.nan)
+    cov_full[is_test] = cov
+
+    mw = st.nrw_mw_of(no)
+    tau = bl.fit_tau_mw(last[is_train], mw, y[is_train], tmask[is_train]) if is_train.sum() >= 30 else 30
+    blend_mw = bl.blend_mw(last, mw, tau, H)
+    resid_dec = bl.residual_deciles((y - blend_mw)[is_train], tmask[is_train])
+    blend_mw_q = bl.quantiles_from_residuals(blend_mw, resid_dec)
+    persist = bl.persistence(ctx, H)
+    persist[is_train] = np.repeat(last[is_train][:, None], H, axis=1)  # no context on a TRAIN row
+    snaive = bl.seasonal_naive_365(x, origins, H)
+    rain_ols = bl.rain_ols(last, rain_lags, y, tmask, is_train)
+
+    train_end = int(train_o.max()) + H if len(train_o) else first_test
+    d_h = metrics.mase_denominators(x[:train_end], H)
+
+    tfm_point = np.full_like(y, np.nan)
+    tfm_q = np.full((n, H, 9), np.nan)
+    if model is not None:
+        past_only = None
+        if proto.get("covariate") and arm != "plain":
+            arm_cov = cov
+            if arm == "shuffled":
+                # the negative control: every window keeps a REAL rain context —
+                # its autocorrelation, its wet spells — but one belonging to a
+                # different origin. What survives that is not rain.
+                rng = np.random.default_rng(7)
+                perm = rng.permutation(len(arm_cov))
+                while len(perm) > 1 and (perm == np.arange(len(perm))).any():
+                    perm = rng.permutation(len(arm_cov))
+                arm_cov = arm_cov[perm]
+            past_only = arm_cov
+        t0 = time.time()
+        pt, q = run_model(model, test_ctx, H, model.config["per_core_batch_size"], log, past_only=past_only)
+        tfm_point[is_test] = pt
+        tfm_q[is_test] = q
+        log(f"    model: {len(test_ctx)} windows in {time.time() - t0:.0f}s")
+
+    arrays = {
+        "origins": origins, "o_dates": series.dates[origins], "is_train": is_train, "is_test": is_test,
+        "last": last, "y": y, "tmask": tmask, "persist": persist, "snaive": snaive,
+        "blend": blend_mw, "blend_q": blend_mw_q, "rain_ols": rain_ols, "rain_lags": rain_lags,
+        "tfm_point": tfm_point, "tfm_q": tfm_q, "tau": np.array(tau), "d_h": d_h,
+        # the leak witness, stored so a reader of the npz can check it without
+        # re-deriving the shift
+        "cov_max_index": np.array([int(o) - 1 for o in origins]),
+    }
+    meta = loaders.nrw_meta(tree, no)
+    # A rain event is a TEST WINDOW that has something to forecast: at least one
+    # day of >= 10 mm areal rain inside its own target range. Counting the rain
+    # AT the origin instead would count the 48 origin days and answer a different
+    # question — measured 2026-09-07: 2 to 4 that way, 20 to 31 this way.
+    ev_thresh = 10
+    events = int(sum(1 for o in test_kept if np.nanmax(rain[o + 1:o + H + 1], initial=0) >= ev_thresh))
+    info = {
+        "name": st.nrw_name_of(no), "basin": st.nrw_basin_of(no), "unit": meta.get("unit", "cm"),
+        "mw": mw, "km2": meta.get("catchmentKm2"),
+        "n_days": len(x), "nan_days": int(np.isnan(x_raw).sum()),
+        "grid": int(len(grid)), "kept": int(len(test_kept)), "train": int(is_train.sum()), "test": int(is_test.sum()),
+        "dropped_by_covariate": int((~usable).sum()),
+        "first_origin": str(series.dates[test_kept[0]]), "last_origin": str(series.dates[test_kept[-1]]),
+        "pairs_scored": int(tmask[is_test].sum()), "tau": int(tau),
+        "rain_events": events,
+        "range": [float(np.nanmin(x_raw)), float(np.nanmax(x_raw))],
+    }
+    return arrays, info
+
+
 # ---------- short horizon (15-minute grid) ----------
 
 def backtest_short_station(uuid: str, hires: Path, model, proto: dict, log) -> tuple[dict | None, dict]:
@@ -202,7 +386,8 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--archive", default=str(REPO / "archive"))
     ap.add_argument("--hires", default=str(REPO / "tmp-forecast" / "hires"))
-    ap.add_argument("--horizon", choices=["seasonal", "short"], default="seasonal")
+    ap.add_argument("--horizon", choices=["seasonal", "short", "nrw"], default="seasonal")
+    ap.add_argument("--nrw", default=str(REPO / "nrw"), help="the LANUK mirror tree (protocol `nrw`)")
     ap.add_argument("--target", choices=["mid", "max", "min"], default="mid")
     ap.add_argument("--out", default=None)
     ap.add_argument("--tmp", default=str(REPO / "tmp-forecast"))
@@ -218,11 +403,25 @@ def main(argv=None) -> int:
     suffix = "" if args.model == tfm.SHIPPED else f"-{args.model}"
     out = Path(args.out or (Path(args.tmp) / "results" / f"{args.horizon}-{args.target}{suffix}"))
     out.mkdir(parents=True, exist_ok=True)
-    uuids = args.stations.split(",") if args.stations else list(st.STATIONS)
-    proto = SEASONAL if args.horizon == "seasonal" else SHORT
+    proto = {"seasonal": SEASONAL, "short": SHORT, "nrw": NRW}[args.horizon]
+    default_ids = list(st.NRW_STATIONS) if args.horizon == "nrw" else list(st.STATIONS)
+    uuids = args.stations.split(",") if args.stations else default_ids
     config = dict(entry["config"])
     if args.horizon == "short":
         config["max_horizon"] = proto["horizon"]
+    elif args.horizon == "nrw":
+        # 14 days round up to one output patch. The SAME substitution has to
+        # happen in gate.py's expectation, or every nrw report is VOID against a
+        # fingerprint nothing produced.
+        import math as _math
+        patch = 64
+        config["max_horizon"] = _math.ceil(proto["horizon"] / patch) * patch
+    # which arm of the rain experiment this run is: the registry key decides, and
+    # it never reaches the model — only which array is handed in
+    cov_key = entry["config"].get("covariate")
+    arm = "plain" if not cov_key else ("shuffled" if "shuffled" in cov_key else "rain")
+    if args.horizon == "nrw" and arm != "plain" and args.model.startswith("2p5"):
+        raise SystemExit("2.5 cannot take a covariate without changing the shipped line's fingerprint")
 
     def log(msg):
         print(msg, flush=True)
@@ -237,10 +436,12 @@ def main(argv=None) -> int:
     per_station = {}
     hash_parts = []
     for uuid in uuids:
-        log(f"{st.name_of(uuid)} ({uuid})")
+        log(f"{(st.nrw_name_of(uuid) if args.horizon == 'nrw' else st.name_of(uuid))} ({uuid})")
         if args.horizon == "seasonal":
             arrays, info = backtest_seasonal_station(uuid, Path(args.archive), args.target, None if args.no_model else model,
                                                      proto, args.limit, log)
+        elif args.horizon == "nrw":
+            arrays, info = backtest_nrw_station(uuid, Path(args.nrw), None if args.no_model else model, proto, arm, log)
         else:
             arrays, info = backtest_short_station(uuid, Path(args.hires), None if args.no_model else model, proto, log)
         per_station[uuid] = info
@@ -254,7 +455,25 @@ def main(argv=None) -> int:
     if model is not None:
         # the reproducibility void condition, measured on the first station's first batch
         first = next((u for u in uuids if (out / f"{u}.npz").exists()), None)
-        if first is not None:
+        if first is not None and args.horizon == "nrw":
+            # WITH the covariate: repeating a plain call would prove the plain
+            # path reproduces and say nothing about the arm that actually ran
+            z = np.load(out / f"{first}.npz", allow_pickle=True)
+            series = loaders.load_nrw_station(Path(args.nrw), first)
+            rain = loaders.load_nrw_rain(Path(args.nrw), first, series.dates)
+            x, run_len = loaders.fill_gaps(series.target(proto["target_field"]))
+            g = loaders.origin_grid(len(x), proto["context"], proto["horizon"], proto["step"])
+            kept, ctx, _, _ = loaders.windows(x, run_len, g, proto["context"], proto["horizon"])
+            b = config["per_core_batch_size"]
+            cv = _nrw_covariate(rain, kept, proto["context"])
+            ok = ~np.isnan(cv).any(axis=1)
+            ctx, cv = ctx[ok][:b], cv[ok][:b]
+            po = None if arm == "plain" else cv
+            a1 = tfm.forecast_batch(model, ctx, proto["horizon"], po)
+            a2 = tfm.forecast_batch(model, ctx, proto["horizon"], po)
+            repeat_ok = np.array_equal(a1[0], a2[0]) and np.array_equal(a1[1], a2[1])
+            log(f"repeat check: {'identical' if repeat_ok else 'DIFFERS'}")
+        elif first is not None:
             if args.horizon == "seasonal":
                 series = loaders.load_station(Path(args.archive), first)
                 x, run_len = loaders.fill_gaps(series.target(args.target))
@@ -278,6 +497,15 @@ def main(argv=None) -> int:
         "tfm_sha256": sha256_arrays(hash_parts) if hash_parts else None,
         "stations": per_station,
     }
+    if args.horizon == "nrw":
+        # what a reader needs to know a report is comparable to another: which
+        # mirror commit, which rain bytes, which arm, and what `target` means here
+        header["nrw_commit"] = git_head_of(Path(args.nrw))
+        header["precip_sha256"] = loaders.precip_sha256(Path(args.nrw), uuids)
+        header["target_field"] = proto["target_field"]
+        header["target_meaning"] = proto["target_meaning"]
+        header["covariate"] = cov_key
+        header["arm"] = arm
     (out / "header.json").write_text(json.dumps(header, indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
     log(f"wrote {out} in {header['elapsed_s']}s")
     return 0

@@ -1,0 +1,10 @@
+# Findings gitleaks' generic-api-key rule flags on entropy alone, checked by
+# hand and kept. Each line is one fingerprint: <path>:<rule>:<line>.
+#
+# The model registry key `3p0-rain-shuffled` scores 3.85 bits and looks like a
+# token to a rule that only measures entropy. It is the name of a forecast arm
+# (scripts/forecast/tfm.py MODELS), it is printed on the deployed gate page, and
+# it grants nothing. The same string is what makes that arm's reports
+# distinguishable from the true rain arm's, so it cannot be shortened away.
+gate/models.json:generic-api-key:74
+gate/nrw-mid/report-3p0-rain-shuffled.json:generic-api-key:1241

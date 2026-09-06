@@ -97,6 +97,26 @@ _3P0_CTOR = ("per_core_batch_size", "use_stitching", "use_linear_detrending",
 _3P0_CALL = ("use_symmetric_averaging", "make_positive", "sort_quantiles",
              "use_znorm", "padding_mode")
 
+# ---------- the rain covariate (protocol `nrw`) ----------
+# 3.0 takes a past-only covariate natively (`past_only_covariates` in
+# TimesFM3Forecaster.predict_batch), and `use_variate_attention` — already True
+# in CONFIG_3P0 — is the architecture flag it rides on. Each covariate is exactly
+# as long as its context.
+#
+# `covariate` is a REGISTRY key, not a model flag: it changes the config
+# fingerprint (so a report cannot be mistaken for a plain-3.0 one) and it never
+# reaches the model, because neither whitelist above names it. What it selects is
+# which array backtest.py hands in.
+#
+# 2.5 CANNOT do this: it would need `return_backcast=True`, which changes the
+# fingerprint of the SHIPPED line and would void every report on file. The
+# assertion in `_forecast_2p5` is that refusal written down.
+CONFIG_3P0_RAIN = {**CONFIG_3P0, "covariate": "areal_rain_past_only_shift1"}
+# The negative control, and it is supposed to LOSE. Same weights, same windows,
+# same context — the rain of a random other origin. If it wins as much as the
+# true arm, what the true arm found is not rain.
+CONFIG_3P0_RAIN_SHUF = {**CONFIG_3P0, "covariate": "areal_rain_past_only_shift1_shuffled_seed7"}
+
 TORCH_THREADS = 8  # fixed, so two runs reduce in the same order
 
 
@@ -129,7 +149,11 @@ def _load_2p5(entry: dict, tmp_dir: Path, config: dict):
     return model
 
 
-def _forecast_2p5(loaded: Loaded, contexts, horizon: int):
+def _forecast_2p5(loaded: Loaded, contexts, horizon: int, past_only=None):
+    # 2.5 has no covariate path that does not move its fingerprint: the only one
+    # is `return_backcast=True`, and the shipped line's fingerprint is what every
+    # committed report is validated against. Refusing here is cheaper than a VOID.
+    assert past_only is None, "TimesFM 2.5 takes no covariate: it would need return_backcast and void every report"
     inputs = [np.asarray(c, dtype=np.float32) for c in contexts]  # a fresh list: forecast() pads in place
     point, quant = loaded.model.forecast(horizon=horizon, inputs=inputs)
     return np.asarray(point, dtype=np.float64), np.asarray(quant, dtype=np.float64)
@@ -151,7 +175,7 @@ def _load_3p0(entry: dict, tmp_dir: Path, config: dict):
     return model
 
 
-def _forecast_3p0(loaded: Loaded, contexts, horizon: int):
+def _forecast_3p0(loaded: Loaded, contexts, horizon: int, past_only=None):
     cfg = loaded.config
     inputs = [np.asarray(c, dtype=np.float32) for c in contexts]
     assert all(c.shape[-1] <= cfg["max_context"] for c in inputs), "context longer than the registered max"
@@ -159,6 +183,17 @@ def _forecast_3p0(loaded: Loaded, contexts, horizon: int):
     assert math.ceil(horizon / patch) * patch == cfg["max_horizon"], \
         "horizon does not round to the registered max_horizon"
     call = {k: cfg[k] for k in _3P0_CALL if k in cfg}
+    if past_only is not None:
+        # one covariate per example, exactly as long as that example's context —
+        # the forecaster pads or truncates silently otherwise, and a covariate
+        # padded at the FRONT would shift every lag by the padding width
+        cov = [np.asarray(c, dtype=np.float32) for c in past_only]
+        assert len(cov) == len(inputs), f"{len(cov)} covariates for {len(inputs)} contexts"
+        for c, x in zip(cov, inputs):
+            assert c.shape[-1] == x.shape[-1], f"covariate {c.shape[-1]} != context {x.shape[-1]}"
+        # rain enters RAW, in mm: every variate is normalised inside the model,
+        # so a log or a sqrt here would be a second, undeclared transform
+        call["past_only_covariates"] = [c[None, :] for c in cov]
     outs = list(loaded.model.predict_batch(contexts=inputs, horizon=horizon, return_quantiles=True, **call))
     point = np.asarray(np.stack([o.forecast for o in outs]), dtype=np.float64)
     quant = np.asarray(np.stack([o.quantiles for o in outs]), dtype=np.float64)
@@ -204,6 +239,44 @@ MODELS = {
         "decile_slice": (0, 9),
         "load": _load_3p0,
         "forecast": _forecast_3p0,
+    },
+    # ---- the rain arms of protocol `nrw` (see stations.NRW_STATIONS) ----
+    # Same weights, same checkpoint, same output layout as 3p0 — only the
+    # registry config differs, which is exactly what makes the fingerprint say
+    # which arm a report came from. `control: True` marks the arm that is
+    # supposed to lose: the gate page lists it and never draws it.
+    "3p0-rain": {
+        "id": "timesfm-3.0",
+        "label": "TimesFM 3.0 + rain",
+        "params": "330M",
+        "checkpoint": "google/timesfm-3.0-pytorch",
+        "license": "timesfm-non-commercial-license-v1.0",
+        "license_url": "https://huggingface.co/google/timesfm-3.0-pytorch/blob/main/LICENSE",
+        "shippable": False,
+        "group": "model-nc",
+        "config": CONFIG_3P0_RAIN,
+        "point_channel": 4,
+        "quantile_channels": 9,
+        "decile_slice": (0, 9),
+        "load": _load_3p0,
+        "forecast": _forecast_3p0,
+    },
+    "3p0-rain-shuffled": {
+        "id": "timesfm-3.0",
+        "label": "TimesFM 3.0 + shuffled rain",
+        "params": "330M",
+        "checkpoint": "google/timesfm-3.0-pytorch",
+        "license": "timesfm-non-commercial-license-v1.0",
+        "license_url": "https://huggingface.co/google/timesfm-3.0-pytorch/blob/main/LICENSE",
+        "shippable": False,
+        "group": "model-nc",
+        "config": CONFIG_3P0_RAIN_SHUF,
+        "point_channel": 4,
+        "quantile_channels": 9,
+        "decile_slice": (0, 9),
+        "load": _load_3p0,
+        "forecast": _forecast_3p0,
+        "control": True,
     },
 }
 SHIPPED = "2p5"
@@ -276,7 +349,7 @@ def versions() -> dict:
     return out
 
 
-def forecast_batch(loaded: Loaded, contexts: np.ndarray, horizon: int):
+def forecast_batch(loaded: Loaded, contexts: np.ndarray, horizon: int, past_only=None):
     """(point (B,H), deciles (B,H,9)) — the same shape from either line.
 
     The point forecast is the MEDIAN channel, and which index that is differs
@@ -286,7 +359,7 @@ def forecast_batch(loaded: Loaded, contexts: np.ndarray, horizon: int):
     output, and a wrong channel would otherwise score as a plausible MAE.
     """
     entry = loaded.entry
-    point, quant = entry["forecast"](loaded, contexts, horizon)
+    point, quant = entry["forecast"](loaded, contexts, horizon, past_only)
     assert quant.shape[-1] == entry["quantile_channels"], quant.shape
     assert np.array_equal(quant[..., entry["point_channel"]], point), \
         "the point forecast is not the median channel"

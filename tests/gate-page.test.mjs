@@ -6,7 +6,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { BLOCKS, LABEL_GAP, LINKS, MODEL_MARKS, NC_GLYPH, PANEL_IDS, TARGETS, buildModel, leadSay, markOf, parseState, renderPage, screenSummary, signed, stackLabels, stateHref } from '../gate/gate.js';
+import { BLOCKS, LABEL_GAP, LINKS, MODEL_MARKS, NC_GLYPH, PANEL_IDS, TARGETS, buildModel, controls, drawable, leadSay, markOf, parseState, renderPage, screenSummary, signed, stackLabels, stateHref } from '../gate/gate.js';
 
 const ROOT = new URL('../gate/', import.meta.url).pathname;
 // the page is manifest-driven, so its tests read the same manifest the browser does
@@ -15,14 +15,23 @@ const MODEL_KEYS = MANIFEST.models.map(mo => mo.key);
 const readReport = rel => JSON.parse(readFileSync(join(ROOT, rel), 'utf8'));
 const at = (mo, dir) => (mo.files[dir] ? readReport(mo.files[dir].json) : undefined);
 const reportsFor = keys => {
-  const models = MANIFEST.models.filter(mo => keys.includes(mo.key));
+  const listed = MANIFEST.models.filter(mo => keys.includes(mo.key));
   const byKey = {};
-  for (const mo of models) byKey[mo.key] = { seasonal: { mid: at(mo, 'seasonal-mid'), max: at(mo, 'seasonal-max') }, short: at(mo, 'short-mid') };
+  for (const mo of listed) {
+    byKey[mo.key] = { seasonal: { mid: at(mo, 'seasonal-mid'), max: at(mo, 'seasonal-max') },
+      short: at(mo, 'short-mid'), nrw: at(mo, 'nrw-mid') };
+  }
+  // `drawable` is loadReports' own filter, imported rather than restated: the
+  // page and this fixture disagreeing about which models are drawn is exactly
+  // how a control arm ends up on the plate with nobody noticing
   // the manifest's word on which model the sheet reads for — loadReports passes
   // it through whether or not that model answered; buildModel falls back
-  return { models, byKey, primary: MANIFEST.primary };
+  return { models: drawable(listed, byKey), listed, byKey, primary: MANIFEST.primary };
 };
 const reports = reportsFor(MODEL_KEYS);              // what the deployed page loads
+// what it DRAWS — a subset since the rain experiment: the control arm is listed
+// and never drawn, and an arm with no seasonal report is drawn only where it ran
+const DRAWN_KEYS = reports.models.map(mo => mo.key);
 const shipped = reportsFor([MANIFEST.shipped]);      // the sheet read for one model alone
 const load = name => readReport(`${name}/report.json`);
 // two axes, two names: MID/MAX are what the SHIPPED model measured, PMID/PMAX
@@ -194,8 +203,8 @@ test('every row carries its readout sentence, every chart its table twin', () =>
   const rows = html.match(/<div class="row[^"]*" tabindex="0" role="button" data-say="[^"]+">/g) || [];
   assert.ok(rows.length >= 7 * 4 + 1 + 7, `rows: ${rows.length}`);
   assert.ok(!/<div class="row[^"]*" tabindex="0" role="button">/.test(html), 'no silent row');
-  assert.equal((html.match(/<details class="tbl">/g) || []).length, 5, 'the curve, skill, error, calibration, short');
-  assert.equal((html.match(/data-readout/g) || []).length, 6, 'the curve, skill, error, calibration, finding 2, short');
+  assert.equal((html.match(/<details class="tbl">/g) || []).length, 7, 'the curve, skill, error, calibration, short, and the rain panel\'s clauses + per-gauge twin');
+  assert.equal((html.match(/data-readout/g) || []).length, 7, 'the curve, skill, error, calibration, finding 2, short, rain');
   for (const c of ['A1', 'A2', 'A3', 'A4', 'A5', 'A6', 'A7']) assert.ok(html.includes(`>${c} `), `${c} chip`);
   assert.ok(html.includes('<span class="g" aria-hidden="true">✗</span>') && html.includes('<span class="g" aria-hidden="true">✓</span>'), 'pass and fail carry a glyph, not only a colour');
 });
@@ -233,7 +242,7 @@ test('every chip and index link says what to focus, and the way back is there tw
   const index = (html.match(/<nav class="index"[\s\S]*?<\/nav>/) || [''])[0];
   assert.ok(index, 'an index');
   const links = index.match(/<a href="[^"]+" data-focus="[^"]+">/g) || [];
-  assert.equal(links.length, 8, 'one per panel');
+  assert.equal(links.length, 9, 'one per panel');
   assert.equal((html.match(/<nav class="p-back" aria-label="back"><a href="\.\.\/">/g) || []).length, 2, 'above the title and in the foot');
   assert.ok(html.indexOf('class="p-back"') < html.indexOf('<h1'), 'the first way back precedes the title');
   assert.ok(html.includes('<h1 tabindex="-1">'), 'the h1 can take the fallback focus');
@@ -247,7 +256,7 @@ test('the panels come closed, in the order of the index, every summary a link ta
   const m = buildModel(reports, parseState(''));
   const html = renderPage(m);
   const ids = [...html.matchAll(/<details class="panel" id="([\w-]+)">/g)].map(x => x[1]);
-  assert.deepEqual(ids, ['skill', 'error', 'calib', 'clim', 'short', 'model', 'method', 'basics']);
+  assert.deepEqual(ids, ['skill', 'error', 'calib', 'clim', 'short', 'rain', 'model', 'method', 'basics']);
   assert.deepEqual(m.panels.map(p => p.id), ids, 'the index is built from what is rendered');
   for (const id of ids) assert.ok(PANEL_IDS.includes(id), `${id} is a known hash`);
   assert.ok(!html.includes('<details class="panel" id="skill" open'), 'nothing is open on load');
@@ -279,7 +288,7 @@ test('the panels come closed, in the order of the index, every summary a link ta
 test('a hostile station name never reaches the markup unescaped', () => {
   const evil = JSON.parse(JSON.stringify(reports));
   const bad = '<img src=x onerror=alert(1)>';
-  for (const key of MODEL_KEYS) {
+  for (const key of DRAWN_KEYS) {
     const r = evil.byKey[key].seasonal.mid;
     r.stations[bad] = r.stations['KÖLN'];
     r.station_info[bad] = r.station_info['a6ee8177-107b-47dd-bcfd-30960ccc6e9c'];
@@ -325,7 +334,7 @@ test('the summary spoken to screen readers names verdict, target, block and the 
   for (const b of m.skill.pooled.bars) assert.ok(s.includes(`${b.label} pooled skill ${b.ss > 0 ? '+' : ''}${b.ss.toFixed(3)}`), `${b.label} with its own skill: ${s}`);
   assert.equal(new Set(m.skill.pooled.bars.map(b => b.ss)).size, m.skill.pooled.bars.length, 'the two numbers differ, so the sentence cannot pass by accident');
   // and with one model on it speaks in the singular, without the label twice
-  const one = screenSummary(buildModel(reports, parseState(`?models=${MANIFEST.shipped}`, '', null, MODEL_KEYS)));
+  const one = screenSummary(buildModel(reports, parseState(`?models=${MANIFEST.shipped}`, '', null, DRAWN_KEYS)));
   const label = MANIFEST.models.find(mo => mo.key === MANIFEST.shipped).label;
   assert.equal(one.split(label).length - 1, 1, `the shipped label appears once: ${one}`);
 });
@@ -354,13 +363,13 @@ test('gist, facts and basics quote the report, not a remembered number', () => {
   assert.notEqual(pc(cm.pooled.blocks['h1-14'].ss), pc(mid.pooled.blocks['h1-14'].ss), 'the two runs differ there, so the sentence cannot pass by accident');
   assert.ok(gm.gist.length < 260, `the gist stays inside its line budget: ${gm.gist.length} chars`);
   // one model on: the old single-subject sentence, with that model's own numbers
-  const only = buildModel(reports, parseState(`?models=${MANIFEST.shipped}`, '', null, MODEL_KEYS));
+  const only = buildModel(reports, parseState(`?models=${MANIFEST.shipped}`, '', null, DRAWN_KEYS));
   assert.ok(only.gist.startsWith(`On the daily mid target ${NAME} beats the blend by ` + pc(mid.pooled.blocks['h1-14'].ss) + ' at two weeks'), only.gist);
   assert.ok(!only.gist.includes(PRIMARY.label), 'and does not name the model it is not drawing');
   assert.ok(!only.gist.includes('never shipped'), 'the shipped line alone carries no such clause');
   // the non-shippable line alone: the clause stays — measured 2026-09-05, the
   // single-model sentence had dropped it, so ?models=3p0 opened without a word
-  const ncOnly = buildModel(reports, parseState(`?models=${nc.key}`, '', null, MODEL_KEYS));
+  const ncOnly = buildModel(reports, parseState(`?models=${nc.key}`, '', null, DRAWN_KEYS));
   assert.ok(ncOnly.gist.includes('measured here, never shipped'), ncOnly.gist);
   assert.ok(ncOnly.gist.length < 260, `the single-model gist stays inside the budget too: ${ncOnly.gist.length} chars`);
   assert.ok(renderPage(gm).includes(`<p class="p-sub">${gm.gist}</p>`), 'the gist sits under the title');
@@ -384,7 +393,7 @@ test('gist, facts and basics quote the report, not a remembered number', () => {
     'a non-commercial line says THAT, rather than blaming a pin it does not honour');
   // the shipped line alone: its own run, pinned, and no name in front of a fact
   // — there is only one run on the sheet to be whose
-  const shippedFacts = buildModel(reports, parseState(`?models=${MANIFEST.shipped}`, '', null, MODEL_KEYS)).facts;
+  const shippedFacts = buildModel(reports, parseState(`?models=${MANIFEST.shipped}`, '', null, DRAWN_KEYS)).facts;
   assert.ok(shippedFacts[4].html.includes(`<b>${mid.header.model}</b>`) && shippedFacts[4].html.includes('pinned exactly'), 'the shipped line says its version is pinned');
   for (const i of [1, 2]) assert.ok(!shippedFacts[i].html.startsWith('<b>TimesFM'), `one model on: no name in front of the fact: ${shippedFacts[i].html.slice(0, 40)}`);
   assert.ok(f1[0].html.includes('<b>3 563</b>') && f1[0].html.includes('<b>509</b>'));
@@ -473,7 +482,8 @@ test('the chain says what our workflow does with the model, in order, and marks 
   const nodes = [...chain.matchAll(/<li class="fn (\w+)"><b>([^<]+)<\/b>/g)].map(x => [x[1], x[2]]);
   // the model link names every candidate drawn, primary first — the chain is the
   // same windows for all of them, and only that one step differs
-  assert.equal(m.drawn.length, MANIFEST.models.length, 'every model in the manifest is drawn by default');
+  // "drawn" is not "listed": a control arm is listed and never drawn
+  assert.equal(m.drawn.length, DRAWN_KEYS.length, 'every drawable model is drawn by default');
   const both = m.drawn.map(mo => mo.label).join(' and ');
   assert.deepEqual(nodes.map(n => n[1]), [
     'PEGELONLINE daily archive', 'loaders.py — windows', 'baselines.py — the bar',
@@ -506,24 +516,29 @@ test('nothing the deploy stamps appears here, and no closing script tag is ever 
 const chipRow = html => (html.match(/<nav class="p-tabs" aria-label="model[^"]*">[\s\S]*?<\/nav>/) || [''])[0];
 
 test('the model chips are state in the URL, and the last one on cannot be switched off', () => {
-  assert.ok(MODEL_KEYS.length >= 2, 'this whole section is vacuous with one model');
+  assert.ok(DRAWN_KEYS.length >= 2, 'this whole section is vacuous with one model');
   // the default is every model that loaded, and the default carries no parameter —
   // so every URL that predates the toggle still means exactly what it said
-  assert.equal(parseState('', '', null, MODEL_KEYS).models, null);
-  assert.equal(stateHref(parseState('', '', null, MODEL_KEYS)), './');
-  assert.deepEqual(parseState('?models=3p0', '', null, MODEL_KEYS).models, ['3p0']);
-  assert.equal(parseState(`?models=${MODEL_KEYS.join(',')}`, '', null, MODEL_KEYS).models, null, 'all of them IS the default');
-  assert.equal(parseState('?models=nonsense', '', null, MODEL_KEYS).models, null, 'an unknown key selects nothing, so everything');
-  assert.equal(stateHref(parseState('?models=3p0', '', null, MODEL_KEYS)), '?models=3p0');
-  assert.equal(stateHref(parseState('?models=3p0&block=h31-90', '', null, MODEL_KEYS), { panel: 'lead' }), '?models=3p0&block=h31-90#lead');
+  assert.equal(parseState('', '', null, DRAWN_KEYS).models, null);
+  assert.equal(stateHref(parseState('', '', null, DRAWN_KEYS)), './');
+  assert.deepEqual(parseState('?models=3p0', '', null, DRAWN_KEYS).models, ['3p0']);
+  assert.equal(parseState(`?models=${MODEL_KEYS.join(',')}`, '', null, DRAWN_KEYS).models, null, 'all of them IS the default');
+  assert.equal(parseState('?models=nonsense', '', null, DRAWN_KEYS).models, null, 'an unknown key selects nothing, so everything');
+  assert.equal(stateHref(parseState('?models=3p0', '', null, DRAWN_KEYS)), '?models=3p0');
+  assert.equal(stateHref(parseState('?models=3p0&block=h31-90', '', null, DRAWN_KEYS), { panel: 'lead' }), '?models=3p0&block=h31-90#lead');
 
-  const row = chipRow(renderPage(buildModel(reports, parseState('', '', null, MODEL_KEYS))));
+  const row = chipRow(renderPage(buildModel(reports, parseState('', '', null, DRAWN_KEYS))));
   assert.ok(row, 'the chips live in the one filter row, not a nav of their own');
-  for (const mo of MANIFEST.models) assert.ok(row.includes(mo.label), `${mo.key} has a chip`);
+  // a chip per DRAWN model: an arm measured only on the NRW grid, and the
+  // control arm, are listed and linked but never drawn — so never a chip
+  for (const mo of reports.models) assert.ok(row.includes(mo.label), `${mo.key} has a chip`);
+  for (const mo of MANIFEST.models.filter(mo => !DRAWN_KEYS.includes(mo.key))) {
+    assert.ok(!row.includes(mo.label), `${mo.key} is not drawn, so it has no chip`);
+  }
   // and each carries the curve it switches — the chip's hue alone would be a
   // colour with nothing to attach it to, and hue alone is not how this sheet means
-  for (const mo of MANIFEST.models) {
-    const mark = markOf(MANIFEST.models, mo.key);
+  for (const mo of reports.models) {
+    const mark = markOf(reports.models, mo.key);
     assert.match(row, new RegExp(`class="mchip m-${mark}[^"]*"[^>]*>\\s*<span class="sw"><svg[^>]*><line class="ln ln-${mark}"`),
       `${mo.key}'s chip shows its own line, in its own dash`);
   }
@@ -531,14 +546,14 @@ test('the model chips are state in the URL, and the last one on cannot be switch
   // with one model left on, its own chip is disabled rather than gone: a control
   // that vanishes when you use it cannot be found again, and an empty sheet is
   // not a state this page can reach
-  const alone = renderPage(buildModel(reports, parseState('?models=3p0', '', null, MODEL_KEYS)));
+  const alone = renderPage(buildModel(reports, parseState('?models=3p0', '', null, DRAWN_KEYS)));
   // disabled AND still marked current: the model in view must not be painted
   // like an unavailable one while the model switched off looks available
   assert.match(chipRow(alone), /<span class="mchip m-[a-z0-9-]+ off on" aria-disabled="true" aria-current="true" title="TimesFM 3\.0 is the only model in view[^"]*" data-ctl="model">.*?TimesFM 3\.0/);
   // an UNAVAILABLE chip stays plainly off — the two states must not look alike
   const noMax = JSON.parse(JSON.stringify(reports));
-  delete noMax.byKey[MODEL_KEYS.find(k => k !== MANIFEST.shipped)].seasonal.max;
-  const rowMax = chipRow(renderPage(buildModel(noMax, parseState('?target=max', '', null, MODEL_KEYS))));
+  delete noMax.byKey[DRAWN_KEYS.find(k => k !== MANIFEST.shipped)].seasonal.max;
+  const rowMax = chipRow(renderPage(buildModel(noMax, parseState('?target=max', '', null, DRAWN_KEYS))));
   assert.match(rowMax, /<span class="mchip m-[a-z0-9-]+ off" aria-disabled="true"/, 'unavailable is a different state from locked-on');
   const dead = (rowMax.match(/<span class="mchip[^"]*off"[\s\S]*?<\/span>/) || [''])[0];
   assert.ok(dead, 'the dead chip is one element, and these read it, not the row around it');
@@ -551,10 +566,13 @@ test('the model chips are state in the URL, and the last one on cannot be switch
 });
 
 test('every model in view is drawn, named in the key, and a model that cannot ship says so', () => {
-  const both = buildModel(reports, parseState('', '', null, MODEL_KEYS));
+  const both = buildModel(reports, parseState('', '', null, DRAWN_KEYS));
   const html = renderPage(both);
   const lead = section(html, 'lead');
-  assert.equal(both.lead.curves.length, MODEL_KEYS.length, 'one curve per model in view');
+  // one curve per model that HAS this target: an arm measured only on the NRW
+  // grid is drawable and has no seasonal curve, which is a dead chip, not a line
+  const withSeasonal = DRAWN_KEYS.filter(k => reports.byKey[k].seasonal.mid);
+  assert.equal(both.lead.curves.length, withSeasonal.length, 'one curve per model measured on this target');
   // by KEY, not by position: the curves come primary-first, and a mark that
   // followed the position would swap hues the day the primary changed — spelled
   // out against MODEL_MARKS by manifest index, not through the helper under test
@@ -574,7 +592,7 @@ test('every model in view is drawn, named in the key, and a model that cannot sh
     assert.ok(html.includes('measured, never shipped'), 'the foot says it too');
   }
   // each model states its own verdict rather than sharing one word
-  assert.equal(both.verdicts.length, MODEL_KEYS.length);
+  assert.equal(both.verdicts.length, DRAWN_KEYS.length);
   const vlist = (html.match(/<ul class="vmodels"[\s\S]*?<\/ul>/) || [''])[0];
   for (const v of both.verdicts) assert.ok(vlist.includes(v.label) && vlist.includes(v.verdict), `${v.label}: ${v.verdict}`);
   // and the foot names every model in view, with its own licence
@@ -584,13 +602,14 @@ test('every model in view is drawn, named in the key, and a model that cannot sh
 
 test('switching a model off makes the WHOLE sheet speak for the other one', () => {
   // the failure this guards: the plate drawing one model's numbers under prose,
-  // links and panel titles that name another
-  for (const mo of MANIFEST.models) {
-    const m = buildModel(reports, parseState(`?models=${mo.key}`, '', null, MODEL_KEYS));
+  // links and panel titles that name another. Over the DRAWN models: a model
+  // that is not drawn cannot be the one in view, and asking for it falls back.
+  for (const mo of reports.models) {
+    const m = buildModel(reports, parseState(`?models=${mo.key}`, '', null, DRAWN_KEYS));
     const html = renderPage(m);
     assert.equal(m.primary.key, mo.key);
     assert.equal(m.lead.curves.length, 1);
-    const others = MANIFEST.models.filter(x => x.key !== mo.key);
+    const others = reports.models.filter(x => x.key !== mo.key);
     assert.ok(html.includes(`Skill by gauge · ${labelNC(mo)} ·`), `${mo.key}: the skill panel names it`);
     assert.ok(html.includes(`Calibration · ${labelNC(mo)} ·`), `${mo.key}: calibration names it`);
     if (m.short) assert.ok(html.includes(`Short horizon · ${labelNC(mo)} ·`), `${mo.key}: the short-horizon panel names it`);
@@ -601,7 +620,12 @@ test('switching a model off makes the WHOLE sheet speak for the other one', () =
     assert.ok(modelPanel.includes(`href="https://huggingface.co/${mo.checkpoint}"`), `${mo.key}: and links its own card`);
     // everything BUT the control row, which legitimately names every model you
     // could switch on — the rest of the sheet must belong to the one in view
-    const sheet = html.replace(/<nav class="p-tabs"[\s\S]*?<\/nav>/g, '');
+    // …and but the RAIN panel, which is a different experiment with arms of its
+    // own: it names the arm that answers ITS question, whichever model the
+    // seasonal sheet is being read for, exactly as the control row names every
+    // model you could switch on
+    const sheet = html.replace(/<nav class="p-tabs"[\s\S]*?<\/nav>/g, '')
+      .replace(/<details class="panel" id="rain"[\s\S]*?<\/details>\s*(?=<details class="panel" id="model")/, '');
     for (const other of others) {
       assert.ok(!sheet.includes(other.checkpoint), `${mo.key}: ${other.key}'s checkpoint survives somewhere on the sheet`);
       assert.ok(!sheet.includes(other.label), `${mo.key}: ${other.key}'s NAME survives somewhere on the sheet`);
@@ -637,7 +661,7 @@ test('skill and calibration draw one bar per model, each out of its own report',
   // the visible caption, not just the aria-label: the model sits on its own line
   for (const mo of both.drawn) assert.ok(calib.includes(`${both.calib[0].station}<span class="mn">${mo.label}</span>`), `the histograms name ${mo.key} where a reader can see it`);
   // and with one model on, the row goes back to a single bar with no slot class
-  const one = buildModel(reports, parseState(`?models=${MANIFEST.shipped}`, '', null, MODEL_KEYS));
+  const one = buildModel(reports, parseState(`?models=${MANIFEST.shipped}`, '', null, DRAWN_KEYS));
   const oneSkill = panel(renderPage(one), 'skill');
   assert.equal((oneSkill.match(/<span class="bar [^"]*"/g) || []).length, one.skill.rows.length + 1);
   assert.ok(!/\bbar [a-z]+ m[12]\b/.test(oneSkill), 'no slot class when there is nothing to tell apart');
@@ -650,7 +674,7 @@ test('the short-horizon panel draws the run of the model in view, not the shippe
   assert.ok(withShort.length > 1, 'more than one candidate has been measured on the 15-minute grid');
   const own = new Map();
   for (const mo of withShort) {
-    const m = buildModel(reports, parseState(`?models=${mo.key}`, '', null, MODEL_KEYS));
+    const m = buildModel(reports, parseState(`?models=${mo.key}`, '', null, DRAWN_KEYS));
     const rep = readReport(mo.files['short-mid'].json);
     assert.equal(m.short.generated, rep.header.generated, `${mo.key}: the panel reads its own run`);
     assert.equal(rep.header.model_key || MANIFEST.shipped, mo.key, `${mo.key}: and that run is its own`);
@@ -665,19 +689,19 @@ test('the short-horizon panel draws the run of the model in view, not the shippe
 test('the manifest decides what is offered — a model whose report did not load is not a chip', () => {
   const only = MANIFEST.shipped;
   const half = { models: MANIFEST.models, byKey: { [only]: reports.byKey[only] } };  // the challenger answered nothing
-  const m = buildModel(half, parseState('', '', null, MODEL_KEYS));
+  const m = buildModel(half, parseState('', '', null, DRAWN_KEYS));
   assert.deepEqual(m.models.map(mo => mo.key), [only], 'only what loaded is offered');
   assert.equal(m.lead.curves.length, 1);
   const html = renderPage(m);
   assert.ok(!chipRow(html), 'with one model there is no model row at all');
   assert.ok(html.includes('aria-label="target and horizon block"'), 'and the filter row is what it always was');
   // asking for the model that did not load still renders, on the one that did
-  const asked = buildModel(half, parseState('?models=3p0', '', null, MODEL_KEYS));
+  const asked = buildModel(half, parseState('?models=3p0', '', null, DRAWN_KEYS));
   assert.equal(asked.primary.key, only, 'a selection that matches nothing falls back to what exists');
 });
 
 test('with two candidates drawn the sheet measures how far apart they are', () => {
-  const both = buildModel(reports, parseState('', '', null, MODEL_KEYS));
+  const both = buildModel(reports, parseState('', '', null, DRAWN_KEYS));
   const g = both.lead.gap;
   assert.ok(g, 'two curves get a measured gap');
   assert.ok(g.d > 0 && g.d < 1, `a ratio difference, not a percentage (${g.d})`);
@@ -688,15 +712,15 @@ test('with two candidates drawn the sheet measures how far apart they are', () =
   assert.ok(lead.includes(`${(g.d * 100).toFixed(1)} points of the blend`), 'the key prints the gap it measured');
   assert.ok(lead.includes(`on day ${g.day}`) && lead.includes(g.ahead), 'and where, and which curve is lower');
   // one model alone has nothing to compare, and says nothing
-  const alone = buildModel(reports, parseState(`?models=${MANIFEST.shipped}`, '', null, MODEL_KEYS));
+  const alone = buildModel(reports, parseState(`?models=${MANIFEST.shipped}`, '', null, DRAWN_KEYS));
   assert.equal(alone.lead.gap, null);
   assert.ok(!section(renderPage(alone), 'lead').includes('points of the blend'));
   // and it must move with the data, not be a literal
   const bent = structuredClone(reports);
-  const other = MODEL_KEYS.find(k => k !== MANIFEST.shipped);
+  const other = DRAWN_KEYS.find(k => k !== MANIFEST.shipped);
   bent.byKey[other].seasonal.mid.pooled.per_h_ratio_median.tfm_point =
     bent.byKey[MANIFEST.shipped].seasonal.mid.pooled.per_h_ratio_median.tfm_point.map(v => v + 0.5);
-  const wide = buildModel(bent, parseState('', '', null, MODEL_KEYS)).lead.gap;
+  const wide = buildModel(bent, parseState('', '', null, DRAWN_KEYS)).lead.gap;
   assert.ok(Math.abs(wide.d - 0.5) < 1e-9, `the gap follows the data (${wide.d})`);
   assert.equal(wide.ahead, MANIFEST.models.find(mo => mo.key === MANIFEST.shipped).label, 'and names the lower curve');
 });
@@ -704,8 +728,8 @@ test('with two candidates drawn the sheet measures how far apart they are', () =
 test('the table twin carries every model the drawing carries', () => {
   // the drawing gained a mark per model while its table kept one hardcoded
   // column, so a reader who opened it got a different sheet
-  for (const q of ['', ...MODEL_KEYS.map(k => `?models=${k}`)]) {
-    const m = buildModel(reports, parseState(q, '', null, MODEL_KEYS));
+  for (const q of ['', ...DRAWN_KEYS.map(k => `?models=${k}`)]) {
+    const m = buildModel(reports, parseState(q, '', null, DRAWN_KEYS));
     const html = renderPage(m);
     const errPanel = html.slice(html.indexOf('<details class="panel" id="error">'), html.indexOf('<details class="panel" id="calib">'));
     const head = (errPanel.match(/<thead>[\s\S]*?<\/thead>/) || [''])[0];
@@ -943,10 +967,10 @@ test('no end label sits on the other side of the bar from the line it names', ()
 });
 
 test('a model with no report for the target in view has a dead chip, not a lit one', () => {
-  const other = MODEL_KEYS.find(k => k !== MANIFEST.shipped);
+  const other = DRAWN_KEYS.find(k => k !== MANIFEST.shipped);
   const half = JSON.parse(JSON.stringify(reports));
   delete half.byKey[other].seasonal.max;                       // it has mid, but no max
-  const m = buildModel(half, parseState('?target=max', '', null, MODEL_KEYS));
+  const m = buildModel(half, parseState('?target=max', '', null, DRAWN_KEYS));
   assert.equal(m.state.target, 'max', 'the shipped model still has the max report');
   assert.deepEqual(m.drawn.map(mo => mo.key), [MANIFEST.shipped], 'only what can be drawn is drawn');
   const row = chipRow(renderPage(m));
@@ -955,14 +979,14 @@ test('a model with no report for the target in view has a dead chip, not a lit o
     'its chip is dead and says why, instead of staying lit over a sheet that is silent about it');
   assert.ok(!/class="mchip m-[a-z0-9-]+ off on"/.test(row), 'dead is not the locked-on state, whatever hue the chip wears');
   // and on the target it does have, it is a live chip again
-  assert.ok(chipRow(renderPage(buildModel(half, parseState('', '', null, MODEL_KEYS)))).includes(label), 'on the target it does have, it is live again');
+  assert.ok(chipRow(renderPage(buildModel(half, parseState('', '', null, DRAWN_KEYS)))).includes(label), 'on the target it does have, it is live again');
 });
 
 test('a licence link that is not plain https never reaches an href', () => {
   const bent = JSON.parse(JSON.stringify(reports));
-  const other = MODEL_KEYS.find(k => k !== MANIFEST.shipped);
+  const other = DRAWN_KEYS.find(k => k !== MANIFEST.shipped);
   for (const rep of Object.values(bent.byKey[other].seasonal)) if (rep) rep.header.model_license_url = 'javascript:alert(1)';
-  const html = renderPage(buildModel(bent, parseState('', '', null, MODEL_KEYS)));
+  const html = renderPage(buildModel(bent, parseState('', '', null, DRAWN_KEYS)));
   assert.ok(!html.includes('javascript:'), 'the scheme is dropped, not escaped and kept');
   assert.ok(html.includes(`href="${LINKS.card}"`), 'and the foot falls back to a link it trusts');
 });
@@ -982,7 +1006,7 @@ test('the sheet has ONE primary, the manifest’s, and everything that stands fo
   assert.ok(row.indexOf(PRIMARY.label) < row.indexOf(SHIPPED.label), 'its chip comes first');
   // and STAYS first when it is switched off — a control that changes places when
   // it is used cannot be found again; only what is drawn follows the primary in view
-  const rowOff = chipRow(renderPage(buildModel(reports, parseState(`?models=${SHIPPED.key}`, '', null, MODEL_KEYS))));
+  const rowOff = chipRow(renderPage(buildModel(reports, parseState(`?models=${SHIPPED.key}`, '', null, DRAWN_KEYS))));
   assert.ok(rowOff.indexOf(PRIMARY.label) < rowOff.indexOf(SHIPPED.label), `the chip row keeps its order with the primary off: ${rowOff.slice(0, 200)}`);
   assert.match(rowOff, new RegExp(`^<nav[^>]*><span class="grp"><span class="p-tabs-lbl">model</span><a href="[^"]*"[^>]*class="mchip m-${markOf(MANIFEST.models, PRIMARY.key)}"`), 'the first chip is the primary’s, offering to draw it again');
   // the verdict list, the settings lid and every title that names the models
@@ -993,11 +1017,11 @@ test('the sheet has ONE primary, the manifest’s, and everything that stands fo
   // verdict word is where a reader of that sheet looks first, and the glyph
   // belongs there; the shipped line alone has nothing to add and gets no row
   const nc = MANIFEST.models.find(mo => !mo.shippable);
-  const ncAlone = renderPage(buildModel(reports, parseState(`?models=${nc.key}`, '', null, MODEL_KEYS)));
+  const ncAlone = renderPage(buildModel(reports, parseState(`?models=${nc.key}`, '', null, DRAWN_KEYS)));
   const ncList = (ncAlone.match(/<ul class="vmodels"[\s\S]*?<\/ul>/) || [''])[0];
   assert.equal((ncList.match(/<li[ >]/g) || []).length, 1, 'one row, its own');   // `<li[ >]`: the swatch's <line> is not a row
   assert.ok(ncList.includes(NC_GLYPH) && ncList.includes(nc.label), 'with the glyph beside the verdict');
-  assert.ok(!renderPage(buildModel(reports, parseState(`?models=${SHIPPED.key}`, '', null, MODEL_KEYS))).includes('<ul class="vmodels"'), 'the shipped line alone: no list');
+  assert.ok(!renderPage(buildModel(reports, parseState(`?models=${SHIPPED.key}`, '', null, DRAWN_KEYS))).includes('<ul class="vmodels"'), 'the shipped line alone: no list');
   const lid = (html.match(/<details class="fold" id="settings"><summary>[\s\S]*?<\/summary>/) || [''])[0];
   assert.ok(lid.includes(`${labelNC(PRIMARY)} + ${labelNC(SHIPPED)}`), `the settings lid leads with the primary: ${lid}`);
   for (const id of ['skill', 'calib', 'model']) assert.ok(panel(html, id).includes(`${labelNC(PRIMARY)} + ${labelNC(SHIPPED)}`), `${id}: the title leads with the primary`);
@@ -1012,7 +1036,7 @@ test('the sheet has ONE primary, the manifest’s, and everything that stands fo
   const skill14 = signed(med(PMID.pooled.stations.map(n => PMID.stations[n].blocks['h1-14'].ss)), 2);
   assert.ok(bands.includes(`</span>${skill14}</b>`), `the number is the primary’s median block skill (${skill14}): ${bands.slice(0, 300)}`);
   assert.notEqual(skill14, signed(med(MID.pooled.stations.map(n => MID.stations[n].blocks['h1-14'].ss)), 2), 'the shipped run’s median differs, so this cannot pass by accident');
-  const alone = section(renderPage(buildModel(reports, parseState(`?models=${SHIPPED.key}`, '', null, MODEL_KEYS))), 'lead');
+  const alone = section(renderPage(buildModel(reports, parseState(`?models=${SHIPPED.key}`, '', null, DRAWN_KEYS))), 'lead');
   assert.ok(alone.includes('<div class="lead-bands">') && !alone.includes('<b><span class="sw">'), 'one curve: a bare number, and the row does not claim more');
   // the clauses fold: one list per model, and the lid counts each by name
   const clauses = html.slice(html.indexOf('<details class="fold" id="clauses">'), html.indexOf('<section class="facts-wrap">'));
@@ -1026,12 +1050,12 @@ test('the sheet has ONE primary, the manifest’s, and everything that stands fo
   // what is read aloud says the words, not the glyph
   assert.ok(clauses.includes(`data-say="${PRIMARY.label} (non-commercial, never shipped): A1 failed`), 'and every readout says whose clause it is, in words a screen reader can say');
   assert.ok(clauses.includes(`aria-label="clauses, ${SHIPPED.label}"`) && !clauses.includes(`aria-label="clauses, ${PRIMARY.label} ${NC_GLYPH}`), 'no glyph in an announced name');
-  const oneClauses = renderPage(buildModel(reports, parseState(`?models=${SHIPPED.key}`, '', null, MODEL_KEYS)));
+  const oneClauses = renderPage(buildModel(reports, parseState(`?models=${SHIPPED.key}`, '', null, DRAWN_KEYS)));
   assert.equal((oneClauses.match(/<ul class="clauses"/g) || []).length, 1, 'one model: one list, as before');
   assert.ok(oneClauses.includes('<span class="fs">2 of 7 held</span>'), 'and a lid with no name to give');
   // the method names both; the foot has a run line per model, each named
   assert.ok(panel(html, 'method').includes(`Neither ${labelNC(PRIMARY)} nor ${labelNC(SHIPPED)} has a published corpus manifest`), 'the method names both candidates');
-  assert.ok(panel(renderPage(buildModel(reports, parseState(`?models=${SHIPPED.key}`, '', null, MODEL_KEYS))), 'method').includes(`${labelNC(SHIPPED)} has no published corpus manifest`), 'and one alone, alone');
+  assert.ok(panel(renderPage(buildModel(reports, parseState(`?models=${SHIPPED.key}`, '', null, DRAWN_KEYS))), 'method').includes(`${labelNC(SHIPPED)} has no published corpus manifest`), 'and one alone, alone');
   const foot = (html.match(/<footer id="plate-foot">[\s\S]*?<\/footer>/) || [''])[0];
   assert.equal((foot.match(/<span class="lbl">run<\/span>/g) || []).length, 2, 'a run line per model');
   assert.ok(foot.includes(`<span class="lbl">run</span>${labelNC(PRIMARY)} · ${PMID.header.generated}`), 'the primary’s run, named, with its own timestamp');
@@ -1050,7 +1074,7 @@ test('the sheet has ONE primary, the manifest’s, and everything that stands fo
 
 test('a primary that is off, or unmeasured on the target in view, is stood in for by the first model that is on', () => {
   // switched off: the sheet speaks for the one that is left
-  assert.equal(buildModel(reports, parseState(`?models=${SHIPPED.key}`, '', null, MODEL_KEYS)).primary.key, SHIPPED.key);
+  assert.equal(buildModel(reports, parseState(`?models=${SHIPPED.key}`, '', null, DRAWN_KEYS)).primary.key, SHIPPED.key);
   // not loaded at all: the manifest still names it, the page falls back
   const half = { ...reportsFor([SHIPPED.key]), primary: MANIFEST.primary };
   assert.equal(buildModel(half, parseState('')).primary.key, SHIPPED.key);
@@ -1061,23 +1085,23 @@ test('a primary that is off, or unmeasured on the target in view, is stood in fo
   // the max target would have vanished while the shipped model was drawn
   const noMax = structuredClone(reports);
   delete noMax.byKey[MANIFEST.primary].seasonal.max;
-  const m = buildModel(noMax, parseState('?target=max', '', null, MODEL_KEYS));
+  const m = buildModel(noMax, parseState('?target=max', '', null, DRAWN_KEYS));
   assert.equal(m.state.target, 'max', 'a target any drawn model has stays available');
   assert.equal(m.primary.key, SHIPPED.key);
   assert.deepEqual(m.drawn.map(mo => mo.key), [SHIPPED.key]);
   assert.ok(renderPage(m).includes(`Skill by gauge · ${labelNC(SHIPPED)} · daily max ·`), 'and says so');
-  assert.equal(buildModel(noMax, parseState('', '', null, MODEL_KEYS)).primary.key, MANIFEST.primary, 'on mid it leads again');
+  assert.equal(buildModel(noMax, parseState('', '', null, DRAWN_KEYS)).primary.key, MANIFEST.primary, 'on mid it leads again');
   // the 15-minute grid too: the primary's short run missing (one failed fetch of
   // a weekly collector file) must not take the whole panel with it while the
   // other model's run is there — the panel draws that one and says so
   const noShort = structuredClone(reports);
   delete noShort.byKey[MANIFEST.primary].short;
-  const ms = buildModel(noShort, parseState('', '', null, MODEL_KEYS));
+  const ms = buildModel(noShort, parseState('', '', null, DRAWN_KEYS));
   assert.ok(ms.short, 'the short panel survives');
   assert.equal(ms.short.model.key, SHIPPED.key, 'and draws the run that exists');
   assert.equal(ms.short.generated, reports.byKey[SHIPPED.key].short.header.generated);
   assert.ok(renderPage(ms).includes(`Short horizon · ${labelNC(SHIPPED)} ·`), 'named for the model whose run it is');
-  assert.equal(buildModel(reports, parseState('', '', null, MODEL_KEYS)).short.model.key, MANIFEST.primary, 'with both runs present it is the primary’s');
+  assert.equal(buildModel(reports, parseState('', '', null, DRAWN_KEYS)).short.model.key, MANIFEST.primary, 'with both runs present it is the primary’s');
   // and a selection that names nothing that loaded falls back to the primary, not to the manifest's first line
   assert.equal(buildModel(reports, { target: 'mid', block: 'h1-14', lead: 'pooled', panel: null, models: ['ghost'] }).primary.key, MANIFEST.primary);
 });

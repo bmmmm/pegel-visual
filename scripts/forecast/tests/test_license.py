@@ -109,11 +109,51 @@ def test_forecast_configs_are_the_pre_registered_ones():
     # the fingerprints gate.py compares against; change deliberately, with a header note
     assert tfm.config_fingerprint(tfm.MODELS["2p5"]["config"]) == "362b77bd29350df5"
     assert tfm.config_fingerprint(tfm.MODELS["3p0"]["config"]) == "9fc34ab62295c07f"
+    # the two rain arms: same weights, same call, a different registry key — the
+    # fingerprint is the ONLY thing that keeps their reports apart, so it is pinned
+    assert tfm.config_fingerprint(tfm.MODELS["3p0-rain"]["config"]) == "7e14c6c065d7e20d"
+    assert tfm.config_fingerprint(tfm.MODELS["3p0-rain-shuffled"]["config"]) == "47d462cff44d0e44"
     assert tfm.config_fingerprint() == "362b77bd29350df5"  # the alias still means the shipped one
     assert tfm.MODELS["2p5"]["config"]["infer_is_positive"] is False
     assert tfm.MODELS["3p0"]["config"]["make_positive"] is False
     for entry in tfm.MODELS.values():
-        assert entry["config"]["max_context"] == 1024, "both lines are fed the same context"
+        assert entry["config"]["max_context"] == 1024, "every line is fed the same context"
+
+
+def test_the_rain_arms_are_three_distinct_fingerprints():
+    """Three arms, three fingerprints — including after the nrw protocol's own
+    max_horizon substitution, which is what the reports are validated against.
+    If two of these collided, a report could be mistaken for the other arm's."""
+    fps = set()
+    for key in ("3p0", "3p0-rain", "3p0-rain-shuffled"):
+        cfg = dict(tfm.MODELS[key]["config"])
+        cfg["max_horizon"] = 64  # ceil(14 / 64) * 64, as backtest.py computes it
+        fps.add(tfm.config_fingerprint(cfg))
+    assert len(fps) == 3, "two arms share a fingerprint: their reports would be indistinguishable"
+
+
+def test_the_covariate_key_never_reaches_the_model():
+    """`covariate` changes the fingerprint and nothing else: neither whitelist
+    names it, so it cannot arrive as a constructor or call argument."""
+    assert "covariate" not in tfm._3P0_CTOR
+    assert "covariate" not in tfm._3P0_CALL
+    assert tfm.MODELS["3p0-rain"]["config"]["covariate"] == "areal_rain_past_only_shift1"
+    assert "shuffled" in tfm.MODELS["3p0-rain-shuffled"]["config"]["covariate"]
+    # and the control arm is marked as one: the gate page lists it, never draws it
+    assert tfm.MODELS["3p0-rain-shuffled"].get("control") is True
+    assert tfm.MODELS["3p0-rain"].get("control") is None
+
+
+def test_every_rain_arm_carries_the_non_commercial_terms():
+    """They are the 3.0 weights under another registry key — a copy that forgot
+    the licence fields would read as a shippable line."""
+    for key in ("3p0-rain", "3p0-rain-shuffled"):
+        e = tfm.MODELS[key]
+        assert e["shippable"] is False
+        assert e["group"] == "model-nc"
+        assert e["checkpoint"] == tfm.MODELS["3p0"]["checkpoint"]
+        assert e["license"] == tfm.MODELS["3p0"]["license"]
+        assert e["point_channel"] == 4 and e["quantile_channels"] == 9
 
 
 # ---------- what is published ----------
