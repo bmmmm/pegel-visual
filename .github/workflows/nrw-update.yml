@@ -15,6 +15,14 @@ name: nrw-update
 # export's inner timestamps (14:10-15:45 UTC measured 2026-09-04) and clear of
 # snapshot-update (05:17/15:17) and archive-update (Mon 04:23).
 #
+# The data branches are mounted as worktrees of this checkout (the pattern
+# pages.yml uses), so they push with the token actions/checkout persisted
+# here, and a branch that does not exist yet is STARTED here as an orphan —
+# the run that creates `nrw` first replays the raw seed kept on `nrw-hires`
+# (nrw-hires/raw/2026-09-04: two daily days and two fine days the live export
+# no longer offers), then the live run merges on top. Nothing about the
+# branches has to be prepared by hand.
+#
 # Its OWN concurrency group: the `archive-branch-write` group serialises the
 # WSV jobs because they push to the same branch, and GitHub cancels the
 # PENDING member of a group when a third run joins it — a daily run in that
@@ -42,17 +50,34 @@ jobs:
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/checkout@v7
-        with:
-          ref: nrw
-          path: nrw-branch
-      - uses: actions/checkout@v7
-        with:
-          ref: nrw-hires
-          path: nrw-hires-branch
       - uses: actions/setup-node@v7
         with:
           node-version: 24
+      - name: Mount the data branches, starting one that does not exist yet
+        # same distinction as the pages.yml mount: "branch missing" is a state
+        # (start it as an orphan), "fetch broken" is a failure (set -e). Each
+        # worktree sits detached on the branch tip; the push steps below push
+        # HEAD to the branch by name, which needs no upstream and creates the
+        # branch on its first push.
+        run: |
+          set -euo pipefail
+          for b in nrw nrw-hires; do
+            if git ls-remote --exit-code --heads origin "$b" >/dev/null; then
+              git fetch origin "$b" --depth 1
+              git worktree add "$b-branch" FETCH_HEAD
+            else
+              echo "no $b branch on this remote yet — starting it as an orphan"
+              git worktree add --orphan -b "$b" "$b-branch"
+            fi
+          done
+      - name: Replay the raw seed into an empty nrw (first run only)
+        # bulk only — tier 2 follows live in the next step; inside the live
+        # window the fresh value wins, outside it the seed's stays (the merge
+        # policy in the collector's header), so the two runs compose
+        run: |
+          set -euo pipefail
+          if [ -f nrw-branch/nrw/manifest.json ]; then echo 'nrw is seeded already'; exit 0; fi
+          node scripts/fetch-nrw-archive.mjs --raw nrw-hires-branch/nrw-hires/raw/2026-09-04 --out nrw-branch/nrw --out-hires nrw-hires-branch/nrw-hires --bulk-only
       - name: Collect from hochwasserportal.nrw
         # Tier 1 (four bulk products, the explicitly licensed primary source)
         # plus Tier 2 (index.json-driven single-station series for the gauges
@@ -76,7 +101,7 @@ jobs:
           git add nrw
           git diff --cached --quiet && { echo 'no changes'; exit 0; }
           git commit -m "nrw: mirror $(date -u +%Y-%m-%d)"
-          git push
+          git push origin HEAD:nrw
           echo "pushed=true" >> "$GITHUB_OUTPUT"
       - name: Commit and push nrw-hires
         # the fine resolution is the most perishable layer, so its push does
@@ -89,7 +114,7 @@ jobs:
           git add nrw-hires
           git diff --cached --quiet && { echo 'no changes'; exit 0; }
           git commit -m "nrw-hires: mirror $(date -u +%Y-%m-%d)"
-          git push
+          git push origin HEAD:nrw-hires
       - name: Redeploy pages
         # a push to a data branch cannot trigger pages.yml itself — the orphan
         # branch carries no workflow files — so dispatch it here
