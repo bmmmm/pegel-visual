@@ -23,6 +23,7 @@ import baselines as bl  # noqa: E402
 import gate  # noqa: E402
 import loaders  # noqa: E402
 import stations as st  # noqa: E402
+import tfm  # noqa: E402
 
 
 # ---------- a synthetic mirror ----------
@@ -261,18 +262,36 @@ def test_without_a_control_arm_r5_cannot_pass():
 
 # ---------- the void conditions ----------
 
+NRW_MAX_HORIZON = 64  # ceil(14 / 64) * 64, as backtest.py computes it
+
+
 def _header(**over):
-    h = {"model_key": "3p0-rain", "config_fingerprint": "x", "model_ran": True, "limit": None,
+    """A header that is VALID, so a test about a verdict is not silently a test
+    about VOID. The fingerprint is computed, never pinned: pinning it here would
+    make every one of these tests fail the day a config field moves, for a reason
+    that has nothing to do with what they check."""
+    key = over.get("model_key", "3p0-rain")
+    cfg = {**tfm.MODELS[key]["config"], "max_horizon": NRW_MAX_HORIZON}
+    h = {"model_key": key, "config_fingerprint": tfm.config_fingerprint(cfg),
+         "model_ran": True, "limit": None,
          "repeat_identical": True, "arm": "rain", "precip_sha256": "abc",
-         "forecast_config": {"max_horizon": 64}, "stations": {}}
+         "forecast_config": {"max_horizon": NRW_MAX_HORIZON}, "stations": {}}
     h.update(over)
+    if "model_key" in over and "config_fingerprint" not in over:
+        h["config_fingerprint"] = tfm.config_fingerprint(
+            {**tfm.MODELS[over["model_key"]]["config"], "max_horizon": NRW_MAX_HORIZON})
     return h
 
 
 def _data(origins=(10, 20, 30)):
+    """A minimal npz-shaped run whose witness agrees: `cov_last` is what the
+    covariate ended on and `rain_lags_first` the rain of day o-1, read a
+    different way. Equal here means "no leak"."""
     o = np.array(origins)
+    w = o.astype(float) * 0.5
     return {u: {"origins": o, "is_train": np.zeros(len(o), bool), "is_test": np.ones(len(o), bool),
-                "y": np.zeros((len(o), 14)), "cov_max_index": o - 1} for u in st.NRW_POOLED}
+                "y": np.zeros((len(o), 14)), "cov_last": w.copy(), "rain_lags_first": w.copy()}
+            for u in st.NRW_POOLED}
 
 
 def test_a_rain_arm_without_against_is_void():
@@ -292,41 +311,178 @@ def test_two_arms_on_different_origins_are_void():
     assert any("do not share their TEST origins" in r for r in v)
 
 
-def test_a_covariate_index_that_reaches_the_origin_is_void():
+def test_the_leak_witness_catches_a_covariate_built_the_wrong_way(tmp_path, monkeypatch):
+    """The one test this experiment stands or falls on.
+
+    The previous version fabricated `cov_max_index = origins`, an input the
+    builder can never emit — and it stayed GREEN when `_nrw_covariate` was made
+    to genuinely leak, because the witness was derived from `origins` and
+    compared against `origins`. This one breaks the BUILDER and asks the gate.
+    """
+    n = TOTAL
+    lv = [50.0 + (i % 11) for i in range(n)]
+    rain = [float(i % 23) for i in range(n)]
+    tree = write_mirror(tmp_path / "nrw", "g1", level=lv, rain=rain)
+    proto = dict(backtest.NRW)
+    proto["context"] = 32                        # a small window: the shift is what matters
+    monkeypatch.setattr(st, "NRW_STATIONS", {"g1": ("G1", "B", 1.0, 5, 50)})
+    monkeypatch.setattr(st, "NRW_POOLED", ("g1",))
+
+    honest, _ = backtest.backtest_nrw_station("g1", tree, None, proto, "rain", lambda m: None)
+    data = {"g1": honest}
+    header = _header(precip_sha256="a")
+    other = ({**header, "arm": "plain", "model_key": "3p0"}, data)
+    v = [r for r in gate.nrw_void(header, data, TH, other) if "rain day o-1" in r or "witness" in r]
+    assert v == [], f"an honest run must carry a clean witness: {v}"
+
+    # now make it leak: the covariate ends on the origin's OWN rain day
+    real = backtest._nrw_covariate
+
+    def leaking(rain_arr, origins, context):
+        out = np.full((len(origins), context), np.nan)
+        for i, o in enumerate(origins):
+            idx = np.arange(o - context + 1, o + 1)
+            if idx.min() >= 0:
+                out[i] = rain_arr[idx]
+        return out
+
+    monkeypatch.setattr(backtest, "_nrw_covariate", leaking)
+    leaked, _ = backtest.backtest_nrw_station("g1", tree, None, proto, "rain", lambda m: None)
+    monkeypatch.setattr(backtest, "_nrw_covariate", real)
+    v2 = gate.nrw_void(header, {"g1": leaked}, TH, ({**header, "arm": "plain", "model_key": "3p0"}, {"g1": leaked}))
+    assert any("does not end on rain day o-1" in r for r in v2), \
+        f"a leaking covariate must be VOID, not scored: {v2}"
+
+
+def test_a_run_without_a_witness_at_all_is_void():
     d = _data()
     for u in d:
-        d[u]["cov_max_index"] = d[u]["origins"]      # o, not o-1
-    v = gate.nrw_void(_header(), d, TH, (_header(), _data()))
-    assert any("reaches the origin's own rain day" in r for r in v)
+        d[u].pop("cov_last", None)
+        d[u].pop("rain_lags_first", None)
+    v = gate.nrw_void(_header(), d, TH, (_header(arm="plain", model_key="3p0"), _data()))
+    assert any("no covariate witness" in r for r in v), "silence is not a passing witness"
+
+
+def test_a_fingerprint_that_is_not_the_registered_one_is_void():
+    """The header is honest by construction in these tests, so this is the one
+    that proves the check still bites."""
+    v = gate.nrw_void(_header(config_fingerprint="deadbeef"), _data(), TH, (_header(arm="plain", model_key="3p0"), _data()))
+    assert any("fingerprint differs" in r for r in v)
 
 
 def test_a_truncated_or_unrepeatable_run_is_void():
-    assert any("truncated" in r for r in gate.nrw_void(_header(limit=5), _data(), TH, (_header(), _data())))
-    assert any("bit for bit" in r for r in gate.nrw_void(_header(repeat_identical=None), _data(), TH, (_header(), _data())))
-    assert any("baselines only" in r for r in gate.nrw_void(_header(model_ran=False), _data(), TH, (_header(), _data())))
+    assert any("truncated" in r for r in gate.nrw_void(_header(limit=5), _data(), TH, (_header(arm="plain", model_key="3p0"), _data())))
+    assert any("bit for bit" in r for r in gate.nrw_void(_header(repeat_identical=None), _data(), TH, (_header(arm="plain", model_key="3p0"), _data())))
+    assert any("baselines only" in r for r in gate.nrw_void(_header(model_ran=False), _data(), TH, (_header(arm="plain", model_key="3p0"), _data())))
 
 
 def test_a_missing_station_is_void():
     d = _data()
     d.pop(next(iter(d)))
-    v = gate.nrw_void(_header(), d, TH, (_header(), _data()))
+    v = gate.nrw_void(_header(), d, TH, (_header(arm="plain", model_key="3p0"), _data()))
     assert any("missing from the results" in r for r in v)
 
 
 # ---------- the house verdict ----------
 
-def _report(pool, stations_info, void=(), against=True):
-    """nrw_report without running a backtest: only its verdict logic."""
-    header = _header(protocol={"blocks": {"h1-3": [1, 3], "h4-7": [4, 7], "h8-14": [8, 14]}},
+def _run(stations_info, model_key="3p0-rain", ss=0.2):
+    """nrw_report over a synthetic run: the real function, the real thresholds.
+
+    The previous version re-implemented the reason list inline and asserted its
+    own list comprehension was non-empty — it stayed green with `nrw_report`
+    deleted and `THRESHOLDS` emptied.
+    """
+    header = _header(model_key=model_key,
+                     protocol={"blocks": {"h1-3": [1, 3], "h4-7": [4, 7], "h8-14": [8, 14]}},
                      stations=stations_info)
-    return header
+    n = 20
+    o = np.arange(100, 100 + n)
+    H = 14
+    y = np.zeros((n, H))
+    w = o.astype(float) * 0.5
+    def arm(err):
+        return {"origins": o, "is_train": np.zeros(n, bool), "is_test": np.ones(n, bool),
+                "y": y, "tmask": np.ones((n, H), bool), "last": np.zeros(n),
+                "persist": np.full((n, H), 3.0), "snaive": np.full((n, H), 9.0),
+                "blend": np.full((n, H), 4.0), "blend_q": np.zeros((n, H, 9)),
+                "rain_ols": np.full((n, H), 5.0), "rain_lags": np.zeros((n, 4)),
+                "tfm_point": np.full((n, H), err), "tfm_q": np.zeros((n, H, 9)),
+                "tau": np.array(30), "d_h": np.ones(H),
+                "cov_last": w.copy(), "rain_lags_first": w.copy()}
+    data = {u: arm(4.0 * (1 - ss)) for u in st.NRW_POOLED}
+    other = (_header(arm='plain', model_key='3p0', stations=stations_info,
+                     protocol={'blocks': {'h1-3': [1, 3], 'h4-7': [4, 7], 'h8-14': [8, 14]}}),
+             {u: arm(4.0) for u in st.NRW_POOLED})
+    return gate.nrw_report(header, data, dict(gate.THRESHOLDS), other, None)
 
 
-def test_provisional_below_the_origin_or_event_floor():
-    info = {"a": {"name": "A", "kept": 39, "rain_events": 30}}
-    reasons = [f"{i['name']}: {i['kept']}/{TH['nrw_origins_min']} origins"
-               for i in info.values() if i["kept"] < TH["nrw_origins_min"]]
-    assert reasons, "39 origins is under the floor of 40"
-    info2 = {"a": {"name": "A", "kept": 48, "rain_events": 9}}
-    reasons2 = [f"{i['name']}" for i in info2.values() if i["rain_events"] < TH["nrw_rain_events_min"]]
-    assert reasons2, "9 events is under the floor of 10"
+FULL = {u: {"name": st.nrw_name_of(u), "kept": 48, "rain_events": 30} for u in st.NRW_POOLED}
+
+
+def test_a_thin_run_is_provisional_and_says_which_floor_it_missed():
+    thin = {u: {**v, "kept": 39} for u, v in FULL.items()}
+    rep = _run(thin)
+    assert rep["verdict"] == "PROVISIONAL"
+    assert any("39/40 origins" in r for r in rep["provisional_reasons"]), rep["provisional_reasons"]
+    dry = {u: {**v, "rain_events": 9} for u, v in FULL.items()}
+    rep2 = _run(dry)
+    assert rep2["verdict"] == "PROVISIONAL"
+    assert any("9/10 rain events" in r for r in rep2["provisional_reasons"]), rep2["provisional_reasons"]
+    # …and a full one is not provisional
+    assert _run(FULL)["verdict"] != "PROVISIONAL"
+
+
+def test_a_line_that_cannot_ship_never_earns_a_ship_verdict():
+    """SHIP is a claim about shipping, and gate.py's exit code is its
+    machine-readable form. Every arm here carries non-commercial weights."""
+    rep = _run(FULL, ss=0.5)          # comfortably over U1 and U2
+    assert rep["pooled"]["blocks"]["h1-3"]["ss"] > gate.THRESHOLDS["U1_ss_h1_3_min"]
+    assert rep["verdict"] == "NO-SHIP", "a non-shippable line scoring well is still NO-SHIP"
+    assert {"SHIP": 0, "NO-SHIP": 1, "VOID": 2, "PROVISIONAL": 3}[rep["verdict"]] != 0
+
+
+def test_a_bad_run_is_no_ship_on_the_numbers_too():
+    rep = _run(FULL, ss=-0.5)
+    assert rep["verdict"] == "NO-SHIP"
+
+
+def test_against_the_wrong_arm_is_void_before_anything_is_scored():
+    """--against <the shuffled run> used to produce a full clause table whose
+    R1/R2/R4 measured rain-against-shuffled under a heading that said plain."""
+    header = _header(protocol={"blocks": {"h1-3": [1, 3]}}, stations=FULL)
+    d = _data()
+    # the registry key scores 3.85 bits and looks like a token to a rule that
+    # measures entropy alone; it is the name of a forecast arm and grants nothing
+    wrong = ({**header, "arm": "shuffled", "model_key": "3p0-rain-shuffled"}, d)  # gitleaks:allow
+    v = gate.nrw_void(header, d, TH, wrong)
+    assert any("not the plain one" in r for r in v)
+    same = ({**header, "arm": "plain"}, d)   # same model_key as --results
+    assert any("cannot be its own control" in r for r in gate.nrw_void(header, d, TH, same))
+
+
+def test_two_arms_on_different_grids_are_void_and_do_not_crash():
+    """The mirror rolls daily, so re-running one arm a day later moves its grid.
+    That used to raise a numpy broadcast error out of the middle of scoring."""
+    header = _header(protocol={"blocks": {"h1-3": [1, 3], "h4-7": [4, 7], "h8-14": [8, 14]}}, stations=FULL)
+    a_data = _data(origins=(10, 20, 30))
+    b_data = _data(origins=(10, 20, 40))
+    rep = gate.nrw_report(header, a_data, dict(gate.THRESHOLDS), ({**header, "arm": "plain", "model_key": "3p0"}, b_data), None)
+    assert rep["verdict"] == "VOID"
+    assert any("do not share their TEST origins" in r for r in rep["void"])
+    assert rep["clauses"] == {}, "a void run states no clauses"
+
+
+def test_the_control_arm_is_far_from_the_window_it_replaces():
+    """A plain derangement hands a window the rain of seven days earlier, which
+    shares 377 of its 384 days. Measured on seed 7 before the fix: 2 of 48
+    windows within one step, 6 within three."""
+    rows = np.arange(48)[:, None] * np.ones((1, 4))
+    out = backtest._deranged(rows, backtest.MIN_SHUFFLE_DISTANCE)
+    moved = np.minimum(np.abs(out[:, 0] - np.arange(48)), 48 - np.abs(out[:, 0] - np.arange(48)))
+    assert moved.min() >= backtest.MIN_SHUFFLE_DISTANCE, f"closest window moved only {moved.min()} origins"
+    assert moved.min() == 24, "a half-cycle moves every window the same maximal distance"
+    # deterministic, so two runs of the same arm reproduce
+    assert np.array_equal(out, backtest._deranged(rows, backtest.MIN_SHUFFLE_DISTANCE))
+    # and it degrades rather than looping for ever on a run too short for the distance
+    short = np.arange(3)[:, None] * np.ones((1, 2))
+    assert backtest._deranged(short, 8).shape == short.shape

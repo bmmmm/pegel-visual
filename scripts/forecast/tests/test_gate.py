@@ -258,7 +258,9 @@ def test_the_caveat_reads_the_candidate_list_the_json_also_carries():
     assert gate.candidate_note({"candidates": [tfm.SHIPPED]}) == [], "one candidate needs no warning"
     assert gate.candidate_note({}) == []
     note = "\n".join(gate.candidate_note({"candidates": [tfm.SHIPPED, "3p0"]}))
-    assert "2 candidates" in note and tfm.MODELS["3p0"]["id"] in note and "SAME TEST origins" in note
+    # by LABEL since the rain arms landed: three arms of one line share an `id`,
+    # so the note read "timesfm-3.0, timesfm-3.0, timesfm-3.0"
+    assert "2 candidates" in note and tfm.MODELS["3p0"]["label"] in note and "SAME TEST origins" in note
 
 
 def test_an_unregistered_model_in_a_header_is_void_not_a_traceback():

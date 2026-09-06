@@ -575,10 +575,16 @@ def nrw_clauses(pool: dict, per_station: dict, control: dict | None, th: dict) -
     ok3 = True
     for name, b in pool["blocks"].items():
         p_t = b["picp80"]["tfm"]
+        p_o = b["picp80"].get("other")
         cal[name] = p_t
         if not (lo <= p_t <= hi):
             ok3 = False
-    cl["R3"] = {"pass": bool(ok3), "detail": {"picp80": cal, "range": [lo, hi]}}
+        # the second half the threshold table has always advertised and no code
+        # read: a covariate may not buy sharpness by breaking calibration
+        if p_o is not None and abs(p_t - 0.8) > abs(p_o - 0.8) + th["R3_slack_vs_plain"]:
+            ok3 = False
+            cal[f"{name} vs plain"] = p_o
+    cl["R3"] = {"pass": bool(ok3), "detail": {"picp80": cal, "range": [lo, hi], "slack_vs_plain": th["R3_slack_vs_plain"]}}
     floor = th["R4_station_ss_floor"]
     worst = {}
     ok4 = True
@@ -642,15 +648,38 @@ def nrw_void(header: dict, data: dict, th: dict, against: dict | None) -> list[s
             H = d["y"].shape[1]
             if int(d["origins"][d["is_train"]].max()) + H >= int(d["origins"][d["is_test"]].min()):
                 reasons.append(f"{st.nrw_name_of(u)}: TRAIN/TEST not disjoint")
-        # the leak witness, checked rather than trusted
-        if "cov_max_index" in d:
-            if not np.array_equal(d["cov_max_index"], d["origins"] - 1):
-                reasons.append(f"{st.nrw_name_of(u)}: a covariate index reaches the origin's own rain day")
+        # THE LEAK, checked against a column derived a DIFFERENT way. The old
+        # witness was `[o-1 for o in origins]` compared to `origins-1` — it
+        # restated its own input, and a genuinely leaking covariate passed it
+        # (measured 2026-09-07). `cov_last` is the last value the covariate
+        # actually ended on; `rain_lags_first` is the rain of day o-1 read
+        # independently of it. They agree only if the shift held.
+        if "cov_last" in d and "rain_lags_first" in d:
+            sel = d["is_test"].astype(bool)
+            a_, b_ = d["cov_last"][sel], d["rain_lags_first"][sel]
+            both = ~np.isnan(a_) & ~np.isnan(b_)
+            if not both.any():
+                reasons.append(f"{st.nrw_name_of(u)}: no covariate witness to check")
+            elif not np.allclose(a_[both], b_[both], rtol=0, atol=1e-9):
+                bad = int((~np.isclose(a_[both], b_[both], rtol=0, atol=1e-9)).sum())
+                reasons.append(f"{st.nrw_name_of(u)}: the covariate does not end on rain day o-1 in {bad} window(s)")
+        else:
+            reasons.append(f"{st.nrw_name_of(u)}: the run carries no covariate witness")
     if against is None:
         if header.get("arm") != "plain":
             reasons.append("a rain arm was scored without --against: nothing to compare it to")
     else:
         ah, ad = against
+        # …and it has to be the PLAIN arm. Nothing checked this, so
+        # `--against <the shuffled run>` produced a full clause table whose R1,
+        # R2 and R4 measured rain-against-shuffled while the report said
+        # "against the plain arm", and R5 compared the control with itself
+        # (measured 2026-09-07: control_ss 0.0, gap 0.063 — passing for free).
+        if ah.get("arm") != "plain":
+            reasons.append(f"--against names the `{ah.get('arm')}` arm, not the plain one: "
+                           f"every clause here is written about the plain arm")
+        if ah.get("model_key") == header.get("model_key"):
+            reasons.append("--against names the same arm as --results: an arm cannot be its own control")
         if ah.get("precip_sha256") != header.get("precip_sha256"):
             reasons.append("the two arms read different precip bytes")
         for u in data:
@@ -665,6 +694,20 @@ def nrw_void(header: dict, data: dict, th: dict, against: dict | None) -> list[s
 
 def nrw_report(header: dict, data: dict, th: dict, against=None, control=None) -> dict:
     blocks = header["protocol"]["blocks"]
+    # VOID FIRST. Scoring two arms whose origin grids differ raises a broadcast
+    # error out of numpy — a traceback where the subsystem's own convention says
+    # VOID (measured: "operands could not be broadcast together (47,3) (48,3)",
+    # which is exactly what a re-run one day later produces, because the mirror
+    # rolls). A void run is reported, not crashed on.
+    void_first = nrw_void(header, data, th, against)
+    if void_first:
+        return {"verdict": "VOID", "control": bool(tfm.MODELS.get(header.get("model_key"), {}).get("control")),
+                "rain_verdict": None, "provisional_reasons": [], "void": void_first,
+                "clauses": {}, "pooled": {"stations": [], "n_origins": 0, "blocks": {}},
+                "control_pooled": None, "stations": {}, "thresholds": th,
+                "header": {k: header[k] for k in header if k != "stations"},
+                "station_info": header["stations"],
+                "against": (against[0].get("model_key") if against else None)}
     a_data = against[1] if against else None
     per_station = {u: nrw_score_station(data[u], blocks, th, a_data.get(u) if a_data else None)
                    for u in data if u in st.NRW_STATIONS}
@@ -676,8 +719,11 @@ def nrw_report(header: dict, data: dict, th: dict, against=None, control=None) -
     # R1-R5 ask "does the rain help?", and the control arm is not the thing being
     # asked about — it is the answer's own falsification test. Scoring it against
     # the clauses would print a rain verdict for shuffled rain.
-    cl = nrw_clauses(pool, per_station, c_pool, th) if (a_data is not None and not is_control) else {}
-    void = nrw_void(header, data, th, against)
+    # by NAME: every other table on this report names its gauges, and R4's
+    # detail was the one place a reader met a raw station number
+    named = {st.nrw_name_of(u): v for u, v in per_station.items()}
+    cl = nrw_clauses(pool, named, c_pool, th) if (a_data is not None and not is_control) else {}
+    void = void_first
 
     reasons = []
     for u, info in header["stations"].items():
@@ -691,6 +737,7 @@ def nrw_report(header: dict, data: dict, th: dict, against=None, control=None) -
     # ask whether this line beats the latte at all.
     u1 = pool["blocks"].get("h1-3", {}).get("ss", float("nan"))
     u2 = [pool["blocks"].get(b, {}).get("ss", float("nan")) for b in ("h4-7", "h8-14")]
+    entry = tfm.MODELS.get(header.get("model_key"), {})
     if void:
         verdict = "VOID"
     elif reasons:
@@ -698,7 +745,12 @@ def nrw_report(header: dict, data: dict, th: dict, against=None, control=None) -
     else:
         ok = (not math.isnan(u1) and u1 >= th["U1_ss_h1_3_min"]
               and all(not math.isnan(x) and x >= th["U2_ss_min"] for x in u2))
-        verdict = "SHIP" if ok else "NO-SHIP"
+        # SHIP is a claim about SHIPPING, and gate.py's exit code is its
+        # machine-readable form. A line whose weights forbid redistribution
+        # cannot earn a 0 however it scores, and the negative control — an arm
+        # built to lose — least of all. The measurement stands and is printed;
+        # the verdict says what may follow from it.
+        verdict = "SHIP" if (ok and entry.get("shippable") is not False) else "NO-SHIP"
     return {"verdict": verdict, "control": is_control,
             "rain_verdict": rain_verdict(cl, pool, per_station, th) if cl else None,
             "provisional_reasons": reasons, "void": void, "clauses": cl, "pooled": pool,
@@ -740,7 +792,9 @@ def candidate_note(rep: dict) -> list[str]:
     found = rep.get("candidates") or []
     if len(found) < 2:
         return []
-    names = ", ".join(tfm.MODELS[k]["id"] for k in found)
+    # labels, not ids: three arms of one line share an id, and the note then
+    # named the same model three times
+    names = ", ".join(tfm.MODELS[k].get("label") or tfm.MODELS[k]["id"] for k in found)
     return [f"- {len(found)} candidates have now been measured on the SAME TEST origins ({names}). "
             f"The clause thresholds were pre-registered for a single candidate; read the significances "
             f"as {len(found)} looks at one test set, not one."]
@@ -893,13 +947,24 @@ def render_nrw(rep: dict) -> str:
             "R2": "no worse at h4-7",
             "R3": "still calibrated (PICP80 in range)",
             "R4": "no single gauge much worse",
-            "R5": "the shuffled control does NOT win",
+            # both halves, or a reader sees "does NOT win | no" over a control
+            # that lost — it failed on the 0.03 gap, not on winning
+            "R5": "the control loses AND the true arm beats it by the registered gap",
         }
         for k, c in rep["clauses"].items():
             d = c["detail"]
-            bits = ", ".join(f"{n} {fmt(v) if not isinstance(v, (dict, list)) else v}" for n, v in d.items()
-                             if not isinstance(v, (dict, list)))
-            lines.append(f"| {k} | {text.get(k, '')} | {fmt(c['pass'])} | {bits} |")
+            # dicts too, flattened: R3's whole detail is a dict of PICP per block
+            # and R4's is a dict of per-gauge skills, so dropping them left those
+            # two rows with an empty cell and no way to see why they failed
+            bits = []
+            for n, v in d.items():
+                if isinstance(v, dict):
+                    bits.append(f"{n} " + " ".join(f"{k2} {fmt(v2)}" for k2, v2 in list(v.items())[:6]))
+                elif isinstance(v, list):
+                    bits.append(f"{n} [{', '.join(fmt(x) for x in v)}]")
+                else:
+                    bits.append(f"{n} {fmt(v)}")
+            lines.append(f"| {k} | {text.get(k, '')} | {fmt(c['pass'])} | {'; '.join(bits)} |")
         lines += [""]
 
     pool = rep["pooled"]

@@ -1,6 +1,6 @@
 # Forecast gate — NRW, does observed areal rain help?
 
-Verdict: **SHIP**
+Verdict: **NO-SHIP**
 
 Rain: **NO EFFECT**
 
@@ -14,11 +14,11 @@ Target: the source's own daily mean, not (min+max)/2. Covariate: areal_rain_past
 
 | clause | question | pass | detail |
 |---|---|---|---|
-| R1 | skill over the plain arm at h1-3, significant | no | ss_h1_3 -0.010, dm_p 0.839, min 0.050, p_max 0.050 |
-| R2 | no worse at h4-7 | no | ss_h4_7 -0.013, min 0.000 |
-| R3 | still calibrated (PICP80 in range) | yes |  |
-| R4 | no single gauge much worse | no | floor -0.050 |
-| R5 | the shuffled control does NOT win | no | control_ss_h1_3 -0.007, true_minus_control -0.003, control_max 0.020, gap_min 0.030 |
+| R1 | skill over the plain arm at h1-3, significant | no | ss_h1_3 -0.010; dm_p 0.839; min 0.050; p_max 0.050 |
+| R2 | no worse at h4-7 | no | ss_h4_7 -0.013; min 0.000 |
+| R3 | still calibrated (PICP80 in range) | yes | picp80 h1-3 0.774 h4-7 0.741 h8-14 0.748; range [0.700, 0.900]; slack_vs_plain 0.030 |
+| R4 | no single gauge much worse | no | floor -0.050; ss_vs_plain Schermbeck_1/h1-3 -0.004 Schermbeck_1/h4-7 0.002 Schermbeck_1/h8-14 0.009 Menden_1/h1-3 -0.013 Menden_1/h4-7 0.008 Menden_1/h8-14 -0.011 |
+| R5 | the control loses AND the true arm beats it by the registered gap | no | control_ss_h1_3 -0.005; true_minus_control -0.005; control_max 0.020; gap_min 0.030 |
 
 ## Pooled over 5 basins, 48 origins
 
@@ -67,5 +67,5 @@ MAE in the gauge's own unit (every LANUK gauge in this set reports cm).
 - The areal mean is Thiessen with equal areas: the source ships no sub-catchment polygons, and a rain gauge joins the nearest receiving gauge of its own basin.
 - **Observed rain, not forecast rain.** This measures the ceiling a perfect precipitation forecast would buy, not what an operational system could do — and the mirror itself lags about a day behind.
 
-- 2 candidates have now been measured on the SAME TEST origins (timesfm-3.0, timesfm-3.0). The clause thresholds were pre-registered for a single candidate; read the significances as 2 looks at one test set, not one.
+- 3 candidates have now been measured on the SAME TEST origins (TimesFM 3.0, TimesFM 3.0 + rain, TimesFM 3.0 + shuffled rain). The clause thresholds were pre-registered for a single candidate; read the significances as 3 looks at one test set, not one.
 

@@ -1,6 +1,6 @@
 # Forecast gate — NRW, does observed areal rain help?
 
-Verdict: **SHIP**
+Verdict: **NO-SHIP**
 
 > Measured, not shipped. These weights are licensed timesfm-non-commercial-license-v1.0 (https://huggingface.co/google/timesfm-3.0-pytorch/blob/main/LICENSE), which forbids redistribution and any commercial or production use — so this line can be measured here but can never become the model this GPL-3.0 repo ships, however it scores.
 
@@ -55,5 +55,5 @@ MAE in the gauge's own unit (every LANUK gauge in this set reports cm).
 - The areal mean is Thiessen with equal areas: the source ships no sub-catchment polygons, and a rain gauge joins the nearest receiving gauge of its own basin.
 - **Observed rain, not forecast rain.** This measures the ceiling a perfect precipitation forecast would buy, not what an operational system could do — and the mirror itself lags about a day behind.
 
-- 2 candidates have now been measured on the SAME TEST origins (timesfm-3.0, timesfm-3.0). The clause thresholds were pre-registered for a single candidate; read the significances as 2 looks at one test set, not one.
+- 3 candidates have now been measured on the SAME TEST origins (TimesFM 3.0, TimesFM 3.0 + rain, TimesFM 3.0 + shuffled rain). The clause thresholds were pre-registered for a single candidate; read the significances as 3 looks at one test set, not one.
 

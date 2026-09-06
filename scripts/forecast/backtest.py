@@ -202,6 +202,31 @@ def backtest_seasonal_station(uuid: str, archive: Path, target: str, model, prot
 
 # ---------- the NRW rain experiment ----------
 
+# how far a control window's covariate must come from, in ORIGINS. At step 7 a
+# distance of 8 means at least 56 days apart: two 384-day windows then share at
+# most 328 of their days, and none of the recent ones a lag-1 response lives on.
+MIN_SHUFFLE_DISTANCE = 8
+
+
+def _deranged(rows: np.ndarray, min_dist: int) -> np.ndarray:
+    """Every row gets the row half the run away — a HALF-CYCLE, not a shuffle.
+
+    A random derangement does not do this job: at n = 48 no permutation with a
+    minimum displacement of 8 turned up in 2000 draws, and the ones that did
+    turn up left 2 windows one step from themselves — which at step 7 means the
+    rain of seven days earlier, sharing 377 of its 384 days. A half-cycle moves
+    every window by exactly floor(n/2) origins (24 at n = 48, so 168 days apart:
+    the two 384-day windows overlap in none of the recent days a lag-1 response
+    lives on), is deterministic, and can be checked in one line rather than
+    hoped for. Regularity is not a defect in a control that only has to be FAR.
+    """
+    n = len(rows)
+    if n < 2:
+        return rows
+    shift = max(1, n // 2)
+    return rows[(np.arange(n) + shift) % n]
+
+
 def _nrw_covariate(rain: np.ndarray, origins: np.ndarray, context: int) -> np.ndarray:
     """(n, context) of areal rain, shifted one day back.
 
@@ -217,6 +242,18 @@ def _nrw_covariate(rain: np.ndarray, origins: np.ndarray, context: int) -> np.nd
         if idx.min() < 0:
             continue
         out[i] = rain[idx]
+    return out
+
+
+def _cov_last(cov_full: np.ndarray, is_test: np.ndarray) -> np.ndarray:
+    """The last value of every window's covariate; NaN on rows that have none.
+
+    Stored so the gate can check the shift against a column derived a different
+    way (`rain_lags[:, 0]`, the rain of day o-1). A witness computed from the
+    same variable it certifies is not a witness.
+    """
+    out = np.full(len(cov_full), np.nan)
+    out[is_test] = cov_full[is_test][:, -1]
     return out
 
 
@@ -299,11 +336,13 @@ def backtest_nrw_station(no: str, tree: Path, model, proto: dict, arm: str, log)
                 # the negative control: every window keeps a REAL rain context —
                 # its autocorrelation, its wet spells — but one belonging to a
                 # different origin. What survives that is not rain.
-                rng = np.random.default_rng(7)
-                perm = rng.permutation(len(arm_cov))
-                while len(perm) > 1 and (perm == np.arange(len(perm))).any():
-                    perm = rng.permutation(len(arm_cov))
-                arm_cov = arm_cov[perm]
+                #
+                # A plain derangement is not enough: origins are one week apart,
+                # so perm[i] = i±1 hands a window the rain of seven days earlier,
+                # which shares 377 of its 384 days. Measured on seed 7: 2 of 48
+                # windows landed within one step and 6 within three. The control
+                # has to be far in ORIGIN, not merely different.
+                arm_cov = _deranged(arm_cov, MIN_SHUFFLE_DISTANCE)
             past_only = arm_cov
         t0 = time.time()
         pt, q = run_model(model, test_ctx, H, model.config["per_core_batch_size"], log, past_only=past_only)
@@ -316,9 +355,15 @@ def backtest_nrw_station(no: str, tree: Path, model, proto: dict, arm: str, log)
         "last": last, "y": y, "tmask": tmask, "persist": persist, "snaive": snaive,
         "blend": blend_mw, "blend_q": blend_mw_q, "rain_ols": rain_ols, "rain_lags": rain_lags,
         "tfm_point": tfm_point, "tfm_q": tfm_q, "tau": np.array(tau), "d_h": d_h,
-        # the leak witness, stored so a reader of the npz can check it without
-        # re-deriving the shift
-        "cov_max_index": np.array([int(o) - 1 for o in origins]),
+        # THE LEAK WITNESS. It has to come out of the covariate that was BUILT,
+        # not out of the origins it was built from: `[o - 1 for o in origins]`
+        # compared against `origins - 1` restates its own input, and a genuinely
+        # leaking `_nrw_covariate` passed it (measured 2026-09-07). `cov_last` is
+        # the last VALUE of each window's covariate; `rain_lags[:, 0]` is the
+        # rain of day o-1 read independently. Equal means the covariate ended
+        # where it was supposed to end.
+        "cov_last": _cov_last(cov_full, is_test),
+        "rain_lags_first": rain_lags[:, 0],
     }
     meta = loaders.nrw_meta(tree, no)
     # A rain event is a TEST WINDOW that has something to forecast: at least one
@@ -458,7 +503,6 @@ def main(argv=None) -> int:
         if first is not None and args.horizon == "nrw":
             # WITH the covariate: repeating a plain call would prove the plain
             # path reproduces and say nothing about the arm that actually ran
-            z = np.load(out / f"{first}.npz", allow_pickle=True)
             series = loaders.load_nrw_station(Path(args.nrw), first)
             rain = loaders.load_nrw_rain(Path(args.nrw), first, series.dates)
             x, run_len = loaders.fill_gaps(series.target(proto["target_field"]))
@@ -468,6 +512,14 @@ def main(argv=None) -> int:
             cv = _nrw_covariate(rain, kept, proto["context"])
             ok = ~np.isnan(cv).any(axis=1)
             ctx, cv = ctx[ok][:b], cv[ok][:b]
+            # the arm that actually ran, shuffle included: repeating the plain
+            # covariate would prove the wrong path reproduces
+            if arm == "shuffled":
+                rng2 = np.random.default_rng(7)
+                perm2 = rng2.permutation(len(cv))
+                while len(perm2) > 1 and (perm2 == np.arange(len(perm2))).any():
+                    perm2 = rng2.permutation(len(cv))
+                cv = cv[perm2][:b]
             po = None if arm == "plain" else cv
             a1 = tfm.forecast_batch(model, ctx, proto["horizon"], po)
             a2 = tfm.forecast_batch(model, ctx, proto["horizon"], po)
