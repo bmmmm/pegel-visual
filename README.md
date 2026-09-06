@@ -9,8 +9,10 @@ PEGELONLINE station set — most stations from WSV (raw values since
 
 Layout: `archive/<station-uuid>/closed.json` (one immutable bundle of all
 completed years, `[{y, min[], max[]}, …]`, extended only by the January
-freeze), `current.json` (running year, refreshed monthly by the
-`archive-update` workflow) and `meta.json` (station name, resume marker, and
+freeze), `current.json` (running year — the `archive-update` workflow refreshes
+it weekly from the REST API and, on the first Monday of the month, re-reads
+the whole year from the WSV ZIP archive, the only path that reaches back past
+the REST retention) and `meta.json` (station name, resume marker, and
 `noArchive` where the WSV download endpoint has said it keeps no series for
 this gauge). `archive/manifest.json` maps every station to its year range
 (`from`/`to`, plus a `gaps` day count as inspection metadata), marks it `none`
