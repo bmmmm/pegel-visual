@@ -97,18 +97,23 @@
   And measure a time series at **both** edges: the newest point against the
   clock, not only the oldest against the window.
 
-## LANUK NRW (`scripts/fetch-nrw-archive.mjs`, `nrw-update.yml`, branches `nrw`/`nrw-hires`)
+## LANUK NRW (`scripts/fetch-nrw-archive.mjs`, `build-nrw-precip.mjs`, `nrw-update.yml`, branches `nrw`/`nrw-hires`)
 
 Its own file: **`.claude/domains/lanuk-nrw.md`** — read it before touching
-the collector, the N1–N7 gate, the two data branches or the LANUK seam in
-`index.html`. Three things worth knowing without opening it: the source has
+the collector, the **areal-rain product** (`nrw/precip/`, its N1–**N8** gate,
+the `?rain` mode and the station PRECIPITATION/RESPONSE blocks), the two data
+branches or the LANUK seam in `index.html`. Three things worth knowing without opening it: the source has
 **no CORS and no live feed** (a daily export, ~24 h old, mirrored by a daily
 Actions run into two GitHub-only orphan branches; only `nrw` is mounted);
 the source window **rolls** (730 days daily, **63 days** at 15 minutes), so a
 missed day is gone for good and the merge policy is the inverse of the WSV
 extreme-union; and WeatherNext was evaluated on 2026-09-04 and rejected on
 four independent grounds that are written down there — do not reopen it
-without new facts.
+without new facts. A fourth, since the rain: **two clocks in one source** — a
+rain day runs 07:00 → 07:00 MEZ, a gauge day 00:00 → 24:00, so a rain day
+closes seven hours into the next gauge day, and the right edge of every rain
+drawing is the collector's own `lastRainDay`, never `window.rain.to` and never
+the clock.
 
 ## Forecast gate (`scripts/forecast/`, `gate/`)
 
@@ -118,5 +123,9 @@ collector. The two things worth knowing without opening it: the 2026-09-02 run
 of TimesFM 2.5 against the persistence/climatology blend is a **NO-SHIP**, and
 that verdict lives in `gate/seasonal-mid/report.md`, not in anyone's memory —
 re-running the gate consumes the test set — TimesFM 3.0 was measured on
-2026-09-03 and is NO-SHIP too. And two model lines are registered, of which
+2026-09-03 and is NO-SHIP too. And four model lines are registered, of which
 only the Apache-2.0 one may ever **ship**; `tests/test_license.py` enforces it.
+The other two are the arms of the NRW rain experiment (2026-09-07): observed
+areal rainfall as a past-only covariate is **NO EFFECT** (−0.010 at h1-3 against
+the same model without it, and a shuffled control three thousandths behind), and
+that control arm is listed and linked but never drawn.

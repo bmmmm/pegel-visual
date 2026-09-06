@@ -432,7 +432,7 @@ coverage (R3), nothing lost against the previous commit (R4), shapes (R5),
 the running year present fleet-wide (R6) and the no-archive markers intact
 (R7). The daily snapshot job skips R6 and R7, because it cannot fix what they
 find and a blocked snapshot loses its day slot for good. The `nrw` branch
-has its own gate (`check-nrw-consistency.mjs`, N1–N7); `nrw-hires` is
+has its own gate (`check-nrw-consistency.mjs`, N1–N8); `nrw-hires` is
 mirrored as fetched. `data-freshness` watches the two deployed branches once
 a day — `archive` for commit age, deployed drift and manifest age, `nrw` for
 commit age — and opens or updates an issue labelled `data-freshness` instead
@@ -526,8 +526,8 @@ reaches the real handlers.
   and the seven rules that guard the archive they accumulate into
 - `wsv-archive.test.mjs`, `rws-archive.test.mjs` — the two WSV/RWS backfill
   pipelines, pinned to the defects a data audit found
-- `nrw-archive.test.mjs`, `nrw-consistency.test.mjs` — the LANUK collector
-  and its N1–N7 gate
+- `nrw-archive.test.mjs`, `nrw-consistency.test.mjs`, `nrw-precip.test.mjs` —
+  the LANUK collector, its N1–N8 gate, and the areal-rain rule clause by clause
 - `river-totals.test.mjs` — the summed-stage build
 - `collect-hires.test.mjs` — the 15-minute collector and its wrapper
 - `gate-page.test.mjs` — the gate page's model and renderer against the
@@ -543,7 +543,7 @@ the statistics, the clause logic on synthetic results, and the licence guard
 | `pages` | after a green `tests` run on `main` (`workflow_run`), or dispatched by a data job | copies the site without `scripts/`, `tests/`, `.github/`, `.claude/` and `CLAUDE.md`, stamps the commit into `index.html` and the deploy date into `sitemap.xml`, mounts `archive/` and `nrw/` from their branches, deploys to GitHub Pages |
 | `archive-update` | Mondays 04:23 UTC | WSV REST refresh; on the first Monday the ZIP heal of the running year and the gap sweep; RWS refresh; totals rebuild; consistency gate; push; deploy |
 | `snapshot-update` | daily 05:17 and 15:17 UTC | bulk capture of every gauge, totals append, gate without R6/R7, push, deploy — two slots because scheduler drift once pushed a run past midnight |
-| `nrw-update` | daily 17:41 UTC | LANUK mirror into `nrw` and `nrw-hires`, N1–N7 gate, push, deploy |
+| `nrw-update` | daily 17:41 UTC | LANUK mirror into `nrw` and `nrw-hires`, areal rain baked from the fresh mirror, N1–N8 gate, push, deploy |
 | `data-freshness` | daily 19:47 UTC | the watchdog over `archive` and `nrw`; reports into an issue |
 
 A push to `main` deploys only after a green `tests` run; a data job's
