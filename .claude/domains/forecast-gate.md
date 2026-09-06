@@ -153,16 +153,26 @@ own script tree, needed when working on it and not before. Moved verbatim.
   `stations.NRW_STATIONS` — the Erft drops out because no Erft gauge reaches
   five rain gauges. Three arms on the SAME 48 origins: plain 3.0, 3.0 with the
   areal rain as a past-only covariate, and 3.0 with the rain of a DIFFERENT
-  origin. Pooled at h1-3 the rain arm is **−0.010** against the plain one
-  (DM p 0.839) and the shuffled control **−0.007** — three thousandths apart.
+  origin — and "different" means a HALF-CYCLE, 24 origins away: a random
+  derangement left two of 48 windows one step from themselves, which at step 7
+  is the rain of seven days earlier sharing 377 of its 384 days. Pooled at h1-3
+  the rain arm is **−0.010** against the plain one (DM p 0.839) and the shuffled
+  control **−0.005** — the control is FIVE THOUSANDTHS BETTER than the real rain.
   `rain_verdict` is **NO EFFECT**. R5 exists for exactly this: R1 can pass on
-  noise, and only a control that wins as much tells you it did.
+  noise, and only a control that does as well tells you it did.
   The house verdict is separate and is about the LINE, not the covariate: 3.0
   clears the MW-blend latte here (+0.117 at h1-3) and still can never ship.
-- **The leak is the experiment.** A rain day closes seven hours into the next
-  gauge day, so at context position t the newest rain is day t-1. The shift is
-  built in `_nrw_covariate`, asserted where it is built, witnessed in the npz
-  (`cov_max_index`), and re-checked by `nrw_void`. The covariate filter runs on
+- **The leak is the experiment, and its witness must not be derived from what
+  it certifies.** A rain day closes seven hours into the next gauge day, so at
+  context position t the newest rain is day t-1. The first witness was
+  `[o-1 for o in origins]` compared against `origins-1` — it restated its own
+  input, and a genuinely leaking `_nrw_covariate` passed it (measured
+  2026-09-07). It is `cov_last` (what each covariate ENDED on) against
+  `rain_lags_first` (the rain of o-1, read another way) now; the leaking build
+  is VOID in 44 of 48 windows. `--against` is likewise checked to BE the plain
+  arm: pointed at the shuffled run it produced a full clause table measuring
+  rain-against-shuffled under headings that said plain, with R5 comparing the
+  control against itself. The covariate filter runs on
   EVERY arm including the plain one — a window one arm cannot take must not be
   scored for the other, or the two arms answer different questions and every
   paired statistic is void.

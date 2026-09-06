@@ -126,6 +126,8 @@ re-running the gate consumes the test set — TimesFM 3.0 was measured on
 2026-09-03 and is NO-SHIP too. And four model lines are registered, of which
 only the Apache-2.0 one may ever **ship**; `tests/test_license.py` enforces it.
 The other two are the arms of the NRW rain experiment (2026-09-07): observed
-areal rainfall as a past-only covariate is **NO EFFECT** (−0.010 at h1-3 against
-the same model without it, and a shuffled control three thousandths behind), and
-that control arm is listed and linked but never drawn.
+areal rainfall as a past-only covariate is **NO EFFECT** — −0.010 at h1-3
+against the same model without it, and the shuffled control came out −0.005,
+i.e. five thousandths BETTER than the real rain. That control arm is listed and
+linked but never drawn, and its whole job is to make a reading like that
+possible: R1 can pass on noise, and only a control that does as well says so.
