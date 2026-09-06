@@ -3171,6 +3171,7 @@ const T = {
   aboveHigh: 'above mean high water',
   riverProfile: 'LONGITUDINAL PROFILE',
   riverSub: 'every gauge at its live water-surface elevation',
+  riverSubMirrored: 'every gauge at its last daily mean — mirrored, no live feed',
   riverElevAxis: 'water surface elevation in metres above sea level (m NHN), against river kilometre',
   riverElevNote: 'Elevation is the gauge zero plus the current reading — or the reading itself where a gauge already reports metres above sea level. Either way the gauges on one river compare directly.',
   meanFall: 'mean fall',
@@ -4388,6 +4389,9 @@ function riverViewModel(stations) {
     kind: 'river',
     river: state.river,
     gauges: stations.length,
+    // a mirrored water (LANUK) has neither a live reading nor an elevation:
+    // the subtitle must not promise either
+    mirrored: !!(state.feed && !state.feed.live),
     kmMin, kmMax, kmSpan, lowKmDown,
     eMin, eMax: eMin + eSpan,
     pts,
@@ -4467,7 +4471,7 @@ function renderRiver(vm) {
   const vh = `<p class="vh">${esc(vm.summary)}</p>`;
   const grad = vm.gradient != null ? ` · ${esc(T.meanFall)} ${vm.gradient.toFixed(2)} m/km` : '';
   const head = `<header class="p-head"><h1>${esc(waterLabel(vm.river))}</h1>` +
-    `<p class="p-sub">${vm.gauges} ${esc(plural(vm.gauges, 'gauge'))} · ${Math.round(vm.kmSpan)} km${grad} — ${esc(T.riverSub)}</p></header>`;
+    `<p class="p-sub">${vm.gauges} ${esc(plural(vm.gauges, 'gauge'))} · ${Math.round(vm.kmSpan)} km${grad} — ${esc(vm.mirrored ? T.riverSubMirrored : T.riverSub)}</p></header>`;
   const tabs = ctlRow(T.viewLabel, [
     { t: 'cmd:live', label: 'profile', on: true, title: 'longitudinal profile with live elevations' },
     { t: 'cmd:wave', label: 'wave', title: 'station × day heatmap — the wave rolls downstream' },
@@ -4741,7 +4745,8 @@ function heatBinAnom(z) {
 function yearsViewModel() {
   const st = histStats();
   const vm = { kind: 'years', station, mode: histMode, summary: screenSummary(),
-    source: `${archiveSource()} daily archive · unvalidated raw data`, thin: false };
+    // a mirrored source has no live feed, and this foot says so like every other plate's
+    source: `${archiveSource()} daily archive · unvalidated raw data${state.feed && !state.feed.live ? ` · ${T.noLiveFeed}` : ''}`, thin: false };
   if (st.daily.length < HIST_MIN_DAYS) {
     vm.thin = true;
     // 'rest-only' means the same thing here as 'none': there is no multi-year
@@ -4848,7 +4853,9 @@ function renderYearsLegend(vm) {
   if (vm.mode === 'abs') {
     return plateKey([
       { sw: [0, 1, 2, 3].map(b => sw('b' + b)).join(''),
-        label: `${vm.lo} cm → ${vm.hi} cm — darker is higher water` },
+        // in the gauge's own unit and rounding: LANUK means carry three decimals
+        // and printed as 195.76999999999998 before this went through fmtLevel
+        label: `${levelWithUnit(vm.lo)} → ${levelWithUnit(vm.hi)} — darker is higher water` },
       // the hint is not a mark: it belongs to the readout panel's empty state,
       // which already carries it — the key names marks only
       { sw: sw('nd'), label: T.noData },

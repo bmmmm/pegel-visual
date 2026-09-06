@@ -4170,6 +4170,17 @@ test('loadRepoArchive: a LANUK station reads its year shards, mean-as-low on see
   assert.equal(arch.find(p => p[0] === day240 + 6 * 36e5)[1], 42, 'a real minimum is used as is');
   assert.equal(app.run('state.lowIsMeanUntil'), Date.UTC(2026, 0, 1) - 36e5 + 239 * 864e5,
     'the newest seed day is remembered, so the plates can say where the real minimum starts');
+  // the foot follows the feed the station loader sets (lanukFeed): mirrored, not live
+  app.run(`state.feed = { name: LANUK, live: false }`);
+  assert.equal(app.run('yearsViewModel().source'), 'LANUK NRW daily archive · unvalidated raw data · no live feed',
+    'the years foot says there is no live feed, like every other LANUK plate');
+  app.run(`state.feed = null`);
+  assert.equal(app.run('yearsViewModel().source'), 'LANUK NRW daily archive · unvalidated raw data');
+  // the heat key prints the range in the gauge's unit through fmtLevel — LANUK
+  // means carry three decimals and once read "195.76999999999998 cm" in a browser
+  const key = app.run('renderYearsLegend(yearsViewModel())');
+  assert.match(key, /\d+ cm → \d+ cm — darker is higher water/, key);
+  assert.ok(!/\d\.\d{3,}/.test(key), 'no float noise in the key');
 });
 
 test('history key: the mean-as-low caveat is bound to seed days inside the window', async () => {
@@ -4281,6 +4292,9 @@ test('?river=ERFT: the LANUK river plate lists every gauge in flow order, mouth 
   assert.equal(vm.lowKmDown, true, 'downstream is the low km, so the mouth is on the right');
   assert.deepEqual(vm.index.map(s => s.name), ['Arloff', 'Neubrueck'], 'the list runs upstream first: Arloff (88.6 km) before Neubrueck (9.75 km)');
   assert.equal(vm.source, 'LANUK NRW · mirrored 2026-09-03 17:41 UTC · no live feed');
+  assert.equal(vm.mirrored, true);
+  assert.ok(html.includes('mirrored, no live feed') && !html.includes('live water-surface elevation'),
+    'the subtitle promises neither a live reading nor an elevation for a mirrored water');
   assert.ok(html.includes('no elevation profile to draw'), 'the profile block says why there is no chart');
   assert.ok(!html.includes('class="chart river"'), 'and draws none');
   assert.ok(html.includes('km counts DOWN to the mouth'), 'the key explains what km means here');
