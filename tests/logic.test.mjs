@@ -4155,9 +4155,9 @@ const coldLists = `
 test('cold cache: the LANUK merge waits for the WSV names, and a shared name stays WSV\'s', async () => {
   const app = nrwApp({ search: '?station=WESEL' });
   app.run(coldLists);
-  assert.equal(app.run('wsvListLoaded'), false, 'nothing cached, nothing fetched yet');
+  assert.equal(app.run('knownStations.size'), 0, 'nothing cached, nothing fetched yet');
   await app.run('lanukIndex()');
-  assert.equal(app.run('wsvListLoaded'), true, 'the merge pulled the WSV list in first');
+  assert.equal(app.run(`knownStations.has('WESEL') && stationMeta.get('WESEL').id === undefined`), true, 'the merge pulled the WSV list in first');
   const order = nrwUrls(app);
   assert.ok(order.indexOf(`${app.run('API')}/stations.json`) < order.indexOf('nrw/manifest.json'), `stations.json before the manifest: ${order.join(', ')}`);
   assert.equal(app.run(`stationMeta.get('WESEL').w`), 'RHEIN', 'the Rhine gauge keeps its name');

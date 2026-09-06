@@ -7251,13 +7251,12 @@ function fillWaters(list, labels) {
   }
 }
 
-// The PEGELONLINE list owns every name it carries. `wsvListLoaded` says it has
-// been filled at least once (cache or API) — `knownStations.size` cannot say
-// that any more, the LANUK index writes into the same set — and `wsvNamesP`
-// settles at that moment, so the LANUK merge can wait for it. A list fetch
-// that fails on a cold cache settles it too: the merge must not hang on an
-// API that is down, and the list's later arrival still wins its own names.
-let wsvListLoaded = false;
+// The PEGELONLINE list owns every name it carries. `wsvNamesP` settles the
+// moment it has been filled once (cache or API) — `knownStations.size` cannot
+// say that any more, the LANUK index writes into the same set — so the LANUK
+// merge can wait for it. A list fetch that fails on a cold cache settles it
+// too: the merge must not hang on an API that is down, and the list's later
+// arrival still wins its own names (this function writes without an id).
 let wsvNamesResolve = () => {};
 const wsvNamesP = new Promise(r => { wsvNamesResolve = r; });
 function fillDatalist(list) {
@@ -7267,7 +7266,6 @@ function fillDatalist(list) {
     stationMeta.set(up, { w: s.w, km: s.km, la: s.la ?? null, lo: s.lo ?? null });
     for (const key of [foldAe(up), foldStrip(up)]) if (!normMap.has(key)) normMap.set(key, s.n);
   }
-  wsvListLoaded = true;
   wsvNamesResolve();
 }
 
@@ -7329,10 +7327,16 @@ function mergeLanukIndex(m) {
 // settles it at boot, a cold one costs the one stations.json fetch the
 // finder would make anyway). Nothing calls this at boot: a WSV station never
 // needs the index, a LANUK deep link reaches it through the live API's 404.
+const WSV_NAMES_WAIT_MS = 4000; // a stalled stations.json must not stall the mirror's route
 function lanukIndex() {
   if (!lanukManifestP) {
     ensureStationList();
-    lanukManifestP = wsvNamesP
+    // bounded: getJson is a bare fetch, and a list request that hangs (captive
+    // portal, flaky mobile link) would otherwise hold every LANUK route hostage;
+    // after the wait the merge goes on, and the list still wins its names
+    // whenever it lands (fillDatalist)
+    const wait = new Promise(r => setTimeout(r, WSV_NAMES_WAIT_MS));
+    lanukManifestP = Promise.race([wsvNamesP, wait])
       .then(() => getJson(`${LANUK_BASE}manifest.json`))
       .then(m => { mergeLanukIndex(m); return m; })
       .catch(() => null);
