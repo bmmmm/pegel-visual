@@ -9,7 +9,27 @@
 //      (N1 red)
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { condenseHires, dayMin, stepOf, tier2Series, seriesHasValues, dayOf } from '../scripts/fetch-nrw-archive.mjs';
+import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { createHash } from 'node:crypto';
+import { condenseHires, dayMin, stepOf, tier2Series, seriesHasValues, dayOf, readRawDir, readSha256Sums } from '../scripts/fetch-nrw-archive.mjs';
+
+test('readRawDir: a seed with SHA256SUMS is checked, a tampered file refuses to replay', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'nrw-seed-'));
+  const files = { 'stations.json': '[]', 'pegeldaten.zip': 'p', 'niederschlagsdaten.zip': 'n', 'temperaturdaten.zip': 't' };
+  for (const [n, c] of Object.entries(files)) writeFileSync(join(dir, n), c);
+  // as `shasum -a 256 "$D"/*` wrote the real one: hash, two spaces, the path as the writer's cwd spelled it
+  writeFileSync(join(dir, 'SHA256SUMS'), Object.entries(files)
+    .map(([n, c]) => `${createHash('sha256').update(c).digest('hex')}  tmp-nrw/raw/2026-09-04/${n}`).join('\n') + '\n');
+  assert.equal(readSha256Sums(join(dir, 'SHA256SUMS')).size, 4);
+  assert.deepEqual(readRawDir(dir).stations, []);
+  writeFileSync(join(dir, 'pegeldaten.zip'), 'tampered');
+  assert.throws(() => readRawDir(dir), /raw seed pegeldaten\.zip: sha256 [0-9a-f]{64} does not match SHA256SUMS/);
+  rmSync(join(dir, 'SHA256SUMS'));
+  assert.equal(readSha256Sums(join(dir, 'SHA256SUMS')), null);
+  assert.doesNotThrow(() => readRawDir(dir), 'no sums file, no check — a seed without one still replays');
+});
 
 const stamp = (day, minuteOfDay) => {
   const hh = Math.floor(minuteOfDay / 60), mm = minuteOfDay % 60;

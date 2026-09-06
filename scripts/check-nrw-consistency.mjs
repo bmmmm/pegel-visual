@@ -34,7 +34,8 @@
 //                     revises them, and a silent swallow is the failure mode.
 //   N5 shape          every shard names its own station and year, its arrays
 //                     are daysInYear(y) long, levels sit inside the plausibility
-//                     bounds, min <= mean <= max on every day, n in 1..96, rain
+//                     bounds, min <= mean <= max on every day, n in 1..288
+//                     (53 gauges publish every 5 minutes), rain
 //                     mm / imax >= 0, acc / cov in 0..100, temperature
 //                     mean <= max — the rule a swapped column trips, which a
 //                     3-column header over 4-field rows invites.
@@ -43,8 +44,10 @@
 //                     >= 110 gauges NRW-wide carry a full triple — the silent
 //                     failure nothing else sees when the source drops the Info
 //                     columns while every series keeps flowing.
-//   N7 bulk coverage  manifest.coverage per product: bulk / registry at most
-//                     3 pp under the high-water mark (which only ever rises),
+//   N7 bulk coverage  manifest.coverage per product: the bulk COUNT at most
+//                     3 % of the registry (in stations: 9.3 of 310) under the
+//                     high-water mark's count, which only ever rises — a
+//                     bare-number mark is a share and is compared as one;
 //                     noSeries grows by <= 2 per run, successful single-station
 //                     fetches fall by <= 5 per run, and registry >= bulk and
 //                     >= station (the rain registry is the UNION of both

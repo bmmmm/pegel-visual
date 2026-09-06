@@ -20,8 +20,10 @@ name: nrw-update
 # here, and a branch that does not exist yet is STARTED here as an orphan —
 # the run that creates `nrw` first replays the raw seed kept on `nrw-hires`
 # (nrw-hires/raw/2026-09-04: two daily days and two fine days the live export
-# no longer offers), then the live run merges on top. Nothing about the
-# branches has to be prepared by hand.
+# no longer offers), then the live run merges on top. The one thing prepared
+# by hand is that seed: it was pushed to nrw-hires on 2026-09-04, and a repo
+# without it (a fork, a rebuilt nrw-hires) fails the replay step with ENOENT
+# — drop the step then, the live run alone starts a valid branch.
 #
 # Its OWN concurrency group: the `archive-branch-write` group serialises the
 # WSV jobs because they push to the same branch, and GitHub cancels the

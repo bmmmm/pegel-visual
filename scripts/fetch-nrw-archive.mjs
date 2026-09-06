@@ -227,6 +227,7 @@
 //    "allow_force_pushes":false,"allow_deletions":false}
 //   JSON
 import { mkdirSync, writeFileSync, readFileSync, readdirSync, existsSync, unlinkSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import {
@@ -895,11 +896,36 @@ export async function fetchBulk(fetchImpl = fetch) {
   return { stations, zips };
 }
 
+// a raw seed directory: stations.json plus the three product ZIPs, and — when
+// the seed carries one — a SHA256SUMS the four are checked against, so a
+// truncated or tampered seed refuses to replay instead of merging silently
 export function readRawDir(dir) {
-  const stations = JSON.parse(readFileSync(join(dir, 'stations.json'), 'utf8'));
+  const sums = readSha256Sums(join(dir, 'SHA256SUMS'));
+  const checked = name => {
+    const bytes = readFileSync(join(dir, name));
+    const want = sums && sums.get(name);
+    if (want) {
+      const got = createHash('sha256').update(bytes).digest('hex');
+      if (got !== want) throw new Error(`raw seed ${name}: sha256 ${got} does not match SHA256SUMS (${want})`);
+    }
+    return bytes;
+  };
+  const stations = JSON.parse(checked('stations.json').toString('utf8'));
   const zips = {};
-  for (const [key, p] of Object.entries(PRODUCTS)) zips[key] = new Uint8Array(readFileSync(join(dir, p.zip)));
+  for (const [key, p] of Object.entries(PRODUCTS)) zips[key] = new Uint8Array(checked(p.zip));
   return { stations, zips };
+}
+
+// SHA256SUMS as `shasum -a 256` writes it — "<hex>  <path>" per line, the path
+// however the writer's cwd spelled it — keyed on the basename; null when absent
+export function readSha256Sums(path) {
+  if (!existsSync(path)) return null;
+  const sums = new Map();
+  for (const line of readFileSync(path, 'utf8').split('\n')) {
+    const m = /^([0-9a-f]{64})\s+\*?(.+)$/u.exec(line.trim());
+    if (m) sums.set(m[2].split('/').pop(), m[1]);
+  }
+  return sums;
 }
 
 // pull exactly the named tables out of one product ZIP; the export stamp is

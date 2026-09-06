@@ -96,8 +96,10 @@ jobs:
           if [ "$MANIFEST_DAYS" -gt 10 ]; then
             PROBLEMS="$PROBLEMS${PROBLEMS:+$NL$NL}The archive refresh has not completed in ${MANIFEST_DAYS} days (manifest.json generated: ${MGEN:-unfetchable}). It runs weekly (Monday) and monthly (the 3rd). The daily snapshot keeps the branch and the deploy looking fresh, so only this check sees a dead archive-update.yml. Check its recent runs — the 2026-07/08 misses ended as CANCELLED timeouts, not failures."
           fi
-          if [ "$NRW_HOURS" -gt 30 ]; then
-            PROBLEMS="$PROBLEMS${PROBLEMS:+$NL$NL}The nrw branch's last commit is ${NRW_HOURS}h old (committed ${NRW_DATE:-never}), past the 30h threshold for the daily LANUK mirror (nrw-update.yml). The source window rolls daily — 63 days for the 15-minute series — so every missed day is lost for good. Check its recent runs."
+          if [ -z "$NRW_DATE" ]; then
+            PROBLEMS="$PROBLEMS${PROBLEMS:+$NL$NL}The nrw branch does not exist: nrw-update.yml has never pushed (or the branch was deleted). Its first run creates the branch from the raw seed on nrw-hires plus the live export — check its recent runs, or dispatch it."
+          elif [ "$NRW_HOURS" -gt 30 ]; then
+            PROBLEMS="$PROBLEMS${PROBLEMS:+$NL$NL}The nrw branch's last commit is ${NRW_HOURS}h old (committed ${NRW_DATE}), past the 30h threshold for the daily LANUK mirror (nrw-update.yml). The source window rolls daily — 63 days for the 15-minute series — so every missed day is lost for good. Check its recent runs."
           fi
 
           if [ -z "$PROBLEMS" ]; then
