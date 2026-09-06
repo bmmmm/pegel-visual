@@ -119,7 +119,13 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 // ---------- zip (central directory + deflate-raw, same layout as in-page) ----------
 
-export function unzipJsonEntry(bytes) {
+// The central directory, without inflating anything: name, method, sizes,
+// local-header offset and the DOS modification stamp of every entry. Reading
+// the directory and inflating an entry are separate steps on purpose — the
+// LANUK bulk ZIPs (scripts/fetch-nrw-archive.mjs) carry a 108 MB 15-minute
+// table next to the 30 KB station table, and a reader that inflates the first
+// match, or every entry, pays for the big one whether it wants it or not.
+export function zipEntries(bytes) {
   const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   let eocd = -1;
   for (let i = bytes.length - 22; i >= Math.max(0, bytes.length - 22 - 65535); i--) {
@@ -128,25 +134,62 @@ export function unzipJsonEntry(bytes) {
   if (eocd < 0) throw new Error('no zip directory');
   const count = dv.getUint16(eocd + 10, true);
   let off = dv.getUint32(eocd + 16, true);
+  const entries = [];
   for (let n = 0; n < count; n++) {
     if (dv.getUint32(off, true) !== 0x02014b50) break;
     const method = dv.getUint16(off + 10, true);
+    const dosTime = dv.getUint16(off + 12, true);
+    const dosDate = dv.getUint16(off + 14, true);
     const compSize = dv.getUint32(off + 20, true);
+    const size = dv.getUint32(off + 24, true);
     const nameLen = dv.getUint16(off + 28, true);
     const extraLen = dv.getUint16(off + 30, true);
     const commentLen = dv.getUint16(off + 32, true);
     const localOff = dv.getUint32(off + 42, true);
     const name = Buffer.from(bytes.subarray(off + 46, off + 46 + nameLen)).toString();
-    if (name.endsWith('.json')) {
-      const lNameLen = dv.getUint16(localOff + 26, true);
-      const lExtraLen = dv.getUint16(localOff + 28, true);
-      const start = localOff + 30 + lNameLen + lExtraLen;
-      const data = bytes.subarray(start, start + compSize);
-      return method === 0 ? Buffer.from(data) : inflateRawSync(data);
-    }
+    // DOS stamp: date = (y-1980)<<9 | m<<5 | d, time = h<<11 | min<<5 | s/2.
+    // No zone in the format; the caller decides what clock the writer used.
+    const mtime = new Date(Date.UTC(1980 + (dosDate >> 9), ((dosDate >> 5) & 15) - 1, dosDate & 31,
+      dosTime >> 11, (dosTime >> 5) & 63, (dosTime & 31) * 2));
+    entries.push({ name, method, compSize, size, localOff, mtime });
     off += 46 + nameLen + extraLen + commentLen;
   }
-  throw new Error('no json entry in zip');
+  return entries;
+}
+
+function inflateEntry(bytes, entry) {
+  const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const lNameLen = dv.getUint16(entry.localOff + 26, true);
+  const lExtraLen = dv.getUint16(entry.localOff + 28, true);
+  const start = entry.localOff + 30 + lNameLen + lExtraLen;
+  const data = bytes.subarray(start, start + entry.compSize);
+  return entry.method === 0 ? Buffer.from(data) : inflateRawSync(data);
+}
+
+// the FIRST entry whose name satisfies `match`, inflated; nothing else is touched
+export function unzipEntry(bytes, match) {
+  const entry = zipEntries(bytes).find(e => match(e.name));
+  if (!entry) throw new Error('no matching entry in zip');
+  return inflateEntry(bytes, entry);
+}
+
+// several entries BY NAME, inflated on demand: Map name -> Buffer, a missing
+// name simply absent (the caller decides whether that is an error)
+export function unzipNamed(bytes, names) {
+  const wanted = new Set(names);
+  const out = new Map();
+  for (const entry of zipEntries(bytes)) {
+    if (wanted.has(entry.name)) out.set(entry.name, inflateEntry(bytes, entry));
+  }
+  return out;
+}
+
+export function unzipJsonEntry(bytes) {
+  try {
+    return unzipEntry(bytes, n => n.endsWith('.json'));
+  } catch (e) {
+    throw e.message === 'no matching entry in zip' ? new Error('no json entry in zip') : e;
+  }
 }
 
 // ---------- condense to daily min/max, day boundaries in MEZ (UTC+1) ----------
