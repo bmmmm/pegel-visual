@@ -1132,3 +1132,43 @@ test('the foot names each report by its grid, so no two links of one model read 
   assert.ok(texts.some(t => t.endsWith('report (short)')), 'the 15-minute grid is named as such, not as a second "mid"');
 });
 
+
+
+test('the rain panel means "worse" by KIND, not by a class nothing paints', () => {
+  // Measured in a browser first: all three bars of the committed run are
+  // negative and every one of them was drawn in the POSITIVE hatch, because
+  // `.meter.neg` was set on the element and defined nowhere. The markup
+  // assertions could not see it — a missing rule is invisible to them — so the
+  // rule itself is what this test reads. scripts/gate-rain-check.mjs measures
+  // the paint; this catches the deletion without a browser.
+  const css = readFileSync(join(ROOT, 'gate.css'), 'utf8');
+  assert.match(css, /\.meter\.neg > span\s*\{[^}]*repeating-linear-gradient\(-45deg/s,
+    'a negative bar hatches the other way');
+  assert.match(css, /\.meter\.neg > span\s*\{[^}]*--dry/s, 'and carries the dry hue, not the water one');
+  // …and the panel actually sets it where the number is negative
+  const m = buildModel(reports, parseState('', '', null, DRAWN_KEYS));
+  const html = renderPage(m);
+  const panel = html.slice(html.indexOf('id="rain"'), html.indexOf('id="model"'));
+  const neg = m.rain.blocks.filter(b => b.ss_vs_other < 0).length;
+  assert.equal((panel.match(/class="meter neg[ "]/g) || []).length, neg + 1,
+    'one per negative block, plus the key\'s own swatch (which carries `sw` as well)');
+});
+
+test('the rain panel names its own marks, and the control arm is not one of them', () => {
+  const m = buildModel(reports, parseState('', '', null, DRAWN_KEYS));
+  const html = renderPage(m);
+  const panel = html.slice(html.indexOf('id="rain"'), html.indexOf('id="model"'));
+  const key = (panel.match(/<dl class="p-key">[\s\S]*?<\/dl>/) || [''])[0];
+  assert.ok(key, 'the panel has a key');
+  assert.match(key, /skill against the same model without rain/);
+  assert.match(key, /the rain made it worse/);
+  assert.match(key, /Observed rain, not forecast rain/, 'the one caveat that changes what the number means');
+  // the control is named in prose and linked in the foot — never drawn, never a chip
+  // named AND reachable: the label sits inside the link to its own report
+  assert.match(panel, /negative control \(<a href="nrw-mid\/report-3p0-rain-shuffled\.md">TimesFM 3\.0 \+ shuffled rain<\/a>\)/);
+  assert.ok(!panel.includes('class="mchip'), 'the panel draws no chips of its own');
+  const chips = (html.match(/<a [^>]*class="mchip[^"]*"[^>]*>[\s\S]*?<\/a>/g) || []).join('');
+  assert.ok(!/shuffled/.test(chips), 'and the control arm has no chip anywhere on the sheet');
+  // it IS reachable: its report is linked
+  assert.ok(html.includes('nrw-mid/report-3p0-rain-shuffled.md'), 'its report is linked, or R5 cannot be checked');
+});

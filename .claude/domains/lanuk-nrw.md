@@ -105,6 +105,54 @@ Display filter for the two rivers: `catchment_name ∈ {Erft-,
 Siegeinzugsgebiet Östlich/Westlich}` **OR** `station_no` starts with
 `272`/`274` — 41 gauges (14 Erft, 27 Sieg); the OR is what keeps Betzdorf.
 
+## Areal rain (`scripts/build-nrw-precip.mjs`, `nrw/precip/`, gate rule N8)
+
+A SEPARATE script from the collector, on purpose: the product is a pure function
+of the committed `nrw/` tree, so `--check` can prove the committed bytes are the
+ones the rule makes. CI runs it between "Collect" and the gate.
+
+**The assignment rule, pre-registered and measured 2026-09-06.** A rain gauge
+joins the nearest RECEIVING gauge of its own basin within 100 km; failing that,
+the nearest gauge of any basin within 10 km; failing that it is unassigned, with
+the reason and the distance. Receiving = one of the 298 topology nodes that is
+not a WSV relay (`siteNo 102`, 21 of them) and has coordinates inside
+`[50.0, 52.8] x [5.5, 9.8]` — 276 of them. The relays and the one Gauss-Krüger
+gauge (2728510000200 Ruenderoth) stay IN the routing graph and forward rain
+downstream; dropping Ruenderoth would cost Menden_1 four upstream nodes.
+Result: **302 basin + 12 orphan + 5 unassigned**. Not 304/10: the two
+Issel-registered gauges in the Eifel (55040051, 55048925) sit 150 km from the
+nearest Issel gauge, so MAX_ASSIGN_KM sends them down the orphan path — that
+clause is what the 100 km is FOR.
+
+**93 gauges get a series, not 94.** Three assigned rain gauges are not three
+reporting ones: 51020051 has a meta.json and no year shard at all, so
+2828300000200 could never clear a threshold of three and the builder withdraws
+the product rather than advertise 1096 null days.
+
+**Two clocks, and they do not line up.** A rain day is [d 07:00, d+1 07:00) MEZ,
+a gauge day [d 00:00, d+1 00:00). Rain day d therefore CLOSES seven hours into
+gauge day d+1 — which is why the response statistic peaks at lag 1 and why a
+forecast covariate may only ever see rain day t-1 at context position t.
+
+**`n[]` is the number of stations BEHIND the printed value.** A day under the
+reporting threshold (max(3, half the set)) is a non-day: mm/med/mx null AND n 0.
+That buys the invariant N8 asserts and the plate draws — a column no gauge stood
+behind is a mark of its own kind, not a short bar.
+
+**The right edge is `coverage.precip.lastRainDay`**, not `window.rain.to`: the
+export runs mid-afternoon and a rain day starts at 07:00, so the source's newest
+day is always half a day short and reads back as no data. Both the ?rain grid
+and every station plate hang on that one value — one picture, one estimator.
+
+**Nesting is real.** rainSet(g) is the union over the whole upstream closure, so
+two gauges on one river share most of their rain. Every legend that prints a set
+size says so, and the forecast experiment picks one gauge per basin to get
+disjoint sets.
+
+`--out` refuses any directory not named `precip`: `prune()` unlinks what it did
+not write, and pointed at the mirror it removed gauges/, rain/ and topology.json
+— days the rolling window never gives back.
+
 ## Architecture in one breath
 
 Daily GitHub Actions (`nrw-update.yml`, 17:41 UTC, own concurrency group) →

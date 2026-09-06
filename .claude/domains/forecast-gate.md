@@ -146,6 +146,40 @@ own script tree, needed when working on it and not before. Moved verbatim.
 - **The model's point forecast is the median channel (index 5), not channel 0.**
   Measured on 2.0.2; `tfm.forecast_batch` asserts it. Horizon ≤ 128 steps is one
   decode step — the 2.0.2/3.0.1 flip-quantile difference never applies.
+- **Observed areal rain does not help TimesFM 3.0, and the control is what
+  says so.** `gate/nrw-mid/` holds the 2026-09-07 run of protocol `nrw`
+  (context 384 = 12 patches of 32, horizon 14, weekly origins, blocks
+  h1-3/h4-7/h8-14) on five LANUK gauges, one per basin, picked by the rule in
+  `stations.NRW_STATIONS` — the Erft drops out because no Erft gauge reaches
+  five rain gauges. Three arms on the SAME 48 origins: plain 3.0, 3.0 with the
+  areal rain as a past-only covariate, and 3.0 with the rain of a DIFFERENT
+  origin. Pooled at h1-3 the rain arm is **−0.010** against the plain one
+  (DM p 0.839) and the shuffled control **−0.007** — three thousandths apart.
+  `rain_verdict` is **NO EFFECT**. R5 exists for exactly this: R1 can pass on
+  noise, and only a control that wins as much tells you it did.
+  The house verdict is separate and is about the LINE, not the covariate: 3.0
+  clears the MW-blend latte here (+0.117 at h1-3) and still can never ship.
+- **The leak is the experiment.** A rain day closes seven hours into the next
+  gauge day, so at context position t the newest rain is day t-1. The shift is
+  built in `_nrw_covariate`, asserted where it is built, witnessed in the npz
+  (`cov_max_index`), and re-checked by `nrw_void`. The covariate filter runs on
+  EVERY arm including the plain one — a window one arm cannot take must not be
+  scored for the other, or the two arms answer different questions and every
+  paired statistic is void.
+- **729 days cannot carry a climatology**, so the `nrw` latte is `blend_mw`: a
+  blend towards the operator's own published MW. An external number, not a
+  constant fitted here — which is what keeps it a baseline rather than a second
+  model. And the rain is OBSERVED: the run measures the ceiling a perfect
+  precipitation forecast would buy, not what an operational system could do.
+- **The control arm is listed, linked and never drawn.** `tfm.MODELS` marks it
+  `control: True`, `write_models_manifest` carries that into `gate/models.json`,
+  and `gate.js`'s exported `drawable()` — used by the page AND its tests, because
+  those two disagreeing is how a control ends up on a plate — filters it out. Its
+  report is linked from the rain panel's own prose, since R5 is worth nothing if
+  a reader cannot open the arm it is about. `scripts/gate-rain-check.mjs` is that
+  panel's browser gate (`gate-check.mjs` does not know it): it measures the PAINT,
+  because `.meter.neg` was set on three negative bars and defined nowhere, and no
+  assertion on markup could see it.
 - **`collect-hires.mjs` is the only source of 15-minute data.** Weekly via the
   LaunchAgent `de.6bm.pegel-hires` (wrapper `collect-hires.sh`, heartbeat
   `cron:pegel-hires`, on the recap roster at 192 h), into

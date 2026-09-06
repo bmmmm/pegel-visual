@@ -1152,8 +1152,11 @@ function renderRain(m) {
       `<td>${num(v.mae.tfm_point, 1)}</td><td>${signed(v.ss)}</td><td>${signed(v.ss_vs_other)}</td></tr>`).join('')).join('') +
     `</tbody></table></div></details>`;
   const ctrl = r.control.length
-    ? `<p class="p-dim">The negative control (${r.control.map(c => esc(c.label)).join(', ')}) ran on the same windows with real rain from a DIFFERENT origin. ` +
-      `It is not drawn anywhere on this sheet — an arm that is supposed to lose reads as a competitor — but its report is linked in the foot, ` +
+    ? `<p class="p-dim">The negative control (${r.control.map(c => {
+        const md = (c.files && c.files['nrw-mid'] && c.files['nrw-mid'].md) || null;
+        return md ? a(md, c.label) : esc(c.label);
+      }).join(', ')}) ran on the same windows with real rain from a DIFFERENT origin. ` +
+      `It is not drawn anywhere on this sheet — an arm that is supposed to lose reads as a competitor — but its report is linked right here, ` +
       `because clause R5 is only worth anything if you can check it.</p>`
     : '';
   return `<p class="p-dim">Five NRW gauges, one per basin, ${esc(r.info.length ? r.info[0].kept : '—')} weekly origins each. ` +
