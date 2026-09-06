@@ -80,7 +80,11 @@
 // WT only) — "no S" is a finding (meta.noSeries, meta.params), never a
 // failure, or every scheduled run dies red the way the 111 WSV lock gauges
 // once killed archive-update. The six rain-only tier-2 stations advertise a
-// 7D week.json only, no year.json: noSeries as well, by the same rule.
+// 7D week.json only, no year.json: noSeries as well, by the same rule. And
+// four Rur gauges (123456, 1234567, 2821790000100, 2829724000100, site 104)
+// advertise S and deliver a year of [ts, null, accuracy] rows — a series
+// without a value (measured 2026-09-06): meta.empty, counted in
+// coverage.<kind>.empty, no level node, no station success (seriesHasValues).
 //
 // The 310 per-station alarmlevel.json are NOT fetched: LANUV_Info_1/2/3 in
 // stations.json ARE the Meldestufen (Menden_1: 250/410/440, identical to its
@@ -175,7 +179,11 @@
 // 96 samples/day — the same aggregation reproduces the source's own day
 // values, so the derived min carries the same authority and the same MEZ day
 // boundary. Days before the fine window carry min null (honest, visible in
-// the schema; the page draws mean as the lower edge there and says so).
+// the schema; the page draws mean as the lower edge there and says so), and
+// so does every PARTIAL day — the window's edge days, the first from 15:15
+// and the last up to the export hour: on the seed the first day's 35-sample
+// "min" sat above the source's day mean at 9 of 252 gauges (condenseHires
+// `full`, dayMin). `n` is written for such days regardless, honestly partial.
 //
 // ---- Usage ----
 //   node scripts/fetch-nrw-archive.mjs --out nrw-branch/nrw --out-hires nrw-hires-branch/nrw-hires
@@ -602,28 +610,57 @@ export function foldDaily(rows, { boundaryHour = 0, field, reduce = 'last', plau
 }
 
 // the day extremes of a fine series: min/max/mean/n per MEZ day — min and n
-// are what the source does not deliver, mean and max are the cross-check
-export function condenseHires(rows, { boundaryHour = 0, plausible = null } = {}) {
+// are what the source does not deliver, mean and max are the cross-check.
+// `full[d]` says whether the kept samples span the whole day: first sample
+// within one `step` of the day boundary, last within one `step` of the next.
+// Only then is the day's min a day minimum. The window's edge days are partial
+// by construction (the 2026-09-04 seed starts 15:15, an export ends ~15:05),
+// and on that seed the first day's "min" sat ABOVE the source's own day mean
+// at 9 of 252 gauges — 35 afternoon samples of 96 — which is exactly what the
+// gate's N5 refuses. A gap inside the day is the source's, not the edge's.
+export function condenseHires(rows, { boundaryHour = 0, plausible = null, step = null } = {}) {
   const years = new Map();
+  const DAY_S = 86400;
+  if (step == null) step = stepOf(rows);
   for (const [ts, v] of rows) {
     if (v == null) continue;
     if (plausible && !(v >= plausible[0] && v <= plausible[1])) continue;
     const day = dayOf(ts, boundaryHour);
     if (!day) continue;
-    const yr = yearSlot(years, day.y, ['min', 'max', 'sum', 'n']);
+    const p = mezParts(ts);
+    let sec = (p.hh * 60 + p.mm) * 60 - boundaryHour * 3600;
+    if (sec < 0) sec += DAY_S;
+    const yr = yearSlot(years, day.y, ['min', 'max', 'sum', 'n', 'first', 'last']);
     const d = day.d;
-    if (yr.n[d] == null) { yr.min[d] = v; yr.max[d] = v; yr.sum[d] = v; yr.n[d] = 1; continue; }
+    if (yr.n[d] == null) { yr.min[d] = v; yr.max[d] = v; yr.sum[d] = v; yr.n[d] = 1; yr.first[d] = sec; yr.last[d] = sec; continue; }
     if (v < yr.min[d]) yr.min[d] = v;
     if (v > yr.max[d]) yr.max[d] = v;
     yr.sum[d] += v;
     yr.n[d]++;
+    if (sec < yr.first[d]) yr.first[d] = sec;
+    if (sec > yr.last[d]) yr.last[d] = sec;
   }
   for (const yr of years.values()) {
     yr.mean = yr.sum.map((s, d) => (yr.n[d] ? Math.round((s / yr.n[d]) * 1000) / 1000 : null));
-    delete yr.sum;
+    yr.full = yr.n.map((n, d) => n != null && yr.first[d] <= step && yr.last[d] >= DAY_S - step);
+    delete yr.sum; delete yr.first; delete yr.last;
   }
   return years;
 }
+
+// the minima a gauge shard may carry: full days only — a partial day's min is
+// not the day's minimum and stays null; `n` is still written, honestly partial
+export const dayMin = yr => yr.min.map((v, d) => (yr.full && yr.full[d] ? v : null));
+
+// whether a folded series carries a single value. The portal advertises S for
+// four Rur gauges (123456 St. Obermaubach UW, 1234567 St. Heimbach UW,
+// 2821790000100 Dedenborn, 2829724000100 Birgeler Bach Kirche — all site 104)
+// whose year.json is 164–364 rows of [ts, null, accuracy]: the accuracy column
+// is filled, the value never (measured 2026-09-06; a healthy single-station
+// series, 102/2710080, has the same columns with values). Such a station is
+// `empty` — neither a tier-2 success nor a level node in the topology, and
+// never a red run, by the same rule as "no S".
+export const seriesHasValues = years => [...years.values()].some(yr => ['mean', 'max', 'mm'].some(f => Array.isArray(yr[f]) && yr[f].some(v => v != null)));
 
 // ---------- merge: fresh wins where it has a value, stored stays otherwise ----------
 
@@ -1021,6 +1058,7 @@ export function buildManifest({ out, registry, topo, basinOf, coverage, exportAt
     if (kind === 'gauges') { e.site = meta.siteNo; e.src = meta.src; }
     if (span.from) { e.from = span.from; e.to = span.to; e.days = span.days; }
     if (meta.noSeries) e.noSeries = true;
+    if (meta.empty) e.empty = true;
     return e;
   };
   for (const no of listDirs(join(out, 'gauges'))) { const e = entryFor('gauges', no, ['mean', 'max']); if (e) manifest.gauges[no] = e; }
@@ -1128,9 +1166,9 @@ export async function collect(o) {
   mkdirSync(out, { recursive: true });
   let written = 0;
   const coverage = {
-    gauges: { registry: gaugeEntries.filter(isGauge).length, bulk: 0, station: 0, noSeries: 0 },
-    rain: { registry: rainEntries.length, bulk: 0, station: 0, noSeries: 0 },
-    temp: { registry: bulkTempIds.size, bulk: 0, station: 0, noSeries: 0 },
+    gauges: { registry: gaugeEntries.filter(isGauge).length, bulk: 0, station: 0, noSeries: 0, empty: 0 },
+    rain: { registry: rainEntries.length, bulk: 0, station: 0, noSeries: 0, empty: 0 },
+    temp: { registry: bulkTempIds.size, bulk: 0, station: 0, noSeries: 0, empty: 0 },
   };
 
   // --- tier 2 first: its shards land before the bulk overwrites them inside
@@ -1159,22 +1197,34 @@ export async function collect(o) {
         if (has('S')) {
           const { years, unknown } = tier2Series(r.docs.S, 0, [PLAUSIBLE_MIN_CM, PLAUSIBLE_MAX_CM]);
           unknown.forEach(u => tier2.unknownSeries.add(u));
-          written += upsertYears(dir, e.station_no, [...years].map(([y, yr]) => [y, { y, mean: yr.mean, max: yr.max, acc: yr.acc }]), ['min', 'mean', 'max', 'n']);
-          levelIds.add(e.station_no);
-          coverage.gauges.station++;
-          tier2Metas.push([dir, e, PRODUCTS.gauges, { src: 'station', noSeries: undefined, params: r.params }]);
+          if (seriesHasValues(years)) {
+            written += upsertYears(dir, e.station_no, [...years].map(([y, yr]) => [y, { y, mean: yr.mean, max: yr.max, acc: yr.acc }]), ['min', 'mean', 'max', 'n']);
+            levelIds.add(e.station_no);
+            coverage.gauges.station++;
+            tier2Metas.push([dir, e, PRODUCTS.gauges, { src: 'station', noSeries: undefined, empty: undefined, params: r.params }]);
+          } else {
+            // advertised, delivered, and nothing in it (see seriesHasValues):
+            // a finding like "no S", so no level node and no station success
+            coverage.gauges.empty++;
+            tier2Metas.push([dir, e, PRODUCTS.gauges, { src: 'station', noSeries: undefined, empty: true, params: r.params }]);
+          }
         } else {
           coverage.gauges.noSeries++;
-          tier2Metas.push([dir, e, PRODUCTS.gauges, { src: 'none', noSeries: true, params: r.params }]);
+          tier2Metas.push([dir, e, PRODUCTS.gauges, { src: 'none', noSeries: true, empty: undefined, params: r.params }]);
         }
         if (has('WT')) {
           const tdir = join(out, 'temp', e.station_no);
           const { years, unknown } = tier2Series(r.docs.WT, 0, PLAUSIBLE_TEMP_C);
           unknown.forEach(u => tier2.unknownSeries.add(u));
-          written += upsertYears(tdir, e.station_no, [...years].map(([y, yr]) => [y, { y, mean: yr.mean, max: yr.max, acc: yr.acc }]), ['mean', 'max']);
           wtIds.add(e.station_no);
-          coverage.temp.station++;
-          tier2Metas.push([tdir, e, PRODUCTS.temp, { src: 'station', params: r.params }]);
+          if (seriesHasValues(years)) {
+            written += upsertYears(tdir, e.station_no, [...years].map(([y, yr]) => [y, { y, mean: yr.mean, max: yr.max, acc: yr.acc }]), ['mean', 'max']);
+            coverage.temp.station++;
+            tier2Metas.push([tdir, e, PRODUCTS.temp, { src: 'station', empty: undefined, params: r.params }]);
+          } else {
+            coverage.temp.empty++;
+            tier2Metas.push([tdir, e, PRODUCTS.temp, { src: 'station', empty: true, params: r.params }]);
+          }
         }
       }
       if (isClimate(e) || has('N')) {
@@ -1182,9 +1232,14 @@ export async function collect(o) {
         if (has('N')) {
           const { years, unknown } = tier2Series(r.docs.N, PRODUCTS.rain.boundaryHour, [0, Infinity]);
           unknown.forEach(u => tier2.unknownSeries.add(u));
-          written += upsertYears(rdir, e.station_no, [...years].map(([y, yr]) => [y, { y, mm: yr.mm, cov: yr.acc }]), ['mm', 'imax'], 'cov');
-          coverage.rain.station++;
-          if (upsertMeta(rdir, rainMeta(e, basinOf(e), { src: 'station', noSeries: undefined, params: r.params }))) written++;
+          if (seriesHasValues(years)) {
+            written += upsertYears(rdir, e.station_no, [...years].map(([y, yr]) => [y, { y, mm: yr.mm, cov: yr.acc }]), ['mm', 'imax'], 'cov');
+            coverage.rain.station++;
+            if (upsertMeta(rdir, rainMeta(e, basinOf(e), { src: 'station', noSeries: undefined, empty: undefined, params: r.params }))) written++;
+          } else {
+            coverage.rain.empty++;
+            if (upsertMeta(rdir, rainMeta(e, basinOf(e), { src: 'station', noSeries: undefined, empty: true, params: r.params }))) written++;
+          }
         } else if (isClimate(e)) {
           coverage.rain.noSeries++;
           if (upsertMeta(rdir, rainMeta(e, basinOf(e), { src: 'none', noSeries: true, params: r.params }))) written++;
@@ -1231,9 +1286,10 @@ export async function collect(o) {
     window.gaugesHires = spanOfRows([...hires.values()]);
     for (const [no, rows] of hires) {
       const dir = join(out, 'gauges', no);
-      const cond = condenseHires(rows, { plausible: [PLAUSIBLE_MIN_CM, PLAUSIBLE_MAX_CM] });
-      // additive: only min and n, mean/max stay the source's own day values
-      written += upsertYears(dir, no, [...cond].map(([y, yr]) => [y, { y, min: yr.min, n: yr.n }]), ['min', 'mean', 'max', 'n']);
+      const cond = condenseHires(rows, { plausible: [PLAUSIBLE_MIN_CM, PLAUSIBLE_MAX_CM], step: stepOf(rows) });
+      // additive: only min and n, mean/max stay the source's own day values;
+      // min only where the samples span the whole day (dayMin), n regardless
+      written += upsertYears(dir, no, [...cond].map(([y, yr]) => [y, { y, min: dayMin(yr), n: yr.n }]), ['min', 'mean', 'max', 'n']);
       if (outHires) written += upsertMonths(join(outHires, 'gauges', no), no, toMonthShards(rows, stepOf(rows)));
     }
     hires.clear();
