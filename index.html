@@ -95,7 +95,12 @@
     white-space: pre-wrap;
     overflow-x: auto;
   }
-  #screen { view-transition-name: screen; }
+  /* No view-transition-name on #screen. A named group is sized to the NEW
+     state, and a switch renders the short connecting screen first: Firefox
+     then squeezed the old plate (1382 px) and the chart that landed mid-fade
+     into that 224 px box for 0.35 s (measured 2026-09-06; Chrome does the
+     same to the old plate, more mildly). The root cross-fade below is
+     viewport-sized in both states and cannot stretch anything. */
   /* visually hidden, still spoken: the plate's prose summary for screen readers */
   .vh {
     position: absolute;
@@ -119,7 +124,7 @@
     #screen .heat td a, #screen .heat td button,
     #screen .heat th a, #screen .heat th button { min-block-size: 1.5rem; }
   }
-  ::view-transition-old(screen), ::view-transition-new(screen) { animation-duration: 0.35s; }
+  ::view-transition-old(root), ::view-transition-new(root) { animation-duration: 0.35s; }
   form {
     margin-top: 1.4em;
     padding-top: 1em;
