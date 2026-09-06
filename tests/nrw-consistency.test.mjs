@@ -192,7 +192,7 @@ test('N3 young: the offered span stored whole is green, a truncated delivery is 
   const truncated = mkGauges(300, { years: STATION_YEARS }); // bulk gauges written like Tier 2: 364 days
   const v = checkWindowDepth(truncated, { nowDate, window: WINDOW, collectionStart: young });
   assert.equal(v.length, 1);
-  assert.match(v[0], /median stored span of 252 bulk gauges is 364 days, the source offered 729 \(2024-09-04\.\.2026-09-02\)/);
+  assert.match(v[0], /median stored span of 252 bulk gauges is 364 days, the source offered 729 \(2024-09-04\.\.2026-09-02, slack 2\)/);
 });
 
 test('N3 young: gaps inside the span are the source\'s, not the collector\'s', () => {

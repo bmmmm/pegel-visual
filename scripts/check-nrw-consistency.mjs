@@ -471,10 +471,17 @@ export function highWaterMark(hw, registry = null) {
   }
   if (ratio != null && ratio > 1) ratio /= 100;
   if (ratio != null && ratio < 0) ratio = null;
+  if (ratio != null) ratio = Math.round(ratio * 1e6) / 1e6; // 81.9 / 100 is 0.8190000000000001 in binary
   return ratio == null && bulk == null ? null : { ratio, bulk };
 }
 export const highWaterRatio = (hw, registry = null) => (highWaterMark(hw, registry) || {}).ratio ?? null;
 
+// A mark that carries the bulk COUNT is compared in counts, not shares: the
+// registry grows by discovery (on 2026-09-04 tier 2 found 17 water-temperature
+// stations the ZIP never had, 108 -> 125, and the share fell 13.6 pp while the
+// ZIP lost nothing), so a share against a count mark reads growth as loss. The
+// slack is the same 3 % — of the registry, in stations. A bare-number mark
+// (a share) keeps the share comparison.
 export function checkCoverageMarks(tree, head = null, {
   slack = HIGH_WATER_SLACK, maxNoSeriesGrowth = MAX_NO_SERIES_GROWTH, maxStationDrop = MAX_STATION_DROP,
 } = {}) {
@@ -493,11 +500,26 @@ export function checkCoverageMarks(tree, head = null, {
     if (bulk > registry || station > registry) {
       v.push(`N7: coverage.${kind}: bulk ${bulk} / station ${station} exceed registry ${registry} — the registry must be the union of every station table`);
     }
+    const h = head && head.coverage && head.coverage[kind];
     const ratio = bulk / registry;
-    const hw = highWaterRatio(c.highWater, registry);
-    if (hw == null) {
+    const mark = highWaterMark(c.highWater, registry);
+    const headMark = h ? highWaterMark(h.highWater, h.registry) : null;
+    if (!mark) {
       v.push(`N7: coverage.${kind}.highWater missing — the mark is set on the first run and only ever raised`);
+    } else if (mark.bulk != null) {
+      if (headMark && headMark.bulk != null && mark.bulk < headMark.bulk) {
+        v.push(`N7: coverage.${kind}.highWater.bulk sank ${headMark.bulk} -> ${mark.bulk} — the mark is only ever raised`);
+      }
+      if (mark.bulk < bulk) {
+        v.push(`N7: coverage.${kind}.highWater.bulk ${mark.bulk} sits below the current bulk count ${bulk} — the mark is only ever raised`);
+      }
+      const maxUnder = slack * registry;
+      if (mark.bulk - bulk > maxUnder) {
+        v.push(`N7: coverage.${kind}: the bulk product carries ${bulk} of ${registry} registered stations, ${mark.bulk - bulk} under its `
+          + `high-water mark ${mark.bulk} (max ${maxUnder.toFixed(1)}) — the ZIP is losing stations`);
+      }
     } else {
+      const hw = mark.ratio;
       if (ratio < hw - slack) {
         v.push(`N7: coverage.${kind}: bulk covers ${pct(ratio)}% of the registry, ${pct(hw - ratio)} pp under the `
           + `high-water mark ${pct(hw)}% (max ${pct(slack)} pp) — the ZIP is losing stations`);
@@ -505,13 +527,12 @@ export function checkCoverageMarks(tree, head = null, {
       if (hw < ratio - ROUND) {
         v.push(`N7: coverage.${kind}.highWater ${pct(hw)}% sits below the current share ${pct(ratio)}% — the mark is only ever raised`);
       }
+      const hhw = headMark ? headMark.ratio : null;
+      if (hhw != null && hw < hhw - ROUND) {
+        v.push(`N7: coverage.${kind}.highWater sank ${pct(hhw)}% -> ${pct(hw)}% — the mark is only ever raised`);
+      }
     }
-    const h = head && head.coverage && head.coverage[kind];
     if (!h) continue;
-    const hhw = highWaterRatio(h.highWater, h.registry);
-    if (hhw != null && hw != null && hw < hhw - ROUND) {
-      v.push(`N7: coverage.${kind}.highWater sank ${pct(hhw)}% -> ${pct(hw)}% — the mark is only ever raised`);
-    }
     if (isNum(h.noSeries) && noSeries - h.noSeries > maxNoSeriesGrowth) {
       v.push(`N7: coverage.${kind}: noSeries grew ${h.noSeries} -> ${noSeries} in one run (max +${maxNoSeriesGrowth})`);
     }
