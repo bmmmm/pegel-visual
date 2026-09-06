@@ -1488,7 +1488,7 @@
       <b>HISTORY</b> block itself (<b>24H … ALL</b>, <b>30D</b> to start) — the
       choice lands in the URL, so shared links reproduce it. <b>export</b> /
       <b>import</b> / <b>clear</b> manage the archive; nothing ever leaves your
-      browser. Want years instead of days? Picking <b>1Y / 5Y / ALL</b> fetches
+      browser. Want years instead of days? Picking <b>1Y</b> or any longer range fetches
       the WSV raw archive (data back to <b>2000</b>, condensed to daily min/max,
       hosted with this site and refreshed weekly) for the station on screen —
       marked as unvalidated raw data: outliers and gaps are part of the deal.
@@ -1512,8 +1512,8 @@
       time-series model, no training on our data — over 3&thinsp;563 backtest
       windows from 2016–2025 on seven gauges in five river regimes, against a
       pre-registered bar (the level decaying into the seasonal norm) with every
-      threshold fixed before the first run. It won by 7 % at two weeks, drew at a
-      month and lost at three. The 3.0 line, out in August 2026, was measured on
+      threshold fixed before the first run. It won by 7 % at two weeks — under
+      the pre-registered bar of 10 % — drew at a month and lost at three. The 3.0 line, out in August 2026, was measured on
       the same windows and lands in the same place — a chip on that page draws
       both curves at once. The page shows every clause, chart and number, plus
       the write-up of what we did and why. A seasonal outlook from the archive
@@ -1544,10 +1544,11 @@
       that river gauge by gauge. Whatever the map has no free cell for — and every
       water PEGELONLINE lists without coordinates, like the Austrian Donau or the
       Czech Elbe gauges — is listed underneath with its gauge count, so the
-      counts stay true even where the map cannot show them. The first item of
-      the app bar names the gauge you came from (<b>← BONN</b>) and goes back to
-      it; it appears in the map and the whole-river view, which otherwise have
-      no station on screen to click.</dd>
+      counts stay true even where the map cannot show them. The station item at
+      the head of the app bar's mode row names the gauge you came from
+      (<b>← BONN</b>) and goes back to it; it turns into a back link in the map
+      and the whole-river view, which otherwise have no station on screen to
+      click.</dd>
     <dt>the rising board</dt>
     <dd><b>rising</b> in the app bar (or <b>?rising</b>, <b>--rising</b>) ranks every gauge by how
       fast it moved since yesterday, in cm per day: top risers first, the
@@ -1564,7 +1565,7 @@
       the baseline between yesterday and a week back (<b>?rising&amp;d7</b>): the
       week view keeps the same cm/day unit, adds the total centimetres of the
       span in brackets, and states the span it actually measured — a missed
-      snapshot day makes it <b>Δ6.8d</b> rather than exactly seven.</dd>
+      snapshot day makes it <b>Δ6.8 d</b> rather than exactly seven.</dd>
     <dt>the total overview</dt>
     <dd><b>totals</b> in the app bar (or <b>?total</b>, <b>--total</b>) stacks every river's summed
       gauge readings into one chart and lets you zoom: years → one year's months
@@ -4675,7 +4676,7 @@ async function loadWave() {
     const today = epochDay(Date.now());
     const day0 = today - (WAVE_FETCH_DAYS - 1);
     const rows = [];
-    // the hosted archive gives the long tail (refreshed monthly), the live API
+    // the hosted archive gives the long tail (refreshed weekly), the live API
     // fills the newest ~31 days — together the window reaches today. Chunked to
     // at most 6 REST calls in flight, to stay polite to the WSV API.
     const chunk = 6;
@@ -6642,12 +6643,12 @@ screen.addEventListener('pointerup', e => {
 });
 // The keyboard layer. Every binding is echoed in the ? sheet and in the
 // matching control's title, so it is discoverable without reading a manual.
-// Nothing here fires while a field or a dialog has focus.
+// Nothing here but Esc fires while a field or a dialog has focus.
 const KEYMAP = [
   ['/', 'open the finder from anywhere on the page'],
   ['?', 'this list'],
   ['h', 'the manual page (same as --help)'],
-  ['Esc', 'close a dialog · zoom out of ?total · leave a sub-view'],
+  ['Esc', 'close the manual or a dialog · zoom out of ?total · leave a sub-view'],
   ['1…0', 'history range, 24H through ALL'],
   ['[  ]', 'the next gauge downstream / upstream on this river'],
   ['g', 'the gauge · m the map · r who\u2019s rising · t the totals'],

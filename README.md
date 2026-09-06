@@ -84,9 +84,10 @@ _      _      _      _      _      _      _      _
   on the Neckar, so the direction comes from the elevation, not from the km.
   Neighbours are one click away, and the station's own label opens the
   whole-river profile.
-- **the chrome** — an app bar with the back button (it names the gauge you
-  came from: `← BONN`), `map`, `rising`, `totals`, `forecast gate`, `⌕ find`
-  and `ⓘ`; a breadcrumb trail (`All waters ▸ RHEIN ▸ BONN`); a finder dialog
+- **the chrome** — an app bar with the wordmark, the station item (the
+  active gauge on its own plate, `← BONN` — the way back — on every other
+  view), `map`, `rising`, `totals`, `forecast gate`, `⌕ find` and `ⓘ`; a
+  breadcrumb trail (`All waters ▸ RHEIN ▸ BONN`); a finder dialog
   with search, browse-by-water, recents and arrow-key navigation; a footer
   with `info`, `report issue` (builds a bug report from the live state,
   receiver URLs stripped, and hands it to GitHub or the clipboard), `share`,
@@ -137,8 +138,8 @@ lists it: `/` opens the finder, `?` the feature guide, `h` the man page;
 downstream / upstream, `g` `m` `r` `t` jump to gauge, map, rising board and
 totals, `a` toggles absolute / anomaly in the years view, `w` profile / wave
 in river mode, `d` sum / change in the totals, `.` copies this view's link,
-`Esc` closes a dialog, zooms out of the totals or leaves a sub-view. Nothing
-fires while a field or a dialog has focus.
+`Esc` closes the manual or a dialog, zooms out of the totals or leaves a
+sub-view. Nothing but `Esc` fires while a field or a dialog has focus.
 
 `share` in the footer hands the current view's link to your system share
 sheet (or copies it). The page ships a web manifest and a shell-only service
@@ -167,8 +168,8 @@ list the map cannot be, every water with its gauge count.
 
 Two things are deliberately kept apart: a river's **gauge count** includes
 every gauge, its **position** comes only from gauges that have coordinates.
-PEGELONLINE carries a few dozen gauges without any (57 of 786 at the last
-count) — the Austrian Donau, the Czech Elbe, the Dutch Rhine — and letting
+PEGELONLINE carries a few dozen gauges without any (57 of 786 when counted
+on 2026-09-02) — the Austrian Donau, the Czech Elbe, the Dutch Rhine — and letting
 that gap into the count would advertise `DONAU 18` for a river whose profile
 then opens with 27. Waters with no located gauge at all are listed under the
 map with their real count, and the key says how many are missing and why.
@@ -197,7 +198,7 @@ is a day old, the board says so and shows what the live values alone can:
 how many gauges sit high, low, normal. The `1D` / `7D` chips move the
 baseline a week back: same cm/day unit, the total centimetres of the span in
 brackets, and the span it actually measured — a missed snapshot day makes it
-`Δ6.8d` rather than exactly seven.
+`Δ6.8 d` rather than exactly seven.
 
 Where a station has mean low/high water marks, its row adds context: already
 `HIGH` / `LOW`, or a rough straight-line ETA like `→MHW ~18d`. Tidal gauges
@@ -250,8 +251,9 @@ snapshot-sourced days as provisional until the next rebuild.
 ## Whole-river mode
 
 Instead of one station, view an entire river as a single longitudinal
-profile: every gauge on the river laid out by river kilometre (downstream to
-the left), plotted at its live water-surface elevation (m NHN), with a
+profile: every gauge on the river laid out along the flow (upstream to the
+left, downstream to the right — the foot says so), plotted at its live
+water-surface elevation (m NHN), with a
 `TROUBLE` list of every station currently running low or high. One request to
 PEGELONLINE fetches the whole river; it refreshes on the same 5-minute cycle.
 Markers carry shape as well as colour (`◉` normal · `▼` low · `▲` high) so
@@ -336,7 +338,7 @@ plate that uses it.
   only one that can look back past the REST retention, and it is what healed
   the half year a cancelled monthly run once tore out. Each January the
   completed year is re-backfilled from the ZIP and graduates into
-  `closed.json`. 111 of the 739 gauges have no WSV archive at all (lock and
+  `closed.json`. About 111 of the 739 gauges have no WSV archive at all (lock and
   weir gauges, foreign partner gauges, a few harbour gauges): that is a
   recorded fact in `manifest.json` (`noArchive`), not a failure — such a
   gauge still grows a running year from the weekly pull, and the plate says
@@ -377,7 +379,7 @@ plate that uses it.
 Four orphan branches carry data and nothing else. They live on GitHub only,
 never on the Forgejo origin, and are only ever fast-forwarded. None of them
 holds a `.github/` directory, so a push there can never start a workflow —
-every data job dispatches the deploy explicitly.
+every job that writes a deployed branch dispatches the deploy explicitly.
 
 | Branch | Holds | Written by | Deployed |
 |---|---|---|---|
@@ -391,11 +393,13 @@ first — seven rules that can each go red: recency (R1), totals alive (R2),
 coverage (R3), nothing lost against the previous commit (R4), shapes (R5),
 the running year present fleet-wide (R6) and the no-archive markers intact
 (R7). The daily snapshot job skips R6 and R7, because it cannot fix what they
-find and a blocked snapshot loses its day slot for good. The `nrw` branches
-have their own gate (`check-nrw-consistency.mjs`, N1–N7). `data-freshness`
-watches all of it once a day — commit age, deployed drift, manifest age — and
-opens or updates an issue labelled `data-freshness` instead of failing
-silently.
+find and a blocked snapshot loses its day slot for good. The `nrw` branch
+has its own gate (`check-nrw-consistency.mjs`, N1–N7); `nrw-hires` is
+mirrored as fetched. `data-freshness` watches the two deployed branches once
+a day — `archive` for commit age, deployed drift and manifest age, `nrw` for
+commit age — and opens or updates an issue labelled `data-freshness` instead
+of failing silently. `hires` has no watchdog but its collector's own
+heartbeat.
 
 ## The forecast gate
 
@@ -422,9 +426,10 @@ an index.
 line this GPL repo may ever ship) reaches a pooled skill of +0.07 at lead days
 1–14 under a bar of 0.10, nothing at 15–30, and loses to plain climatology at
 31–90. TimesFM 3.0 was measured as a challenger on the same test origins: a
-little better everywhere and nowhere near the bar — and its weights are
-non-commercial, so it is named on the sheet with a ⚖ and can never become
-the shipped model, however it scores; `tests/test_license.py` holds that.
+little better at the first and the last block, level at the middle one, and
+nowhere near the bar — and its weights are non-commercial, so it is named on
+the sheet with a ⚖ and can never become the shipped model, however it
+scores; `scripts/forecast/tests/test_license.py` holds that.
 The short horizon (48 h on the 15-minute grid) stays `PROVISIONAL` until
 every gauge has 60 independent origins, which is what the weekly `hires`
 collection is accumulating toward. A weather model as forecast input was
@@ -434,7 +439,8 @@ forecast, and the gate page says why.
 
 `cd scripts/forecast && uv run python backtest.py --help` is the whole
 bootstrap — a plain `uv run` syncs torch and the shipped `timesfm` pin into
-`tmp-forecast/`; the challenger line lives in a conflicting group
+`scripts/forecast/.venv/`, with the download cache under `tmp-forecast/`;
+the challenger line lives in a conflicting group
 (`--no-group model --group model-nc`). Re-running the gate consumes the test
 set: read `gate/*/report.md` before touching a threshold.
 
@@ -496,13 +502,15 @@ the statistics, the clause logic on synthetic results, and the licence guard
 | Workflow | When | What |
 |---|---|---|
 | `tests` | every push and PR to `main` | `node --test`; the pytest suite without model weights; `scripts/gate-check.mjs` driving the gate page in the runner's Chrome on a desktop and a phone viewport |
-| `pages` | after a green `tests` run on `main` (`workflow_run`), or dispatched by a data job | copies the site without `scripts/`, `tests/`, `.github/` and `.claude/`, stamps the commit into `index.html` and the deploy date into `sitemap.xml`, mounts `archive/` and `nrw/` from their branches, deploys to GitHub Pages |
+| `pages` | after a green `tests` run on `main` (`workflow_run`), or dispatched by a data job | copies the site without `scripts/`, `tests/`, `.github/`, `.claude/` and `CLAUDE.md`, stamps the commit into `index.html` and the deploy date into `sitemap.xml`, mounts `archive/` and `nrw/` from their branches, deploys to GitHub Pages |
 | `archive-update` | Mondays 04:23 UTC | WSV REST refresh; on the first Monday the ZIP heal of the running year and the gap sweep; RWS refresh; totals rebuild; consistency gate; push; deploy |
 | `snapshot-update` | daily 05:17 and 15:17 UTC | bulk capture of every gauge, totals append, gate without R6/R7, push, deploy — two slots because scheduler drift once pushed a run past midnight |
 | `nrw-update` | daily 17:41 UTC | LANUK mirror into `nrw` and `nrw-hires`, N1–N7 gate, push, deploy |
-| `data-freshness` | daily 19:47 UTC | the watchdog over all data branches; reports into an issue |
+| `data-freshness` | daily 19:47 UTC | the watchdog over `archive` and `nrw`; reports into an issue |
 
-A deploy only follows a green `tests` run. The engineering notes that are
+A push to `main` deploys only after a green `tests` run; a data job's
+dispatch deploys whatever `main` holds at that moment, unasked. The
+engineering notes that are
 not needed on every turn — the browser recipe, the gate's registry and pins,
 the LANUK measurements — live in `.claude/domains/`; `CLAUDE.md` carries the
 rules that are.
