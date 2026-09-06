@@ -1634,6 +1634,7 @@
   </nav>
   <p id="footer-credits">
     <span>data: <a href="https://www.pegelonline.wsv.de" rel="noopener">PEGELONLINE</a> &copy; WSV, refreshed every 5 min</span>
+    <span>data (NRW rivers): <a href="https://hochwasserportal.nrw" rel="noopener">LANUK NRW</a>, dl-de/zero-2.0, mirrored daily — no live feed</span>
     <span>⛅ weather: <a href="https://open-meteo.com" rel="noopener">open-meteo</a></span>
   </p>
 </footer>
@@ -1641,6 +1642,27 @@
 'use strict';
 
 const API = 'https://www.pegelonline.wsv.de/webservices/rest-api/v2';
+
+// ---------- LANUK NRW: the second gauge source ----------
+// Gauges the WSV never serves (Erft, Sieg, every non-federal water in NRW) come
+// from the LANUK NRW hochwasserportal export, mirrored daily by
+// scripts/fetch-nrw-archive.mjs onto the `nrw` data branch and served from
+// /nrw/ same-origin. The portal has no CORS headers and its export is a day
+// old, so there is no live feed for these: the reading is a daily mean.
+// Their station id is `lanuk-<station_no>` — path-safe, and trivially told
+// apart from a 36-character PEGELONLINE uuid. The seam sits at the loader
+// layer: state.info / state.gauge stay the shared language and everything
+// above them (view models, renderers, routing, finder, map) is source-blind.
+const LANUK = 'LANUK NRW';
+const LANUK_BASE = 'nrw/';
+const isLanukId = id => typeof id === 'string' && id.startsWith('lanuk-');
+const lanukNo = id => (isLanukId(id) ? id.slice('lanuk-'.length) : null);
+// the ONE place the two archive layouts differ: the directory a station's
+// series lives in — nrw/gauges/<no>/ for a LANUK id, archive/<uuid>/ otherwise
+const seriesBase = id => (isLanukId(id) ? `${LANUK_BASE}gauges/${lanukNo(id)}/` : `archive/${id}/`);
+// the current station's id as the loaders know it: a LANUK id from the merged
+// station index, or null for a PEGELONLINE gauge (which is addressed by name)
+const stationId = () => (stationMeta.get(station) || {}).id || null;
 // sed-replaced with the deployed commit sha by .github/workflows/pages.yml;
 // stays 'dev' locally and whenever the placeholder wasn't replaced
 const APP_COMMIT = '__COMMIT__';
@@ -1811,7 +1833,8 @@ function applyModeChrome() {
   // the boards left the only way to move your own data behind a typed flag.
   // The one item in it that IS per-station — the WSV download link, which
   // points at one gauge's page — goes away with the recent-gauge chips.
-  document.getElementById('wsv-archive-item').hidden = !perStation;
+  // …and it points at a WSV page, so a gauge fed from elsewhere hides it too
+  document.getElementById('wsv-archive-item').hidden = !perStation || !!(state.feed && !state.feed.live);
   if (!perStation) document.getElementById('recent').hidden = true;
   else renderRecent();
   // The app bar's station item doubles as the way back: neither the map nor the
@@ -2014,6 +2037,18 @@ const state = {
   total: null,      // { overview, top, error } while in total mode (see loadTotal)
   repoArchive: null, // 'available' | 'none' once the hosted archive manifest was consulted
   archiveSource: null, // manifest entry.source (e.g. 'Rijkswaterstaat'); null → WSV
+  // what feeds the plate when it is not the live PEGELONLINE API: null = live
+  // WSV; else { name, live: false, collectedAt, reading, trend, … } set by the
+  // loader that owns the station (see loadLanukStation). The view models read
+  // it for the foot line, the trend note and the poll decision — never a
+  // source name, so a third source only ever touches the loader layer.
+  feed: null,
+  lanuk: null,      // LANUK-only extras (stages, catchment, down, note) — never in state.gauge
+  neighborsNote: null, // why the neighbour profile is empty, when the loader knows (null = still locating)
+  // newest day (ms) whose stored low is the daily MEAN, not a minimum — the seed
+  // rows of a source that publishes no minimum; the history key says so while
+  // such days are in the window
+  lowIsMeanUntil: null,
 };
 // who to attribute the hosted multi-year archive to for the current station —
 // most are WSV, a few Dutch gauges are backed by Rijkswaterstaat (see the
@@ -2054,8 +2089,206 @@ function noWaterLevelError(info) {
       : `pick another station${water ? ' on the ' + water : ''}`);
 }
 
+// ---------- LANUK station loader: the seam ----------
+
+// Year shards and meta files are shared by the station page, the history
+// backfill and the river/wave views — one fetch per file per session. A
+// missing file stays missing for the session (the mirror is a static tree).
+const lanukShardCache = new Map(); // "<no>/<y>" -> Promise<shard|null>
+const lanukMetaCache = new Map();  // "<no>" -> Promise<meta|null>
+function lanukShard(no, y) {
+  const key = `${no}/${y}`;
+  if (!lanukShardCache.has(key)) {
+    lanukShardCache.set(key, getJson(`${LANUK_BASE}gauges/${no}/${y}.json`).catch(() => null));
+  }
+  return lanukShardCache.get(key);
+}
+function lanukMeta(no) {
+  if (!lanukMetaCache.has(no)) {
+    lanukMetaCache.set(no, getJson(`${LANUK_BASE}gauges/${no}/meta.json`).catch(() => null));
+  }
+  return lanukMetaCache.get(no);
+}
+
+// a manifest/meta from-to is a year, or an ISO date whose year is meant
+const yearOf = v => (typeof v === 'number' ? v : Number(String(v || '').slice(0, 4))) || null;
+// MEZ midnight of day d of year y, in ms — the archive's day convention (the
+// data is stamped UTC+1 all year, exactly like current.json)
+const mezDayStart = (y, d) => Date.UTC(y, 0, 1) - 36e5 + d * 864e5;
+const mezIsoDay = (y, d) => new Date(mezDayStart(y, d) + 36e5).toISOString().slice(0, 10);
+
+// the newest day of a year shard with a daily MEAN: { d, value } or null. The
+// mean is the bulk export's own figure and the reading; the newest day of a
+// shard may carry only the min/max/n condensed from the fine series (a partial
+// day, measured 2026-09-04: Sep 3 with 61 of 96 samples and no mean) — that
+// day is history, not the reading. A shard without any mean array (none in
+// the mirror today) would fall back to the maximum rather than show nothing.
+function lanukDayValue(shard, d) {
+  if (Array.isArray(shard.mean)) return shard.mean[d];
+  return shard.max[d];
+}
+function lanukNewestDay(shard) {
+  if (!shard || !Array.isArray(shard.max)) return null;
+  for (let d = shard.max.length - 1; d >= 0; d--) {
+    const v = lanukDayValue(shard, d);
+    if (v != null) return { d, value: v };
+  }
+  return null;
+}
+// the reading at most three days before d, for the day-over-day trend
+function lanukPrevDay(shard, d) {
+  for (let k = d - 1; k >= 0 && k >= d - 3; k--) {
+    const v = lanukDayValue(shard, k);
+    if (v != null) return { d: k, value: v };
+  }
+  return null;
+}
+
+// the newest daily mean as the plate's "current" reading — a day old by
+// construction, stamped at the MEZ start of its day. The feed descriptor
+// (lanukFeed) says what it is, so nothing prints it as live.
+async function lanukLatest(no, entry) {
+  const to = yearOf(entry && entry.to) || new Date().getUTCFullYear();
+  for (let y = to; y >= to - 1; y--) {
+    const shard = await lanukShard(no, y);
+    const day = lanukNewestDay(shard);
+    if (!day) continue;
+    const prev = lanukPrevDay(shard, day.d);
+    return {
+      y, d: day.d, value: day.value,
+      timestamp: new Date(mezDayStart(y, day.d)).toISOString(),
+      isoDay: mezIsoDay(y, day.d),
+      // cm per hour, so the header's arrow keeps its noise floor; null when the
+      // day before is missing too
+      trend: prev ? (day.value - prev.value) / ((day.d - prev.d) * 24) : null,
+    };
+  }
+  return null;
+}
+
+// the station record the rest of the page reads, in PEGELONLINE's shape
+function lanukInfoFrom(meta, id) {
+  const water = String(meta.water || '').toUpperCase();
+  return {
+    id,
+    shortname: meta.name,
+    longname: meta.name,
+    water: { shortname: water, longname: meta.water || '' },
+    // the distance to the confluence stands in for the river kilometre: it
+    // falls DOWNSTREAM, so the mouth lands on the right like a WSV km axis
+    km: typeof meta.distToConflKm === 'number' ? meta.distToConflKm : null,
+    latitude: typeof meta.lat === 'number' ? meta.lat : null,
+    longitude: typeof meta.lon === 'number' ? meta.lon : null,
+    timeseries: [{ shortname: 'W', unit: meta.unit || 'cm' }],
+  };
+}
+
+// where a reading sits against the operator's MNW/MHW — the same three-way
+// answer PEGELONLINE ships as stateMnwMhw, so troubleKind() reads it unchanged
+function lanukState(v, meta) {
+  if (meta.mnw != null && v < meta.mnw) return 'low';
+  if (meta.mhw != null && v > meta.mhw) return 'high';
+  return meta.mnw != null && meta.mhw != null ? 'normal' : 'unknown';
+}
+
+// the W series record: MNW/MW/MHW as characteristic values so charValue(),
+// sceneModel() and historyRefMarks() run unchanged; no gauge zero (the source
+// publishes none), so elevOf() answers null and the profiles say so
+function lanukGaugeFrom(meta, reading) {
+  const characteristicValues = [['MNW', meta.mnw], ['MW', meta.mw], ['MHW', meta.mhw]]
+    .filter(([, v]) => typeof v === 'number' && Number.isFinite(v))
+    .map(([shortname, value]) => ({ shortname, value }));
+  const currentMeasurement = reading
+    ? { timestamp: reading.timestamp, value: reading.value, stateMnwMhw: lanukState(reading.value, meta) }
+    : null;
+  return { shortname: 'W', unit: meta.unit || 'cm', characteristicValues, currentMeasurement, gaugeZero: null };
+}
+
+// what the plates need to know about this feed that is not a reading: it is
+// not live, when the mirror ran, how to word the trend, which windows make
+// sense for one value a day
+function lanukFeed(latest) {
+  const info = lanukManifestInfo || {};
+  return {
+    name: LANUK,
+    live: false,
+    license: 'dl-de/zero-2.0',
+    collectedAt: info.generated || null,
+    reading: latest ? { text: `daily mean · ${latest.isoDay}`, note: T.lanukReadingNote } : null,
+    trend: { perHour: latest ? latest.trend : null, note: T.lanukTrendNote },
+    minWindowDays: 7,
+    thinNote: T.lanukThin,
+    reachNote: T.lanukReach,
+    kmNote: T.lanukKmNote,
+  };
+}
+
+async function loadLanukStation() {
+  const forStation = station; // guard against a mid-flight station switch
+  const id = stationId();
+  const no = lanukNo(id);
+  const isNewStation = !state.info;
+  // no live feed, so no poll: the 5-minute timer switchStation (or the boot)
+  // armed before this loader knew what it was looking at is disarmed here
+  clearInterval(refreshTimer);
+  refreshTimer = null;
+  try {
+    const [meta, manifest] = await Promise.all([lanukMeta(no), loadRepoManifest()]);
+    if (station !== forStation || mode !== 'station') return; // switched away while fetching — discard
+    if (!meta) throw new Error(`no meta.json under ${seriesBase(id)}`);
+    const entry = (manifest || {})[id] || {};
+    const latest = await lanukLatest(no, entry);
+    if (station !== forStation || mode !== 'station') return;
+    if (!latest) throw new Error('the mirrored year shards hold no daily reading');
+    state.info = lanukInfoFrom(meta, id);
+    state.gauge = lanukGaugeFrom(meta, latest);
+    // LANUK-only extras live beside the gauge, never inside it, so no
+    // existing consumer of state.gauge can trip over them
+    state.lanuk = {
+      stages: Array.isArray(meta.info) ? meta.info : [],
+      catchment: { no: meta.catchmentNo ?? null, name: meta.catchmentName || '', km2: meta.catchmentKm2 ?? null },
+      distToConflKm: meta.distToConflKm ?? null,
+      down: meta.down ?? null,
+      note: meta.note || null,
+      dayBoundary: meta.dayBoundary || null,
+      collectedAt: (lanukManifestInfo || {}).generated || null,
+      sourceExportAt: (lanukManifestInfo || {}).sourceExportAt || null,
+    };
+    state.feed = lanukFeed(latest);
+    state.wt = null;
+    state.q = null;
+    state.error = null;
+    state.repoArchive = entry.none ? 'none' : 'available';
+    state.archiveSource = LANUK;
+    state.neighborsNote = T.lanukNoDatum;
+    riverInput.value = state.info.water.shortname;
+    state.archive = loadArchive(forStation);
+    updateLocalBar();
+    applyModeChrome(); // the WSV archive link goes away now that the feed is known
+    if (isNewStation) {
+      pushRecent(forStation);
+      renderRecent();
+    }
+    // no loadWeather(): a rain cloud of this minute over a reading of yesterday
+    // would be a false statement, not garnish. The mirrored shards ARE the
+    // history, so every window comes from them — nothing else to backfill
+    loadRepoArchive();
+  } catch (e) {
+    if (station !== forStation || mode !== 'station') return; // stale error from a station we left
+    state.error = `station "${forStation}" failed: ${e.message}\n` +
+      `check that the ${LANUK} mirror (${LANUK_BASE}manifest.json) lists it`;
+  }
+  scheduleRender();
+  applyLiveChrome();
+}
+
 async function loadData() {
   const forStation = station; // guard against a mid-flight station switch
+  // a gauge of the second source goes to its own loader the moment the merged
+  // index knows the name — every switch after boot, and every warm session.
+  // A cold boot on such a deep link, with the index still in flight, gets
+  // there through the 404 path below; the live path is never delayed for it.
+  if (isLanukId(stationId())) return loadLanukStation();
   const isNewStation = !state.info; // switchStation resets info to null before calling us
   try {
     const enc = encodeURIComponent(forStation);
@@ -2123,8 +2356,21 @@ async function loadData() {
     }
   } catch (e) {
     if (station !== forStation || mode !== 'station') return; // stale error from a station we left
+    if (e.status === 404) {
+      // the live API does not know the name. The merged index may — a gauge
+      // of the second source (its index is same-origin and one fetch, but a
+      // cold boot races it against this very request), or a fragment the
+      // index folds to one name — so it is asked before the error stands:
+      // a LANUK name routes on, one folded match switches (never back to
+      // this name — resolveDeepLink skips known ones), several raise the
+      // did-you-mean screen, none keeps the error.
+      await lanukIndex();
+      if (station !== forStation || mode !== 'station') return;
+      if (isLanukId(stationId())) return loadLanukStation();
+    }
     state.error = `station "${forStation}" failed: ${e.message}\n` +
       `check the name against ${API}/stations.json or try ?station=BONN`;
+    if (e.status === 404) resolveDeepLink(true);
   }
   scheduleRender();
   applyLiveChrome();
@@ -2140,6 +2386,9 @@ async function loadWeather() {
   // switch away from the station, so without this the 15-minute tick fired an
   // open-meteo request from ?total and threw the answer away on arrival.
   if (mode !== 'station' || !info || info.latitude == null || info.longitude == null) return;
+  // a day-old daily mean under this minute's rain cloud is not garnish, it is
+  // a false statement — no weather over a plate that has no live reading
+  if (state.feed && !state.feed.live) return;
   const forStation = station; // guard against a mid-flight station switch
   try {
     const d = await getJson(`https://api.open-meteo.com/v1/forecast?latitude=${info.latitude}&longitude=${info.longitude}&current=precipitation,snowfall,cloud_cover,wind_speed_10m`);
@@ -2206,7 +2455,9 @@ function troubleKind(stateStr) {
 // Keeps a station if it has a km AND a W timeseries and either an elevation
 // (gaugeZero + current W) or a non-normal state worth flagging. elev is null when
 // gaugeZero/current is missing — such a station shows in the trouble list only.
-function prepareRiverStations(raw) {
+// keepUnplottable: for a source that publishes no gauge datum at all, every
+// gauge with a reading is still a row in the flow-ordered index
+function prepareRiverStations(raw, { keepUnplottable = false } = {}) {
   const out = [];
   for (const s of raw) {
     if (typeof s.km !== 'number') continue;
@@ -2215,10 +2466,11 @@ function prepareRiverStations(raw) {
     const cur = w.currentMeasurement;
     const kind = troubleKind(cur && cur.stateMnwMhw);
     const elev = elevOf(w, cur);
-    if (elev == null && kind === 'normal') continue; // nothing to plot, nothing to flag
+    if (elev == null && kind === 'normal' && !(keepUnplottable && cur && cur.value != null)) continue; // nothing to plot, nothing to flag
     out.push({
       name: s.shortname,
       uuid: s.uuid, // the wave view fetches each station's hosted archive by uuid
+      id: s.id || null, // …or by its LANUK id, which addresses the /nrw/ shards
       km: s.km,
       value: cur && cur.value != null ? cur.value : null,
       unit: gaugeUnit(w),
@@ -2229,14 +2481,77 @@ function prepareRiverStations(raw) {
   return out.sort((a, b) => a.km - b.km);
 }
 
+// a water only the LANUK mirror knows: its gauges' meta and newest shard stand
+// in for the ?waters= REST answer. No gauge datum anywhere in that source, so
+// nothing is plottable — every gauge with a reading is still a row, in flow
+// order, and the wave view draws the mirrored days. No poll: no live feed.
+async function loadLanukRiver(forRiver, ids) {
+  clearInterval(refreshTimer);
+  refreshTimer = null;
+  try {
+    const manifest = await loadRepoManifest() || {};
+    const raw = [];
+    const chunk = 6;
+    for (let i = 0; i < ids.length; i += chunk) {
+      // a per-gauge try: one broken meta drops that row, never the whole river
+      await Promise.all(ids.slice(i, i + chunk).map(async id => { try {
+        const no = lanukNo(id);
+        const meta = await lanukMeta(no);
+        if (!meta) return;
+        const latest = await lanukLatest(no, manifest[id]);
+        raw.push({ ...lanukInfoFrom(meta, id), timeseries: [lanukGaugeFrom(meta, latest)] });
+      } catch { /* skip this gauge */ } }));
+      if (mode !== 'river' || state.river !== forRiver) return; // switched away mid-fetch
+    }
+    const prepared = prepareRiverStations(raw, { keepUnplottable: true });
+    if (prepared.length < 2) {
+      state.error = `river "${forRiver}" has fewer than 2 gauges with a reading in the ${LANUK} mirror`;
+      state.riverStations = null;
+    } else {
+      state.riverStations = prepared;
+      state.feed = { name: LANUK, live: false, collectedAt: (lanukManifestInfo || {}).generated || null, kmNote: T.lanukKmNote };
+      state.archiveSource = LANUK;
+      state.error = null;
+      if (viewMode === 'wave') loadWave(); // the wave view needs the station list first
+    }
+  } catch (e) {
+    if (mode !== 'river' || state.river !== forRiver) return;
+    state.error = `river "${forRiver}" failed: ${e.message}\ncheck the ${LANUK} mirror (${LANUK_BASE}manifest.json)`;
+    state.riverStations = null;
+  }
+  scheduleRender();
+  setScreenAria();
+}
+
+// once the live API could not draw a water: the LANUK ids on it, if the mirror
+// (whose index may still be in flight on a cold boot) knows it and the WSV
+// list does not; null when there is nothing to fall back to, 'switched' when
+// the reader has moved on meanwhile
+async function lanukRiverFallback(forRiver) {
+  await lanukIndex();
+  if (mode !== 'river' || state.river !== forRiver) return 'switched';
+  const ids = lanukWaters.get(forRiver);
+  return ids && !wsvWaters.has(forRiver) ? ids : null;
+}
+
 async function loadRiver() {
   const forRiver = state.river; // guard against a mid-flight river/station switch
+  // A water PEGELONLINE also names stays WSV's — the two sources never merge on
+  // one plate (different datums, one of them without a live feed). A water only
+  // the LANUK mirror knows goes straight there once both lists are in; before
+  // that (cold cache) the live API is asked first and the mirror is the
+  // fallback, so a shared deep link never lands on the wrong source.
+  const direct = lanukWaters.get(forRiver);
+  if (direct && wsvWaters.size && !wsvWaters.has(forRiver)) return loadLanukRiver(forRiver, direct);
   try {
     const enc = encodeURIComponent(forRiver);
     const raw = await getJson(`${API}/stations.json?waters=${enc}&includeTimeseries=true&includeCurrentMeasurement=true`);
     if (mode !== 'river' || state.river !== forRiver) return; // switched away — discard
     const prepared = prepareRiverStations(raw);
     if (prepared.filter(s => s.elev != null).length < 2) {
+      const fb = await lanukRiverFallback(forRiver);
+      if (fb === 'switched') return;
+      if (fb) return loadLanukRiver(forRiver, fb);
       state.error = `river "${forRiver}" has fewer than 2 usable stations\n` +
         `check the name against ${API}/stations.json?waters=${enc}`;
       state.riverStations = null;
@@ -2247,6 +2562,9 @@ async function loadRiver() {
     }
   } catch (e) {
     if (mode !== 'river' || state.river !== forRiver) return; // stale error from a river we left
+    const fb = await lanukRiverFallback(forRiver);
+    if (fb === 'switched') return;
+    if (fb) return loadLanukRiver(forRiver, fb);
     state.error = `river "${forRiver}" failed: ${e.message}\n` +
       `check ${API}/stations.json?waters=${encodeURIComponent(forRiver)}`;
     state.riverStations = null;
@@ -2714,6 +3032,15 @@ const T = {
   source: 'SOURCE',
   sourceWsv: 'PEGELONLINE (WSV)',
   refreshEvery: 'refreshes every 5 min',
+  noLiveFeed: 'no live feed',
+  // the LANUK NRW mirror: one daily mean per gauge, a day late, no gauge datum
+  lanukReadingNote: 'the source publishes one mean per day, about a day after it — there is no live reading',
+  lanukTrendNote: 'day-over-day change of the daily mean, spread over 24 hours — this source publishes one value per day',
+  lanukNoDatum: 'this source publishes no gauge datum, so there is no elevation profile — the river view lists the gauges in flow order',
+  lanukThin: 'This source publishes one value per day — pick a window of a week or more.',
+  lanukReach: 'the LANUK export reaches back two years',
+  lanukKmNote: 'km counts DOWN to the mouth here: the source gives each gauge’s distance to the confluence, not a river kilometre.',
+  riverNoElev: 'No gauge on this water publishes a gauge datum, so there is no elevation profile to draw. The list below runs in flow order, upstream first.',
   link: 'LINK',
   copy: 'copy',
   copied: 'copied',
@@ -2857,6 +3184,30 @@ const T = {
   noMatchFor: 'No exact match for',
   didYouMean: 'Did you mean one of these?',
 };
+
+// the plate foot's provenance: the live API's wording, or the feed's own —
+// a mirrored daily mean must never read "refreshes every 5 min"
+function feedSourceLine(cur) {
+  const f = state.feed;
+  if (!f) {
+    return cur
+      ? `${T.sourceWsv} · reading ${new Date(cur.timestamp).toISOString().replace('T', ' ').slice(0, 16)} UTC · ${T.refreshEvery}`
+      : `${T.sourceWsv} · ${T.refreshEvery}`;
+  }
+  // the mirror stamps a date (manifest.generated is the run's day); a full
+  // timestamp, should one ever arrive, is printed to the minute
+  const c = f.collectedAt ? String(f.collectedAt) : '';
+  const at = c ? ` · mirrored ${c.includes('T') ? c.replace('T', ' ').slice(0, 16) + ' UTC' : c.slice(0, 10)}` : '';
+  return `${f.name}${f.reading ? ` · ${f.reading.text}` : ''}${at} · ${f.live ? T.refreshEvery : T.noLiveFeed}`;
+}
+
+// the caveat for days whose stored low is the daily mean (a source without a
+// minimum): the history key and the years key both say so while such days show.
+// `untilMs` is the MEZ start of the newest such day (state.lowIsMeanUntil); the
+// day named is the one after it, in MEZ — the archive's own day convention
+const lowIsMeanNote = untilMs =>
+  `Before ${new Date(untilMs + 864e5 + 36e5).toISOString().slice(0, 10)} the lower edge is the daily mean, not the daily minimum — ` +
+  'the source publishes no minimum, and its fine-resolution series does not reach back that far.';
 
 // the plate foot's per-view provenance line
 function setSourceLine(text) {
@@ -3020,6 +3371,10 @@ function moonPhase() {
 // content. Northern-hemisphere orientation: waxing lights up the right side.
 
 function trendPerHour() {
+  // a feed that publishes one value a day has no six-hour slope; its loader
+  // hands over the day-over-day figure (or null) instead of letting the walk
+  // below read the daily low-to-high spread as a rise
+  if (state.feed && state.feed.trend) return state.feed.trend.perHour;
   const a = state.archive;
   if (a.length < 2) return null;
   const [tLast, vLast] = a[a.length - 1];
@@ -3590,6 +3945,7 @@ function renderSceneKey(vm) {
       label: f.drought ? T.keyBoatAground : f.icy ? T.keyBoatStuck : T.keyBoat },
     s.craft.aircraft.length && { sw: sw('<g class="plane"><path d="M-5 0 h8 l3 -3 v6 l-3 -3 M-1 -3 v6"/></g>',
       '-7 -5 15 10'), label: T.keyPlane },
+    vm.operatorNote && { note: vm.operatorNote, warn: true },
   ]);
 }
 
@@ -3603,7 +3959,7 @@ function historyViewModel() {
   const wd = preset.d;
   const cutoff = wd ? Date.now() - wd * 864e5 : 0;
   const arch = wd ? state.archive.filter(p => p[0] >= cutoff) : state.archive;
-  if (arch.length < 2) return { empty: true, label: preset.label };
+  if (arch.length < 2) return { empty: true, label: preset.label, text: (state.feed && state.feed.thinNote) || T.historyThin };
   const t0 = arch[0][0], t1 = arch[arch.length - 1][0];
   const spanDays = Math.max(1, Math.round((t1 - t0) / 864e5));
   const cols = bucketCols();
@@ -3614,7 +3970,8 @@ function historyViewModel() {
   if (wd && coveredDays < wd * 0.8 && state.repoArchive === 'none') {
     note = { kind: 'none', text: 'WSV keeps no multi-year archive for this gauge' };
   } else if (wd && coveredDays < wd * 0.8) {
-    note = { kind: 'short', text: `covers ${Math.round(coveredDays)} days so far — import the WSV archive below` };
+    note = { kind: 'short', text: `covers ${Math.round(coveredDays)} days so far — ` +
+      ((state.feed && state.feed.reachNote) || 'import the WSV archive below') };
   } else if ((wd || spanDays) > API_MAX_DAYS) {
     note = { kind: 'raw', text: `unvalidated raw data (${archiveSource()})` };
   }
@@ -3627,6 +3984,13 @@ function historyViewModel() {
   const behind = Date.now() - t1;
   const stale = behind > windowGapLimit(arch)
     ? { at: t1, text: `no reading after ${new Date(t1).toISOString().slice(0, 10)} — the right edge is where the record ends, not today` }
+    : null;
+  // a third honesty entry, about the band's LOWER edge: days whose stored low
+  // is the daily mean (the seed rows of a source without a minimum) draw a
+  // narrower band than the truth. Named while any such day is in the window.
+  const seedUntil = state.lowIsMeanUntil;
+  const seed = seedUntil != null && t0 <= seedUntil
+    ? { at: seedUntil, text: lowIsMeanNote(seedUntil) }
     : null;
   // The axis is time now, so a tick sits where its instant sits: frac is the
   // share of the window that had elapsed, nothing to do with how many readings
@@ -3663,7 +4027,7 @@ function historyViewModel() {
     empty: false,
     label: wd ? preset.label : spanDays > 730 ? (spanDays / 365.25).toFixed(1) + 'Y' : spanDays + 'D',
     windowDays: wd, spanDays, points: arch.length, from: t0, to: t1,
-    series: b, banded, ticks, note, stale, gaps: b.gaps,
+    series: b, banded, ticks, note, stale, seed, gaps: b.gaps,
     marks: historyRefMarks(b.min, b.max),
     insight: unusualNow(),
   };
@@ -3740,8 +4104,11 @@ const keyChip = cls => `<span class="hsw ${cls}"></span>`;
 // the sparkline window + the way into the multi-year view, right under the
 // chart's own heading
 function historyCtl() {
+  // a feed with one value a day offers no 24 h window: the chip would only
+  // ever lead to the empty note
+  const minDays = (state.feed && state.feed.minWindowDays) || 0;
   return ctlRow(T.showLabel, [
-    ...HISTORY_PRESETS.map(p => ({
+    ...HISTORY_PRESETS.filter(p => p.d == null || p.d >= minDays).map(p => ({
       t: 'cmd:h:' + p.k, label: p.label, on: p.k === historyKey,
       title: p.d && p.d > API_MAX_DAYS ? `${p.label} — needs the imported multi-year archive` : '',
     })),
@@ -3753,7 +4120,7 @@ function renderHistory(h) {
   if (h.empty) {
     // the empty window is exactly when the range chips matter most — keep them
     return `<section class="p-block"><h2 class="p-h2">${esc(T.history)} · ${esc(h.label)}</h2>` +
-      historyCtl() + `<p class="p-dim">${esc(T.historyThin)}</p></section>`;
+      historyCtl() + `<p class="p-dim">${esc(h.text || T.historyThin)}</p></section>`;
   }
   const { lo, hi, min, max } = h.series;
   const n = lo.length;
@@ -3805,6 +4172,7 @@ function renderHistory(h) {
     { note: `${h.points} readings` },
     h.note && { note: h.note.text, warn: true },
     h.stale && { note: h.stale.text, warn: true },
+    h.seed && { note: h.seed.text, warn: true },
   ]);
   return `<section class="p-block"><h2 class="p-h2">${esc(T.history)} · ${esc(h.label)}</h2>` +
     historyCtl() +
@@ -3816,7 +4184,9 @@ function renderHistory(h) {
 function profileViewModel() {
   const n = state.neighbors;
   if (n.length < 2) {
-    return { empty: true, text: n.length === 0 ? T.profileLoading : T.profileNone };
+    // a loader that KNOWS there is nothing to locate says why, instead of
+    // leaving "locating…" on screen forever
+    return { empty: true, text: n.length === 0 ? (state.neighborsNote || T.profileLoading) : T.profileNone };
   }
   const kmMin = n[0].km, kmSpan = Math.max(n[n.length - 1].km - kmMin, 0.1);
   const elevs = n.map(p => p.elev);
@@ -3883,7 +4253,15 @@ function stationViewModel() {
     history: historyViewModel(),
     profile: profileViewModel(),
     summary: screenSummary(),
-    source: `${T.sourceWsv} · reading ${new Date(cur.timestamp).toISOString().replace('T', ' ').slice(0, 16)} UTC · ${T.refreshEvery}`,
+    source: feedSourceLine(cur),
+    // a feed that is not the live API words its own trend and names what the
+    // hero number IS (a daily mean, a day late); the live API needs neither
+    trendNote: (state.feed && state.feed.trend && state.feed.trend.note) || T.trendNote,
+    reading: (state.feed && state.feed.reading) || null,
+    // the operator's own caveat about this gauge (LANUK's INTERNET_BEMERKUNG:
+    // "readings below 30 cm are unreliable since a gravel bank formed") — kept
+    // verbatim, next to the level it qualifies
+    operatorNote: (state.lanuk && state.lanuk.note) || null,
   };
 }
 
@@ -3915,9 +4293,12 @@ function renderStation(vm) {
   const trendTxt = vm.trend === null ? '—'
     : `${trendArrow(vm.trend)} ${fmtTrend(vm.trend)} cm/h`;
   const facts = [
-    ['trend', trendTxt, T.trendNote],
+    ['trend', trendTxt, vm.trendNote || T.trendNote],
     ['state', vm.stateName ? vm.stateName.toUpperCase() : 'unknown', T.stateNote],
   ];
+  // what the hero number is, when it is not a live reading — first, because
+  // "a day old" changes how every other fact reads
+  if (vm.reading) facts.unshift(['reading', vm.reading.text, vm.reading.note]);
   if (vm.wt != null) facts.push(['water', `${vm.wt.toFixed(1)} °C`, '']);
   if (vm.q != null) facts.push(['flow', `${Math.round(vm.q)} m³/s`, '']);
   const head = `<header class="p-head station-head">` +
@@ -4011,7 +4392,9 @@ function riverViewModel(stations) {
       text: s.kind === 'low' ? T.belowLow : T.aboveHigh,
     })),
     summary: screenSummary(),
-    source: `${T.sourceWsv} · ${T.refreshEvery}`,
+    source: feedSourceLine(),
+    // a source whose "km" is the distance to the mouth says so in the key
+    kmNote: (state.feed && state.feed.kmNote) || null,
   };
 }
 
@@ -4080,10 +4463,14 @@ function renderRiver(vm) {
         `<span class="b-badge">km ${esc(fmtKm(s.km))}</span></li>`).join('') +
       '</ol></section>'
     : `<section class="p-block"><h2 class="p-h2">${esc(T.trouble)}</h2><p class="p-dim">${esc(T.allNormal)}</p></section>`;
+  // fewer than two elevations and there is no profile to draw: say why, and
+  // let the flow-ordered list be the plate (a source without any gauge datum)
+  const plottable = vm.pts.length >= 2;
   const key = plateKey([
     ...[['normal', T.kindNormal], ['low', T.kindLow], ['high', T.kindHigh]].map(([k, label]) =>
       ({ sw: keySw(rvMark(k, 6, 6), 'river'), label })),
-    { note: T.riverElevNote },
+    plottable && { note: T.riverElevNote },
+    vm.kmNote && { note: vm.kmNote },
   ]);
   // every gauge as a row, in flow order — the drawing answers "what shape is
   // this river", the list answers "which gauges are on it", and on a phone only
@@ -4097,9 +4484,12 @@ function renderRiver(vm) {
     `<span class="km">km ${esc(fmtKm(s.km))}</span></a></li>`).join('') + '</ol>';
   // on a phone the trouble list is the answer to "is anything wrong here?",
   // so it comes first; the profile follows for anyone who wants the shape
+  const profile = plottable
+    ? `<p class="p-sub2">${esc(T.riverElevAxis)}</p>${renderRiverChart(vm)}`
+    : `<p class="p-dim">${esc(T.riverNoElev)}</p>`;
   return `<section class="plate river-plate">${vh}${head}${tabs}${trouble}` +
     `<section class="p-block"><h2 class="p-h2">${esc(T.riverProfile)}</h2>` +
-    `<p class="p-sub2">${esc(T.riverElevAxis)}</p>${renderRiverChart(vm)}` +
+    profile +
     `<div class="pf-flow"><span>← ${esc(T.upstream)}</span><span>${esc(T.downstream)} →</span></div>` +
     index + key + '</section></section>';
 }
@@ -4427,6 +4817,11 @@ function renderYearsHeat(vm) {
 
 function renderYearsLegend(vm) {
   const sw = keyChip;
+  // the day level here is the mid of the stored low and high; where the low is
+  // a mean (see lowIsMeanNote) that mid sits high, and the key says so
+  const seed = state.lowIsMeanUntil != null
+    ? { note: lowIsMeanNote(state.lowIsMeanUntil), warn: true }
+    : null;
   if (vm.mode === 'abs') {
     return plateKey([
       { sw: [0, 1, 2, 3].map(b => sw('b' + b)).join(''),
@@ -4434,6 +4829,7 @@ function renderYearsLegend(vm) {
       // the hint is not a mark: it belongs to the readout panel's empty state,
       // which already carries it — the key names marks only
       { sw: sw('nd'), label: T.noData },
+      seed,
     ]);
   }
   return plateKey([
@@ -4444,6 +4840,7 @@ function renderYearsLegend(vm) {
     { note: '← drier than usual · normal · wetter than usual →' },
     { note: T.sigmaNote },
     { note: T.divergeHatchNote },
+    seed,
   ]);
 }
 
@@ -4607,14 +5004,19 @@ function cropWaveWindow(rows, nDays) {
 // Defensive against malformed files: a missing/short max array must skip that
 // day, not throw (which would take the whole river's wave view down) or store
 // NaN (which would flatten the row's per-station scaling)
+// A year that stores the daily mean (the LANUK shards) is drawn from it; the
+// WSV bundle stores extremes only, so its day is the mid of the two. One
+// estimator per row either way — a row never mixes the two.
 function foldYearsIntoWindow(years, vals, day0) {
   for (const yr of years) {
-    if (!yr || !Number.isFinite(yr.y) || !Array.isArray(yr.min) || !Array.isArray(yr.max)) continue;
+    if (!yr || !Number.isFinite(yr.y) || !Array.isArray(yr.max)) continue;
     const base = epochDay(Date.UTC(yr.y, 0, 1));
-    for (let d = 0; d < yr.min.length; d++) {
+    for (let d = 0; d < yr.max.length; d++) {
       const di = base + d - day0;
       if (di < 0 || di >= vals.length) continue;
-      const lo = yr.min[d], hi = yr.max[d];
+      const mean = Array.isArray(yr.mean) ? yr.mean[d] : null;
+      if (Number.isFinite(mean)) { vals[di] = mean; continue; }
+      const lo = Array.isArray(yr.min) ? yr.min[d] : null, hi = yr.max[d];
       if (Number.isFinite(lo) && Number.isFinite(hi)) vals[di] = (lo + hi) / 2;
     }
   }
@@ -4643,7 +5045,7 @@ async function loadWave() {
   scheduleRender();
   try {
     const manifest = await loadRepoManifest() || {};
-    const cands = prepared.filter(s => s.uuid);
+    const cands = prepared.filter(s => s.uuid || s.id);
     // cap the rows by sampling evenly along the river, so both ends survive
     const picks = cands.length <= WAVE_MAX_ROWS ? cands
       : Array.from({ length: WAVE_MAX_ROWS }, (_, i) => cands[Math.round(i * (cands.length - 1) / (WAVE_MAX_ROWS - 1))]);
@@ -4659,16 +5061,28 @@ async function loadWave() {
       // shape) drops that row, never the whole river
       await Promise.all(picks.slice(i, i + chunk).map(async s => { try {
         const vals = Array(WAVE_FETCH_DAYS).fill(null);
-        const entry = manifest[s.uuid];
-        if (entry && !entry.none) {
+        const key = s.id || s.uuid;
+        const entry = manifest[key];
+        if (entry && !entry.none && isLanukId(key)) {
+          // the mirror is sharded by year: every year the window touches
+          const y0 = new Date(day0 * DAY_MS).getUTCFullYear(), y1 = new Date(today * DAY_MS).getUTCFullYear();
+          for (let y = y0; y <= y1; y++) {
+            const data = await lanukShard(lanukNo(key), y);
+            if (data) foldYearsIntoWindow([data], vals, day0);
+          }
+        } else if (entry && !entry.none) {
           const files = ['current'];
           if (new Date(day0 * DAY_MS).getUTCFullYear() < new Date(today * DAY_MS).getUTCFullYear()) files.push('closed');
           for (const f of files) {
-            const data = await getJson(`archive/${s.uuid}/${f}.json`).catch(() => null);
+            const data = await getJson(`${seriesBase(key)}${f}.json`).catch(() => null);
             if (data) foldYearsIntoWindow(Array.isArray(data) ? data : [data], vals, day0);
           }
         }
-        const meas = await getJson(`${API}/stations/${s.uuid}/W/measurements.json?start=P31D`).catch(() => []);
+        // the live API fills the newest ~31 days — for a gauge it serves; a
+        // mirrored gauge has no live feed, its newest day is the mirror's
+        const meas = s.uuid
+          ? await getJson(`${API}/stations/${s.uuid}/W/measurements.json?start=P31D`).catch(() => [])
+          : [];
         const pts = meas.map(m => [Date.parse(m.timestamp), m.value])
           .filter(p => Number.isFinite(p[0]) && Number.isFinite(p[1])).sort((a, b) => a[0] - b[0]);
         for (const { d, v } of dailyMeans(pts)) {
@@ -4731,7 +5145,9 @@ function waveViewModel(w) {
     from: isoDay(dayAt(0)), to: isoDay(dayAt(days - 1)),
     shown: w.shown, total: w.total,
     summary: screenSummary(),
-    source: `${archiveSource()} daily archive + the live API for the newest days`,
+    source: state.feed && !state.feed.live
+      ? `${archiveSource()} daily archive · ${T.noLiveFeed}`
+      : `${archiveSource()} daily archive + the live API for the newest days`,
   };
 }
 
@@ -4930,7 +5346,9 @@ function riversViewModel() {
     unplaced: spilled.filter(r => r.la == null).length,
     all: [...rivers].sort((a, b) => a.name.localeCompare(b.name)),
     summary: screenSummary(),
-    source: `${T.sourceWsv} station list · positions are the centroid of each water's own gauges`,
+    // the map is drawn from the merged index, so its foot names every list in it
+    source: `${lanukWaters.size ? `${T.sourceWsv} + ${LANUK} station lists` : `${T.sourceWsv} station list`}` +
+      ' · positions are the centroid of each water\'s own gauges',
   };
 }
 
@@ -6033,6 +6451,10 @@ function switchStation(name, adsb, push = true) {
   state.error = null;
   state.repoArchive = null; // per-station; re-resolved from the manifest on demand
   state.archiveSource = null;
+  state.feed = null;        // the loader that answers says what fed it
+  state.lanuk = null;
+  state.neighborsNote = null;
+  state.lowIsMeanUntil = null;
   state.archive = loadArchive(station);
   sparkDisplay = null; // new station's data shouldn't spring in from the old one's shape
   // the stats cache key is only a shape hash (length + first/last ts) — two fully
@@ -6086,6 +6508,8 @@ function switchRiver(name, push = true) {
   state.riverStations = null;
   state.gauge = null; // ensure any station live-title guard sees no gauge
   state.error = null;
+  state.feed = null;  // per-river too: the loader that answers says what fed it
+  state.archiveSource = null;
   waveData = null; // the wave heatmap is per-river
 
   if (push) history[push === 'replace' ? 'replaceState' : 'pushState'](null, '', '?river=' + encodeURIComponent(next) + viewSuffix());
@@ -6770,6 +7194,7 @@ function fillWaters(list, labels) {
   if (labels) for (const [short, long] of Object.entries(labels)) waterLongs.set(short, long);
   for (const w of list) {
     const up = (w || '').toUpperCase();
+    if (up) wsvWaters.add(up); // the PEGELONLINE list is what makes a water WSV's
     if (!up || knownWaters.has(up)) continue;
     knownWaters.add(up);
     for (const k of [foldAe(up), foldStrip(up)]) if (!watersNorm.has(k)) watersNorm.set(k, up);
@@ -6785,6 +7210,64 @@ function fillDatalist(list) {
   }
 }
 
+// ---------- the LANUK index: the second source's gauges join the same sets ----------
+
+// nrw/manifest.json lists every gauge the mirror carries. Its names join
+// knownStations/stationMeta/normMap exactly like the PEGELONLINE list does,
+// keyed by UPPERCASE name and carrying the `lanuk-<no>` id that routes the
+// loaders. Collision guard: a name the WSV list has (or gets, later — the two
+// lists arrive in either order) is WSV's; fillDatalist overwrites without an
+// id, and this merge never overwrites an entry that has none.
+const lanukWaters = new Map(); // UPPERCASE water -> [lanuk ids on it]
+const wsvWaters = new Set();   // the waters the PEGELONLINE list names
+let lanukManifestInfo = null;  // { generated, sourceExportAt, license, window } of the mirror
+let lanukManifestP = null;     // Promise<manifest|null>, one fetch per session (see lanukIndex)
+const numOrNull = v => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+
+function mergeLanukIndex(m) {
+  if (!m || typeof m.gauges !== 'object' || !m.gauges) return 0;
+  lanukManifestInfo = {
+    generated: m.generated || null, sourceExportAt: m.sourceExportAt || null,
+    license: m.license || null, window: m.window || null,
+  };
+  let added = 0;
+  for (const [no, g] of Object.entries(m.gauges)) {
+    if (!g || g.noSeries) continue; // a temperature-only site is not a gauge here
+    const up = String(g.n || '').toUpperCase();
+    if (!up) continue;
+    const id = 'lanuk-' + no;
+    const have = stationMeta.get(up);
+    if (have && have.id !== id) continue; // WSV's name, or another LANUK gauge that got here first
+    const w = String(g.w || '').toUpperCase();
+    knownStations.add(up);
+    stationMeta.set(up, { w, km: numOrNull(g.km), la: numOrNull(g.la), lo: numOrNull(g.lo), id });
+    for (const key of [foldAe(up), foldStrip(up)]) if (!normMap.has(key)) normMap.set(key, up);
+    if (w) {
+      if (!lanukWaters.has(w)) lanukWaters.set(w, []);
+      if (!lanukWaters.get(w).includes(id)) lanukWaters.get(w).push(id);
+      if (!knownWaters.has(w)) {
+        knownWaters.add(w);
+        for (const k of [foldAe(w), foldStrip(w)]) if (!watersNorm.has(k)) watersNorm.set(k, w);
+      }
+    }
+    added++;
+  }
+  riversCache = null; // the map aggregate is keyed on the list size
+  if (added) scheduleRender();
+  return added;
+}
+
+// fetch-and-merge, once per session; a missing mirror (plain checkout without
+// the data branch) resolves to null and the page is all-WSV, as before
+function lanukIndex() {
+  if (!lanukManifestP) {
+    lanukManifestP = getJson(`${LANUK_BASE}manifest.json`)
+      .then(m => { mergeLanukIndex(m); return m; })
+      .catch(() => null);
+  }
+  return lanukManifestP;
+}
+
 // picking a datalist suggestion (or committing a complete valid name) fires 'change',
 // not per keystroke — so this applies on select without clobbering mid-typing input
 stationInput.addEventListener('change', () => {
@@ -6797,6 +7280,7 @@ stationInput.addEventListener('change', () => {
 
 async function loadStationList() {
   loadWaterList(); // independent of the station cache's freshness early-return below
+  lanukIndex();    // likewise: the second source's gauges join the finder and the map
   let cached = null;
   try { cached = JSON.parse(localStorage.getItem(STATIONS_CACHE)); } catch {}
   const usable = cached && cached.v === STATIONS_CACHE_V && Array.isArray(cached.list);
@@ -7023,18 +7507,41 @@ const repoArchiveTried = new Set(); // "<uuid>/<closed|current>" — one attempt
 // pre-30-day archive for those). Missing manifest (e.g. plain local checkout
 // without the data branch) falls back to blind year fetches.
 let repoManifest; // undefined = not fetched yet, null = unavailable
+// one map over both mirrors: WSV/RWS stations by uuid, LANUK gauges by their
+// `lanuk-<no>` id — every consumer looks a station up by the key its loader
+// knows, so the second source costs it nothing. The LANUK half rides on the
+// index fetch lanukIndex() started (never a fetch of its own: a station page
+// that never asked for the index does not ask here either)
 async function loadRepoManifest() {
   if (repoManifest === undefined) {
     repoManifest = await getJson('archive/manifest.json').then(m => m.stations || null).catch(() => null);
   }
-  return repoManifest;
+  const lanuk = lanukManifestP ? await lanukManifestP : null;
+  if (!lanuk || typeof lanuk.gauges !== 'object' || !lanuk.gauges) return repoManifest;
+  const merged = Object.assign({}, repoManifest || {});
+  for (const [no, g] of Object.entries(lanuk.gauges)) {
+    if (!g) continue;
+    merged['lanuk-' + no] = {
+      n: g.n, w: String(g.w || '').toUpperCase(), from: g.from, to: g.to, days: g.days,
+      source: LANUK, lanuk: true, none: !!g.noSeries,
+    };
+  }
+  return merged;
 }
+
+// the band's lower edge for one archived day: the minimum where the source
+// stores one, else the daily mean (the seed rows of a source that publishes no
+// minimum — narrower than the truth, never the wrong way round), else nothing
+const dayLow = (yr, d) => (Array.isArray(yr.min) ? yr.min[d] : null) ?? (Array.isArray(yr.mean) ? yr.mean[d] : null) ?? null;
 
 async function loadRepoArchive() {
   const info = state.info;
-  if (!info || !info.uuid) return;
+  // addressed by whatever key this station's loader knows: the LANUK id from
+  // the index, or the PEGELONLINE uuid
+  const key = stationId() || (info && info.uuid) || null;
+  if (!key) return;
   const forStation = station;
-  const entry = (await loadRepoManifest() || {})[info.uuid];
+  const entry = (await loadRepoManifest() || {})[key];
   if (station !== forStation) return; // switched away while the manifest loaded
   if (entry) {
     state.repoArchive = entry.none ? 'none' : 'available';
@@ -7042,18 +7549,29 @@ async function loadRepoArchive() {
     scheduleRender();
     if (entry.none) return; // known gap — skip the pointless fetches
   }
-  const uuid = info.uuid;
   // the whole history is two files: closed.json (immutable bundle of every
   // completed year) + current.json (running year). One fetch each per session;
   // a missing file (station not archived) is fine, and a failed fetch frees its
-  // guard so a later pick can retry.
+  // guard so a later pick can retry. The LANUK mirror is one shard per year
+  // instead, listed by the manifest's from/to.
   const jobs = [];
-  for (const file of ['closed', 'current']) {
-    const key = uuid + '/' + file;
-    if (repoArchiveTried.has(key)) continue;
-    repoArchiveTried.add(key);
-    jobs.push(getJson(`archive/${uuid}/${file}.json`)
-      .catch(() => { repoArchiveTried.delete(key); return null; }));
+  if (isLanukId(key)) {
+    const y1 = yearOf(entry && entry.to) || new Date().getUTCFullYear();
+    const y0 = yearOf(entry && entry.from) || y1 - 1;
+    for (let y = y0; y <= y1; y++) {
+      const k = key + '/' + y;
+      if (repoArchiveTried.has(k)) continue;
+      repoArchiveTried.add(k);
+      jobs.push(lanukShard(lanukNo(key), y));
+    }
+  } else {
+    for (const file of ['closed', 'current']) {
+      const k = key + '/' + file;
+      if (repoArchiveTried.has(k)) continue;
+      repoArchiveTried.add(k);
+      jobs.push(getJson(`${seriesBase(key)}${file}.json`)
+        .catch(() => { repoArchiveTried.delete(k); return null; }));
+    }
   }
   if (!jobs.length) return;
   const results = (await Promise.all(jobs)).filter(Boolean);
@@ -7069,15 +7587,24 @@ async function loadRepoArchive() {
   // start, and the API answered 400. Nothing is lost by dropping it, the live
   // 30-day window carries today's real readings.
   const now = Date.now();
+  let seedUntil = null; // newest day whose low is a mean, not a minimum
   for (const yr of years) {
+    if (!yr || !Array.isArray(yr.max)) continue;
     const base = Date.UTC(yr.y, 0, 1) - 36e5; // MEZ midnight of Jan 1 (data is UTC+1 year-round)
-    for (let d = 0; d < yr.min.length; d++) {
-      if (yr.min[d] == null) continue;
+    for (let d = 0; d < yr.max.length; d++) {
+      const loV = dayLow(yr, d), hiV = yr.max[d];
+      if (loV == null || hiV == null) continue;
+      if (!(Array.isArray(yr.min) && yr.min[d] != null) && (seedUntil == null || base + d * 864e5 > seedUntil)) {
+        seedUntil = base + d * 864e5;
+      }
       // two points per day keep both the daily low and the flood peak honest
       const lo = base + d * 864e5 + 6 * 36e5, hi = base + d * 864e5 + 18 * 36e5;
-      if (lo <= now) measurements.push({ timestamp: new Date(lo).toISOString(), value: yr.min[d] });
-      if (hi <= now) measurements.push({ timestamp: new Date(hi).toISOString(), value: yr.max[d] });
+      if (lo <= now) measurements.push({ timestamp: new Date(lo).toISOString(), value: loV });
+      if (hi <= now) measurements.push({ timestamp: new Date(hi).toISOString(), value: hiV });
     }
+  }
+  if (station === forStation && seedUntil != null) {
+    state.lowIsMeanUntil = Math.max(state.lowIsMeanUntil ?? -Infinity, seedUntil);
   }
   // The archive is keyed by station NAME, so a reader who moved on mid-fetch
   // still keeps what arrived for the gauge they left. Discarding it here while
@@ -7094,6 +7621,7 @@ async function loadRepoArchive() {
 async function ensureHistoryCoverage(days) {
   if (!days) return loadRepoArchive(); // ALL: offer everything the repo has
   if (days > API_MAX_DAYS) return loadRepoArchive(); // beyond the API's 30-day reach
+  if (state.feed && !state.feed.live) return loadRepoArchive(); // no live API to ask: the mirror is all there is
   const forStation = station;
   const cutoff = Date.now() - days * 864e5;
   // Reaching far enough back is not the same as being complete. Judging by the
@@ -7476,6 +8004,9 @@ resolveDeepLink(false);
 renderRecent();
 
 updateLocalBar();
+// the second source's index, in flight from the first moment: same-origin,
+// one fetch, and every loader below routes on it as soon as it is in
+lanukIndex();
 if (mode === 'rivers') {
   applyModeChrome();
   stationInput.value = '';

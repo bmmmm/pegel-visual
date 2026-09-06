@@ -3834,3 +3834,381 @@ test('elevOf: a metre gauge needs no gauge zero to have an elevation', () => {
   assert.ok(Math.abs(elev({ unit: 'm+PNP', gaugeZero: { value: 0.041 } }, 240.1) - 240.141) < 1e-9);
   assert.equal(elev({ unit: 'm+NN' }, null), null);
 });
+
+// ---------- LANUK NRW: the second gauge source, wired in at the loader layer ----------
+
+// 2026-09-04 12:00 UTC — two days after the mirror's newest day (2026-09-02), the
+// way a reader meets the deployed site the morning after the daily run
+const NRW_NOW = Date.UTC(2026, 8, 4, 12);
+const NRW_MANIFEST = {
+  schema: 1, generated: '2026-09-03T17:41:00Z', sourceExportAt: '2026-09-03T14:11:00Z',
+  license: 'dl-de/zero-2.0', window: { from: '2024-09-04', to: '2026-09-02' },
+  gauges: {
+    2729100000100: { n: 'Menden_1', w: 'Sieg', b: '272', site: '100', src: 'bulk', from: '2024-09-04', to: '2026-09-02', days: 729 },
+    2721390000100: { n: 'Weidenau', w: 'Sieg', b: '272', from: '2024-09-04', to: '2026-09-02', days: 729 },
+    2747900000200: { n: 'Neubrueck', w: 'Erft', b: '274', from: '2024-09-04', to: '2026-09-02', days: 729 },
+    2741500000100: { n: 'Arloff', w: 'Erft', b: '274', from: '2024-09-04', to: '2026-09-02', days: 729 },
+    4711: { n: 'Warmwasser', w: 'Erft', b: '274', noSeries: true },
+  },
+};
+const NRW_META = {
+  2729100000100: { id: '2729100000100', name: 'Menden_1', water: 'Sieg', siteNo: '100', lat: 50.7979, lon: 7.1591,
+    catchmentNo: '272', catchmentName: 'Siegeinzugsgebiet Westlich', catchmentKm2: 2825, distToConflKm: 8.6,
+    unit: 'cm', info: [250, 410, 440], mw: 66, mnw: 18, mhw: 364, gaugeDatum: null,
+    note: 'Aufgrund der Bildung einer Kiesbank vor dem Pegel kommt es bei Wasserständen von weniger als 30 cm zu Fehlwerten',
+    dayBoundary: '00:00+01:00', src: 'bulk', down: null },
+  2721390000100: { id: '2721390000100', name: 'Weidenau', water: 'Sieg', lat: 50.9, lon: 8.0, distToConflKm: 130.83,
+    unit: 'cm', mw: 27, mnw: 6, mhw: 129, down: '2729100000100' },
+  2747900000200: { id: '2747900000200', name: 'Neubrueck', water: 'Erft', lat: 51.1, lon: 6.7, distToConflKm: 9.75,
+    catchmentKm2: 1595.43, unit: 'cm', mw: 77, mnw: 57, mhw: 150, info: [145, null, null] },
+  2741500000100: { id: '2741500000100', name: 'Arloff', water: 'Erft', lat: 50.6, lon: 6.8, distToConflKm: 88.6,
+    catchmentKm2: 114.39, unit: 'cm', mw: 31, mnw: 22, mhw: 91 },
+};
+// a 2026 shard: Jul 20 … Sep 2 (day 200 … 244) carry readings; the minimum is
+// null before day 240 (seed rows) and real from Aug 29 on. Menden_1 gets the
+// realistic level, the other gauges a flat one that stays inside MNW…MHW.
+function nrwShard(no, y = 2026, level = 40) {
+  const n = 365;
+  const min = Array(n).fill(null), mean = Array(n).fill(null), max = Array(n).fill(null), cnt = Array(n).fill(null);
+  for (let d = 200; d <= 244; d++) {
+    mean[d] = level + (d - 200) * 0.1;
+    max[d] = mean[d] + 3;
+    cnt[d] = 96;
+    if (d >= 240) min[d] = mean[d] - 2;
+  }
+  // Menden_1 rose 2.4 cm from Sep 1 to Sep 2 → +0.1 cm/h day-over-day
+  if (no === '2729100000100') { mean[244] = mean[243] + 2.4; max[244] = mean[244] + 3; min[244] = mean[244] - 2; }
+  return { id: no, y, min, mean, max, n: cnt, acc: {} };
+}
+// serve the mirror (and nothing else) through getJson; every URL asked is recorded
+const nrwStub = `
+  globalThis.__nrw = [];
+  getJson = async url => {
+    globalThis.__nrw.push(url);
+    if (url === 'nrw/manifest.json') return ${JSON.stringify(NRW_MANIFEST)};
+    if (url === 'archive/manifest.json') return { stations: { 'bonn-uuid': { n: 'BONN', w: 'RHEIN', from: 2000, to: 2026 } } };
+    let m = /^nrw\\/gauges\\/(\\d+)\\/meta\\.json$/.exec(url);
+    if (m) { const meta = ${JSON.stringify(NRW_META)}[m[1]]; if (meta) return meta; }
+    m = /^nrw\\/gauges\\/(\\d+)\\/(\\d{4})\\.json$/.exec(url);
+    if (m && ${JSON.stringify(NRW_META)}[m[1]]) {
+      if (m[2] === '2026') return (${nrwShard.toString()})(m[1], 2026, m[1] === '2729100000100' ? 40 : 60);
+      if (m[2] === '2024' || m[2] === '2025') { const s = (${nrwShard.toString()})(m[1], +m[2], 50); return s; }
+    }
+    const e = new Error('404 ' + url); e.status = 404; throw e;
+  };
+  lanukManifestP = null; // the boot's attempt ran against the offline stub — start over`;
+const nrwApp = (opts = {}) => {
+  const app = loadApp({ now: NRW_NOW, ...opts });
+  app.run(nrwStub);
+  return app;
+};
+const nrwUrls = app => app.run('globalThis.__nrw');
+
+test('lanuk ids: the predicate, the number, and the one place the two layouts differ', () => {
+  const app = loadApp({ now: NRW_NOW });
+  assert.equal(app.run(`isLanukId('lanuk-2729100000100')`), true);
+  assert.equal(app.run(`isLanukId('a6ee8177-107b-47dd-bcfd-30960ccc6e9c')`), false, 'a WSV uuid is not a LANUK id');
+  assert.equal(app.run(`isLanukId(null)`), false);
+  assert.equal(app.run(`lanukNo('lanuk-2729100000100')`), '2729100000100');
+  assert.equal(app.run(`seriesBase('lanuk-2729100000100')`), 'nrw/gauges/2729100000100/');
+  assert.equal(app.run(`seriesBase('bonn-uuid')`), 'archive/bonn-uuid/', 'the WSV bundle keeps its uuid directory');
+  assert.equal(app.run('stationId()'), null, 'a WSV station (or an unknown name) has no id — it is addressed by name');
+});
+
+test('lanuk adapter: MNW/MW/MHW become characteristic values, the state is synthesised', () => {
+  const app = loadApp({ now: NRW_NOW });
+  const meta = NRW_META['2729100000100'];
+  const gauge = v => app.run(`lanukGaugeFrom(${JSON.stringify(meta)}, { timestamp: '2026-09-01T23:00:00.000Z', value: ${v} })`);
+  const g = gauge(48);
+  assert.deepEqual(g.characteristicValues.map(c => c.shortname), ['MNW', 'MW', 'MHW']);
+  assert.equal(g.currentMeasurement.stateMnwMhw, 'normal');
+  assert.equal(gauge(10).currentMeasurement.stateMnwMhw, 'low', 'below MNW');
+  assert.equal(gauge(400).currentMeasurement.stateMnwMhw, 'high', 'above MHW');
+  assert.equal(g.unit, 'cm');
+  assert.equal(g.gaugeZero, null, 'the source publishes no gauge datum');
+  // …and the existing readers work on it unchanged
+  app.run(`state.gauge = ${JSON.stringify(g)}`);
+  assert.equal(app.run(`charValue('MHW')`), 364);
+  assert.equal(app.run(`elevOf(state.gauge, state.gauge.currentMeasurement)`), null, 'no datum → no elevation, no throw');
+  assert.equal(app.run(`troubleKind(state.gauge.currentMeasurement.stateMnwMhw)`), 'normal');
+  // a station without an MNW/MHW pair says so instead of guessing
+  assert.equal(app.run(`lanukGaugeFrom({ name: 'X', mw: 30 }, { timestamp: 't', value: 20 }).currentMeasurement.stateMnwMhw`), 'unknown');
+  const info = app.run(`lanukInfoFrom(${JSON.stringify(meta)}, 'lanuk-2729100000100')`);
+  assert.equal(info.water.shortname, 'SIEG', 'the water is UPPERCASE like every WSV water, so river: links resolve');
+  assert.equal(info.km, 8.6, 'the distance to the mouth stands in for the km');
+  assert.deepEqual(info.timeseries.map(t => t.shortname), ['W'], 'so noWaterLevelError never fires');
+  assert.equal(info.uuid, undefined, 'no uuid — the id is the key');
+});
+
+test('dayLow: the minimum where stored, else the daily mean, else nothing', () => {
+  const app = loadApp({ now: NRW_NOW });
+  assert.equal(app.run(`dayLow({ min: [5], mean: [7], max: [9] }, 0)`), 5);
+  assert.equal(app.run(`dayLow({ min: [null], mean: [7], max: [9] }, 0)`), 7, 'a seed day: mean as the low');
+  assert.equal(app.run(`dayLow({ max: [9] }, 0)`), null, 'the WSV bundle has no mean — a missing min stays missing');
+  assert.equal(app.run(`dayLow({ min: [null], mean: [null], max: [9] }, 0)`), null);
+});
+
+test('lanuk index: names join the finder sets, a WSV name is never overwritten', () => {
+  const app = loadApp({ now: NRW_NOW, storage: WARM_STATIONS });
+  const before = app.run(`JSON.stringify(stationMeta.get('BONN'))`);
+  const added = app.run(`mergeLanukIndex(${JSON.stringify({
+    ...NRW_MANIFEST,
+    gauges: { ...NRW_MANIFEST.gauges, 1: { n: 'Bonn', w: 'Rhein', from: '2024-09-04', to: '2026-09-02' } },
+  })})`);
+  assert.equal(added, 4, 'four gauges with a series; the temperature-only site and the WSV collision stay out');
+  assert.equal(app.run(`JSON.stringify(stationMeta.get('BONN'))`), before, 'BONN is still the WSV entry');
+  assert.equal(app.run(`knownStations.has('MENDEN_1')`), true);
+  assert.equal(app.run(`stationMeta.get('MENDEN_1').id`), 'lanuk-2729100000100');
+  assert.equal(app.run(`stationMeta.get('MENDEN_1').w`), 'SIEG');
+  assert.equal(app.run(`resolveStation('menden_1')`), 'MENDEN_1', 'the folded name resolves to the UPPERCASE key');
+  // the colliding gauge is WSV's, so its water is not registered as a LANUK water either
+  assert.deepEqual(app.run(`[...lanukWaters.keys()].sort()`), ['ERFT', 'SIEG']);
+  assert.equal(app.run(`knownWaters.has('SIEG')`), true, 'typing a LANUK water opens river mode');
+  assert.equal(app.run(`wsvWaters.has('SIEG')`), false);
+  // the finder ranks them like any other gauge
+  assert.ok(app.run(`finderMatches('mend')`).some(m => m.name === 'MENDEN_1'));
+  // the WSV list arriving AFTER the merge still wins its own names
+  app.run(`fillDatalist([{ n: 'MENDEN_1', w: 'RUHR', km: 1 }])`);
+  assert.equal(app.run(`stationMeta.get('MENDEN_1').id`), undefined, 'fillDatalist writes without an id: the name is WSV\'s now');
+  assert.equal(app.run(`mergeLanukIndex(${JSON.stringify(NRW_MANIFEST)})`), 3, 'and the merge no longer touches it');
+});
+
+test('loadRepoManifest: one map over both mirrors, LANUK gauges keyed by their id', async () => {
+  const app = nrwApp();
+  await app.run('lanukIndex()');
+  const m = await app.run('loadRepoManifest()');
+  assert.ok(m['bonn-uuid'], 'the WSV entries are still there');
+  const e = m['lanuk-2729100000100'];
+  assert.equal(e.n, 'Menden_1');
+  assert.equal(e.w, 'SIEG');
+  assert.equal(e.source, 'LANUK NRW');
+  assert.equal(e.none, false);
+  assert.equal(m['lanuk-4711'].none, true, 'a temperature-only site is a known gap, like a WSV none-entry');
+  assert.equal(nrwUrls(app).filter(u => u === 'nrw/manifest.json').length, 1, 'one index fetch per session');
+});
+
+test('loadRepoArchive: a LANUK station reads its year shards, mean-as-low on seed days', async () => {
+  const app = nrwApp({ search: '?station=MENDEN_1' });
+  await app.run('lanukIndex()');
+  app.run(`station = 'MENDEN_1'; state.info = lanukInfoFrom(${JSON.stringify(NRW_META['2729100000100'])}, 'lanuk-2729100000100')`);
+  await app.run('loadRepoArchive()');
+  const urls = nrwUrls(app).filter(u => u.startsWith('nrw/gauges/'));
+  assert.deepEqual(urls, ['nrw/gauges/2729100000100/2024.json', 'nrw/gauges/2729100000100/2025.json', 'nrw/gauges/2729100000100/2026.json'],
+    'one shard per year the manifest lists, under the LANUK path');
+  assert.equal(app.run('state.repoArchive'), 'available');
+  assert.equal(app.run('archiveSource()'), 'LANUK NRW');
+  const arch = app.run(`loadArchive('MENDEN_1')`);
+  assert.equal(arch.length, 3 * 45 * 2, 'two points per archived day, every year');
+  // day 200 of 2026 is a seed day: its low is the mean, its high the maximum
+  const day200 = Date.UTC(2026, 0, 1) - 36e5 + 200 * 864e5;
+  const lo = arch.find(p => p[0] === day200 + 6 * 36e5), hi = arch.find(p => p[0] === day200 + 18 * 36e5);
+  assert.equal(lo[1], 40, 'seed day: the mean stands in for the missing minimum');
+  assert.equal(hi[1], 43);
+  // day 240 has a real minimum
+  const day240 = Date.UTC(2026, 0, 1) - 36e5 + 240 * 864e5;
+  assert.equal(arch.find(p => p[0] === day240 + 6 * 36e5)[1], 42, 'a real minimum is used as is');
+  assert.equal(app.run('state.lowIsMeanUntil'), Date.UTC(2026, 0, 1) - 36e5 + 239 * 864e5,
+    'the newest seed day is remembered, so the plates can say where the real minimum starts');
+});
+
+test('history key: the mean-as-low caveat is bound to seed days inside the window', async () => {
+  const app = nrwApp({ search: '?station=MENDEN_1' });
+  await app.run('lanukIndex()');
+  app.run(`station = 'MENDEN_1'; state.info = lanukInfoFrom(${JSON.stringify(NRW_META['2729100000100'])}, 'lanuk-2729100000100')`);
+  await app.run('loadRepoArchive()');
+  app.run(`state.archive = loadArchive('MENDEN_1')`);
+  const at = key => app.run(`(() => { historyKey = '${key}'; const h = historyViewModel(); return { seed: h.seed, html: renderHistory(h) }; })()`);
+  const wide = at('30d');
+  assert.ok(wide.seed, 'a 30-day window reaches into the seed rows');
+  assert.ok(wide.seed.text.startsWith('Before 2026-08-29'), `names the first day with a real minimum: ${wide.seed.text}`);
+  assert.ok(wide.html.includes(`<dd class="warn">${wide.seed.text}</dd>`), 'and the key carries it as a warning');
+  const narrow = at('7d');
+  assert.equal(narrow.seed, null, 'a window of real-minimum days only carries no caveat');
+  assert.ok(!narrow.html.includes('Before 2026-08-29'));
+  // the years view draws day mids from the same points, so its key says it too
+  app.run(`state.gauge = lanukGaugeFrom(${JSON.stringify(NRW_META['2729100000100'])}, { timestamp: '2026-09-01T23:00:00.000Z', value: 48 })`);
+  assert.ok(app.run('renderYears(yearsViewModel())').includes('Before 2026-08-29'), 'the years key names the seed rows as well');
+  app.run(`state.lowIsMeanUntil = null`);
+  assert.ok(!app.run('renderYears(yearsViewModel())').includes('Before 2026-'), 'and drops it for a station with real minima throughout');
+});
+
+test('?station=MENDEN_1: the seam loads a full station plate off the mirror, with no live feed', async () => {
+  const app = nrwApp({ search: '?station=MENDEN_1' });
+  await app.run('lanukIndex()');
+  app.run(`refreshTimer = setInterval(loadData, REFRESH_MS)`); // what the boot armed before it knew
+  await app.run('loadData()');
+  assert.equal(app.run('state.error'), null);
+  assert.equal(app.run('state.info.shortname'), 'Menden_1');
+  assert.equal(app.run('state.info.water.shortname'), 'SIEG');
+  const cur = app.run('state.gauge.currentMeasurement');
+  assert.equal(cur.value, 44.3 + 2.4, 'the newest daily mean is the reading');
+  assert.equal(cur.timestamp, '2026-09-01T23:00:00.000Z', 'stamped at the MEZ start of its day — a day old, honestly');
+  assert.equal(cur.stateMnwMhw, 'normal');
+  assert.deepEqual(app.run('state.lanuk.stages'), [250, 410, 440], 'the alert stages ride beside the gauge, not in it');
+  assert.equal(app.run('state.gauge.stages'), undefined);
+  assert.equal(app.run('state.feed.live'), false);
+  assert.equal(app.run('refreshTimer'), null, 'no live feed → the 5-minute poll is disarmed');
+  assert.equal(app.run('state.repoArchive'), 'available');
+  assert.ok(app.run(`JSON.parse(localStorage.getItem('pegel.recent'))`).includes('MENDEN_1'), 'a gauge that answered earns its chip');
+  assert.ok(!nrwUrls(app).some(u => u.includes('pegelonline') || u.includes('open-meteo')), 'no live API, no weather request');
+  // the trend is day-over-day, not the low-to-high spread of the stored day
+  assert.ok(Math.abs(app.run('trendPerHour()') - 0.1) < 1e-9, `+2.4 cm over one day → +0.1 cm/h: ${app.run('trendPerHour()')}`);
+  // the loader kicked the shard backfill off without waiting for it — let it land
+  await new Promise(r => setTimeout(r, 20));
+  assert.ok(app.run('state.archive.length') > 0, 'the mirrored shards are the history');
+  // the plate says what the number is and where it came from
+  const html = app.run('renderStation(stationViewModel())');
+  const vm = app.run('stationViewModel()');
+  assert.equal(vm.history.empty, false, 'a 30-day window off the mirror is not empty');
+  assert.equal(vm.source, 'LANUK NRW · daily mean · 2026-09-02 · mirrored 2026-09-03 17:41 UTC · no live feed');
+  assert.ok(!vm.source.includes('refreshes every 5 min'));
+  assert.ok(html.includes('<dt>reading</dt>'), 'the facts row names the reading as a daily mean');
+  assert.ok(html.includes('daily mean · 2026-09-02'));
+  assert.ok(html.includes('Kiesbank'), 'the operator\'s own caveat is on the plate');
+  // the operator's MNW/MW/MHW feed the scene's marks (and would ride on the
+  // history chart the moment the window's range reaches them — at 40–50 cm
+  // none of 18 / 66 / 364 is inside it, exactly like a WSV gauge)
+  assert.ok(html.includes('long-term mean low / mean / high water'), 'the scene key names the operator\'s means');
+  assert.deepEqual(vm.history.marks, [], 'reference lines outside the drawn range stay off the chart');
+  assert.deepEqual(vm.scene.marks.map(m => m.key).sort(), ['MHW', 'MNW', 'MW']);
+  assert.ok(!html.includes('>24H<') && !html.includes('>3D<') && html.includes('>7D<'), 'one value a day: no 24 h window on offer');
+  assert.ok(html.includes('no elevation profile'), 'the neighbour block says why it is empty');
+  assertNamed(svgAt(html), keyClasses(html), 'the LANUK station scene');
+  // the weather poll returns before it asks anything
+  const hits = await app.run(`(async () => { let n = 0; const g = getJson; getJson = async () => { n++; return {}; }; await loadWeather(); getJson = g; return n; })()`);
+  assert.equal(hits, 0);
+  // the years view is the same plate off the same points
+  app.run(`viewMode = 'years'`);
+  const years = app.run('renderYears(yearsViewModel())');
+  assert.ok(years.includes('LANUK NRW') || app.run('yearsViewModel()').source.includes('LANUK NRW'), 'the years foot names the source');
+  // switching away resets every feed-owned slot
+  app.run(`switchStation('BONN', '')`);
+  assert.equal(app.run('state.feed'), null);
+  assert.equal(app.run('state.lanuk'), null);
+  assert.equal(app.run('state.lowIsMeanUntil'), null);
+});
+
+test('a cold boot on a LANUK deep link routes through the live API\'s 404 to the mirror', async () => {
+  // no index yet: loadData goes to PEGELONLINE first, which does not know the
+  // name; the 404 path then waits for the index and re-routes
+  const app = loadApp({ now: NRW_NOW, search: '?station=MENDEN_1' });
+  app.run(nrwStub);
+  app.run(`const live = getJson; getJson = async url => {
+    if (url.startsWith('${'https://www.pegelonline.wsv.de'}')) { const e = new Error('404'); e.status = 404; throw e; }
+    return live(url);
+  }`);
+  await app.run('loadData()');
+  assert.equal(app.run('state.error'), null, 'no error stands');
+  assert.equal(app.run('state.info && state.info.shortname'), 'Menden_1');
+  assert.equal(app.run('state.feed && state.feed.name'), 'LANUK NRW');
+});
+
+test('?river=ERFT: the LANUK river plate lists every gauge in flow order, mouth last', async () => {
+  const app = nrwApp({ search: '?river=ERFT' });
+  app.run(`lanukWaters.clear(); wsvWaters.clear(); wsvWaters.add('RHEIN')`); // the WSV water list is in, and it has no ERFT
+  await app.run('lanukIndex()');
+  app.run(`refreshTimer = setInterval(loadRiver, REFRESH_MS)`);
+  await app.run('loadRiver()');
+  assert.equal(app.run('state.error'), null);
+  assert.equal(app.run('refreshTimer'), null, 'no poll for a mirrored river');
+  assert.ok(!nrwUrls(app).some(u => u.includes('pegelonline')), 'a water only the mirror knows never asks the live API');
+  const st = app.run('state.riverStations');
+  assert.deepEqual(st.map(s => s.name), ['Neubrueck', 'Arloff'], 'km-sorted like every river (km = distance to the mouth)');
+  assert.ok(st.every(s => s.elev === null), 'no gauge datum anywhere → nothing to plot');
+  assert.ok(st.every(s => s.id && s.id.startsWith('lanuk-')), 'each row carries the id the wave view fetches by');
+  const { vm, html } = app.run(`(() => { const vm = riverViewModel(state.riverStations); return { vm, html: renderRiver(vm) }; })()`);
+  assert.equal(vm.lowKmDown, true, 'downstream is the low km, so the mouth is on the right');
+  assert.deepEqual(vm.index.map(s => s.name), ['Arloff', 'Neubrueck'], 'the list runs upstream first: Arloff (88.6 km) before Neubrueck (9.75 km)');
+  assert.equal(vm.source, 'LANUK NRW · mirrored 2026-09-03 17:41 UTC · no live feed');
+  assert.ok(html.includes('no elevation profile to draw'), 'the profile block says why there is no chart');
+  assert.ok(!html.includes('class="chart river"'), 'and draws none');
+  assert.ok(html.includes('km counts DOWN to the mouth'), 'the key explains what km means here');
+  assert.ok(html.includes('data-nav="Arloff"') && html.includes('data-nav="Neubrueck"'), 'every gauge is tappable');
+  assertNamed(svgAt(html), keyClasses(html), 'the LANUK river plate');
+  // the wave view draws the mirrored days — mean per day — and asks no live API
+  app.run(`viewMode = 'wave'; waveData = null`);
+  await app.run('loadWave()');
+  const wave = app.run('waveData');
+  assert.ok(wave.rows && wave.rows.length === 2, `two rows: ${JSON.stringify(wave)}`);
+  assert.ok(!nrwUrls(app).some(u => u.includes('measurements.json')), 'no REST call for a mirrored gauge');
+  const neu = wave.rows.find(r => r.name === 'Neubrueck');
+  const present = neu.vals.filter(v => v != null);
+  assert.ok(present.length >= 40, 'the window is filled from the shards');
+  assert.ok(Math.abs(present[present.length - 1] - 64.4) < 1e-9, 'the newest cell is the daily MEAN of Sep 2, not a min/max mid');
+  assert.equal(app.run('waveViewModel(waveData)').source, 'LANUK NRW daily archive · no live feed');
+});
+
+test('?river=SIEG on a cold cache: the live API is asked first, the mirror is the fallback', async () => {
+  const app = nrwApp({ search: '?river=SIEG' });
+  app.run(`lanukWaters.clear(); wsvWaters.clear()`); // no WSV water list yet
+  app.run(`const mirror = getJson; getJson = async url => {
+    if (url.includes('stations.json?waters=SIEG')) return []; // PEGELONLINE: no such water
+    return mirror(url);
+  }`);
+  await app.run('loadRiver()');
+  assert.equal(app.run('state.error'), null);
+  assert.deepEqual(app.run('state.riverStations').map(s => s.name), ['Menden_1', 'Weidenau']);
+  assert.ok(nrwUrls(app).some(u => u === 'nrw/manifest.json'), 'the fallback waited for the index');
+});
+
+test('a water both sources name stays WSV\'s: the mirror is never consulted for it', async () => {
+  const app = nrwApp({ search: '?river=RHEIN' });
+  app.run(`lanukWaters.clear(); wsvWaters.clear(); wsvWaters.add('RHEIN'); lanukWaters.set('RHEIN', ['lanuk-2729100000100'])`);
+  let asked = 0;
+  app.run(`getJson = async url => {
+    if (url.includes('stations.json?waters=RHEIN')) return [
+      { shortname: 'BONN', uuid: 'u1', km: 654, timeseries: [{ shortname: 'W', gaugeZero: { value: 40 }, currentMeasurement: { value: 100, stateMnwMhw: 'normal' } }] },
+      { shortname: 'KÖLN', uuid: 'u2', km: 688, timeseries: [{ shortname: 'W', gaugeZero: { value: 35 }, currentMeasurement: { value: 120, stateMnwMhw: 'normal' } }] },
+    ];
+    globalThis.__asked = (globalThis.__asked || 0) + 1; throw new Error('unexpected ' + url);
+  }`);
+  // let the boot's own loadRiver (fired against the offline stub) settle first,
+  // so only the call under test is counted
+  await new Promise(r => setTimeout(r, 10));
+  app.run('globalThis.__asked = 0');
+  await app.run('loadRiver()');
+  asked = app.run('globalThis.__asked || 0');
+  delete globalThis.__asked;
+  assert.deepEqual(app.run('state.riverStations').map(s => s.name), ['BONN', 'KÖLN']);
+  assert.equal(asked, 0, 'no mirror file was requested');
+  assert.equal(app.run('state.feed'), null, 'a WSV river carries no feed descriptor');
+});
+
+test('foldYearsIntoWindow: a shard with a daily mean is drawn from it, the WSV bundle from its mid', () => {
+  const app = loadApp({ now: NRW_NOW });
+  const day0 = app.run(`epochDay(Date.UTC(2026, 0, 1))`);
+  const out = app.run(`(() => {
+    const vals = Array(3).fill(null);
+    foldYearsIntoWindow([
+      { y: 2026, min: [null, 10, null], mean: [7, 12, null], max: [9, 14, 20] },
+    ], vals, ${day0});
+    return vals;
+  })()`);
+  assert.deepEqual(out, [7, 12, null], 'the mean where stored — even on a seed day without a minimum; a max alone is not a level');
+});
+
+test('lanuk plates: a hostile gauge or water name never reaches markup unescaped', async () => {
+  const app = loadApp({ now: NRW_NOW });
+  const bad = '<img src=x onerror=alert(1)>&"';
+  const meta = { ...NRW_META['2729100000100'], name: bad, water: 'Sieg' + bad, note: 'note ' + bad };
+  const html = app.run(`(() => {
+    station = 'X';
+    state.info = lanukInfoFrom(${JSON.stringify(meta)}, 'lanuk-1');
+    state.gauge = lanukGaugeFrom(${JSON.stringify(meta)}, { timestamp: '2026-09-01T23:00:00.000Z', value: 48 });
+    state.lanuk = { stages: [], note: ${JSON.stringify('note ' + bad)} };
+    state.feed = lanukFeed({ isoDay: '2026-09-02', trend: 0.1 });
+    state.archive = []; state.neighbors = [];
+    return renderStation(stationViewModel());
+  })()`);
+  assert.ok(!html.includes('<img'), 'station plate: the name and the operator note are escaped');
+  const river = app.run(`(() => {
+    state.river = 'SIEG';
+    state.feed = { name: 'LANUK NRW', live: false, kmNote: T.lanukKmNote };
+    const vm = riverViewModel([
+      { name: ${JSON.stringify(bad)}, id: 'lanuk-1', km: 10, elev: null, value: 48, unit: 'cm', kind: 'high' },
+      { name: 'B', id: 'lanuk-2', km: 5, elev: null, value: 48, unit: 'cm', kind: 'normal' },
+    ]);
+    return renderRiver(vm);
+  })()`);
+  assert.ok(!river.includes('<img'), 'river plate: the name is escaped in the trouble list and the index');
+});
