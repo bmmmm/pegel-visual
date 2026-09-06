@@ -7,9 +7,11 @@ REST API (WSV). No build step, no backend, no dependencies.
 Every view is a *plate*: a title block saying what you are looking at, the
 drawing itself, a legend for every mark it uses, and a foot naming the source
 and the age of the reading. If a section cannot name itself in its own legend,
-it does not ship.
+it does not ship — a test pulls the mark classes out of every drawing and out
+of its key and fails on the first one the key does not name.
 
-**Live:** https://bmmmm.github.io/pegel-visual/
+**Live:** https://bmmmm.github.io/pegel-visual/ ·
+**Forecast gate:** https://bmmmm.github.io/pegel-visual/gate/
 
 ```
 _      _      _      _      _      _      _      _
@@ -18,179 +20,170 @@ _      _      _      _      _      _      _      _
 
 ## What it shows
 
-- current level as a hero reading, trend per hour, MNW/MHW state. The trend
-  averages over 6 hours: gauges report whole centimetres and a big river moves
-  centimetres per *day*, so an hourly slope rounds to a flat `0` almost every
-  time. Under an hour of history it reads `—`, not a made-up zero
-- animated river cross-section: waves at the live level, drifting current,
-  seeded riverbed, a little ship, markers for MNW / MW / MHW
-- living scenes: below MNW the sun blazes over a cracked, dried-out bank;
-  above MHW storm clouds drift in and rain falls on the swollen river; when
-  the level rises fast (≥ 2 cm/h) a lone rain cloud drifts in upstream as a
-  harbinger of the water to come — independent scenes can overlap, e.g. a
-  drought sun next to the harbinger cloud when a low river is refilling;
-  after sunset (computed for the station's real coordinates) the moon rises
-  in its real current phase and stars twinkle over the water. The scene also
-  mirrors real weather at the station (rain, snow, clouds, wind) via
-  [open-meteo](https://open-meteo.com), refreshed every 15 min
-- automatic dark mode (`light-dark()`, follows your system), tab title and
-  favicon carry the live level — the buddy's waterline tracks MNW…MHW
-- history sparkline — starts with the API's 30 days and grows: every visit
-  merges the data into a local archive (localStorage, per station), so over
-  time your sparkline covers more than the API can serve. Points older than
-  16 days are thinned to hourly, older than a year to 6-hourly. `export`
-  downloads the archive as JSON, `import` restores a previously exported
-  file (e.g. after switching devices) and merges it with what is already
-  there, `clear` (click twice) deletes it. Nothing ever leaves your browser.
-  Fetching is API-friendly: the 30-day history is requested once as a seed,
-  afterwards only the delta since the newest archived point is pulled.
-- **years, not days:** WSV publishes each station's raw archive back to
-  2000-01-01 ([DL-DE→Zero-2.0](https://www.govdata.de/dl-de/zero-2-0)).
-  This repo hosts a condensed copy — daily min/max — as two files per
-  station on the `archive` branch: `closed.json`, an immutable bundle of
-  every completed year, and `current.json`, the running year. So picking
-  `1Y` / `5Y` / `ALL` fetches just three files same-origin (manifest +
-  bundle + running year) and merges them into your local archive on the
-  fly. A monthly CI run refreshes the running year from the PEGELONLINE
-  REST API (a month at a time); each January the completed year is
-  re-backfilled from the WSV archive download — the monthly snapshots
-  only fill days the archive is missing — and graduates into the
-  immutable bundle. The live API covers the newest 30 days on
-  top, so the site is never more than a month stale. Multi-year views are
-  flagged as *unvalidated raw data*, since WSV serves these values
-  unchecked (outliers and gaps included; the manifest records a per-station
-  gap-day count as inspection metadata — the page itself does not surface
-  it). `scripts/fetch-wsv-archive.mjs` builds and refreshes the
-  data — the full backfill still uses WSV's ZIP download page, which the
-  browser cannot fetch cross-origin (it sends its CORS header twice, see
-  issue #1). The manual route works too: the `full archive (2000→)` link
-  opens the station's WSV download page, and `import` swallows the ZIP
-  directly (unpacked in the browser via `DecompressionStream`, still no
-  dependencies)
-- **beyond WSV:** ten Dutch gauges PEGELONLINE relays live but WSV keeps no
-  multi-year archive for (LOBITH, PANNERDENSE KOP, TIEL, VUREN, ZALTBOMMEL,
-  NIJMEGEN HAVEN, IJSSELKOP, DORDRECHT, KRIMPEN, ROTTERDAM) are backfilled
-  from [Rijkswaterstaat](https://www.rijkswaterstaat.nl) open data (CC0)
-  instead, back to ~1989. Each carries a `source` marker in the archive
-  manifest so the *unvalidated raw data* attribution names the right origin;
-  `scripts/fetch-rws-archive.mjs` builds and refreshes them. Values were
-  verified seamless with the live PEGELONLINE feed (identical NAP datum). See
-  the [`archive` branch README](../../tree/archive) for the per-source
-  attribution
-- **years view** (`▦ YEARS` chip or `?view=years`) — the station as a
-  multi-year statistics terminal, built from the same daily archive:
-  a heatmap of every year by month (`absolute` shades the level itself,
-  `anomaly` the deviation from that month's long-term mean — dry months in
-  the drought accent, wet months in the flood accent, `·` for normal),
-  the long-term monthly min–max band with median against the current
-  year, and a day-of-year overlay of all years with one year bold —
-  click any year in the heatmap to put it on top or page through them
-  with the `◂ year ▸` chips; clicking a month cell prints its numbers
-  (monthly mean, min–max, deviation from the long-term month mean in σ)
-  in a readout line
-- water surface elevation profile (m NHN) between the neighboring
-  stations on the same river, ordered by river km — neighbors are one
-  click away, and the current station's own label opens the whole-river
-  profile
-- water temperature and discharge in the header when the station reports
-  them, all-time record markers (HHW/NNW) on the chart when available, and
-  a frozen river scene — static pack ice, drifting floes, a ship stuck fast —
-  once water temperature drops to 0.5 °C or below
+- **the reading** — the live level as hero digits in the gauge's *own* unit:
+  centimetres above gauge zero for most, metres above a datum for the 69
+  gauges that report that way (reservoirs, barrages, canals). Next to it the
+  trend per hour, averaged over 6 hours — gauges report whole centimetres and
+  a big river moves centimetres per *day*, so an hourly slope rounds to a flat
+  `0` almost every time — and the state relative to MNW / MHW. Under an hour
+  of history, or after a silence longer than 12 hours, the trend reads `—`,
+  not a made-up zero. Water temperature and flow join the facts when the
+  station reports them.
+- **the living river** — an animated cross-section: waves at the live level,
+  drifting current, a seeded riverbed, a little ship, dashed marks for
+  MNW / MW / MHW and the all-time records HHW / NNW. The scene reacts to the
+  world: below MNW the sun blazes over a cracked, dried-out bank; above MHW
+  storm clouds drift in and rain falls on the swollen river; at 0.5 °C or
+  below the river freezes over — static pack ice, drifting floes, a ship
+  stuck fast. Real weather at the station (rain, snow, cloud cover, wind)
+  comes from [open-meteo](https://open-meteo.com), refreshed every 15
+  minutes; after sunset, computed for the station's real coordinates, the
+  moon rises in its current phase and stars twinkle over the water — unless
+  it is overcast. Your own ADS-B and AIS receivers can put real aircraft and
+  ships into the picture (see below).
+- **automatic dark mode** (`light-dark()`, follows your system); the tab
+  title and favicon carry the live level — the buddy's waterline tracks
+  MNW…MHW.
+- **the history block** — a time chart that starts with the API's 30 days
+  and grows: every visit merges the readings into a local archive
+  (localStorage, per station), so over time it covers more than the API can
+  serve. Points older than 16 days are thinned to hourly, older than a year
+  to 6-hourly; the least-recently viewed stations are evicted first when the
+  quota fills. The range chips sit on the block itself — `24H 3D 7D 15D 30D
+  1Y 5Y 10Y 20Y ALL`, plus `▦ YEARS` — and land in the URL, so a shared link
+  reproduces the window. Fetching is API-friendly: the 30 days are requested
+  once as a seed, afterwards only the delta since the newest archived point.
+  The chart's x axis is time, not sample index, so a resolution change
+  inside a window is drawn through while a real silence breaks the line; the
+  note under the chart says where the record actually ends (`no reading
+  after …`). `export` downloads the archive as JSON, `import` restores a
+  previously exported file (or swallows a WSV archive ZIP directly, unpacked
+  in the browser via `DecompressionStream`), `clear` deletes it after a second
+  click; a per-station breakdown lets you drop one gauge at a time. Nothing
+  ever leaves your browser.
+- **years, not days** — picking `1Y` and beyond fetches the hosted daily
+  archive same-origin: the manifest, the station's bundle of completed years
+  and its running year, merged into your local archive on the fly. Where
+  it comes from, how it is refreshed and where it ends is in *Where the data
+  comes from* below; the plate flags it *unvalidated raw data* and names the
+  source, and a gauge WSV never archived says so instead of offering an
+  import that cannot deliver.
+- **years view** (`▦ YEARS` or `?view=years`) — the station as a multi-year
+  statistics terminal, built from the same daily archive: a heatmap of every
+  year by month (`absolute` shades the level itself, `anomaly` the deviation
+  from that month's long-term mean — dry months in the drought accent, wet
+  months in the flood accent), the long-term monthly min–max band with
+  median against the current year, and a day-of-year overlay of all years
+  with one year bold. Click a year in the heatmap to put it on top or page
+  through them with the `◂ ▸` chips; clicking a month cell prints its
+  numbers (mean, min–max, deviation from the long-term month mean in σ) in a
+  readout line. `← live` goes back.
+- **the elevation profile** — water surface elevation (m NHN) between the
+  neighbouring gauges on the same river. It always runs downstream to the
+  right: German river kilometres count downstream on the Rhine but upstream
+  on the Neckar, so the direction comes from the elevation, not from the km.
+  Neighbours are one click away, and the station's own label opens the
+  whole-river profile.
+- **the chrome** — an app bar with the back button (it names the gauge you
+  came from: `← BONN`), `map`, `rising`, `totals`, `forecast gate`, `⌕ find`
+  and `ⓘ`; a breadcrumb trail (`All waters ▸ RHEIN ▸ BONN`); a finder dialog
+  with search, browse-by-water, recents and arrow-key navigation; a footer
+  with `info`, `report issue` (builds a bug report from the live state,
+  receiver URLs stripped, and hands it to GitHub or the clipboard), `share`,
+  `source` and Ko-fi. Every empty, loading or error state is drawn by the
+  water-drop buddy, who says what is wrong.
 
 ## Any station
 
-Default is Bonn (Rhine). Type a station name into the prompt at the bottom
-(with autocomplete over all PEGELONLINE stations), or use the query param.
-Partial names work: a fragment that matches exactly one station (umlaut
-spellings folded) switches directly, an ambiguous one — `MAGDEBURG`,
-`HAMBURG`, `TRIER` — opens a clickable *did you mean* list instead of an
-error:
+Default is Bonn (Rhine). Press `/` for the finder, type a name into the
+prompt in the tools fold, or use the query param. Partial names work: a
+fragment that matches exactly one station (umlaut spellings folded) switches
+directly, an ambiguous one — `MAGDEBURG`, `HAMBURG`, `TRIER` — opens a
+clickable *did you mean* list instead of an error:
 
 ```
 ?station=BONN
 ?station=MARBURG
 ```
 
-Neighbors for the elevation profile are discovered automatically from the
+Neighbours for the elevation profile are discovered automatically from the
 station's river and kilometrage. Stations without characteristic values or
 gauge zero degrade gracefully.
 
-The prompt is a tiny REPL: type a bare name to switch station, or a
-flag command (flags are matched case-insensitively) to do more in one go:
+The prompt is a tiny REPL: a bare name switches station (a bare *river*
+name opens the whole-river profile), or a flag command does more in one go.
+Flags are matched case-insensitively and combine, e.g. `--station KÖLN
+--history 7d`:
 
 - `--station NAME` — switch to station NAME (same as typing a bare name)
-- `--rivers` — open the rivers map (same as the `map` item in the top bar or `?rivers`)
-- `--rising` — open the rising board: every gauge ranked by cm/day vs yesterday
-  (same as the `rising` item in the top bar or `?rising`)
-- `--total` — open the total overview: every river's summed gauge readings
-  stacked over the years, zoomable down to a single day (same as the
-  `totals` item in the top bar or `?total`)
+- `--river NAME` — whole-river profile of NAME (any case, multi-word)
+- `--rivers` — the rivers map (same as `map` in the app bar or `?rivers`)
+- `--rising` — the rising board (same as `rising` or `?rising`)
+- `--total` — the total overview (same as `totals` or `?total`)
 - `--adsb URL` — set your ADS-B receiver URL; `--adsb` with no value clears it
 - `--ais URL` — set your AIS receiver URL; `--ais` with no value clears it
-- `--history RANGE` — set the sparkline window (`24h`, `3d`, `7d`, `15d`, `30d`,
-  `1y`, `5y`, `10y`, `20y`, `all`); the choice also lands in the URL, so shared
-  links reproduce it
-- `--view MODE` — switch the sub-view: `years` (station statistics), `wave`
-  (river heatmap), `list` (the waters A–Z, with `--rivers`) or `live`; also
-  lands in the URL, so shared links reproduce it
+- `--history RANGE` — the history window: `24h`, `3d`, `7d`, `15d`, `30d`,
+  `1y`, `5y`, `10y`, `20y`, `all`
+- `--view MODE` — the sub-view: `years` (station statistics), `wave` (river
+  heatmap), `list` (the waters A–Z, with `--rivers`) or `live`
 - `--export` — download the whole local archive as JSON
 - `--clear` — delete the local archive (no confirmation — you typed it)
-- `--info` — open the feature guide dialog (also linked as `info` in the footer):
-  every feature on the page, explained in one box
-- `--help` — show a man page with all of the above right on the screen
+- `--info` — the feature guide: every feature on the page, explained in one box
+- `--help` — a man page with all of the above right on the screen
 
-River names autocomplete alongside stations: typing or picking a known river
-(e.g. `RHEIN`) opens the whole-river profile directly.
+The keyboard layer covers the same ground without typing, and the `?` sheet
+lists it: `/` opens the finder, `?` the feature guide, `h` the man page;
+`1`…`9` and `0` pick a history range, `[` and `]` walk to the next gauge
+downstream / upstream, `g` `m` `r` `t` jump to gauge, map, rising board and
+totals, `a` toggles absolute / anomaly in the years view, `w` profile / wave
+in river mode, `d` sum / change in the totals, `.` copies this view's link,
+`Esc` closes a dialog, zooms out of the totals or leaves a sub-view. Nothing
+fires while a field or a dialog has focus.
 
-Flags combine, e.g. `--station KÖLN --history 7d` switches station and
-range in one command. Press `/` to focus the prompt from anywhere on the
-page, Escape to dismiss the help screen.
-
-`share` in the footer hands the station link to your system share sheet
-(or copies it). The page ships a web manifest, so it can be installed as
-an app from the browser menu.
+`share` in the footer hands the current view's link to your system share
+sheet (or copies it). The page ships a web manifest and a shell-only service
+worker (network first, never the data), so it installs as an app from the
+browser menu.
 
 ## The rivers map
 
-`--rivers` (the `map` item in the top bar, or `?rivers`) puts every water
-PEGELONLINE serves on one screen — a schematic outline of Germany with
-each river anchored at the centroid of its own gauges and labelled with how
-many it has. Click a name to open that river's profile.
+`map` (or `?rivers`, `--rivers`) puts every water PEGELONLINE serves on one
+screen — a schematic outline of Germany with each river anchored at the
+centroid of its own gauges and labelled with how many it has. Click a name
+to open that river's profile.
 
 ```
 ?rivers
+?rivers&view=list
 ```
 
 The outline is an SVG polygon under an equirectangular projection with the
-longitude scaled by cos(51.15 N), so Germany keeps its shape at any width
-instead of being squashed by character-cell proportions. Label placement is
-greedy from the busiest water down, with real bounding-box collision: names
-that find no free spot are listed in the A–Z index instead of being squeezed
-over a neighbour. The `A–Z index` tab lists every water with its gauge count —
-the browsable list the map cannot be.
-
-A `← STATION` button next to `--rivers` leads back to the gauge you came from.
-It shows up in the map and in whole-river mode — neither has a station on
-screen to click, so without it the only way back is typing a name.
+longitude scaled by cos(51.15 N), so Germany keeps its shape at any width.
+Label placement is greedy from the busiest water down, with real
+bounding-box collision and a cap that follows the width (12 labels on a
+phone, 26 on a desk): names that find no free spot are listed in the
+`A–Z index` tab instead of being squeezed over a neighbour — the browsable
+list the map cannot be, every water with its gauge count.
 
 Two things are deliberately kept apart: a river's **gauge count** includes
 every gauge, its **position** comes only from gauges that have coordinates.
-PEGELONLINE carries 58 gauges without any — the Austrian Donau, the Czech
-Elbe, the Dutch Rhine — and letting that gap into the count would advertise
-`DONAU 18` for a river whose profile then opens with 27. Waters with no
-located gauge at all are listed under the map with their real count, and the
-list header names how many are missing and why.
+PEGELONLINE carries a few dozen gauges without any (57 of 786 at the last
+count) — the Austrian Donau, the Czech Elbe, the Dutch Rhine — and letting
+that gap into the count would advertise `DONAU 18` for a river whose profile
+then opens with 27. Waters with no located gauge at all are listed under the
+map with their real count, and the key says how many are missing and why.
 
 ## The rising board
 
-`--rising` (or `?rising`, the `rising` item in the top bar, or the
-`who's rising` link in the finder) ranks every gauge by how fast it moved
-since yesterday, in cm per day:
-the top 20 risers, the steepest fallers below, and every row a click away
-from its station.
+`rising` (or `?rising`, `--rising`, the `who's rising` link in the finder)
+ranks every gauge by how fast it moved since yesterday, in cm per day: the
+top 20 risers, the 8 steepest fallers below, every row a click away from its
+station, with a sparkline of its recent days and a bar proportional to the
+rate.
 
 ```
 ?rising
+?rising&d7
 ```
 
 The live API only tells the present — it has no bulk history — so the
@@ -198,27 +191,31 @@ The live API only tells the present — it has no bulk history — so the
 workflow captures onto the `archive` data branch
 (`archive/snapshots/YYYY-MM.json`, one value per station per day, written by
 `scripts/snapshot-wsv.mjs`). The rate is normalized over the real time since
-that capture, so a missed snapshot day cannot double an apparent rise. Until
-the first snapshot is a day old, the board says so and shows what the live
-values alone can: how many gauges sit high, low, normal.
+that capture, so a missed snapshot day cannot double an apparent rise, and a
+baseline younger than 12 hours is not used at all. Until the first snapshot
+is a day old, the board says so and shows what the live values alone can:
+how many gauges sit high, low, normal. The `1D` / `7D` chips move the
+baseline a week back: same cm/day unit, the total centimetres of the span in
+brackets, and the span it actually measured — a missed snapshot day makes it
+`Δ6.8d` rather than exactly seven.
 
 Where a station has mean low/high water marks, its row adds context: already
 `HIGH` / `LOW`, or a rough straight-line ETA like `→MHW ~18d`. Tidal gauges
 are counted but never ranked — a day apart, the tide phase has wandered
 ~50 minutes, so their day diff would measure the tide, not the river. They
 are recognized by their `MThw` mark or, where the API carries no marks at all
-(Rotterdam, Helgoland, the barrage gauges), by the snapshot job from the tide
-in their own archived daily record (median daily span ≥ 40 cm — rivers
-measure 3–6 cm, tidal gauges 195–280).
+(Rotterdam, Helgoland, the barrage gauges), by a flag the snapshot job derives
+from the tide in their own archived daily record (median daily span ≥ 40 cm —
+rivers measure 3–6 cm, tidal gauges 195–280).
 
 ## The total overview
 
-`--total` (or `?total`) stacks every river's summed gauge readings into one
-bar chart and zooms interactively: all years → one year's months → one
-month's days → a single day, where every river is ranked by its share of
+`totals` (or `?total`, `--total`) stacks every river's summed gauge readings
+into one bar chart and zooms interactively: all years → one year's months →
+one month's days → a single day, where every river is ranked by its share of
 that day's sum, each row a click away from its river profile. The five
-all-time biggest rivers keep a fixed band color at every level; the rest
-folds into `OTHER`. Every zoom level is a shareable link:
+all-time biggest rivers keep a fixed band, colour, glyph and hatch at every
+level; the rest folds into `OTHER`. Every zoom level is a shareable link:
 
 ```
 ?total
@@ -236,19 +233,19 @@ sidecar is persisted alongside the aggregate.
 
 Because the absolute sum grows with every gauge that joins the archive (and
 carries the arbitrary datums as a huge constant baseline), trends belong to
-the `Δ DIFF` toggle (`?total&diff`): the net day-over-day change, counting
+the `Δ change` chip (`?total&diff`): the net day-over-day change, counting
 only gauge pairs that reported on both days. A gauge's first reporting day
 never contributes, so coverage ramps cancel out and the diverging bars show
 how much water actually arrived or left — per day, netted per month, and
-netted per year at the zoomed-out levels.
+netted per year at the zoomed-out levels. `Σ sum` switches back.
 
 The data is pre-aggregated on the `archive` branch by
 `scripts/build-river-totals.mjs` (`archive/totals/overview.json` — every
 river at monthly grain, one fetch for the zoomed-out levels;
 `archive/totals/<year>.json` — every river at daily grain, fetched lazily
-per visited year). The monthly workflow rebuilds it from the full
+per visited year). The weekly archive workflow rebuilds it from the full
 per-station archive; the daily snapshot workflow appends today, marking
-snapshot-sourced days as provisional until the next monthly rebuild.
+snapshot-sourced days as provisional until the next rebuild.
 
 ## Whole-river mode
 
@@ -257,61 +254,53 @@ profile: every gauge on the river laid out by river kilometre (downstream to
 the left), plotted at its live water-surface elevation (m NHN), with a
 `TROUBLE` list of every station currently running low or high. One request to
 PEGELONLINE fetches the whole river; it refreshes on the same 5-minute cycle.
-Markers carry shape as well as colour so meaning never rides on hue alone.
-Every marker and `TROUBLE` row is a real link — one click jumps into that
-gauge's plate (the elevation profile's neighbours work the same way). On a
-phone the `TROUBLE` list comes first: it is the answer to "is anything wrong
-on this river?"
+Markers carry shape as well as colour (`◉` normal · `▼` low · `▲` high) so
+meaning never rides on hue alone. Every marker and `TROUBLE` row is a real
+link — one click jumps into that gauge's plate. On a phone the `TROUBLE`
+list comes first: it is the answer to "is anything wrong on this river?"
 
 Layout is continuous: container queries and SVG viewBoxes size every plate to
 the space it actually has, so there is no hard phone/desktop fork and no font
 shrunk into illegibility.
 
-Entry points — the query param or the prompt's `--river` flag (any case,
-multi-word river names allowed):
+Entry points — the query param, the prompt's `--river` flag or a bare river
+name (any case, multi-word river names allowed):
 
 ```
 ?river=RHEIN
 > pegel --river RHEIN
 > pegel --river ELDE MÜRITZ WASSERSTRASSE
-```
-
-A profile line looks like this — the water surface stepping down between two
-gauges, a flagged low station labelled below its marker:
-
-```
-                      RUHRORT
-      ·······◉·······  57.94
-◉·····                        ·····▼·····
-812.4                              WESEL
-                                   19.03
+> pegel ERFT
 ```
 
 `--river` and `--station` are mutually exclusive views; typing a station name
 (or `--station NAME`) from river mode switches straight back. Back/forward in
-the browser restores whichever view the URL held.
+the browser restores whichever view, sub-view, range and year the URL held.
 
 ### Wave view
 
 The `profile / wave` chips on the river plate or `?river=RHEIN&view=wave`
-redraw the whole
-river as a station × day heatmap: rows run downstream (top = upstream), columns
-are the last ~2.5 months, and darker cells mean higher water — each row scaled
-to its own station's range. A flood wave shows up as a diagonal ridge rolling
-down the screen as it travels toward the mouth. The bulk of the data comes from
-the hosted daily archive (refreshed monthly); the newest ~31 days are filled
-live from the PEGELONLINE API, at most 6 requests in flight and capped at 24
-sampled stations per river. Every row is a click target into that station.
+redraw the whole river as a station × day heatmap: rows run downstream
+(top = upstream), columns are the last ~2.5 months, and darker cells mean
+higher water — each row scaled to its own station's range. A flood wave shows
+up as a diagonal ridge rolling down the screen as it travels toward the
+mouth. The bulk of the data comes from the hosted daily archive; the newest
+~31 days are filled live from the PEGELONLINE API, at most 6 requests in
+flight, and a river with more than 24 gauges is sampled evenly along its
+length (the foot says `N of M gauges sampled`). Every row is a click target
+into that station.
 
 ## Aircraft overhead (optional, bring your own receiver)
 
 If you run an ADS-B receiver (tar1090 / readsb / adsb.im image), put its URL
 into the `--adsb` field of the prompt (e.g. `http://10.0.0.5:8080`). Live
-aircraft are projected onto the river axis between the neighbor stations and
-drawn in the sky at their barometric altitude, with callsign and flight level.
-The URL is stored in your browser's localStorage only — it never leaves your
-machine. Note: the public HTTPS page cannot fetch a plain-http LAN receiver
-(mixed content); serve the page locally or put the receiver behind HTTPS.
+aircraft within 50 km of the river axis are projected onto it between the
+neighbour stations and drawn in the sky at their barometric altitude, with
+callsign and flight level; the scene caption counts them (`3 aircraft
+overhead`, or `ADS-B receiver offline`). The URL is stored in your browser's
+localStorage only — it never leaves your machine, and a bug report strips it.
+Note: the public HTTPS page cannot fetch a plain-http LAN receiver (mixed
+content); serve the page locally or put the receiver behind HTTPS.
 
 ## Ships on the river (optional, bring your own receiver)
 
@@ -320,10 +309,134 @@ receiver, put its web server URL into the `--ais` field (e.g.
 `http://10.0.0.5:8080/aiscatcher` on an adsb.im image — the ship list is
 fetched from `<url>/ships.json` every 5 s). Real river traffic within ~2 km
 of the river axis is drawn right on the waterline: a direction-aware hull
-with ship name (or MMSI) and speed in knots, and a `ais: N ships` status in
-the header. While real ships are in view, the decorative boat politely yields
-the river. The URL stays in your browser's localStorage; the same
-mixed-content caveat as for ADS-B applies.
+with ship name (or MMSI) and speed in knots, and the scene caption says
+`2 ships on the water`. While real ships are in view, the decorative boat
+politely yields the river. The URL stays in your browser's localStorage; the
+same mixed-content caveat as for ADS-B applies.
+
+## Where the data comes from
+
+Three gauge sources, one weather feed, and no forecast — each named on the
+plate that uses it.
+
+- **PEGELONLINE (WSV)** — the live feed: every federal-waterway gauge with
+  its current reading, the last 30 days, and the characteristic values (MNW,
+  MW, MHW, HHW/NNW, `MThw` for tidal gauges). Refreshed on a 5-minute cycle,
+  attribution on every foot. © Wasserstraßen- und Schifffahrtsverwaltung des
+  Bundes.
+- **The WSV archive (2000→)** — WSV publishes each station's raw record back
+  to 2000-01-01 under [DL-DE→Zero-2.0](https://www.govdata.de/dl-de/zero-2-0).
+  This repo keeps a condensed copy — daily min/max — on the `archive` branch,
+  two files per gauge: `closed.json`, an immutable bundle of every completed
+  year, and `current.json`, the running year. The running year has two
+  feeders, because one was not enough: a **weekly** REST pull
+  (`fetch-wsv-archive.mjs --current`; the server caps the window at ~31 days)
+  and, on the first Monday of the month, a re-read of the whole running year
+  from the ZIP download (`--running`) plus a gap sweep — the ZIP path is the
+  only one that can look back past the REST retention, and it is what healed
+  the half year a cancelled monthly run once tore out. Each January the
+  completed year is re-backfilled from the ZIP and graduates into
+  `closed.json`. 111 of the 739 gauges have no WSV archive at all (lock and
+  weir gauges, foreign partner gauges, a few harbour gauges): that is a
+  recorded fact in `manifest.json` (`noArchive`), not a failure — such a
+  gauge still grows a running year from the weekly pull, and the plate says
+  which of the two it is looking at. Multi-year views are flagged
+  *unvalidated raw data*, since WSV serves these values unchecked. The
+  browser cannot fetch the ZIP itself (the download page sends its CORS
+  header twice), so the `full archive (2000→)` link opens WSV's page and
+  `import` swallows the ZIP.
+- **Rijkswaterstaat** — ten Dutch gauges PEGELONLINE relays live but WSV
+  keeps no archive for (LOBITH, PANNERDENSE KOP, TIEL, VUREN, ZALTBOMMEL,
+  NIJMEGEN HAVEN, IJSSELKOP, DORDRECHT, KRIMPEN, ROTTERDAM) are backfilled
+  from [Rijkswaterstaat](https://www.rijkswaterstaat.nl) open data (CC0)
+  instead, back to ~1989, by `scripts/fetch-rws-archive.mjs`. Verified
+  seamless with the live feed (same NAP datum); the manifest's `source`
+  marker routes the attribution. See the
+  [`archive` branch README](../../tree/archive) for the per-source detail.
+- **LANUK NRW** — the Erft, the Sieg and the rest of North Rhine-Westphalia's
+  state gauges are not on PEGELONLINE at all. They come from the
+  [LANUK NRW](https://hochwasserportal.nrw) open-data export (dl-de/zero-2.0):
+  ~300 gauges with daily mean and maximum (the minimum is computed from the
+  15-minute series, so seeded history draws its lower edge at the daily mean
+  and the legend says so), ~310 rain gauges and ~110 water-temperature
+  stations, plus the official alert stages. The source is a daily export with
+  a rolling window (730 days daily, 63 days at 15-minute resolution) and sends
+  no CORS header, so `scripts/fetch-nrw-archive.mjs` mirrors it once a day
+  into two GitHub-only branches: `nrw` (the daily level, mounted under
+  `/nrw/`) and `nrw-hires` (the fine resolution, kept but never deployed).
+  These stations have no live feed — their plate says *no live feed* and names
+  the export time instead of refreshing. `?station=MENDEN_1`, `?river=SIEG`,
+  `?river=ERFT`.
+- **Weather** — the scene mirrors the current conditions at the gauge
+  (rain, snow, cloud cover, wind) from [open-meteo](https://open-meteo.com),
+  refreshed every 15 minutes. It dresses the drawing; it is not a forecast,
+  and no weather model feeds one — see the gate below.
+
+### The data branches
+
+Four orphan branches carry data and nothing else. They live on GitHub only,
+never on the Forgejo origin, and are only ever fast-forwarded. None of them
+holds a `.github/` directory, so a push there can never start a workflow —
+every data job dispatches the deploy explicitly.
+
+| Branch | Holds | Written by | Deployed |
+|---|---|---|---|
+| `archive` | daily min/max per WSV and RWS gauge since 2000 (`archive/<uuid>/closed.json` + `current.json`), the daily snapshots for the rising board (`archive/snapshots/YYYY-MM.json`), the river totals (`archive/totals/`) | `archive-update` weekly, `snapshot-update` twice daily | mounted as `/archive/` |
+| `hires` | 15-minute readings of eight gauges for the short-horizon forecast gate | `scripts/forecast/collect-hires.sh`, weekly from one machine (launchd) | no |
+| `nrw` | LANUK NRW daily level, alert stages, topology | `nrw-update` daily | mounted as `/nrw/` |
+| `nrw-hires` | LANUK 15-minute gauges, hourly rain and water temperature, the raw seed of 2026-09-04 | `nrw-update` daily | no |
+
+Every push to `archive` passes `scripts/check-archive-consistency.mjs`
+first — seven rules that can each go red: recency (R1), totals alive (R2),
+coverage (R3), nothing lost against the previous commit (R4), shapes (R5),
+the running year present fleet-wide (R6) and the no-archive markers intact
+(R7). The daily snapshot job skips R6 and R7, because it cannot fix what they
+find and a blocked snapshot loses its day slot for good. The `nrw` branches
+have their own gate (`check-nrw-consistency.mjs`, N1–N7). `data-freshness`
+watches all of it once a day — commit age, deployed drift, manifest age — and
+opens or updates an issue labelled `data-freshness` instead of failing
+silently.
+
+## The forecast gate
+
+https://bmmmm.github.io/pegel-visual/gate/
+
+Before a forecast view could be drawn, one question had to be answered:
+does a model beat what needs no model? `scripts/forecast/` (Python 3.12 via
+uv) runs a rolling-origin backtest of Google's
+[TimesFM](https://github.com/google-research/timesfm) — a zero-shot
+time-series model, no training on this data — against a
+persistence/climatology blend on the closed years of the daily archive:
+seven gauges in five river regimes, from the tidal Elbe at Cuxhaven to the
+alpine Danube at Passau, test origins from 2016 on, lead days 1–90. `gate.py`
+decides with clauses pre-registered before the first run (A1–A7: skill per
+block, a bootstrap on the regimes, calibration, a contamination probe):
+`SHIP`, `NO-SHIP`, `VOID` or `PROVISIONAL`. The reports are committed under
+`gate/` and rendered as a plate of their own: the error-by-lead-day curve on
+a log axis with the picked block hatched, a lead cursor you can drag or drive
+with the arrow keys, target and gauge chips that land in the URL
+(`?target=`, `?lead=`), and everything beyond the one picture folded behind
+an index.
+
+**The verdict on file is NO-SHIP, twice.** TimesFM 2.5 (Apache-2.0, the only
+line this GPL repo may ever ship) reaches a pooled skill of +0.07 at lead days
+1–14 under a bar of 0.10, nothing at 15–30, and loses to plain climatology at
+31–90. TimesFM 3.0 was measured as a challenger on the same test origins: a
+little better everywhere and nowhere near the bar — and its weights are
+non-commercial, so it is named on the sheet with a ⚖ and can never become
+the shipped model, however it scores; `tests/test_license.py` holds that.
+The short horizon (48 h on the 15-minute grid) stays `PROVISIONAL` until
+every gauge has 60 independent origins, which is what the weekly `hires`
+collection is accumulating toward. A weather model as forecast input was
+evaluated and rejected the same way: the gate fails exactly where a weather
+forecast could help, and TimesFM is univariate. So the station plate draws no
+forecast, and the gate page says why.
+
+`cd scripts/forecast && uv run python backtest.py --help` is the whole
+bootstrap — a plain `uv run` syncs torch and the shipped `timesfm` pin into
+`tmp-forecast/`; the challenger line lives in a conflicting group
+(`--no-group model --group model-nc`). Re-running the gate consumes the test
+set: read `gate/*/report.md` before touching a threshold.
 
 ## Run locally
 
@@ -332,11 +445,13 @@ python3 -m http.server 8123
 open http://127.0.0.1:8123/
 ```
 
-The rising board's snapshot files live on the `archive` branch, so `?rising`
-shows its no-baseline state locally. To rehearse it with real data, capture
-one backdated day slot into the git-ignored `archive/` directory and reload —
-the board diffs the live values against it (the diffs stay near zero, since
-the "yesterday" values are really today's):
+The data branches are not on `main`, so a local page has the live API and
+nothing else: multi-year ranges, the rising board and `?total` show their
+no-data states. To rehearse them with real data, mirror what the deployed
+site serves into the git-ignored mounts — `archive/manifest.json` plus one
+gauge's `closed.json` and `current.json` into `archive/<uuid>/` — and
+`?station=BONN&history=5y` drives the range straight from the URL. One
+backdated snapshot slot gives the rising board a baseline:
 
 ```
 PEGEL_NOW=$(date -u -v-1d +%Y-%m-%dT03:00:00Z) node scripts/snapshot-wsv.mjs --out archive/snapshots
@@ -344,37 +459,66 @@ PEGEL_NOW=$(date -u -v-1d +%Y-%m-%dT03:00:00Z) node scripts/snapshot-wsv.mjs --o
 
 (BSD `date`; on Linux use `date -u -d yesterday +%Y-%m-%dT03:00:00Z`.)
 
-## Tests
+A headless `--screenshot` is not a check: `scheduleRender()` rides on
+`requestAnimationFrame`, which a headless page never serves, so every view
+screenshots as `loading…`. Drive a real browser over CDP or WebDriver BiDi
+instead — the recipe, both engines and the phone emulation are in
+`.claude/domains/browser-verify.md`; `scripts/gate-check.mjs` is the committed
+form of it for the gate page.
 
-A dependency-free `node:test` suite — 251 tests across six files, plus
-`tests/extract.mjs`, which is the harness rather than a test: it pulls the
-script out of `index.html` and evaluates it against a minimal hand-rolled
-browser stub (no jsdom, no network, an injectable clock for the astronomy),
-so `app.run('<expr>')` reaches any top-level function in the page.
+## Tests and CI
 
-- `logic.test.mjs` — the page itself: parsing, view models, every renderer
+`node --test` runs a dependency-free `node:test` suite in a few seconds.
+`tests/extract.mjs` is the harness rather than a test: it pulls the script
+out of `index.html` and evaluates it against a minimal hand-rolled browser
+stub — no jsdom, no network, an injectable clock — so `app.run('<expr>')`
+reaches any top-level function in the page and `app.fire('keydown', …)`
+reaches the real handlers.
+
+- `logic.test.mjs` — the page itself: parsing, view models, every renderer,
+  the legend gate (every mark class in a drawing must appear in that
+  drawing's own key) and a hostile-station-name pass over the renderers
 - `snapshot.test.mjs`, `archive-consistency.test.mjs` — the daily snapshots
-  and the archive they accumulate into
-- `wsv-archive.test.mjs`, `rws-archive.test.mjs` — the two backfill pipelines
+  and the seven rules that guard the archive they accumulate into
+- `wsv-archive.test.mjs`, `rws-archive.test.mjs` — the two WSV/RWS backfill
+  pipelines, pinned to the defects a data audit found
+- `nrw-archive.test.mjs`, `nrw-consistency.test.mjs` — the LANUK collector
+  and its N1–N7 gate
 - `river-totals.test.mjs` — the summed-stage build
+- `collect-hires.test.mjs` — the 15-minute collector and its wrapper
+- `gate-page.test.mjs` — the gate page's model and renderer against the
+  committed reports, under the same legend gate as the app
 
-Run them with:
+`scripts/forecast/tests/` is a pytest suite for the gate: windows, baselines,
+the statistics, the clause logic on synthetic results, and the licence guard
+(`uv run --no-sync pytest -q` after `uv sync --locked --no-group model`).
 
-```
-node --test
-```
+| Workflow | When | What |
+|---|---|---|
+| `tests` | every push and PR to `main` | `node --test`; the pytest suite without model weights; `scripts/gate-check.mjs` driving the gate page in the runner's Chrome on a desktop and a phone viewport |
+| `pages` | after a green `tests` run on `main` (`workflow_run`), or dispatched by a data job | copies the site without `scripts/`, `tests/`, `.github/` and `.claude/`, stamps the commit into `index.html` and the deploy date into `sitemap.xml`, mounts `archive/` and `nrw/` from their branches, deploys to GitHub Pages |
+| `archive-update` | Mondays 04:23 UTC | WSV REST refresh; on the first Monday the ZIP heal of the running year and the gap sweep; RWS refresh; totals rebuild; consistency gate; push; deploy |
+| `snapshot-update` | daily 05:17 and 15:17 UTC | bulk capture of every gauge, totals append, gate without R6/R7, push, deploy — two slots because scheduler drift once pushed a run past midnight |
+| `nrw-update` | daily 17:41 UTC | LANUK mirror into `nrw` and `nrw-hires`, N1–N7 gate, push, deploy |
+| `data-freshness` | daily 19:47 UTC | the watchdog over all data branches; reports into an issue |
 
-CI runs the same suite on every push and pull request, and a deploy only
-follows a green run — see `.github/workflows/pages.yml`.
+A deploy only follows a green `tests` run. The engineering notes that are
+not needed on every turn — the browser recipe, the gate's registry and pins,
+the LANUK measurements — live in `.claude/domains/`; `CLAUDE.md` carries the
+rules that are.
 
 Data: © Wasserstraßen- und Schifffahrtsverwaltung des Bundes (WSV),
-[PEGELONLINE](https://www.pegelonline.wsv.de), refreshed every 5 minutes.
+[PEGELONLINE](https://www.pegelonline.wsv.de), refreshed every 5 minutes;
+Rijkswaterstaat open data (CC0) for the ten Dutch gauges; NRW state gauges:
+Landesamt für Natur, Umwelt und Klima NRW (LANUK),
+[hochwasserportal.nrw](https://hochwasserportal.nrw), dl-de/zero-2.0,
+mirrored daily; weather: [open-meteo](https://open-meteo.com).
 
 ## License
 
-[GPL-3.0](LICENSE).
+[GPL-3.0](LICENSE). The shipped forecast line is Apache-2.0; the
+non-commercial challenger is measured, never shipped.
 
 ## Support
 
 If you enjoy this, you can [buy me a coffee on Ko-fi](https://ko-fi.com/bmabma). ☕
-

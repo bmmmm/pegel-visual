@@ -1464,24 +1464,25 @@
   </div>
   <dl>
     <dt>the gauge</dt>
-    <dd>The big digits are the live water level in cm, next to the trend per hour
+    <dd>The big digits are the live water level in the gauge's own unit —
+      centimetres above gauge zero for most, metres above a datum for some — next
+      to the trend per hour
       (<b>▲</b> rising · <b>▼</b> falling · <b>▬</b> steady) averaged over the last
       6 hours — gauges report whole centimetres, so an hourly slope on a big river
       is mostly rounding noise — and the station's state
-      relative to its mean low/high water. Stations that report them also show water
-      temperature (<b>WT</b>) and discharge (<b>Q</b>). Data comes from PEGELONLINE
-      (WSV) and refreshes every 5 minutes.</dd>
+      relative to its mean low/high water. Stations that report them also show
+      <b>water</b> temperature and <b>flow</b> (discharge). Data comes from
+      PEGELONLINE (WSV) and refreshes every 5 minutes.</dd>
     <dt>the living river</dt>
     <dd>The cross-section waves at the real level: drifting current, a little ship,
       dashed marker lines for <b>MNW / MW / MHW</b> and all-time records
       (<b>HHW / NNW</b>). The scene reacts to the world — below MNW the bank cracks
-      under a blazing sun; above MHW a storm rains into the swollen river; a fast-rising
-      level sends a lone harbinger cloud in upstream; at ≤ 0.5 °C the river freezes
-      over, floes drifting past a ship stuck fast. Real rain, snow, clouds and wind at
+      under a blazing sun; above MHW a storm rains into the swollen river; at
+      ≤ 0.5 °C the river freezes over, floes drifting past a ship stuck fast. Real rain, snow, clouds and wind at
       the station draw themselves (via open-meteo), and after the station's actual
       sunset the real moon phase rises over twinkling stars — unless it's overcast.</dd>
     <dt>history &amp; archive</dt>
-    <dd>The sparkline starts with the API's data and grows: every visit merges new
+    <dd>The <b>HISTORY</b> block starts with the API's data and grows: every visit merges new
       points into a local archive in your browser, so over time it covers more than
       the API can serve. Pick a window with the range chips that sit on the
       <b>HISTORY</b> block itself (<b>24H … ALL</b>, <b>30D</b> to start) — the
@@ -1489,7 +1490,7 @@
       <b>import</b> / <b>clear</b> manage the archive; nothing ever leaves your
       browser. Want years instead of days? Picking <b>1Y / 5Y / ALL</b> fetches
       the WSV raw archive (data back to <b>2000</b>, condensed to daily min/max,
-      hosted with this site and refreshed monthly) for the station on screen —
+      hosted with this site and refreshed weekly) for the station on screen —
       marked as unvalidated raw data: outliers and gaps are part of the deal.
       The <b>full archive</b> link and <b>import</b> (which swallows the WSV ZIP
       directly) remain as the manual route.</dd>
@@ -1525,7 +1526,7 @@
       rolling down the screen. Each row is scaled to its own station. Data:
       the hosted daily archive plus the live API for the newest days.</dd>
     <dt>elevation profile</dt>
-    <dd>Below the sparkline: the water surface elevation (m NHN) between the
+    <dd>Below the history block: the water surface elevation (m NHN) between the
       neighboring gauges on the same river. It always runs downstream to the right —
       German river km count downstream on the Rhein but upstream on the Neckar, so
       the direction comes from the elevation, not from the km. The neighbors are
@@ -1536,18 +1537,19 @@
       <b>◉</b> normal · <b>▼</b> low · <b>▲</b> high — plus a TROUBLE list of every
       station running low or high. Every marker, label and row is a click target.</dd>
     <dt>the rivers map</dt>
-    <dd>The <b>--rivers</b> button (or <b>?rivers</b>) puts every water on one
+    <dd><b>map</b> in the app bar (or <b>?rivers</b>, or <b>--rivers</b> in the
+      prompt) puts every water on one
       screen: a schematic outline of Germany with each river anchored at the
       centroid of its own gauges, sized by how many it has. Click a name to walk
       that river gauge by gauge. Whatever the map has no free cell for — and every
       water PEGELONLINE lists without coordinates, like the Austrian Donau or the
       Czech Elbe gauges — is listed underneath with its gauge count, so the
-      counts stay true even where the map cannot show them. The
-      <b>← STATION</b> button next to <b>--rivers</b> goes back to the gauge you
-      came from; it appears in the map and the whole-river view, which otherwise
-      have no station on screen to click.</dd>
+      counts stay true even where the map cannot show them. The first item of
+      the app bar names the gauge you came from (<b>← BONN</b>) and goes back to
+      it; it appears in the map and the whole-river view, which otherwise have
+      no station on screen to click.</dd>
     <dt>the rising board</dt>
-    <dd>The <b>--rising</b> button (or <b>?rising</b>) ranks every gauge by how
+    <dd><b>rising</b> in the app bar (or <b>?rising</b>, <b>--rising</b>) ranks every gauge by how
       fast it moved since yesterday, in cm per day: top risers first, the
       steepest fallers below, every row a click away from its station. The
       "yesterday" is a daily snapshot of all stations, captured by this site's
@@ -1564,7 +1566,7 @@
       span in brackets, and states the span it actually measured — a missed
       snapshot day makes it <b>Δ6.8d</b> rather than exactly seven.</dd>
     <dt>the total overview</dt>
-    <dd>The <b>--total</b> button (or <b>?total</b>) stacks every river's summed
+    <dd><b>totals</b> in the app bar (or <b>?total</b>, <b>--total</b>) stacks every river's summed
       gauge readings into one chart and lets you zoom: years → one year's months
       → one month's days → a single day, where every river is ranked by its
       share of that day's sum. The five all-time biggest rivers keep their own
@@ -1592,9 +1594,9 @@
     <dd>Aircraft overhead from your own ADS-B receiver (<b>--adsb URL</b>) and real
       river traffic on the waterline from your own AIS receiver (<b>--ais URL</b>,
       AIS-catcher) — both URLs stay in your browser. The tab title and favicon
-      carry the live level, dark mode follows your system, narrow screens switch
-      the layout reflows for the screen it is on, and the page installs as an
-      app from the browser menu. Should a gauge ever fall silent, the water-drop
+      carry the live level, dark mode follows your system, the layout reflows
+      for the screen it is on, and the page installs as an app from the browser
+      menu. Should a gauge ever fall silent, the water-drop
       buddy says so.</dd>
   </dl>
 </dialog>
@@ -6300,17 +6302,17 @@ function helpText(unknownFlag) {
     '                      (the Σ/Δ chips switch to net daily change, ?total&diff)',
     '    --adsb URL        set your local ADS-B receiver URL; no value clears it',
     '    --ais URL         set your local AIS receiver URL (AIS-catcher); no value clears it',
-    `    --history RANGE   set the sparkline window: ${HISTORY_PRESETS.map(p => p.k).join(' ')} (default ${HISTORY_DEFAULT})`,
-    '    --view MODE       live | years (station statistics) | wave (river heatmap)',
+    `    --history RANGE   set the history window: ${HISTORY_PRESETS.map(p => p.k).join(' ')} (default ${HISTORY_DEFAULT})`,
+    '    --view MODE       live | years (station statistics) | wave (river heatmap) | list (the waters A-Z, with --rivers)',
     '    --export          download the whole local archive as JSON',
     '    --clear           delete the local archive (no confirmation - you typed it)',
     '    --info            open the feature guide (what everything here means)',
     '    --help            show this screen',
     '',
+    // the same list the keydown handler and the ? sheet read, so it cannot drift
     'KEYS',
-    '    /       focus the prompt from anywhere on the page',
     '    enter   apply the command / switch station',
-    '    esc     dismiss this help screen',
+    ...KEYMAP.map(([k, d]) => `    ${k.padEnd(8)}${d}`),
     '',
     'DATA',
     '    PEGELONLINE (c) WSV, refreshed every 5 min',
@@ -6642,7 +6644,7 @@ screen.addEventListener('pointerup', e => {
 // matching control's title, so it is discoverable without reading a manual.
 // Nothing here fires while a field or a dialog has focus.
 const KEYMAP = [
-  ['/', 'focus the search prompt'],
+  ['/', 'open the finder from anywhere on the page'],
   ['?', 'this list'],
   ['h', 'the manual page (same as --help)'],
   ['Esc', 'close a dialog · zoom out of ?total · leave a sub-view'],
