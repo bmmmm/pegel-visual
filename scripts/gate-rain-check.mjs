@@ -48,7 +48,9 @@ for (const vp of [{ n: 'desktop', w: 1280, h: 900 }, { n: 'phone', w: 390, h: 84
   const ev = async x => { const r = await send('Runtime.evaluate', { expression: x, returnByValue: true, awaitPromise: true }); if (r.exceptionDetails) throw new Error(r.exceptionDetails.text); return r.result.value; };
   await send('Page.enable'); await send('Runtime.enable');
   await send('Emulation.setDeviceMetricsOverride', { width: vp.w, height: vp.h, deviceScaleFactor: 2, mobile: !!vp.mobile });
-  await send('Page.navigate', { url: `http://127.0.0.1:${port}/gate/#rain` });
+    // GATE_BASE_URL=https://bmmmm.github.io/pegel-visual/ checks the deployed page
+  const base = process.env.GATE_BASE_URL || `http://127.0.0.1:${port}/`;
+  await send('Page.navigate', { url: base + 'gate/#rain' });
   for (let i = 0; i < 60; i++) { await sleep(250); if (await ev(`!!document.querySelector('#rain')`).catch(() => false)) break; }
   await sleep(500);
   const m = await ev(`(() => {
