@@ -1,6 +1,6 @@
 # pegel-visual — Projekt-Notizen
 
-- **Tests:** `node --test` — `tests/extract.mjs` evaluiert das Inline-Script aus `index.html` gegen Browser-Stubs (kein jsdom, kein Netz): `loadApp({search, now, width})`, dann `app.run('<expr>')` im App-Scope.
+- **Tests:** `node --test` — `tests/extract.mjs` evaluiert das Inline-Script aus `index.html` gegen Browser-Stubs (kein jsdom, kein Netz): `loadApp({search, now, width})`, dann `app.run('<expr>')` im App-Scope. Timer im App-Scope sind Stubs, die nie feuern: ein Test, der auf `app.run('new Promise(r => setTimeout(r, 5))')` wartet, hängt für immer — auf der Node-Seite warten oder direkt `await app.run('loadData()')`.
 - **Node-Scripts mit Netzwerk laufen am Sandbox-Proxy vorbei:** undici/`fetch` kennt `HTTP_PROXY` nicht → `ENOTFOUND www.pegelonline.wsv.de`, obwohl `curl` denselben Host erreicht. Das ist die Sandbox, nicht DNS und nicht die App — ein Bypass pro Call statt Debugging (betrifft `scripts/fetch-wsv-archive.mjs` und Ad-hoc-Node gegen die WSV-APIs).
 - **`archive`-Branch = GitHub-only Orphan-Datenbranch.** Pushes dorthin triggern nie einen Workflow (kein `.github/` im gepushten Commit) — Deploys brauchen den expliziten `gh workflow run pages.yml --ref main`; das Reseed-Runbook steht im Header von `scripts/fetch-wsv-archive.mjs`.
 - **WSV-Archiv-Pipeline: die gemessenen Fakten stehen am Code, nicht hier.** Die Kurzfassung: `current.json` hat zwei Quellen, und nur der monatliche ZIP-Lauf (`--running`) kann zurückblicken — der wöchentliche REST-Lauf reicht ~31 Tage (Modi-Header von `scripts/fetch-wsv-archive.mjs`). ~111 Pegel ohne WSV-Archiv sind kein Fehlschlag: das 303 des `prepare`-Endpunkts ist die Tatsache, `markNoArchive` hält es in `meta.json` fest, nur der ZIP-Pfad löscht es, und `closed.json` unterscheidet „nie gehabt" von Ausfall (Kommentare an `prepare`, `hasClosedYears`, `markNoArchive`, `buildManifest` ebendort). **R6** und **R7** in `scripts/check-archive-consistency.mjs` bewachen Laufjahr und Marker; ihre Kommentare tragen die Kalibrierung, die fünf Pegel, die R6 nach Konstruktion nicht sieht, und die zwei stillgelegten. Warum `rivers.RHEIN.n` 2026 bei 33 startet und am 10.07. auf 36 springt, steht an `finalizeYear` in `scripts/build-river-totals.mjs`.
@@ -45,7 +45,9 @@
   A class-name grep passed for months while no hatch existed, and a plain
   `includes()` would pass on the legend's own swatch — the `tb-fell` regex in
   `tests/logic.test.mjs` is the form. Put the fix back OUT and watch it go red
-  before believing it.
+  before believing it. Browser checks too: `body.innerHTML.includes()` matches
+  the script's own string table and the global footer — read `#screen`'s
+  `innerText` (2026-09-06: 44 false FAILs from one wrong anchor).
 - **`app.fire('keydown', {key})` / `app.fire('popstate')`** reach the real
   handlers: the harness collects window/document listeners, and `app.source`
   hands you the script text for structural checks (the dead-`cmd:`-target
