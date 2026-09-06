@@ -1172,3 +1172,53 @@ test('the rain panel names its own marks, and the control arm is not one of them
   // it IS reachable: its report is linked
   assert.ok(html.includes('nrw-mid/report-3p0-rain-shuffled.md'), 'its report is linked, or R5 cannot be checked');
 });
+
+test('the rain panel links every report it is about, including its own arm', () => {
+  const m = buildModel(reports, parseState('', '', null, DRAWN_KEYS));
+  const html = renderPage(m);
+  // the panel's own arm was the one report on this sheet nobody could open: the
+  // foot links DRAWN models, and an arm measured only on the NRW grid is not one
+  for (const f of ['report-3p0-rain.md', 'report-3p0-rain-shuffled.md']) {
+    assert.ok(html.includes(`nrw-mid/${f}`), `${f} is reachable from the page`);
+  }
+});
+
+test('the rain panel never speaks for the control arm, whatever the fetch order', () => {
+  // byKey's key order comes from resolved fetches, not from the manifest, so the
+  // fallback has to be qualified: with no arm carrying a rain verdict, the panel
+  // must still not put the arm built to lose in its own title
+  const only = JSON.parse(JSON.stringify(reports.byKey));
+  for (const k of Object.keys(only)) if (only[k].nrw) delete only[k].nrw.rain_verdict;
+  const shuffled = { ...reports, byKey: Object.fromEntries(Object.entries(only).reverse()) };
+  const m = buildModel(shuffled, parseState('', '', null, DRAWN_KEYS));
+  if (m.rain) {
+    const ctrlKeys = MANIFEST.models.filter(mo => mo.control).map(mo => mo.key);
+    assert.ok(!ctrlKeys.includes(m.rain.key), `the panel reads ${m.rain.key}, which is a control arm`);
+  }
+});
+
+test('a void or provisional rain run says so instead of drawing as a result', () => {
+  const voided = JSON.parse(JSON.stringify(reports.byKey));
+  const k = Object.keys(voided).find(x => voided[x].nrw && voided[x].nrw.rain_verdict);
+  voided[k].nrw.void = ['the two arms do not share their TEST origins'];
+  const m = buildModel({ ...reports, byKey: voided }, parseState('', '', null, DRAWN_KEYS));
+  const html = renderPage(m);
+  const panel = html.slice(html.indexOf('id="rain"'), html.indexOf('id="model"'));
+  assert.match(panel, /<b>VOID\.<\/b> the two arms do not share their TEST origins\. Nothing below is a result\./);
+  // and a thin run says which floor it missed
+  const thin = JSON.parse(JSON.stringify(reports.byKey));
+  thin[k].nrw.provisional_reasons = ['Stah: 39/40 origins'];
+  const p2 = renderPage(buildModel({ ...reports, byKey: thin }, parseState('', '', null, DRAWN_KEYS)));
+  assert.match(p2.slice(p2.indexOf('id="rain"'), p2.indexOf('id="model"')), /<b>PROVISIONAL\.<\/b> Stah: 39\/40 origins/);
+});
+
+test('the origin count in the rain panel reads every gauge, not the first', () => {
+  const uneven = JSON.parse(JSON.stringify(reports.byKey));
+  const k = Object.keys(uneven).find(x => uneven[x].nrw && uneven[x].nrw.rain_verdict);
+  const info = uneven[k].nrw.station_info;
+  const ids = Object.keys(info);
+  info[ids[0]].kept = 40;
+  const html = renderPage(buildModel({ ...reports, byKey: uneven }, parseState('', '', null, DRAWN_KEYS)));
+  const panel = html.slice(html.indexOf('id="rain"'), html.indexOf('id="model"'));
+  assert.match(panel, /40–48 weekly origins each/, 'a range when they differ, not the first gauge\'s number');
+});

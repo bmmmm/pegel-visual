@@ -340,8 +340,14 @@ export function buildModel(reports, parsed) {
   // have no seasonal report at all, which is exactly why they are not drawn.
   const listed = reports.listed || reports.models || [];
   const allKeys = Object.keys(reports.byKey || {});
-  const rainKey = allKeys.find(k => reports.byKey[k].nrw && reports.byKey[k].nrw.rain_verdict)
-    || allKeys.find(k => reports.byKey[k].nrw);
+  // the arm that ANSWERS the question first; failing that any non-control arm
+  // that ran there. Never a control: `drawable()` filters those out of the
+  // plate, and a fallback that did not would put the arm built to lose in the
+  // panel's title. byKey's order comes from resolved fetches, not the manifest,
+  // so "any" has to be qualified.
+  const notControl = k => !(listed.find(mo => mo.key === k) || {}).control;
+  const rainKey = allKeys.find(k => reports.byKey[k].nrw && reports.byKey[k].nrw.rain_verdict && notControl(k))
+    || allKeys.find(k => reports.byKey[k].nrw && notControl(k));
   const nrw = rainKey ? reports.byKey[rainKey].nrw : null;
   const report = reportFor(reports.byKey[primary], state.target);
   // every enabled model's report for the target in view, primary first
@@ -1159,7 +1165,20 @@ function renderRain(m) {
       `It is not drawn anywhere on this sheet — an arm that is supposed to lose reads as a competitor — but its report is linked right here, ` +
       `because clause R5 is only worth anything if you can check it.</p>`
     : '';
-  return `<p class="p-dim">Five NRW gauges, one per basin, ${esc(r.info.length ? r.info[0].kept : '—')} weekly origins each. ` +
+  const own = (r.model && r.model.files && r.model.files['nrw-mid'] && r.model.files['nrw-mid'].md) || null;
+  const foot = own
+    ? `<p class="p-dim">${a(own, 'The full report for this arm')} — every clause, every gauge, and the caveats.</p>`
+    : '';
+  // origins per gauge, read across ALL of them: "48 each" off the first station
+  // is true until the day one gauge drops a window
+  const kept = [...new Set(r.info.map(i => i.kept))];
+  const kn = kept.length === 1 ? String(kept[0]) : `${Math.min(...kept)}\u2013${Math.max(...kept)}`;
+  const trouble = r.void.length
+    ? `<p class="p-dim warn"><b>VOID.</b> ${r.void.map(x => esc(x)).join('; ')}. Nothing below is a result.</p>`
+    : r.reasons.length
+      ? `<p class="p-dim warn"><b>PROVISIONAL.</b> ${r.reasons.map(x => esc(x)).join('; ')}.</p>`
+      : '';
+  return trouble + `<p class="p-dim">Five NRW gauges, one per basin, ${esc(r.info.length ? kn : '—')} weekly origins each. ` +
     `The question is not whether this model is good, but whether the areal rainfall over each gauge's own catchment ` +
     `— observed, not forecast — makes it better. The bar is the skill against the SAME model without the covariate: ` +
     `zero means the rain changed nothing.</p>` +
@@ -1171,7 +1190,7 @@ function renderRain(m) {
       { sw: '<span class="meter neg sw" style="display:inline-block;width:12px;height:12px"><span style="width:60%"></span></span>', label: 'the rain made it worse' },
       { note: `Covariate: ${esc(r.covariate || 'none')}. Mirror: ${esc(r.mirror || '—')}. Run ${esc(r.generated || '—')}.` },
       { note: 'Observed rain, not forecast rain: this measures the ceiling a perfect precipitation forecast would buy.' },
-    ]) + clauses + table;
+    ]) + foot + clauses + table;
 }
 
 // the basics: model and question, the bar, the verdict — three short paragraphs
