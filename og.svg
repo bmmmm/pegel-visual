@@ -21,6 +21,6 @@
     <path d="M22 26 q10 9 20 0" fill="none" stroke="#141414" stroke-width="3" stroke-linecap="round"/>
   </g>
   <text x="470" y="300" font-family="Menlo, monospace" font-size="118" font-weight="700" fill="#141414">PEGEL<tspan fill="#6f9fb8">://</tspan></text>
-  <text x="476" y="362" font-family="Menlo, monospace" font-size="34" fill="#5c5c5c">live ASCII river gauges</text>
+  <text x="476" y="362" font-family="Menlo, monospace" font-size="32" fill="#5c5c5c">live river gauges as survey plates</text>
   <text x="476" y="408" font-family="Menlo, monospace" font-size="26" fill="#a6a6a6">data: PEGELONLINE · WSV</text>
 </svg>

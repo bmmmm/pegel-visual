@@ -33,6 +33,15 @@ memory `browser-verify-cdp-recipe` points here as the source.
   (`JSON.stringify(...)`), or the result comes back as a serialized object tree.
   Console via `session.subscribe {events:['log.entryAdded']}`. Errors arrive as
   `{type:'error'}`, not as a rejected promise.
+- **A view transition is invisible to headless screenshots** — both engines
+  capture the DOM under the snapshot layer, so a squashed 350 ms frame never
+  shows up in a PNG. Measure it instead: `document.getAnimations()` filtered
+  on `effect.pseudoElement` says which `::view-transition-*` groups run and
+  where in their timeline they are, and `getComputedStyle(document.documentElement,
+  '::view-transition-new(<name>)').height` against the real element's
+  `offsetHeight` says whether a snapshot is being stretched. That is how the
+  `#screen` group was caught sized to the 224 px connecting screen while the
+  chart underneath was already 831 px (2026-09-06, Firefox 154 and Chrome).
 - **A time series has two edges, and a check that measures one proves nothing.**
   The gate that signed off the running-year heal only asked whether the line
   breaks — a series ending cleanly on 31.12.2025 would have passed it. Always
