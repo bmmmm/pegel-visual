@@ -4134,6 +4134,73 @@ test('lanuk index: names join the finder sets, a WSV name is never overwritten',
   assert.equal(app.run(`mergeLanukIndex(${JSON.stringify(NRW_MANIFEST)})`), 3, 'and the merge no longer touches it');
 });
 
+// the live lists a cold cache has to fetch: WESEL is on the Rhine for WSV and
+// on the Lippe for LANUK (measured 2026-09-06, BRAKE collides the same way)
+const coldLists = `
+  const live = getJson;
+  getJson = async url => {
+    globalThis.__nrw.push(url);
+    if (url === API + '/stations.json') return [
+      { shortname: 'WESEL', water: { shortname: 'RHEIN' }, km: 814, latitude: 51.6, longitude: 6.6 },
+      { shortname: 'BONN', water: { shortname: 'RHEIN' }, km: 654.8 },
+    ];
+    if (url === API + '/waters.json') return [{ shortname: 'RHEIN' }];
+    if (url === 'nrw/manifest.json') {
+      const m = await live(url);
+      return { ...m, gauges: { ...m.gauges, 39899002: { n: 'Wesel', w: 'Lippe', b: '278', site: '100', src: 'bulk', from: '2024-09-04', to: '2026-09-02', days: 729 } } };
+    }
+    return live(url);
+  };`;
+
+test('cold cache: the LANUK merge waits for the WSV names, and a shared name stays WSV\'s', async () => {
+  const app = nrwApp({ search: '?station=WESEL' });
+  app.run(coldLists);
+  assert.equal(app.run('wsvListLoaded'), false, 'nothing cached, nothing fetched yet');
+  await app.run('lanukIndex()');
+  assert.equal(app.run('wsvListLoaded'), true, 'the merge pulled the WSV list in first');
+  const order = nrwUrls(app);
+  assert.ok(order.indexOf(`${app.run('API')}/stations.json`) < order.indexOf('nrw/manifest.json'), `stations.json before the manifest: ${order.join(', ')}`);
+  assert.equal(app.run(`stationMeta.get('WESEL').w`), 'RHEIN', 'the Rhine gauge keeps its name');
+  assert.equal(app.run('stationId()'), null, 'WESEL is addressed by name — the WSV gauge, never lanuk-39899002');
+  assert.equal(app.run(`knownStations.has('BONN')`), true, 'the whole WSV list is in, not only the collision');
+  assert.deepEqual(app.run(`[...lanukWaters.keys()].sort()`), ['ERFT', 'SIEG'], 'the colliding gauge registers no LANUK water either');
+  // one list per session: the finder, the map and the merge share the fetch
+  await app.run('loadStationList()');
+  await app.run('loadStationList()');
+  assert.equal(nrwUrls(app).filter(u => u.endsWith('/stations.json')).length, 1, 'one stations.json fetch per session');
+});
+
+test('river fallback: a water the WSV list is not in yet is never handed to the mirror', async () => {
+  const app = nrwApp({ search: '?river=RHEIN' });
+  app.run(`const live = getJson; getJson = async url => {
+    globalThis.__nrw.push(url);
+    if (url === API + '/waters.json' || url === API + '/stations.json') { const e = new Error('503'); e.status = 503; throw e; }
+    return live(url);
+  }`);
+  app.run(`wsvWaters.clear()`);
+  await app.run('lanukIndex()');
+  app.run(`lanukWaters.set('RHEIN', ['lanuk-39899002'])`); // the mirror knows Rhine gauges of its own
+  assert.equal(await app.run(`lanukRiverFallback('RHEIN')`), null, 'the WSV water list is unknown: no fallback, the error stands');
+  app.run(`wsvWaters.add('EMS'); state.river = 'ERFT'`); // the list is in, and it has no ERFT
+  const erft = await app.run(`lanukRiverFallback('ERFT')`);
+  assert.ok(Array.isArray(erft) && erft.length === 2 && erft.every(id => id.startsWith('lanuk-')), `the two mirrored Erft gauges: ${JSON.stringify(erft)}`);
+  app.run(`wsvWaters.add('ERFT'); state.river = 'ERFT'`);
+  assert.equal(await app.run(`lanukRiverFallback('ERFT')`), null, 'a water WSV names stays WSV\'s');
+});
+
+test('switching to a mirrored gauge leaves no poll timer behind', async () => {
+  const app = nrwApp();
+  app.run(coldLists);
+  await app.run('lanukIndex()');
+  app.run(`switchStation('MENDEN_1', '')`);
+  // the mirrored loader disarms the poll synchronously, so the switch's own
+  // arming has to come first — checked right here, before any fetch settles
+  assert.equal(app.run('refreshTimer'), null, 'the loader disarmed the poll and the switch did not re-arm it');
+  await app.run('loadData()');
+  assert.equal(app.run('state.feed && state.feed.live'), false, 'the mirrored loader answered');
+  assert.equal(app.run('refreshTimer'), null, 'and a second loader run leaves it disarmed');
+});
+
 test('loadRepoManifest: one map over both mirrors, LANUK gauges keyed by their id', async () => {
   const app = nrwApp();
   await app.run('lanukIndex()');
@@ -4222,7 +4289,10 @@ test('?station=MENDEN_1: the seam loads a full station plate off the mirror, wit
   assert.equal(app.run('refreshTimer'), null, 'no live feed → the 5-minute poll is disarmed');
   assert.equal(app.run('state.repoArchive'), 'available');
   assert.ok(app.run(`JSON.parse(localStorage.getItem('pegel.recent'))`).includes('MENDEN_1'), 'a gauge that answered earns its chip');
-  assert.ok(!nrwUrls(app).some(u => u.includes('pegelonline') || u.includes('open-meteo')), 'no live API, no weather request');
+  // the session-level name lists (stations.json, waters.json) are the merge's price on a cold
+  // cache; the GAUGE itself never touches the live API, and there is no weather request
+  const liveCalls = nrwUrls(app).filter(u => (u.includes('pegelonline') && !/\/(stations|waters)\.json$/.test(u)) || u.includes('open-meteo'));
+  assert.deepEqual(liveCalls, [], 'no live API for the gauge, no weather request');
   // the trend is day-over-day, not the low-to-high spread of the stored day
   assert.ok(Math.abs(app.run('trendPerHour()') - 0.1) < 1e-9, `+2.4 cm over one day → +0.1 cm/h: ${app.run('trendPerHour()')}`);
   // the loader kicked the shard backfill off without waiting for it — let it land
@@ -4283,7 +4353,9 @@ test('?river=ERFT: the LANUK river plate lists every gauge in flow order, mouth 
   await app.run('loadRiver()');
   assert.equal(app.run('state.error'), null);
   assert.equal(app.run('refreshTimer'), null, 'no poll for a mirrored river');
-  assert.ok(!nrwUrls(app).some(u => u.includes('pegelonline')), 'a water only the mirror knows never asks the live API');
+  // the session-level list fetches (stations.json, waters.json) are the cold cache's price;
+  // the RIVER itself is never requested from the live API
+  assert.ok(!nrwUrls(app).some(u => u.includes('waters=ERFT')), 'a water only the mirror knows never asks the live API for its gauges');
   const st = app.run('state.riverStations');
   assert.deepEqual(st.map(s => s.name), ['Neubrueck', 'Arloff'], 'km-sorted like every river (km = distance to the mouth)');
   assert.ok(st.every(s => s.elev === null), 'no gauge datum anywhere → nothing to plot');
@@ -4315,12 +4387,14 @@ test('?river=ERFT: the LANUK river plate lists every gauge in flow order, mouth 
 
 test('?river=SIEG on a cold cache: the live API is asked first, the mirror is the fallback', async () => {
   const app = nrwApp({ search: '?river=SIEG' });
-  app.run(`lanukWaters.clear(); wsvWaters.clear()`); // no WSV water list yet
+  app.run(`lanukWaters.clear(); wsvWaters.clear()`); // no WSV water list yet — the API is reachable, the cache is cold
   app.run(`const mirror = getJson; getJson = async url => {
     if (url.includes('stations.json?waters=SIEG')) return []; // PEGELONLINE: no such water
+    if (url.endsWith('/waters.json')) return [{ shortname: 'RHEIN' }]; // the WSV water list: no SIEG on it
     return mirror(url);
   }`);
   await app.run('loadRiver()');
+  assert.equal(app.run(`wsvWaters.has('RHEIN')`), true, 'the fallback pulled the WSV water list in before deciding');
   assert.equal(app.run('state.error'), null);
   assert.deepEqual(app.run('state.riverStations').map(s => s.name), ['Menden_1', 'Weidenau']);
   assert.ok(nrwUrls(app).some(u => u === 'nrw/manifest.json'), 'the fallback waited for the index');

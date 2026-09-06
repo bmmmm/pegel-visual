@@ -2260,6 +2260,15 @@ async function loadLanukStation() {
       sourceExportAt: (lanukManifestInfo || {}).sourceExportAt || null,
     };
     state.feed = lanukFeed(latest);
+    // a window this feed cannot fill (24H or 3D on one value a day, kept from
+    // a WSV gauge) is not what the reader meant: step up to the smallest the
+    // chips still offer instead of landing on an empty chart
+    if (state.feed.minWindowDays) {
+      const cur = HISTORY_PRESETS.find(p => p.k === historyKey);
+      if (cur && cur.d != null && cur.d < state.feed.minWindowDays) {
+        historyKey = (HISTORY_PRESETS.find(p => p.d == null || p.d >= state.feed.minWindowDays) || cur).k;
+      }
+    }
     state.wt = null;
     state.q = null;
     state.error = null;
@@ -2534,9 +2543,15 @@ async function loadLanukRiver(forRiver, ids) {
 // the reader has moved on meanwhile
 async function lanukRiverFallback(forRiver) {
   await lanukIndex();
+  await ensureWaterList();
   if (mode !== 'river' || state.river !== forRiver) return 'switched';
   const ids = lanukWaters.get(forRiver);
-  return ids && !wsvWaters.has(forRiver) ? ids : null;
+  // the WSV water list has to be IN before a water is handed to the mirror:
+  // an empty set says "unknown", not "WSV has none" — eight waters are on
+  // both lists (RHEIN, EMS, WESER, LAHN, RUHR, EDER, ORKE, DIEMEL), and a cold
+  // cache with the API down would otherwise draw the Rhine from the Lippe's
+  // neighbour without a word about it
+  return ids && wsvWaters.size && !wsvWaters.has(forRiver) ? ids : null;
 }
 
 async function loadRiver() {
@@ -4473,7 +4488,7 @@ function renderRiver(vm) {
   const head = `<header class="p-head"><h1>${esc(waterLabel(vm.river))}</h1>` +
     `<p class="p-sub">${vm.gauges} ${esc(plural(vm.gauges, 'gauge'))} · ${Math.round(vm.kmSpan)} km${grad} — ${esc(vm.mirrored ? T.riverSubMirrored : T.riverSub)}</p></header>`;
   const tabs = ctlRow(T.viewLabel, [
-    { t: 'cmd:live', label: 'profile', on: true, title: 'longitudinal profile with live elevations' },
+    { t: 'cmd:live', label: 'profile', on: true, title: vm.mirrored ? 'gauges in flow order — mirrored daily means, no elevations' : 'longitudinal profile with live elevations' },
     { t: 'cmd:wave', label: 'wave', title: 'station × day heatmap — the wave rolls downstream' },
   ], 'river view');
   const trouble = vm.troubled.length
@@ -6511,8 +6526,10 @@ function switchStation(name, adsb, push = true) {
   if (meta && meta.w) riverInput.value = meta.w;
 
   clearInterval(refreshTimer);
-  loadData();
+  // armed BEFORE the loader runs: a mirrored gauge's loader disarms the poll
+  // synchronously (no live feed, no poll), and that has to be the last word
   refreshTimer = setInterval(loadData, REFRESH_MS);
+  loadData();
   if (adsbChanged) loadAircraft();
 
   // the chip row is rebuilt now (the station just left becomes a chip), but the
@@ -6556,8 +6573,8 @@ function switchRiver(name, push = true) {
   riverInput.value = next;
   stationInput.value = ''; // no station is selected in river mode
   clearInterval(refreshTimer);
+  refreshTimer = setInterval(loadRiver, REFRESH_MS); // armed first: a mirrored water's loader disarms it, last word
   loadRiver();
-  refreshTimer = setInterval(loadRiver, REFRESH_MS);
 }
 
 // enter the rivers map. Unlike the other two modes this needs no live readings and
@@ -6570,6 +6587,7 @@ function switchRivers(push = true) {
 
   mode = 'rivers';
   viewMode = 'live';
+  state.feed = null; // the plate left behind may have been a mirrored one; this one has no feed
   state.river = null;
   state.riverStations = null;
   state.gauge = null;
@@ -6600,6 +6618,7 @@ function switchRising(push = true) {
 
   mode = 'rising';
   viewMode = 'live';
+  state.feed = null; // no feed of its own; never inherit a mirrored plate's
   state.river = null;
   state.riverStations = null;
   state.gauge = null;
@@ -6639,6 +6658,7 @@ function switchTotal(push = true) {
 
   mode = 'total';
   viewMode = 'live';
+  state.feed = null; // no feed of its own; never inherit a mirrored plate's
   state.river = null;
   state.riverStations = null;
   state.gauge = null;
@@ -7231,6 +7251,15 @@ function fillWaters(list, labels) {
   }
 }
 
+// The PEGELONLINE list owns every name it carries. `wsvListLoaded` says it has
+// been filled at least once (cache or API) — `knownStations.size` cannot say
+// that any more, the LANUK index writes into the same set — and `wsvNamesP`
+// settles at that moment, so the LANUK merge can wait for it. A list fetch
+// that fails on a cold cache settles it too: the merge must not hang on an
+// API that is down, and the list's later arrival still wins its own names.
+let wsvListLoaded = false;
+let wsvNamesResolve = () => {};
+const wsvNamesP = new Promise(r => { wsvNamesResolve = r; });
 function fillDatalist(list) {
   for (const s of list) {
     const up = s.n.toUpperCase();
@@ -7238,6 +7267,8 @@ function fillDatalist(list) {
     stationMeta.set(up, { w: s.w, km: s.km, la: s.la ?? null, lo: s.lo ?? null });
     for (const key of [foldAe(up), foldStrip(up)]) if (!normMap.has(key)) normMap.set(key, s.n);
   }
+  wsvListLoaded = true;
+  wsvNamesResolve();
 }
 
 // ---------- the LANUK index: the second source's gauges join the same sets ----------
@@ -7288,10 +7319,21 @@ function mergeLanukIndex(m) {
 }
 
 // fetch-and-merge, once per session; a missing mirror (plain checkout without
-// the data branch) resolves to null and the page is all-WSV, as before
+// the data branch) resolves to null and the page is all-WSV, as before.
+// The WSV names go FIRST: a name PEGELONLINE has is PEGELONLINE's, and the
+// merge's collision guard can only see a name that is already in the map —
+// WESEL is on the Rhine for WSV and on the Lippe for LANUK, BRAKE on the
+// Weser and on the Aa (measured 2026-09-06). Merging before the list was in
+// handed a Rhine gauge the Lippe's shards. So the merge waits for wsvNamesP,
+// and starts the list load itself when nothing else has (a warm cache
+// settles it at boot, a cold one costs the one stations.json fetch the
+// finder would make anyway). Nothing calls this at boot: a WSV station never
+// needs the index, a LANUK deep link reaches it through the live API's 404.
 function lanukIndex() {
   if (!lanukManifestP) {
-    lanukManifestP = getJson(`${LANUK_BASE}manifest.json`)
+    ensureStationList();
+    lanukManifestP = wsvNamesP
+      .then(() => getJson(`${LANUK_BASE}manifest.json`))
       .then(m => { mergeLanukIndex(m); return m; })
       .catch(() => null);
   }
@@ -7308,9 +7350,26 @@ stationInput.addEventListener('change', () => {
   else if (knownStations.size) syncStationInput(); // invalid/abandoned/ASCII spelling: snap back
 });
 
+// one load of the PEGELONLINE lists per session — cache first, the API when
+// the cache is stale or missing — shared by the finder, the map, the river
+// fallback and the LANUK merge, so none of them races another's fetch
+let wsvListP = null, wsvWatersP = null;
+function ensureStationList() {
+  if (!wsvListP) wsvListP = fetchStationList();
+  return wsvListP;
+}
+function ensureWaterList() {
+  if (!wsvWatersP) wsvWatersP = loadWaterList();
+  return wsvWatersP;
+}
 async function loadStationList() {
-  loadWaterList(); // independent of the station cache's freshness early-return below
-  lanukIndex();    // likewise: the second source's gauges join the finder and the map
+  ensureWaterList(); // independent of the station cache's freshness early-return below
+  const p = ensureStationList();
+  lanukIndex();      // the second source's gauges join the finder and the map — after the WSV names
+  return p;
+}
+
+async function fetchStationList() {
   let cached = null;
   try { cached = JSON.parse(localStorage.getItem(STATIONS_CACHE)); } catch {}
   const usable = cached && cached.v === STATIONS_CACHE_V && Array.isArray(cached.list);
@@ -7334,7 +7393,12 @@ async function loadStationList() {
     // 404ed; now that the names are known, run the error screen through the same
     // resolution the boot does — canonical name, or the did-you-mean list
     if (state.error && mode === 'station') resolveDeepLink(true);
-  } catch { /* keep whatever cache we already showed */ }
+  } catch {
+    // keep whatever cache we already showed — and let the LANUK merge go on
+    // without the names: it must not hang on an API that is down, and the
+    // list's later arrival still wins its own names (fillDatalist)
+    wsvNamesResolve();
+  }
 }
 
 // rivers join the suggestions after the stations: picking (or typing) one opens
@@ -7492,7 +7556,10 @@ function finderShow() {
   finderRender();
   finder.showModal();
   finderInput.focus();
-  if (!knownStations.size) loadStationList().then(() => { if (finder.open) finderRender(); });
+  // both lists, always: the WSV one is memoised and the LANUK merge is lazy,
+  // so this costs nothing once they are in — and `knownStations.size` stopped
+  // meaning "the WSV list is in" the day the LANUK names joined the same set
+  loadStationList().then(() => { if (finder.open) finderRender(); });
 }
 
 document.getElementById('finder-btn').addEventListener('click', finderShow);
@@ -8045,9 +8112,11 @@ resolveDeepLink(false);
 renderRecent();
 
 updateLocalBar();
-// the second source's index, in flight from the first moment: same-origin,
-// one fetch, and every loader below routes on it as soon as it is in
-lanukIndex();
+// no LANUK index at boot: a WSV station never needs it (and it used to cost
+// every reader the 88 KB manifest), a LANUK deep link reaches it through the
+// live API's 404 in loadData, a river through its fallback, the finder and
+// the map through loadStationList — and the merge waits for the WSV names on
+// every one of those paths (lanukIndex)
 if (mode === 'rivers') {
   applyModeChrome();
   stationInput.value = '';
@@ -8071,11 +8140,13 @@ if (mode === 'rivers') {
   riverInput.value = state.river;
   stationInput.value = ''; // booting straight into river mode: no station selected
   setScreenAria();
+  refreshTimer = setInterval(loadRiver, REFRESH_MS); // armed first: a mirrored water's loader disarms it, last word
   loadRiver();
-  refreshTimer = setInterval(loadRiver, REFRESH_MS);
 } else {
-  loadData();
+  // armed BEFORE the loader runs: a mirrored gauge's loader disarms the poll
+  // synchronously (no live feed, no poll), and that has to be the last word
   refreshTimer = setInterval(loadData, REFRESH_MS);
+  loadData();
 }
 setInterval(loadWeather, WEATHER_REFRESH_MS);
 loadAircraft();
