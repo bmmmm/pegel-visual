@@ -1134,6 +1134,22 @@ day; \`min\` and \`n\` derived from the fine series, null before its window),
 \`rain/<station_no>/…\` (mm per day starting 07:00 MEZ, imax = max hourly
 mm/h, coverage %) and \`temp/<station_no>/…\` (°C). Nothing is thinned or
 deleted by the workflow; the pruning levers exist and are never passed.
+
+\`precip/\` is the one DERIVED tree here, written by
+\`scripts/build-nrw-precip.mjs\` in the same run, right after this collector
+and before the gate. It holds the areal daily rainfall over each gauge's
+upstream catchment (\`precip/<station_no>/{meta.json,<YYYY>.json,response.json}\`),
+the same per basin (\`precip/basins/<no>/…\`), and \`precip/{index.json,overview.json}\`.
+It is a pure function of the rest of this branch: \`--check\` recomputes it and
+exits 1 with a list of what differs, and gate rule N8 runs exactly that before
+every push. Unlike the mirrored trees it may SHRINK — a gauge that drops below
+three upstream rain gauges loses its files, because a derived product must not
+keep history its inputs no longer imply.
+
+Two clocks: a rain day is [d 07:00, d+1 07:00) MEZ, a gauge day
+[d 00:00, d+1 00:00). Rain day d closes seven hours into gauge day d+1, so
+\`coverage.precip.lastRainDay\` — the newest rain day with a reading — is what
+every drawing hangs its right edge on, not \`window.rain.to\` and not the clock.
 `;
 
 // ---------- the run ----------
