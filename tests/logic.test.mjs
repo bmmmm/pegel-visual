@@ -3623,11 +3623,18 @@ const svgAt = (html, from = 0) => {
   const a = html.indexOf('<svg', from);
   return a < 0 ? '' : html.slice(a, html.indexOf('</svg>', a));
 };
+// svgAt's sibling for the plates whose drawing is a table, not an SVG: anchor
+// the assertion to the element it is about. A class-name grep over the whole
+// page would pass on the legend's own swatches and prove nothing.
+const tableAt = (html, cls) => {
+  const a = html.indexOf(`<table class="${cls}"`);
+  return a < 0 ? '' : html.slice(a, html.indexOf('</table>', a));
+};
 
 // Not marks: the drawings' own container classes (`hist` is the history
 // chart's), invisible hit targets, text labels, and the two boat states the key
 // spells out in words instead.
-const NOT_A_MARK = new Set(['scene', 'chart', 'hist', 'profile', 'hit', 'craft-lbl', 'stuck', 'aground']);
+const NOT_A_MARK = new Set(['scene', 'chart', 'hist', 'profile', 'precip', 'response', 'hit', 'craft-lbl', 'stuck', 'aground']);
 
 const assertNamed = (drawing, key, what) => {
   const missing = [...classesIn(drawing)].filter(c => !NOT_A_MARK.has(c) && !key.has(c));
@@ -3862,8 +3869,9 @@ test('the river profile carries a browsable index, in flow order', () => {
 // 390 px) but strong enough to catch a deletion.
 test('the wave grid keeps its name column when it scrolls to the newest day', () => {
   const page = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
-  assert.match(page, /\.heat\.wave th\[scope="row"\]\s*\{[^}]*position: sticky/s,
-    'the row labels are sticky, or scrolling right leaves a wall of colour');
+  // both grids on this chassis, or scrolling right leaves a wall of colour
+  assert.match(page, /\.heat\.wave th\[scope="row"\], \.heat\.rain th\[scope="row"\]\s*\{[^}]*position: sticky/s,
+    'the row labels are sticky in the wave AND the rain grid');
   assert.match(page, /@container plate \(max-width: 34rem\)[^}]*--wave-name: 5rem/s,
     'and the name column narrows on a phone');
   assert.match(page, /wave\.scrollLeft = wave\.scrollWidth/,
@@ -3997,7 +4005,14 @@ test('elevOf: a metre gauge needs no gauge zero to have an elevation', () => {
 const NRW_NOW = Date.UTC(2026, 8, 4, 12);
 const NRW_MANIFEST = {
   schema: 1, generated: '2026-09-03T17:41:00Z', sourceExportAt: '2026-09-03T14:11:00Z',
-  license: 'dl-de/zero-2.0', window: { from: '2024-09-04', to: '2026-09-02' },
+  license: 'dl-de/zero-2.0', window: { from: '2024-09-04', to: '2026-09-02',
+    // the areal plate reads THIS window's right edge, not the clock
+    rain: { from: '2024-09-04T07:00:00.000+01:00', to: '2026-09-02T07:00:00.000+01:00' } },
+  // which gauges have a baked areal-rain product, and why the others do not
+  precip: {
+    2729100000100: { n: 5, up: 3, series: true },
+    2741500000100: { n: 2, up: 1, series: false, why: 'only 2 rain gauges upstream (needs 3)' },
+  },
   gauges: {
     2729100000100: { n: 'Menden_1', w: 'Sieg', b: '272', site: '100', src: 'bulk', from: '2024-09-04', to: '2026-09-02', days: 729 },
     2721390000100: { n: 'Weidenau', w: 'Sieg', b: '272', from: '2024-09-04', to: '2026-09-02', days: 729 },
@@ -4035,6 +4050,62 @@ function nrwShard(no, y = 2026, level = 40) {
   if (no === '2729100000100') { mean[244] = mean[243] + 2.4; max[244] = mean[244] + 3; min[244] = mean[244] - 2; }
   return { id: no, y, min, mean, max, n: cnt, acc: {} };
 }
+// ---------- the areal-rain product (nrw/precip/) ----------
+
+// Menden_1's rain year: mostly 2 mm, one wet day, one day nobody reported
+// (mm null AND n 0 — the collector's invariant), and a dry stretch of real
+// zeros so the plate has to tell "0 mm" from "no day".
+function nrwPrecipShard(no, y) {
+  const n = y % 4 === 0 ? 366 : 365;
+  const mm = Array(n).fill(null), cnt = Array(n).fill(0), med = Array(n).fill(null), mx = Array(n).fill(null);
+  for (let d = 0; d < n; d++) {
+    if (y === 2026 && d > 244) break;            // the mirror stops at Sep 2
+    if (d % 37 === 0) continue;                  // a day no gauge stood behind
+    const v = d % 11 === 0 ? 0 : d % 23 === 0 ? 18.5 : 2;
+    mm[d] = v; cnt[d] = 5; med[d] = v; mx[d] = v + 1;
+  }
+  return { id: no, y, mm, n: cnt, med, mx };
+}
+const NRW_PRECIP_META = {
+  schema: 1, id: '2729100000100', name: 'Menden_1', water: 'Sieg', basin: '272', km2: 2825,
+  unit: 'mm/d', method: 'unweighted mean over the reporting rain gauges of the upstream closure',
+  dayBoundary: '07:00+01:00', levelDayBoundary: '00:00+01:00',
+  align: 'rain day d = [d 07:00, d+1 07:00) MEZ; overlaps level day d 17 h, d+1 7 h',
+  minCoveragePct: 50, maxMmPerDay: 400, nRain: 5, nUpstream: 3,
+  upstream: ['2721390000100', '2729100000100'],
+  set: [{ no: '51089370', name: 'Hennef<script>', km: 3.13, via: 'orphan', at: '2729100000100' }],
+};
+const NRW_RESPONSE = {
+  schema: 1, id: '2729100000100', window: { from: '2024-09-04', to: '2026-09-02', days: 729 },
+  nRain: 5, minCoveragePct: 50,
+  align: 'rain day d = [d 07:00, d+1 07:00) MEZ; overlaps level day d 17 h, d+1 7 h',
+  lags: [{ lag: 0, r: 0.12, n: 700 }, { lag: 1, r: 0.59, n: 700 }, { lag: 2, r: 0.31, n: 700 },
+    { lag: 3, r: 0.1, n: 700 }, { lag: 4, r: -0.08, n: 700 }, { lag: 5, r: -0.21, n: 700 },
+    { lag: 6, r: -0.05, n: 700 }, { lag: 7, r: 0.01, n: 700 }],
+  peakLag: 1, rPeak: 0.59, nPeak: 700,
+  events: { thresholdMm: 10, n: 58, risePer10mm: 13.4 },
+  unit: { r: 'pearson', rise: 'cm per 10 mm areal rain' },
+};
+// 16 basins in the real file; three is enough to carry every case the plate has
+// to draw: a linked basin, a thin one, and one with no gauged river at all.
+const NRW_RAIN_OVERVIEW = (() => {
+  const day = i => (i % 13 === 0 ? null : i % 7 === 0 ? 0 : i % 5 === 0 ? 12.5 : 1.5);
+  const mm = Array.from({ length: 90 }, (_, i) => day(i));
+  const n = mm.map(v => (v == null ? 0 : 4));
+  return {
+    schema: 1, generated: '2026-09-03', sourceExportAt: '2026-09-03T14:11:00Z',
+    window: { from: '2026-06-05', to: '2026-09-02', days: 90 },
+    align: 'rain day d = [d 07:00, d+1 07:00) MEZ; overlaps level day d 17 h, d+1 7 h',
+    bins: [0.5, 3.5, 9.5],
+    basins: [
+      { no: '272', name: 'Sieg', river: 'SIEG', km2: 2825, set: 32, gauges: 27, mm, n, sum7: 19, n7: 7 },
+      { no: '274', name: 'Erft<script>', river: 'ERFT', km2: 1595, set: 3, gauges: 14, mm, n, sum7: 9.8, n7: 7 },
+      { no: '2772', name: 'Emschereinzugsgebiet', river: null, km2: null, set: 2, gauges: 0,
+        mm: Array(90).fill(null), n: Array(90).fill(0), sum7: null, n7: 0 },
+    ],
+  };
+})();
+
 // serve the mirror (and nothing else) through getJson; every URL asked is recorded
 const nrwStub = `
   globalThis.__nrw = [];
@@ -4049,6 +4120,13 @@ const nrwStub = `
       if (m[2] === '2026') return (${nrwShard.toString()})(m[1], 2026, m[1] === '2729100000100' ? 40 : 60);
       if (m[2] === '2024' || m[2] === '2025') { const s = (${nrwShard.toString()})(m[1], +m[2], 50); return s; }
     }
+    m = /^nrw\\/precip\\/(\\d+)\\/meta\\.json$/.exec(url);
+    if (m && m[1] === '2729100000100') return ${JSON.stringify(NRW_PRECIP_META)};
+    m = /^nrw\\/precip\\/(\\d+)\\/response\\.json$/.exec(url);
+    if (m && m[1] === '2729100000100') return ${JSON.stringify(NRW_RESPONSE)};
+    m = /^nrw\\/precip\\/(\\d+)\\/(\\d{4})\\.json$/.exec(url);
+    if (m && m[1] === '2729100000100') return (${nrwPrecipShard.toString()})(m[1], +m[2]);
+    if (url === 'nrw/precip/overview.json') return ${JSON.stringify(NRW_RAIN_OVERVIEW)};
     const e = new Error('404 ' + url); e.status = 404; throw e;
   };
   lanukManifestP = null; // the boot's attempt ran against the offline stub — start over`;
@@ -4460,4 +4538,293 @@ test('lanuk plates: a hostile gauge or water name never reaches markup unescaped
     return renderRiver(vm);
   })()`);
   assert.ok(!river.includes('<img'), 'river plate: the name is escaped in the trouble list and the index');
+});
+
+// ---------- PRECIPITATION and RESPONSE: the areal rain on the station plate ----------
+
+const precipApp = async (search = '?station=MENDEN_1') => {
+  const app = nrwApp({ search });
+  await app.run('lanukIndex()');
+  await app.run('loadData()');
+  return app;
+};
+
+test('PRECIPITATION: the window follows the history chips and ends on the mirror’s newest rain day', async () => {
+  const app = await precipApp();
+  const vm = k => app.run(`(() => { historyKey = '${k}'; return precipViewModel(); })()`);
+  const wide = vm('30d');
+  assert.equal(wide.empty, false);
+  // Sep 2 2026 is the manifest's rain edge; the clock in this harness is Sep 4
+  assert.equal(app.run(`rainDayISO(precipViewModel().to)`), '2026-09-02',
+    'the right edge is the mirror’s newest rain day, not today');
+  assert.equal(wide.cols.length, 30, '30 days, one column each at this width');
+  assert.equal(wide.step, 1);
+  const narrow = vm('1y');
+  assert.ok(narrow.step > 1, 'a year of days is bucketed');
+  assert.equal(narrow.cols.length, Math.ceil(365 / narrow.step));
+  // every column covers WHOLE days and no day is in two columns
+  const spans = narrow.cols.map(c => c.to - c.from + 1);
+  assert.deepEqual([...new Set(spans)], [narrow.step], 'every column is exactly `step` days wide');
+  for (let i = 1; i < narrow.cols.length; i++) {
+    assert.equal(narrow.cols[i].from, narrow.cols[i - 1].to + 1, 'columns tile the window without a gap or an overlap');
+  }
+  app.run(`historyKey = '30d'`);
+});
+
+test('PRECIPITATION: the printed sum and the bar scale come off the drawn row', async () => {
+  const app = await precipApp();
+  const vm = app.run(`(() => { historyKey = '30d'; return precipViewModel(); })()`);
+  const drawn = vm.cols.filter(c => c.mm != null);
+  const sum = Math.round(drawn.reduce((s, c) => s + c.mm, 0) * 10) / 10;
+  assert.equal(vm.sumMm, sum, 'Σ is the sum of the columns that are drawn');
+  assert.equal(vm.maxCol, Math.max(...drawn.map(c => c.mm)), 'and the scale is their maximum');
+  const html = app.run(`renderPrecip(precipViewModel())`);
+  assert.ok(html.includes(`Σ ${vm.sumMm} mm · max ${vm.maxCol} mm`), `the key prints both: ${html.slice(0, 300)}`);
+});
+
+test('PRECIPITATION: a column no gauge reported is a mark of its own, not a zero-height bar', async () => {
+  const app = await precipApp();
+  const html = app.run(`(() => { historyKey = '30d'; return renderPrecip(precipViewModel()); })()`);
+  const svg = svgAt(html, html.lastIndexOf('<svg', html.indexOf('class="chart precip"')));
+  // the fixture puts a no-data day every 37 days and real zeros every 11
+  assert.match(svg, /class="pr-nd"/, 'a no-data column is drawn');
+  assert.match(svg, /class="pr-bar"/, 'and a real bar is too');
+  // the two must not be the same element type with different fills: pr-nd is an
+  // outline over the full field, pr-bar a filled rect that starts at the base
+  const nd = /<rect class="pr-nd"[^>]*height="([\d.]+)"/.exec(svg);
+  assert.ok(nd && Number(nd[1]) > 40, `the no-data column spans the field, not a value: height ${nd && nd[1]}`);
+});
+
+test('PRECIPITATION: every mark it draws is named in its own key, and a new one goes red', async () => {
+  const app = await precipApp();
+  const html = app.run(`(() => { historyKey = '30d'; return renderPrecip(precipViewModel()); })()`);
+  const svg = svgAt(html, html.lastIndexOf('<svg', html.indexOf('class="chart precip"')));
+  assertNamed(svg, keyClasses(html), 'the precipitation plate');
+  // put the fix back out: a mark the key does not carry must fail
+  const broken = svg.replace('class="pr-bar"', 'class="pr-ghost"');
+  assert.throws(() => assertNamed(broken, keyClasses(html), 'x'), /every mark drawn is named/);
+});
+
+test('PRECIPITATION: the key names both clocks, both units and the nesting', async () => {
+  const app = await precipApp();
+  const html = app.run(`(() => { historyKey = '30d'; return renderPrecip(precipViewModel()); })()`);
+  const key = html.slice(html.indexOf('<dl class="p-key">'));
+  assert.match(key, /rain day runs 07:00 → 07:00 MEZ, a gauge day 00:00 → 24:00/, 'two clocks, in the key, not in prose elsewhere');
+  assert.match(key, /two units and two scales/);
+  assert.match(key, /inherits every rain gauge above it/, 'the nesting is stated where the set size is');
+  assert.match(key, /5 gauges over 2825 km²/, 'real numbers, from the product’s own meta');
+  assert.match(key, /right edge is the mirror’s newest rain day, not today: 2026-09-02/);
+});
+
+test('PRECIPITATION: a gauge with too few rain gauges says why, and fetches nothing', async () => {
+  const app = await precipApp('?station=ARLOFF');
+  const p = app.run('state.precip');
+  assert.equal(p.reason, 'only 2 rain gauges upstream (needs 3)', 'the manifest’s own reason, verbatim');
+  const html = app.run('renderPrecip(precipViewModel())');
+  assert.match(html, /only 2 rain gauges upstream/);
+  assert.match(html, /class="p-dim"/, 'a degradation, not an empty box');
+  assert.deepEqual(nrwUrls(app).filter(u => u.startsWith('nrw/precip/')), [],
+    'the manifest said no, so not one byte of /precip/ was asked for');
+  assert.equal(app.run('renderResponse(responseViewModel())'), '', 'and no RESPONSE block either');
+});
+
+test('PRECIPITATION: a WSV station shows nothing and asks the mirror for nothing', async () => {
+  const app = nrwApp({ search: '?station=BONN' });
+  await app.run('lanukIndex()');
+  app.run(`state.precip = null`);
+  assert.equal(app.run('renderPrecip(precipViewModel())'), '');
+  assert.equal(app.run('renderResponse(responseViewModel())'), '');
+  assert.deepEqual(nrwUrls(app).filter(u => u.includes('/precip/')), [], 'BONN asks the mirror for nothing');
+});
+
+test('PRECIPITATION: a hostile station name in the rain set never reaches the markup raw', async () => {
+  const app = await precipApp();
+  const html = app.run(`(() => { historyKey = '30d'; return renderPrecip(precipViewModel()); })()`);
+  assert.ok(!html.includes('<script>'), 'the set carries Hennef<script> — it must arrive escaped or not at all');
+});
+
+test('RESPONSE: the peak is marked, and the sentence names the other estimator', async () => {
+  const app = await precipApp();
+  const html = app.run('renderResponse(responseViewModel())');
+  const svg = svgAt(html, html.lastIndexOf('<svg', html.indexOf('class="chart response"')));
+  assert.match(svg, /class="rs-peak"/, 'the peak lag carries its own glyph');
+  assert.match(svg, /class="rs-neg"/, 'lag 4-6 are negative in the fixture and draw as the other kind');
+  assert.equal((svg.match(/class="rs-bar"|class="rs-neg"/g) || []).length, 8, 'one bar per lag, 0 through 7');
+  assert.match(html, /\+13\.4 cm per 10 mm areal rain, peaking at lag 1 \(58 events ≥ 10 mm\)/);
+  assert.match(html, /two estimators: the bars are Pearson r, the sentence is a slope/);
+  assert.match(html, /r = 0\.59 over 700 days/);
+  assertNamed(svg, keyClasses(html), 'the response plate');
+});
+
+test('RESPONSE: a weak or thin relationship warns instead of reading as a measurement', async () => {
+  const app = await precipApp();
+  const weak = app.run(`(() => {
+    state.precip.response = { ...state.precip.response, rPeak: 0.11, nPeak: 12,
+      lags: state.precip.response.lags.map(l => ({ ...l, r: l.r * 0.2 })) };
+    return renderResponse(responseViewModel());
+  })()`);
+  assert.match(weak, /class="warn">weak at every lag/);
+  assert.match(weak, /class="warn">few days behind the peak/);
+});
+
+test('RESPONSE: no statistic at all is a stated reason, never a blank block', async () => {
+  const app = await precipApp();
+  const html = app.run(`(() => { state.precip.response = null; return renderResponse(responseViewModel()); })()`);
+  assert.match(html, /no response statistic for this gauge/);
+  const withReason = app.run(`(() => {
+    state.precip.response = { lags: [], peakLag: null, rPeak: null, nPeak: 0,
+      events: { thresholdMm: 10, n: 3, risePer10mm: null }, reason: 'too few rain events (3 < 10)' };
+    return renderResponse(responseViewModel());
+  })()`);
+  assert.match(withReason, /too few rain events \(3 &lt; 10\)|too few rain events \(3 < 10\)/);
+});
+
+// ---------- ?rain: the basin overview ----------
+
+// The boot fires its own loadRain() against the offline stub before nrwStub is
+// installed; its rejection lands AFTER the test's own load unless it is let
+// through first. Same shape as nrwStub's `lanukManifestP = null`.
+const rainApp = async (search = '?rain') => {
+  const app = loadApp({ now: NRW_NOW, search });
+  app.run(nrwStub);
+  await app.run(`(async () => { for (let i = 0; i < 4; i++) await Promise.resolve(); state.rain = null; await loadRain(); })()`);
+  return app;
+};
+
+test('?rain: a deep link opens the mode, a bad window clamps, and ?rising&rain stays rising', () => {
+  const at = search => loadApp({ now: NRW_NOW, search }).run('[mode, rainDays]');
+  assert.deepEqual(at('?rain'), ['rain', 30]);
+  assert.deepEqual(at('?rain&w=90'), ['rain', 90]);
+  assert.deepEqual(at('?rain&w=999'), ['rain', 30], 'an unknown window falls back to the default');
+  assert.deepEqual(at('?rain&w=abc'), ['rain', 30]);
+  assert.deepEqual(at('?rising&rain')[0], 'rising', 'the older mode wins — a shared link never changes meaning');
+  assert.deepEqual(at('?total&rain')[0], 'total');
+});
+
+test('?rain: the window chip is a real link and the query round-trips', () => {
+  const app = loadApp({ now: NRW_NOW, search: '?rain&w=60' });
+  assert.equal(app.run(`rainHref(30)`), '?rain', 'the default carries no w=');
+  assert.equal(app.run(`rainHref(90)`), '?rain&w=90');
+  assert.equal(app.run(`currentModeQuery()`), '?rain&w=60');
+  assert.equal(app.run(`navHref('cmd:rw:90')`), '?rain&w=90', 'the chip has an href, so it can be shared and middle-clicked');
+  assert.equal(app.run(`navHref('rain')`), '?rain&w=60', 'the app-bar link carries the window you are in');
+});
+
+test('?rain: the Back button undoes a window change', async () => {
+  const app = await rainApp();
+  app.run(`rainSetDays(90)`);
+  assert.equal(app.run('rainDays'), 90);
+  assert.equal(app.run('rainQuery()'), '?rain&w=90', 'the pushed entry carries the window');
+  // the harness's history is a no-op, so Back is modelled the way the handler
+  // sees it: the address bar moved, then popstate fired
+  app.location.search = '?rain';
+  app.fire('popstate');
+  assert.equal(app.run('rainDays'), 30, 'and going back lands on the window the link said');
+  assert.equal(app.run('mode'), 'rain', 'without leaving the mode');
+});
+
+test('?rain: the table draws the collector’s numbers and never recomputes them', async () => {
+  const app = await rainApp();
+  const vm = app.run('rainViewModel()');
+  assert.equal(vm.rows.length, 3);
+  assert.equal(vm.days, 30, 'the default window');
+  assert.equal(vm.to, '2026-09-02', 'the newest column is the export’s rain day, not today');
+  assert.deepEqual(vm.bins, [0.5, 3.5, 9.5]);
+  // Σ7d is the file's number: the fixture has a null day in the last seven, so
+  // recomputing here would come out different from the collector's own sum
+  assert.equal(vm.rows[0].sum7, 19);
+  assert.equal(vm.rows[0].n7, 7);
+  const html = app.run('renderRain(rainViewModel())');
+  assert.ok(html.includes('>19</td>'), 'and the cell prints exactly that');
+});
+
+test('?rain: the ramp is fixed in mm and the key prints its real edges', async () => {
+  const app = await rainApp();
+  assert.equal(app.run(`precipBin(null, [0.5, 3.5, 9.5])`), -1, 'no day is its own bin');
+  assert.equal(app.run(`precipBin(0, [0.5, 3.5, 9.5])`), 0);
+  assert.equal(app.run(`precipBin(0.5, [0.5, 3.5, 9.5])`), 0, 'the edge belongs to the lower bin');
+  assert.equal(app.run(`precipBin(0.51, [0.5, 3.5, 9.5])`), 1);
+  assert.equal(app.run(`precipBin(9.5, [0.5, 3.5, 9.5])`), 2);
+  assert.equal(app.run(`precipBin(9.51, [0.5, 3.5, 9.5])`), 3);
+  const html = app.run('renderRain(rainViewModel())');
+  assert.match(html, /daily rainfall: ≤0\.5 · ≤3\.5 · ≤9\.5 · &gt;9\.5 mm/, 'the ramp names the mm it actually stands for');
+  assert.match(html, /the ramp is fixed in mm across every basin and window, unlike WAVE/);
+});
+
+test('?rain: every mark in the grid is named in the key, and a new bin goes red', async () => {
+  const app = await rainApp();
+  const html = app.run('renderRain(rainViewModel())');
+  const table = tableAt(html, 'heat rain');
+  const ignore = new Set(['heat', 'rain', 'c-name', 'c-sum', 'rsum', 'rsum-h', 'vh', 'nolink']);
+  const drawn = [...classesIn(table)].filter(c => !ignore.has(c));
+  const key = keyClasses(html);
+  assert.ok(drawn.length >= 3, `the grid draws several bins: ${drawn.join(',')}`);
+  for (const c of drawn) assert.ok(key.has(c), `${c} is drawn but not in the key`);
+  // put it back out: a bin the ramp does not carry has to show up as missing
+  const broken = table.replace('<td class="', '<td class="b9 ');
+  const missing = [...classesIn(broken)].filter(c => !ignore.has(c) && !key.has(c));
+  assert.deepEqual(missing, ['b9'], 'a bin with no swatch must be visible as missing');
+});
+
+test('?rain: a basin with no gauged river is text, not a link', async () => {
+  const app = await rainApp();
+  const html = app.run('renderRain(rainViewModel())');
+  const table = tableAt(html, 'heat rain');
+  const links = (table.match(/data-nav="river:/g) || []).length;
+  assert.equal(links, 2, 'two of the three basins have a river; the Emscher does not');
+  assert.match(table, /class="nolink"[^>]*title="[^"]*no gauged river of its own/);
+  assert.match(html, /a basin name that is not a link has no gauged river of its own/, 'and the key says so');
+});
+
+test('?rain: an empty basin row is drawn as no-day cells with no sum', async () => {
+  const app = await rainApp();
+  const vm = app.run('rainViewModel()');
+  const emscher = vm.rows.find(r => r.no === '2772');
+  assert.ok(emscher.cells.every(c => c.bin === -1), 'two rain gauges never reach the floor of three');
+  assert.equal(emscher.sum7, null);
+  const html = app.run('renderRain(rainViewModel())');
+  assert.ok(html.includes('>—</td>'), 'and the sum cell says so rather than printing 0');
+});
+
+test('?rain: a hostile basin name is escaped, and the foot says there is no live feed', async () => {
+  const app = await rainApp();
+  const html = app.run('renderRain(rainViewModel())');
+  assert.ok(!html.includes('<script>'), 'Erft<script> must not reach the markup raw');
+  assert.ok(html.includes('Erft&lt;script&gt;'));
+  await app.run('render()');
+  const foot = app.run(`document.getElementById('source-line').textContent`);
+  assert.match(foot, /LANUK NRW · mirrored 2026-09-03 · rain day starts 07:00 MEZ · no live feed/);
+});
+
+test('?rain: a missing overview is an error with a retry, not a blank plate', async () => {
+  const app = loadApp({ now: NRW_NOW, search: '?rain' });
+  app.run(`getJson = async url => { const e = new Error('404 ' + url); e.status = 404; throw e; };`);
+  await app.run(`(async () => { for (let i = 0; i < 4; i++) await Promise.resolve(); state.rain = null; await loadRain(); })()`);
+  assert.match(app.run('state.rain.error'), /the rainfall overview isn't mirrored yet/);
+  await app.run('render()');
+  assert.match(app.run(`document.getElementById('screen').innerHTML`), /isn't mirrored yet/);
+});
+
+test('?rain: the mode has a key, a flag and a manual entry', () => {
+  const app = loadApp({ now: NRW_NOW, search: '?rain' });
+  assert.equal(app.run(`parseCommand('--rain').rain`), true);
+  assert.match(app.run('helpText()'), /--rain\s+rainfall per NRW basin/);
+  assert.match(app.run('helpText()'), /p the rain/, 'the key sheet and the manual read the same KEYMAP');
+});
+
+test('?rain: the p key and the app bar reach the same mode', async () => {
+  const app = loadApp({ now: NRW_NOW, search: '?station=BONN' });
+  app.run(nrwStub);
+  app.fire('keydown', { key: 'p' });
+  assert.equal(app.run('mode'), 'rain');
+  assert.equal(app.run('rainQuery()'), '?rain');
+  assert.equal(app.run(`document.getElementById('rain-btn').className`), 'on', 'the app bar marks where you are');
+  assert.equal(app.run(`document.title`), 'PEGEL://RAIN · 30D');
+  assert.match(app.run(`document.getElementById('crumbs').innerHTML`), /rainfall per basin/);
+});
+
+test('the rain grid gets its own width, and the wave chassis it borrows still fits a phone', () => {
+  const page = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
+  assert.match(page, /\.rain-wrap[^}]*--wave-min/s, 'the rain grid widens the chassis it shares with the wave');
+  assert.match(page, /\.heat\.wave, \.heat\.rain \{[^}]*min-width: var\(--wave-min\)/s);
 });

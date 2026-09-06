@@ -895,6 +895,37 @@
   .h-fill { fill: color-mix(in oklab, var(--water) 55%, transparent); }
   .h-line { fill: none; stroke: var(--water-line); stroke-width: 1.6; vector-effect: non-scaling-stroke; }
   .href-line { stroke: var(--ink); stroke-width: 1; stroke-dasharray: 5 4; opacity: 0.5; vector-effect: non-scaling-stroke; }
+  /* ---- areal rain over the catchment ---- */
+  .precip-wrap { margin-left: var(--axis-gutter); }
+  .precip { height: 7.2rem; border-bottom: 1px solid var(--ink); }
+  /* a fill wide enough to read, bounded by the ink hairline every area on this
+     page is bounded by */
+  .pr-bar { fill: var(--water); stroke: var(--ink); stroke-width: 0.4; vector-effect: non-scaling-stroke; }
+  /* no-data is a KIND apart, not a shade: outline only, full height, so it can
+     never be mistaken for a short bar */
+  .pr-nd { fill: none; stroke: var(--mid); stroke-width: 0.7; stroke-dasharray: 2 2; vector-effect: non-scaling-stroke; }
+  .pr-base { stroke: var(--ink); stroke-width: 1; vector-effect: non-scaling-stroke; }
+  /* its own class, deliberately not .h-line: the same series drawn at a
+     different scale in a different field, and a shared class would let one
+     chart's restyle silently move the other */
+  .pr-level { fill: none; stroke: var(--water-line); stroke-width: 1.6; vector-effect: non-scaling-stroke; }
+  /* ---- rain -> level response ---- */
+  .resp-wrap { margin-left: var(--axis-gutter); }
+  .response { height: 5.6rem; }
+  .rs-bar { fill: var(--water); stroke: var(--ink); stroke-width: 0.4; vector-effect: non-scaling-stroke; }
+  .rs-neg { fill: var(--dry); stroke: var(--ink); stroke-width: 0.4; vector-effect: non-scaling-stroke; }
+  .rs-zero { stroke: var(--ink); stroke-width: 1; vector-effect: non-scaling-stroke; }
+  /* a stroke, not a fill: the chart is stretched horizontally and a filled shape
+     would flatten out of sight. non-scaling-stroke keeps it 3 px at every width. */
+  .rs-peak { stroke: var(--ink); stroke-width: 3; stroke-linecap: butt; vector-effect: non-scaling-stroke; }
+  .rs-axis {
+    display: grid;
+    grid-template-columns: repeat(8, 1fr);
+    font-family: var(--font-data);
+    font-size: 0.66rem;
+    color: var(--mid);
+    text-align: center;
+  }
   .p-key .warn { color: var(--dry-line); }
   /* ---- readout: the spelled-out sentence, then the terse line ---- */
   .readout .say { margin: 0; font-size: 1.02em; max-width: 62ch; text-wrap: pretty; }
@@ -1061,14 +1092,21 @@
   .wave-months span { position: absolute; transform: translateX(-50%); }
   /* fixed layout is what makes the name column obey a width at all: under
      `auto` a max-width on a cell is ignored and the names eat the whole grid */
-  .heat.wave { table-layout: fixed; min-width: var(--wave-min); }
-  .heat.wave td { height: 0.85rem; }
-  .heat.wave .c-name { width: var(--wave-name); }
+  .heat.wave, .heat.rain { table-layout: fixed; min-width: var(--wave-min); }
+  .heat.wave td, .heat.rain td { height: 0.85rem; }
+  .heat.wave .c-name, .heat.rain .c-name { width: var(--wave-name); }
+  /* the rain grid carries a sum column as well as the days, and 16 basin names
+     are longer than a gauge name: it needs more room before it starts to
+     scroll than the wave does */
+  .rain-wrap { --wave-min: 44rem; }
+  .heat.rain .c-sum { width: 3.4rem; }
+  .heat.rain .rsum { font-size: 0.66rem; color: var(--mid); text-align: right; padding-left: 0.8ch; font-variant-numeric: tabular-nums; }
+  .heat.rain .rsum-h { font-size: 0.62rem; color: var(--dim); text-align: right; padding-left: 0.8ch; font-weight: 400; }
   /* The name column rides along: the grid starts scrolled to its newest day,
      and a heatmap whose row labels have scrolled off the left is a wall of
      colour. Its own background is load-bearing — a transparent sticky cell
      lets the day cells slide underneath it. */
-  .heat.wave th[scope="row"] {
+  .heat.wave th[scope="row"], .heat.rain th[scope="row"] {
     overflow: hidden;
     text-align: left;
     position: sticky;
@@ -1076,7 +1114,10 @@
     z-index: 1;
     background: var(--paper);
   }
-  .heat.wave th a { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .heat.wave th a, .heat.rain th a { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* a basin with no river of its own is not a link — it says so on hover
+     instead of pretending to lead somewhere */
+  .heat.rain th span.nolink { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--mid); }
   .wg { color: var(--mid); margin-right: 0.6ch; }
   .k-low .wg { color: var(--dry-line); }
   .k-high .wg { color: var(--water-line); }
@@ -1402,6 +1443,7 @@
       <a id="rivers-btn" href="?rivers" data-nav="rivers" title="--rivers · all waters on a map">map</a>
       <a id="rising-btn" href="?rising" data-nav="rising" title="--rising · who's rising right now">rising</a>
       <a id="total-btn" href="?total" data-nav="total" title="--total · all rivers, summed">totals</a>
+      <a id="rain-btn" href="?rain" data-nav="rain" title="--rain · rainfall per basin, NRW mirror">rain</a>
       <a id="gate-link" href="gate/" title="could a zero-shot model forecast these gauges? the measurement and the write-up">forecast gate</a>
     </nav>
     <div id="appbar-tools">
@@ -1712,13 +1754,15 @@ let station = (new URLSearchParams(location.search).get('station') || 'BONN').to
 // rising board ranking every gauge by its daily rise, or the total overview
 // stacking every river's summed gauge readings over the full archive.
 // ?rising wins over ?rivers, then ?total, then ?river=, then ?station= on load.
-let mode = (p => p.has('rising') ? 'rising' : p.has('rivers') ? 'rivers' : p.has('total') ? 'total' : p.get('river') ? 'river' : 'station')(new URLSearchParams(location.search));
+// ?rain hangs at the END of the chain on purpose: ?rising&rain stays rising, so
+// an older link never changes meaning because a mode was added after it
+let mode = (p => p.has('rising') ? 'rising' : p.has('rivers') ? 'rivers' : p.has('total') ? 'total' : p.has('rain') ? 'rain' : p.get('river') ? 'river' : 'station')(new URLSearchParams(location.search));
 // sub-view within a mode: station mode offers 'years' (multi-year statistics),
 // river mode offers 'wave' (station × day heatmap). 'live' is the default of both.
 // rivers mode offers 'list' (the A–Z index of every water)
 const VIEW_KEYS = ['live', 'years', 'wave', 'list'];
 // which sub-views each mode actually has — everything else falls back to 'live'
-const MODE_VIEWS = { station: ['years'], river: ['wave'], rivers: ['list'], rising: [], total: [] };
+const MODE_VIEWS = { station: ['years'], river: ['wave'], rivers: ['list'], rising: [], total: [], rain: [] };
 let viewMode = (new URLSearchParams(location.search).get('view') || 'live').toLowerCase();
 if (!VIEW_KEYS.includes(viewMode)) viewMode = 'live';
 if (viewMode !== 'live' && !MODE_VIEWS[mode].includes(viewMode)) viewMode = 'live';
@@ -1768,6 +1812,19 @@ let risingDays = new URLSearchParams(location.search).has('d7') ? 7 : 1;
 const risingHref = n => n > 1 ? '?rising&d7' : '?rising';
 const risingQuery = () => risingHref(risingDays);
 
+// ?rain: the mirror's basin-by-day rainfall. One window state, URL-synced, so a
+// chip sets something shareable and the Back button undoes it.
+const RAIN_WINDOWS = [30, 60, 90];
+const RAIN_DEFAULT = 30;
+let rainDays = RAIN_DEFAULT;
+function rainSyncFromUrl(p) {
+  const w = Number(p.get('w'));
+  rainDays = RAIN_WINDOWS.includes(w) ? w : RAIN_DEFAULT;
+}
+const rainHref = n => (n === RAIN_DEFAULT ? '?rain' : '?rain&w=' + n);
+const rainQuery = () => rainHref(rainDays);
+rainSyncFromUrl(new URLSearchParams(location.search));
+
 const stationLink = document.getElementById('station-link');
 const permaLabel = document.getElementById('footer-perma-label');
 const wsvArchiveLink = document.getElementById('wsv-archive-link');
@@ -1781,6 +1838,7 @@ function currentModeQuery() {
   if (mode === 'rivers') return '?rivers' + viewSuffix();
   if (mode === 'rising') return risingQuery();
   if (mode === 'total') return totalQuery();
+  if (mode === 'rain') return rainQuery();
   return '?station=' + encodeURIComponent(station) + viewSuffix();
 }
 
@@ -1831,6 +1889,13 @@ function applyTotalChrome() {
   permaLabel.textContent = 'total link:';
 }
 
+function applyRainChrome() {
+  document.title = 'PEGEL://RAIN · ' + rainDays + 'D';
+  stationLink.textContent = rainQuery();
+  stationLink.href = currentModeQuery();
+  permaLabel.textContent = 'rain link:';
+}
+
 // river and rivers mode hide the per-station chrome (archive bar, recent chips);
 // the prompt form stays so users can jump back to a station. Every control that
 // steers the drawing itself now rides on the plate, next to what it changes.
@@ -1857,7 +1922,7 @@ function applyModeChrome() {
   home.className = perStation ? 'on' : '';
   home.setAttribute('aria-current', perStation ? 'page' : 'false');
   // the global views in the same nav — mark whichever one is active
-  for (const [id, m] of [['rivers-btn', 'rivers'], ['rising-btn', 'rising'], ['total-btn', 'total']]) {
+  for (const [id, m] of [['rivers-btn', 'rivers'], ['rising-btn', 'rising'], ['total-btn', 'total'], ['rain-btn', 'rain']]) {
     const btn = document.getElementById(id);
     const on = mode === m;
     btn.className = on ? 'on' : '';
@@ -1885,6 +1950,7 @@ function renderCrumbs() {
     if (mode === 'station') parts.push(here(station));
     else if (mode === 'rising') parts.push(here(T.risingBoard));
     else if (mode === 'total') parts.push(here(T.totalBoard));
+    else if (mode === 'rain') parts.push(here(T.rainBoard));
   }
   const html = parts.join(' ▸ ');
   if (html === lastCrumbs) return;
@@ -1895,6 +1961,7 @@ function renderCrumbs() {
 if (mode === 'rivers') applyRiversChrome();
 else if (mode === 'rising') applyRisingChrome();
 else if (mode === 'total') applyTotalChrome();
+else if (mode === 'rain') applyRainChrome();
 else if (mode !== 'river') applyStationChrome();
 
 // live chrome: once data is in, the tab title carries the level + trend, the
@@ -2043,6 +2110,7 @@ const state = {
   riverStations: null, // prepared station array for the longitudinal profile
   rising: null,     // { data: risingOverview() result, error } while in rising mode
   total: null,      // { overview, top, error } while in total mode (see loadTotal)
+  rain: null,       // { data, error } while in rain mode (see loadRain)
   repoArchive: null, // 'available' | 'none' once the hosted archive manifest was consulted
   archiveSource: null, // manifest entry.source (e.g. 'Rijkswaterstaat'); null → WSV
   // what feeds the plate when it is not the live PEGELONLINE API: null = live
@@ -2052,6 +2120,11 @@ const state = {
   // source name, so a third source only ever touches the loader layer.
   feed: null,
   lanuk: null,      // LANUK-only extras (stages, catchment, down, note) — never in state.gauge
+  // the baked areal rainfall of this gauge's upstream catchment, LANUK only:
+  // { no, years: {y: shard}, response, meta, n, reason } | { no, reason } | null.
+  // `reason` is why there is no series (fewer than three rain gauges upstream) —
+  // the plate prints it rather than drawing nothing.
+  precip: null,
   neighborsNote: null, // why the neighbour profile is empty, when the loader knows (null = still locating)
   // newest day (ms) whose stored low is the daily MEAN, not a minimum — the seed
   // rows of a source that publishes no minimum; the history key says so while
@@ -2116,6 +2189,56 @@ function lanukMeta(no) {
     lanukMetaCache.set(no, getJson(`${LANUK_BASE}gauges/${no}/meta.json`).catch(() => null));
   }
   return lanukMetaCache.get(no);
+}
+
+// ---------- the areal-rain product (nrw/precip/, see scripts/build-nrw-precip.mjs) ----------
+
+const precipShardCache = new Map(); // "<no>/<y>" -> Promise<shard|null>
+const precipMetaCache = new Map();  // "<no>" -> Promise<meta|null>
+const precipRespCache = new Map();  // "<no>" -> Promise<response|null>
+const precipShard = (no, y) => cachedJson(precipShardCache, `${no}/${y}`, `${LANUK_BASE}precip/${no}/${y}.json`);
+const precipMeta = no => cachedJson(precipMetaCache, no, `${LANUK_BASE}precip/${no}/meta.json`);
+const precipResponse = no => cachedJson(precipRespCache, no, `${LANUK_BASE}precip/${no}/response.json`);
+function cachedJson(cache, key, url) {
+  if (!cache.has(key)) cache.set(key, getJson(url).catch(() => null));
+  return cache.get(key);
+}
+
+// The mirror rolls a two-year window, so a station's whole rain record is three
+// year files at most. Loading all of them at once costs ~45 kB and buys the
+// absence of a second load path: no window chip can land on a year that is not
+// there yet, and setHistory has nothing to re-fetch.
+function precipYears() {
+  const w = (lanukManifestInfo && lanukManifestInfo.window && lanukManifestInfo.window.rain) || null;
+  const now = new Date().getUTCFullYear();
+  const from = yearOf(w && w.from) || now - 2, to = yearOf(w && w.to) || now;
+  const out = [];
+  for (let y = from; y <= to; y++) out.push(y);
+  return out;
+}
+
+// Called only from loadLanukStation: a WSV station never asks the mirror for a
+// product the mirror does not have for it.
+async function loadPrecip(forStation, no, entry) {
+  if (!entry || !entry.series) {
+    state.precip = { no, n: (entry && entry.n) || 0, reason: (entry && entry.why) || T.precipNoProduct };
+    scheduleRender();
+    return;
+  }
+  const [meta, response, ...shards] = await Promise.all([
+    precipMeta(no), precipResponse(no), ...precipYears().map(y => precipShard(no, y)),
+  ]);
+  if (station !== forStation || mode !== 'station') return; // switched away while fetching
+  if (!meta) {
+    state.precip = { no, n: entry.n, reason: T.precipNoProduct };
+  } else {
+    const years = {};
+    precipYears().forEach((y, i) => { if (shards[i]) years[y] = shards[i]; });
+    // nRain is the product's own count of the set; `set` is the same list, but
+    // the count is what the legend prints and what the collector guarantees
+    state.precip = { no, meta, response, years, n: meta.nRain ?? (meta.set || []).length, reason: null };
+  }
+  scheduleRender();
 }
 
 // a manifest/meta from-to is a year, or an ISO date whose year is meant
@@ -2290,6 +2413,11 @@ async function loadLanukStation() {
     // would be a false statement, not garnish. The mirrored shards ARE the
     // history, so every window comes from them — nothing else to backfill
     loadRepoArchive();
+    // …but the mirror's OWN rainfall, aggregated over this gauge's catchment and
+    // stamped with the same export, is a statement about the same day the level
+    // is from. The manifest says whether there is a product before a byte of it
+    // is fetched, so a gauge without one costs no request.
+    loadPrecip(forStation, no, (lanukPrecipIndex || {})[no]);
   } catch (e) {
     if (station !== forStation || mode !== 'station') return; // stale error from a station we left
     state.error = `station "${forStation}" failed: ${e.message}\n` +
@@ -3071,6 +3199,7 @@ const T = {
   allWaters: 'All waters',
   risingBoard: 'rising board',
   totalBoard: 'all rivers summed',
+  rainBoard: 'rainfall per basin',
   wholeRiver: 'whole river',
   recent: 'recent',
   browseByWater: 'browse by water',
@@ -3125,6 +3254,37 @@ const T = {
   histDaily: 'the reading over time',
   histBand: 'min–max inside one pixel column',
   histGapKey: 'the gauge reported nothing here, so the line stops rather than guess across it',
+  // areal rain over the gauge's own catchment (nrw/precip/)
+  precip: 'PRECIPITATION',
+  precipBar: 'areal rain per column',
+  precipDay: 'one day',
+  precipDays: 'days',
+  precipNd: 'no rain gauge stood behind this column — not a dry day',
+  precipBase: 'the 0 mm line the bars hang from',
+  precipLevel: 'the gauge’s daily mean over the same columns',
+  precipGap: 'the gauge reported nothing here, so the level line stops',
+  precipSameRow: 'both read off the drawn row, not off a wider window',
+  precipMean: 'unweighted mean over the reporting rain gauges of the upstream catchment',
+  precipNoArea: 'catchment area unknown for this gauge',
+  precipNested: 'a gauge downstream inherits every rain gauge above it, so two gauges on one river do not have separate rain',
+  precipTwoClocks: 'two clocks: a rain day runs 07:00 → 07:00 MEZ, a gauge day 00:00 → 24:00',
+  precipUnits: 'two units and two scales in one drawing',
+  precipThin: 'thin set — an areal mean over this few gauges is a local reading, not a catchment',
+  precipEdge: 'right edge is the mirror’s newest rain day, not today:',
+  precipNoProduct: 'no areal rain for this gauge: fewer than three rain gauges drain into it',
+  precipNoWindow: 'the mirror does not say which day its rain record ends on',
+  // rain -> level response
+  response: 'RESPONSE · rain → level',
+  respPos: 'correlation above zero: rain that day, level rises after',
+  respNeg: 'correlation below zero',
+  respZero: 'no correlation',
+  respPeak: 'the strongest lag',
+  respTwoEstimators: 'two estimators: the bars are Pearson r, the sentence is a slope',
+  respWeak: 'weak at every lag — this gauge does not follow its catchment’s rain',
+  respThin: 'few days behind the peak: read it as an indication, not a measurement',
+  respPeakAt: 'peaking at lag',
+  respNoSlope: 'too few rain events to state a rise per 10 mm',
+  respMissing: 'no response statistic for this gauge',
   neighbours: 'NEIGHBOURS',
   neighboursSub: 'water surface elevation between the gauges up- and downstream, in metres above sea level (m NHN)',
   neighboursAria: 'elevation profile of the neighbouring gauges',
@@ -3203,6 +3363,24 @@ const T = {
   loadMap: 'Mapping the network…',
   loadRising: 'Diffing every gauge against its last snapshot…',
   loadTotal: 'Summing every gauge…',
+  loadRain: 'Reading the mirror’s rainfall…',
+  // ?rain — the basin-by-day overview
+  rainTitle: 'RAINFALL · NRW BASINS',
+  rainSub: 'areal daily rainfall per basin, from the LANUK NRW mirror',
+  rainRamp: 'daily rainfall',
+  rainNoDay: 'no day: too few rain gauges reported',
+  rainSum7: 'Σ7d is the collector’s own sum of the seven newest days — days without a reading are not counted, and the tooltip says how many there were',
+  rainFixedRamp: 'the ramp is fixed in mm across every basin and window, unlike WAVE, where each row is scaled to its own gauge',
+  rainBasinNotCatchment: 'a basin is the source’s own grouping, not one gauge’s catchment — the station plates carry those',
+  rainNoRiver: 'no gauged river of its own',
+  rainNoRiverKey: 'a basin name that is not a link has no gauged river of its own (Emscher)',
+  rainBasins: '16 basins',
+  rainBasin: 'basin',
+  rainDaysCol: 'daily rainfall',
+  rainSum7Col: 'Σ7d',
+  rainMirrored: 'mirrored',
+  rainDayStart: 'rain day starts 07:00 MEZ',
+  rainUnreadable: 'the rainfall overview is there but not shaped the way this page reads it',
   loadTotalYear: 'Summing day by day:',
   loadRiver: 'Walking',
   loadWave: 'Sounding day by day:',
@@ -3287,12 +3465,14 @@ function navHref(target) {
     if (c.startsWith('ty:')) return totalHref(+c.slice(3), null, null);
     if (c.startsWith('tm:')) { const [y, m] = c.slice(3).split(':').map(Number); return totalHref(y, m, null); }
     if (c.startsWith('td:')) { const [y, m, d] = c.slice(3).split(':').map(Number); return totalHref(y, m, d); }
+    if (c.startsWith('rw:')) return rainHref(+c.slice(3));
     return null; // in-view toggles with no URL of their own stay buttons
   }
   if (target.startsWith('river:')) return '?river=' + encodeURIComponent(target.slice(6));
   if (target === 'rising') return '?rising';
   if (target === 'rivers') return '?rivers';
   if (target === 'total') return '?total';
+  if (target === 'rain') return rainQuery();
   return '?station=' + encodeURIComponent(target);
 }
 
@@ -4218,6 +4398,226 @@ function renderHistory(h) {
     `<div class="hist-wrap">${scale}${chart}</div>${axis}${key}</section>`;
 }
 
+// ---------- areal rain over the catchment, and its response ----------
+
+// Rain days are calendar days in the mirror's own index (day 0 = Jan 1), so the
+// plate works in absolute day numbers and only touches shards at the edges.
+const rainDayNum = iso => Date.parse(String(iso || '').slice(0, 10) + 'T00:00:00Z') / 864e5;
+const rainDayISO = n => new Date(n * 864e5).toISOString().slice(0, 10);
+function rainSlot(n) {
+  const y = new Date(n * 864e5).getUTCFullYear();
+  return { y, i: n - Date.UTC(y, 0, 1) / 864e5 };
+}
+
+// The right edge is the newest rain day the MIRROR holds, never today: the
+// export lags about a day, and a plate that ran to the clock would draw a gap
+// that is nothing but the export's own lateness.
+function newestRainDay() {
+  // the collector's measured edge first: the same day the ?rain overview ends
+  // on, so the two plates never disagree about which day is newest. The source
+  // window is the fallback for a mirror written before the edge was recorded.
+  if (lanukPrecipEdge) return rainDayNum(lanukPrecipEdge);
+  const w = lanukManifestInfo && lanukManifestInfo.window && lanukManifestInfo.window.rain;
+  return w && w.to ? rainDayNum(w.to) : null;
+}
+
+function precipViewModel() {
+  const p = state.precip;
+  if (!p) return null;
+  const preset = historyPreset();
+  if (p.reason) return { empty: true, reason: p.reason, n: p.n || 0, label: preset.label };
+  const edge = newestRainDay();
+  if (edge == null) return { empty: true, reason: T.precipNoWindow, n: p.n, label: preset.label };
+
+  const meta = p.meta || {};
+  const at = (arr, d) => {
+    const { y, i } = rainSlot(d);
+    const s = p.years[y];
+    return s && Array.isArray(s[arr]) ? s[arr][i] : undefined;
+  };
+  // the oldest day the loaded shards can answer for
+  let first = edge;
+  for (const y of Object.keys(p.years)) first = Math.min(first, Date.UTC(Number(y), 0, 1) / 864e5);
+  const days = preset.d ? Math.min(preset.d, edge - first + 1) : (edge - first + 1);
+  // whole days per column, so no day is counted in two columns and none is
+  // silently dropped between them
+  const step = Math.max(1, Math.ceil(days / (plateDensity() === 'narrow' ? 60 : 120)));
+  const nCols = Math.ceil(days / step);
+  // built from the right edge inwards: the newest day must land ON the edge,
+  // whatever the remainder of days/step is
+  const cols = [];
+  for (let c = nCols - 1; c >= 0; c--) {
+    const to = edge - (nCols - 1 - c) * step, from = to - step + 1;
+    let mm = 0, reported = 0, seen = 0, nMax = 0;
+    for (let d = from; d <= to; d++) {
+      const v = at('mm', d);
+      if (v === undefined) continue;
+      seen++;
+      if (v == null) continue;
+      mm += v; reported++;
+      nMax = Math.max(nMax, at('n', d) || 0);
+    }
+    cols.unshift({ from, to, mm: reported ? Math.round(mm * 100) / 100 : null, days: reported, seen, n: nMax });
+  }
+  // Sum and scale come from the SAME row the bars are drawn from — a printed
+  // total that was computed over a different window is the classic way for a
+  // plate to lie about its own drawing.
+  const drawn = cols.filter(c => c.mm != null);
+  const sumMm = drawn.reduce((s, c) => s + c.mm, 0);
+  const maxCol = drawn.reduce((m, c) => Math.max(m, c.mm), 0);
+
+  // The level row over the same columns: the daily mean of whatever readings
+  // fall inside each column. Same series the HISTORY plate draws, so the two
+  // cannot disagree about the gauge.
+  const lvl = new Array(cols.length).fill(null);
+  if (cols.length) {
+    const t0 = cols[0].from * 864e5, sums = new Array(cols.length).fill(0), counts = new Array(cols.length).fill(0);
+    for (const [ts, cm] of state.archive) {
+      const c = Math.floor((ts - t0) / 864e5 / step);
+      if (c < 0 || c >= cols.length) continue;
+      sums[c] += cm; counts[c]++;
+    }
+    for (let c = 0; c < cols.length; c++) if (counts[c]) lvl[c] = sums[c] / counts[c];
+  }
+  let gaps = 0;
+  for (let c = 0, inGap = false; c < cols.length; c++) {
+    if (lvl[c] != null) { inGap = false; continue; }
+    if (!inGap) { gaps++; inGap = true; }
+  }
+  const lo = Math.min(...lvl.filter(v => v != null)), hi = Math.max(...lvl.filter(v => v != null));
+
+  return {
+    empty: false, label: preset.label, step, cols, lvl, gaps,
+    sumMm: Math.round(sumMm * 10) / 10, maxCol,
+    level: Number.isFinite(lo) ? { lo, hi } : null,
+    from: cols.length ? cols[0].from : edge, to: edge,
+    n: p.n, km2: meta.km2 ?? null, nUpstream: meta.nUpstream || 0,
+    align: meta.align || '', unit: gaugeUnit(),
+  };
+}
+
+function renderPrecip(p) {
+  if (!p) return '';
+  const head = `<section class="p-block"><h2 class="p-h2">${esc(T.precip)} · ${esc(p.label)}</h2>`;
+  if (p.empty) return head + `<p class="p-dim">${esc(p.reason)}</p></section>`;
+  const W = 320, RH = 56, GAP = 6, LH = 70, H = RH + GAP + LH;
+  const n = p.cols.length;
+  const cw = W / Math.max(1, n);
+  const scale = p.maxCol > 0 ? (RH - 4) / p.maxCol : 0;
+  const parts = [`<line class="pr-base" x1="0" y1="0.5" x2="${W}" y2="0.5"/>`];
+  p.cols.forEach((c, i) => {
+    const x = i * cw, w = Math.max(0.8, cw - (cw > 3 ? 0.8 : 0.15));
+    if (c.mm == null) {
+      // a column no rain gauge stood behind, drawn as an outline over the full
+      // field: a zero-height bar and a no-data column must not look alike
+      parts.push(`<rect class="pr-nd" x="${x.toFixed(2)}" y="0.5" width="${w.toFixed(2)}" height="${(RH - 1).toFixed(1)}"/>`);
+      return;
+    }
+    if (c.mm <= 0) return; // a dry day IS zero — the base line is its drawing
+    parts.push(`<rect class="pr-bar" x="${x.toFixed(2)}" y="0.5" width="${w.toFixed(2)}" height="${Math.max(0.6, c.mm * scale).toFixed(2)}"/>`);
+  });
+  if (p.level) {
+    const span = Math.max(p.level.hi - p.level.lo, 1);
+    const Y = v => RH + GAP + (1 - (v - p.level.lo) / span) * (LH - 4) + 2;
+    const runs = [];
+    for (let i = 0, cur = null; i < n; i++) {
+      if (p.lvl[i] == null) { cur = null; continue; }
+      if (!cur) runs.push(cur = []);
+      cur.push(i);
+    }
+    for (const run of runs) {
+      const pts = run.map(i => `${(i * cw + cw / 2).toFixed(1)},${Y(p.lvl[i]).toFixed(1)}`);
+      if (pts.length === 1) pts.push(pts[0]);
+      parts.push(`<polyline class="pr-level" points="${pts.join(' ')}"/>`);
+    }
+  }
+  const chart = svgWrap(`0 0 ${W} ${H}`, parts.join(''),
+    ' class="chart precip" preserveAspectRatio="none" role="img"' +
+    attr('aria-label', `${T.precip}: ${p.sumMm} mm over ${p.label}, ${p.n} rain gauges, against the gauge's daily mean`));
+  const days = p.step === 1 ? T.precipDay : `${p.step} ${T.precipDays}`;
+  const key = plateKey([
+    { sw: keySw('<rect class="pr-bar" x="3" y="0" width="6" height="9"/><line class="pr-base" x1="0" y1="0.5" x2="12" y2="0.5"/>'), label: `${T.precipBar} (${esc(days)})` },
+    { sw: keySw('<rect class="pr-nd" x="1" y="1" width="10" height="10"/>'), label: T.precipNd },
+    { sw: keySw('<line class="pr-base" x1="0" y1="6" x2="12" y2="6"/>'), label: T.precipBase },
+    { sw: keySw('<polyline class="pr-level" points="0,9 4,4 8,6 12,2"/>'), label: T.precipLevel },
+    p.gaps > 0 && { note: `${p.gaps} ${plural(p.gaps, 'break')} — ${T.precipGap}` },
+    { note: `Σ ${p.sumMm} mm · max ${p.maxCol} mm — ${T.precipSameRow}` },
+    { note: p.km2 != null
+      ? `${T.precipMean}: ${p.n} ${plural(p.n, 'gauge')} over ${p.km2} km² (${p.nUpstream} ${plural(p.nUpstream, 'gauge')} upstream)`
+      : `${T.precipMean}: ${p.n} ${plural(p.n, 'gauge')} — ${T.precipNoArea}` },
+    { note: T.precipNested },
+    { note: T.precipTwoClocks },
+    p.align && { note: p.align },
+    { note: `${T.precipUnits} — mm/d, ${p.unit}` },
+    p.n <= 3 && { note: `${T.precipThin} (${p.n})`, warn: true },
+    { note: `${T.precipEdge} ${rainDayISO(p.to)}` },
+  ]);
+  return head + `<div class="precip-wrap">${chart}</div>${key}</section>`;
+}
+
+// RESPONSE: what the rain did to the level, as the mirror's own record says.
+// Two estimators live here and the key has to keep them apart — the bars are a
+// correlation, the sentence is a slope.
+function responseViewModel() {
+  const p = state.precip;
+  if (!p || p.reason) return null;
+  const r = p.response;
+  if (!r) return { empty: true, reason: T.respMissing };
+  if (r.peakLag == null && r.events.risePer10mm == null) return { empty: true, reason: r.reason || T.respMissing };
+  const lags = (r.lags || []).map(l => ({ ...l, r: l.r == null ? 0 : l.r }));
+  const max = Math.max(0.2, ...lags.map(l => Math.abs(l.r)));
+  return {
+    empty: false, lags, max, peakLag: r.peakLag, rPeak: r.rPeak, nPeak: r.nPeak,
+    rise: r.events.risePer10mm, events: r.events.n, threshold: r.events.thresholdMm,
+    align: r.align || '', unit: (r.unit && r.unit.rise) || 'per 10 mm areal rain',
+    weak: r.rPeak != null && Math.abs(r.rPeak) < 0.2, thin: r.nPeak > 0 && r.nPeak < 30,
+  };
+}
+
+function renderResponse(r) {
+  if (!r) return '';
+  const head = `<section class="p-block"><h2 class="p-h2">${esc(T.response)}</h2>`;
+  if (r.empty) return head + `<p class="p-dim">${esc(r.reason)}</p></section>`;
+  const W = 320, H = 84, mid = H / 2, cw = W / r.lags.length;
+  const parts = [`<line class="rs-zero" x1="0" y1="${mid}" x2="${W}" y2="${mid}"/>`];
+  r.lags.forEach((l, i) => {
+    const x = i * cw + cw * 0.18, w = cw * 0.64;
+    const h = Math.abs(l.r) / r.max * (mid - 6);
+    // sign on the hue AND on the side of zero the bar grows from: two marks of
+    // one family separate by kind, not by shade
+    const cls = l.r < 0 ? 'rs-neg' : 'rs-bar';
+    const y = l.r < 0 ? mid : mid - h;
+    parts.push(`<rect class="${cls}" x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${w.toFixed(1)}" height="${Math.max(0.8, h).toFixed(1)}"/>`);
+    if (l.lag === r.peakLag) {
+      // a cap on the bar's outer edge, drawn as a STROKE: a filled triangle in a
+      // preserveAspectRatio="none" viewBox is stretched 3.6x horizontally and
+      // barely at all vertically, which flattens it into a sliver nobody sees
+      const ty = l.r < 0 ? mid + h : mid - h;
+      parts.push(`<line class="rs-peak" x1="${x.toFixed(1)}" y1="${ty.toFixed(1)}" x2="${(x + w).toFixed(1)}" y2="${ty.toFixed(1)}"/>`);
+    }
+  });
+  const chart = svgWrap(`0 0 ${W} ${H}`, parts.join(''),
+    ' class="chart response" preserveAspectRatio="none" role="img"' +
+    attr('aria-label', `${T.response}: correlation per lag 0 to 7 days, peak at lag ${r.peakLag}`));
+  const axis = `<div class="rs-axis">` +
+    r.lags.map(l => `<span>${l.lag}</span>`).join('') + '</div>';
+  const say = r.rise != null && r.peakLag != null
+    ? `<p class="say">${esc(`+${r.rise} ${r.unit}, ${T.respPeakAt} ${r.peakLag} (${r.events} ${plural(r.events, 'event')} ≥ ${r.threshold} mm)`)}</p>`
+    : `<p class="p-dim">${esc(T.respNoSlope)}</p>`;
+  const key = plateKey([
+    { sw: keySw('<rect class="rs-bar" x="3" y="2" width="6" height="8"/>'), label: T.respPos },
+    { sw: keySw('<rect class="rs-neg" x="3" y="2" width="6" height="8"/>'), label: T.respNeg },
+    { sw: keySw('<line class="rs-zero" x1="0" y1="6" x2="12" y2="6"/>'), label: T.respZero },
+    { sw: keySw('<rect class="rs-bar" x="3" y="4" width="6" height="6"/><line class="rs-peak" x1="3" y1="3.5" x2="9" y2="3.5"/>'), label: T.respPeak },
+    { note: T.respTwoEstimators },
+    r.align && { dd: esc(r.align) },
+    r.rPeak != null && { note: `r = ${r.rPeak.toFixed(2)} over ${r.nPeak} ${plural(r.nPeak, 'day')}` },
+    r.weak && { note: T.respWeak, warn: true },
+    r.thin && { note: T.respThin, warn: true },
+  ]);
+  return head + `<div class="resp-wrap">${chart}${axis}</div>${say}${key}</section>`;
+}
+
 // ---------- neighbours ----------
 
 function profileViewModel() {
@@ -4360,7 +4760,10 @@ function renderStation(vm) {
     ? `<section class="p-block readout"><p class="say">${insightSentence(u, vm.value)}</p>` +
       `<p class="terse">${esc(unusualText(u, false))}</p></section>`
     : '';
-  return `<section class="plate">${vh}${head}${scene}${renderHistory(vm.history)}${readout}${renderProfile(vm.profile)}</section>`;
+  // rain first, then what it did: the reader has just been told what the level
+  // is doing, and PRECIPITATION is the only block on the plate that answers why
+  return `<section class="plate">${vh}${head}${scene}${renderHistory(vm.history)}${readout}` +
+    `${renderPrecip(precipViewModel())}${renderResponse(responseViewModel())}${renderProfile(vm.profile)}</section>`;
 }
 
 // ---------- river profile renderer ----------
@@ -5233,6 +5636,101 @@ function renderWave(vm) {
     // ignores a width set on the cell itself
     `<colgroup><col class="c-name"></colgroup><tbody>${rows}</tbody></table></div>` +
     `<div class="pf-flow"><span>↓ ${esc(T.downstream)}</span><span>${esc(T.timeRight)} →</span></div>` +
+    key + '</section>';
+}
+
+// ---------- ?rain: rainfall per basin, day by day ----------
+
+// The ramp is FIXED in mm, from the quantiles the collector measured over its
+// own 90-day window — unlike WAVE, whose every row is scaled to its own gauge.
+// A wet week must look wet next to a dry one, and a per-window rescale would
+// make every window look the same.
+function precipBin(mm, bins) {
+  if (mm == null) return -1;
+  if (!Array.isArray(bins) || bins.length < 3) return mm > 0 ? 2 : 0;
+  return mm <= bins[0] ? 0 : mm <= bins[1] ? 1 : mm <= bins[2] ? 2 : 3;
+}
+
+function rainViewModel() {
+  const d = state.rain && state.rain.data;
+  if (!d || !Array.isArray(d.basins)) return null;
+  const have = d.window && d.window.days ? d.window.days : (d.basins[0] ? d.basins[0].mm.length : 0);
+  const days = Math.min(rainDays, have);
+  const start = have - days;
+  const to = d.window ? rainDayNum(d.window.to) : null;
+  const dayAt = i => (to == null ? null : to - (days - 1 - i));
+  const rows = d.basins.map(b => ({
+    no: b.no, name: b.name || b.no, river: b.river || null,
+    set: b.set || 0, gauges: b.gauges || 0, km2: b.km2 ?? null,
+    sum7: b.sum7 ?? null, n7: b.n7 ?? 0,
+    cells: b.mm.slice(start).map((mm, i) => {
+      const iso = dayAt(i) == null ? '' : rainDayISO(dayAt(i));
+      return { bin: precipBin(mm, d.bins), mm,
+        label: mm == null
+          ? `${b.name}, ${iso}: ${T.rainNoDay}`
+          : `${b.name}, ${iso}: ${mm} mm` };
+    }),
+  }));
+  const months = [];
+  for (let i = 0; i < days; i++) {
+    const n = dayAt(i);
+    if (n == null) continue;
+    const dt = new Date(n * 864e5);
+    if (dt.getUTCDate() === 1) months.push({ i, label: MONTH_ABBR[dt.getUTCMonth()] });
+  }
+  return {
+    kind: 'rain', days, rows, months, bins: d.bins || [],
+    from: to == null ? '' : rainDayISO(to - days + 1), to: to == null ? '' : rainDayISO(to),
+    exportAt: d.sourceExportAt || null, align: d.align || '',
+    summary: screenSummary(),
+  };
+}
+
+function renderRain(vm) {
+  if (!vm) return '';
+  const vh = `<p class="vh">${esc(vm.summary)}</p>`;
+  const head = `<header class="p-head"><h1>${esc(T.rainTitle)}</h1>` +
+    `<p class="p-sub">${esc(T.rainSub)}</p></header>`;
+  const ctl = ctlRow(T.showLabel, RAIN_WINDOWS.map(n => ({
+    t: 'cmd:rw:' + n, label: n + 'D', on: n === rainDays,
+    title: `${n} ${T.precipDays} — the collector's window is 90`,
+  })), 'rain range');
+  const cols = vm.months.map(m =>
+    `<span${attr('style', `left:${((m.i + 0.5) / Math.max(1, vm.days) * 100).toFixed(2)}%`)}>${esc(m.label)}</span>`).join('');
+  const rows = vm.rows.map(r => {
+    const label = `${r.name} — ${r.set} ${plural(r.set, 'rain gauge')}, ${r.gauges} ${plural(r.gauges, 'gauge')}`;
+    const nameCell = r.river
+      ? `<a${navAttrs('river:' + r.river)}${attr('title', label)}>${esc(r.name)}</a>`
+      : `<span class="nolink"${attr('title', `${label} — ${T.rainNoRiver}`)}>${esc(r.name)}</span>`;
+    return `<tr><th scope="row">${nameCell}</th>` +
+      r.cells.map(c => `<td class="${c.bin < 0 ? 'nd' : 'b' + c.bin}"${attr('title', c.label)}><span class="vh">${esc(c.label)}</span></td>`).join('') +
+      `<td class="rsum"${attr('title', r.n7 ? `${r.n7} ${plural(r.n7, 'day')}` : T.rainNoDay)}>` +
+      `${esc(r.sum7 == null ? '—' : String(r.sum7))}</td></tr>`;
+  }).join('');
+  const b = vm.bins;
+  const rampLabel = b.length >= 3
+    ? `${T.rainRamp}: ≤${b[0]} · ≤${b[1]} · ≤${b[2]} · >${b[2]} mm`
+    : T.rainRamp;
+  const key = plateKey([
+    { sw: [0, 1, 2, 3].map(x => keyChip('b' + x)).join(''), label: rampLabel },
+    { sw: keyChip('nd'), label: T.rainNoDay },
+    { note: T.rainSum7 },
+    { note: T.rainFixedRamp },
+    { note: T.rainBasinNotCatchment },
+    vm.align && { dd: esc(vm.align) },
+    { note: `${T.precipEdge} ${vm.to}` },
+    { note: T.rainNoRiverKey },
+    { note: `${vm.from} → ${vm.to}` },
+  ]);
+  return `<section class="plate">${vh}${head}${ctl}` +
+    `<div class="wave-wrap rain-wrap"><div class="wave-months">${cols}</div>` +
+    `<table class="heat rain"><caption class="vh">${esc(T.rainTitle)}</caption>` +
+    `<colgroup><col class="c-name"><col span="${vm.days}"><col class="c-sum"></colgroup>` +
+    `<thead><tr><th scope="col" class="vh">${esc(T.rainBasin)}</th>` +
+    `<th scope="col" class="vh" colspan="${vm.days}">${esc(T.rainDaysCol)}</th>` +
+    `<th scope="col" class="rsum-h">${esc(T.rainSum7Col)}</th></tr></thead>` +
+    `<tbody>${rows}</tbody></table></div>` +
+    `<div class="pf-flow"><span>${esc(T.rainBasins)}</span><span>${esc(T.timeRight)} →</span></div>` +
     key + '</section>';
 }
 
@@ -6407,7 +6905,7 @@ function setView(v, push = true) {
 
 // controls shared by the in-grid targets (data-st="cmd:…") and the bar chips
 function runGridCmd(c) {
-  if (c === 'retry') { state.error = null; scheduleRender(); if (mode === 'station') loadData(); else if (mode === 'river') loadRiver(); else if (mode === 'rising') loadRising(); else if (mode === 'total') loadTotal(); }
+  if (c === 'retry') { state.error = null; scheduleRender(); if (mode === 'station') loadData(); else if (mode === 'river') loadRiver(); else if (mode === 'rising') loadRising(); else if (mode === 'total') loadTotal(); else if (mode === 'rain') { state.rain = null; loadRain(); } }
   else if (c === 'live') setView('live');
   else if (c === 'wave') setView('wave');
   else if (c === 'years') setView('years');
@@ -6431,6 +6929,7 @@ function runGridCmd(c) {
   } else if (c === 'tall') totalSetZoom(null, null, null);
   else if (c === 'tsum') totalSetDiff(false);
   else if (c === 'tdiff') totalSetDiff(true);
+  else if (c.startsWith('rw:')) rainSetDays(+c.slice(3));
 }
 
 // ---------- station prompt ----------
@@ -6501,6 +7000,7 @@ function switchStation(name, adsb, push = true) {
   state.archiveSource = null;
   state.feed = null;        // the loader that answers says what fed it
   state.lanuk = null;
+  state.precip = null;      // the areal rain belongs to the gauge that was left
   state.neighborsNote = null;
   state.lowIsMeanUntil = null;
   state.archive = loadArchive(station);
@@ -6686,6 +7186,73 @@ function switchTotal(push = true) {
   loadTotal();
 }
 
+// ---------- ?rain: the mirror's basin-by-day rainfall ----------
+
+// One file, already aggregated: the plate recomputes none of it. A window this
+// wide over 16 basins would otherwise be 300 shard fetches and a second
+// estimator to keep in step with the collector's.
+async function loadRain() {
+  if (state.rain && state.rain.data) return; // a daily export moves once a day
+  try {
+    const data = await getJson(`${LANUK_BASE}precip/overview.json`);
+    if (mode !== 'rain') return;
+    state.rain = { data, error: null };
+  } catch (e) {
+    if (mode !== 'rain') return;
+    state.rain = { data: null, error: `the rainfall overview isn't mirrored yet: ${e.message}` };
+  }
+  scheduleRender();
+  setScreenAria();
+}
+
+function rainSetDays(n) {
+  if (!RAIN_WINDOWS.includes(n) || n === rainDays) return;
+  rainDays = n;
+  // pushState, not replace: the window IS the view here, and going back from
+  // 90D has to land on 30D rather than leave the mode
+  history.pushState(null, '', rainQuery());
+  applyRainChrome();
+  scheduleRender();
+  setScreenAria();
+}
+
+function switchRain(push = true) {
+  dismissHelp();
+  dismissSuggest();
+  if (mode === 'rain') { // already here: only the window may have moved (popstate)
+    applyRainChrome();
+    scheduleRender();
+    setScreenAria();
+    return;
+  }
+
+  mode = 'rain';
+  viewMode = 'live';
+  state.feed = null; // no feed of its own; never inherit a mirrored plate's
+  state.river = null;
+  state.riverStations = null;
+  state.gauge = null;
+  state.error = null;
+  waveData = null;
+
+  if (push) history[push === 'replace' ? 'replaceState' : 'pushState'](null, '', rainQuery());
+  applyRainChrome();
+  applyModeChrome();
+  scheduleRender();
+  setScreenAria();
+  if (document.startViewTransition && !reduceMotion.matches) {
+    const vt = document.startViewTransition(renderNow);
+    vt.ready.catch(() => {});
+    vt.finished.catch(() => {});
+  }
+
+  stationInput.value = '';
+  riverInput.value = '';
+  clearInterval(refreshTimer);
+  // no refresh interval: a daily export has nothing to poll for
+  loadRain();
+}
+
 function dismissHelp() {
   if (!state.help) return;
   state.help = null;
@@ -6719,6 +7286,7 @@ function parseCommand(raw) {
     else if (flag === 'rivers') cmd.rivers = true; // plural: the map, not one river
     else if (flag === 'rising') cmd.rising = true;
     else if (flag === 'total') cmd.total = true;
+    else if (flag === 'rain') cmd.rain = true;
     else if (flag === 'view') cmd.view = value.toLowerCase();
     else if (flag === 'help') cmd.help = true;
     else if (flag === 'export') cmd.export = true;
@@ -6740,7 +7308,7 @@ function helpText(unknownFlag) {
     '',
     'SYNOPSIS',
     '    > pegel [STATION] [--station NAME] [--river NAME] [--rivers] [--rising]',
-    '            [--total] [--adsb URL] [--ais URL] [--history RANGE] [--view MODE]',
+    '            [--total] [--rain] [--adsb URL] [--ais URL] [--history RANGE] [--view MODE]',
     '            [--export] [--clear] [--info] [--help]',
     '',
     'OPTIONS',
@@ -6752,6 +7320,8 @@ function helpText(unknownFlag) {
     '                      (the 1D/7D chips move the baseline a week back, ?rising&d7)',
     '    --total           every river summed and stacked over the years; zoom to a day',
     '                      (the Σ/Δ chips switch to net daily change, ?total&diff)',
+    '    --rain            rainfall per NRW basin, day by day, from the LANUK mirror',
+    '                      (the 30D/60D/90D chips widen the window, ?rain&w=90)',
     '    --adsb URL        set your local ADS-B receiver URL; no value clears it',
     '    --ais URL         set your local AIS receiver URL (AIS-catcher); no value clears it',
     `    --history RANGE   set the history window: ${HISTORY_PRESETS.map(p => p.k).join(' ')} (default ${HISTORY_DEFAULT})`,
@@ -6790,6 +7360,7 @@ function runCommand(raw) {
   if (cmd.rising) switchRising();
   else if (cmd.rivers) switchRivers();
   else if (cmd.total) switchTotal();
+  else if (cmd.rain) switchRain();
   else if (cmd.river !== undefined) switchRiver(cmd.river);
   else if (cmd.station !== undefined || cmd.adsb !== undefined) switchStation(cmd.station, cmd.adsb);
   if (cmd.history !== undefined && HISTORY_PRESETS.some(p => p.k === cmd.history)) setHistory(cmd.history);
@@ -7062,6 +7633,7 @@ function actOnGridTarget(st) {
   else if (st === 'rising') switchRising();
   else if (st === 'rivers') switchRivers();
   else if (st === 'total') switchTotal();
+  else if (st === 'rain') switchRain();
   else switchStation(st, adsbInput.value);
 }
 // Plate targets are real links/buttons: one delegated handler (app bar, crumbs,
@@ -7102,7 +7674,7 @@ const KEYMAP = [
   ['Esc', 'close the manual or a dialog · zoom out of ?total · leave a sub-view'],
   ['1…0', 'history range, 24H through ALL'],
   ['[  ]', 'the next gauge downstream / upstream on this river'],
-  ['g', 'the gauge · m the map · r who\u2019s rising · t the totals'],
+  ['g', 'the gauge · m the map · r who\u2019s rising · t the totals · p the rain'],
   ['a', 'absolute / anomaly heat · w profile / wave · d sum / change'],
   ['. ', 'copy this view\u2019s link'],
 ];
@@ -7158,6 +7730,7 @@ document.addEventListener('keydown', e => {
   if (k === 'm') { e.preventDefault(); switchRivers(); return; }
   if (k === 'r') { e.preventDefault(); switchRising(); return; }
   if (k === 't') { e.preventDefault(); switchTotal(); return; }
+  if (k === 'p') { e.preventDefault(); switchRain(); return; }
   if (k === 'a' && viewMode === 'years') { e.preventDefault(); runGridCmd(histMode === 'abs' ? 'anom' : 'abs'); return; }
   if (k === 'w' && mode === 'river') { e.preventDefault(); setView(viewMode === 'wave' ? 'live' : 'wave'); return; }
   if (k === 'd' && mode === 'total') { e.preventDefault(); totalSetDiff(!totalDiff); return; }
@@ -7170,6 +7743,7 @@ window.addEventListener('popstate', () => {
   if (p.has('rising')) { risingSetDays(p.has('d7') ? 7 : 1, false); switchRising(false); }
   else if (p.has('rivers')) switchRivers(false);
   else if (p.has('total')) { totalSyncFromUrl(p); switchTotal(false); }
+  else if (p.has('rain')) { rainSyncFromUrl(p); switchRain(false); }
   else if (p.get('river')) switchRiver(p.get('river'), false);
   // NOT `|| ''` — switchStation reads an empty string as the documented
   // "clear my receiver" gesture, so stepping back onto any entry without
@@ -7283,6 +7857,8 @@ function fillDatalist(list) {
 const lanukWaters = new Map(); // UPPERCASE water -> [lanuk ids on it]
 const wsvWaters = new Set();   // the waters the PEGELONLINE list names
 let lanukManifestInfo = null;  // { generated, sourceExportAt, license, window } of the mirror
+let lanukPrecipIndex = null;   // manifest.precip: <no> -> { n, up, series, why? }
+let lanukPrecipEdge = null;    // manifest.coverage.precip.lastRainDay: the right edge every rain plate hangs on
 let lanukManifestP = null;     // Promise<manifest|null>, one fetch per session (see lanukIndex)
 const numOrNull = v => (typeof v === 'number' && Number.isFinite(v) ? v : null);
 
@@ -7292,6 +7868,14 @@ function mergeLanukIndex(m) {
     generated: m.generated || null, sourceExportAt: m.sourceExportAt || null,
     license: m.license || null, window: m.window || null,
   };
+  // which gauges have a baked areal-rain product, and why the others do not.
+  // Read before any /precip/ fetch, so a gauge without one costs no request and
+  // the plate can name the reason instead of showing an empty box.
+  lanukPrecipIndex = m.precip || null;
+  // the newest rain day with a READING — not window.rain.to, which names the
+  // newest day the SOURCE offers and is always half a day short (the export
+  // runs mid-afternoon, a rain day starts at 07:00)
+  lanukPrecipEdge = (m.coverage && m.coverage.precip && m.coverage.precip.lastRainDay) || null;
   let added = 0;
   for (const [no, g] of Object.entries(m.gauges)) {
     if (!g || g.noSeries || g.empty) continue; // a temperature-only site, or an advertised series without a value, is not a gauge here
@@ -8051,6 +8635,17 @@ function render() {
     setSourceLine(vm.source);
     return;
   }
+  if (mode === 'rain') {
+    if (state.rain && state.rain.error) return setScreenError(state.rain.error);
+    if (!state.rain) return setScreenLoading(T.loadRain);
+    const vm = rainViewModel();
+    if (!vm) return setScreenError(T.rainUnreadable);
+    setScreenPlate(renderRain(vm));
+    // no live feed on this source, ever: the foot says so rather than leaving
+    // the reader to assume the newest column is this morning
+    setSourceLine(`${LANUK} · ${T.rainMirrored} ${vm.exportAt ? String(vm.exportAt).slice(0, 10) : '—'} · ${T.rainDayStart} · ${T.noLiveFeed}`);
+    return;
+  }
   if (mode === 'river') {
     if (state.error) return setScreenError(state.error);
     if (!state.riverStations) return setScreenLoading(`${T.loadRiver} ${state.river}…`);
@@ -8142,6 +8737,11 @@ if (mode === 'rivers') {
   stationInput.value = '';
   setScreenAria();
   loadTotal(); // no refresh interval — the aggregate moves once a day at most
+} else if (mode === 'rain') {
+  applyModeChrome();
+  stationInput.value = '';
+  setScreenAria();
+  loadRain(); // no refresh interval — a daily export has nothing to poll for
 } else if (mode === 'river') {
   state.river = new URLSearchParams(location.search).get('river').toUpperCase();
   applyRiverChrome();
