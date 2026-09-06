@@ -7433,7 +7433,9 @@ stationInput.addEventListener('focus', loadStationList, { once: true });
 // handler — no per-button listeners needed
 // preload shortly after first paint — requestIdleCallback never fires under the
 // 120 ms render loop, so it would starve indefinitely
-setTimeout(loadStationList, 600);
+// the WSV lists only: the LANUK index stays lazy (finder, map, a typed name,
+// a 404 of the live API) — a WSV station page never fetches the mirror
+setTimeout(() => { ensureStationList(); ensureWaterList(); }, 600);
 
 // ---------- recent stations (quick-switch chips) ----------
 
