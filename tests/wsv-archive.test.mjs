@@ -24,7 +24,7 @@ const CURRENT_YEAR = 2026;
 const {
   condense, daysInYear, buildManifest, freezeFromZip, healRunningYearFromZip, fetchRawRange,
   requestEnd, lastYearOf, planChunks, dropSpillYears,
-  writeStation, graduateCompletedYear, hasClosedYears,
+  writeStation, graduateCompletedYear, hasClosedYears, markNoArchive, clearNoArchive,
   PLAUSIBLE_MIN_CM, PLAUSIBLE_MAX_CM,
   failureVerdict, reportRunOutcome,
 } = await import('../scripts/fetch-wsv-archive.mjs');
@@ -337,6 +337,71 @@ test('hasClosedYears: only a bundle with years counts as "WSV archived this gaug
   assert.equal(hasClosedYears(dir), false, 'an empty bundle is not a history');
   writeFileSync(join(dir, 'closed.json'), JSON.stringify([{ y: 2024, min: [1], max: [2] }]));
   assert.equal(hasClosedYears(dir), true);
+});
+
+// The verdict "WSV has no ZIP archive for this gauge" used to be logged and
+// dropped, so buildManifest re-derived it from the file listing and the weekly
+// REST refresh erased it by simply succeeding. These four pin the fact where it
+// cannot be argued away.
+test('markNoArchive records the verdict without disturbing the rest of meta.json', () => {
+  const dir = tmp('pegel-noarchive-');
+  writeFileSync(join(dir, 'meta.json'), JSON.stringify({ name: 'Neuwied Stadt', fetchedThrough: 0 }));
+  markNoArchive(dir);
+  const meta = JSON.parse(readFileSync(join(dir, 'meta.json'), 'utf8'));
+  assert.equal(meta.noArchive, true);
+  assert.equal(meta.name, 'Neuwied Stadt', 'the name survives');
+  assert.equal(meta.fetchedThrough, 0, 'and the resume marker with it');
+});
+
+test('markNoArchive works on a gauge that has no meta.json yet', () => {
+  const dir = join(tmp('pegel-noarchive-bare-'), 'never-written');
+  markNoArchive(dir);
+  assert.equal(JSON.parse(readFileSync(join(dir, 'meta.json'), 'utf8')).noArchive, true);
+});
+
+test('clearNoArchive withdraws it, and is a no-op where it never stood', () => {
+  const dir = tmp('pegel-noarchive-clear-');
+  writeFileSync(join(dir, 'meta.json'), JSON.stringify({ name: 'BONN', noArchive: true, fetchedThrough: 2025 }));
+  clearNoArchive(dir);
+  const meta = JSON.parse(readFileSync(join(dir, 'meta.json'), 'utf8'));
+  assert.equal('noArchive' in meta, false, 'the key is gone, not falsified');
+  assert.equal(meta.fetchedThrough, 2025);
+  clearNoArchive(dir); // twice is fine
+  assert.equal(JSON.parse(readFileSync(join(dir, 'meta.json'), 'utf8')).fetchedThrough, 2025);
+  const bare = tmp('pegel-noarchive-none-');
+  clearNoArchive(bare); // no meta.json at all must not throw or create one
+});
+
+// The trap this whole fix turns on: --current reaches these gauges over REST
+// every Monday and succeeds. If a successful WRITE cleared the marker, it would
+// be gone again seven days after every gap sweep set it. writeStation is the
+// one path --current takes, so writeStation must leave the marker alone.
+test('a REST refresh writing a running year does NOT withdraw the noArchive verdict', () => {
+  const dir = tmp('pegel-noarchive-rest-');
+  markNoArchive(dir);
+  const years = new Map([[CURRENT_YEAR, {
+    min: Array(daysInYear(CURRENT_YEAR)).fill(null).map((_, i) => (i === 5 ? 10 : null)),
+    max: Array(daysInYear(CURRENT_YEAR)).fill(null).map((_, i) => (i === 5 ? 20 : null)),
+  }]]);
+  writeStation(dir, 'Neuwied Stadt', years, null, 0); // exactly the --current call shape
+  assert.equal(JSON.parse(readFileSync(join(dir, 'meta.json'), 'utf8')).noArchive, true,
+    'REST success says nothing about the ZIP archive and must not clear the marker');
+});
+
+test('buildManifest surfaces the noArchive verdict beside the year range, not instead of it', () => {
+  const out = tmp('pegel-noarchive-manifest-');
+  mkdirSync(join(out, 'uuid-rest'));
+  writeFileSync(join(out, 'uuid-rest', 'current.json'),
+    JSON.stringify({ y: CURRENT_YEAR, min: [5], max: [7] }));
+  writeFileSync(join(out, 'uuid-rest', 'meta.json'),
+    JSON.stringify({ name: 'Neuwied Stadt', noArchive: true }));
+  const m = buildManifest([
+    { uuid: 'uuid-rest', shortname: 'Neuwied Stadt', water: { shortname: 'RHEIN' } },
+  ], out);
+  assert.deepEqual(m.stations['uuid-rest'],
+    { n: 'Neuwied Stadt', w: 'RHEIN', from: CURRENT_YEAR, to: CURRENT_YEAR, noArchive: true },
+    'the running year stays reachable AND the missing archive is named');
+  assert.equal(m.stations['uuid-rest'].none, undefined, 'it is not `none` — there are days to draw');
 });
 
 test('healRunningYearFromZip: an empty ZIP year changes nothing', () => {

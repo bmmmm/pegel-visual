@@ -33,7 +33,7 @@ SINK="$REPO/tmp-forecast/hires-branch"
 SINK_URL="https://github.com/bmmmm/pegel-visual.git"
 SINK_BRANCH=hires
 
-for tool in node git gh rsync; do
+for tool in node git gh rsync curl; do
   command -v "$tool" >/dev/null 2>&1 || { printf 'collect-hires.sh: %s not on PATH (%s)\n' "$tool" "$PATH" >&2; exit 1; }
 done
 
@@ -90,6 +90,33 @@ sink_push() {
   git -C "$SINK" push --quiet github "HEAD:$SINK_BRANCH"
   printf 'sink: pushed %s\n' "$(git -C "$SINK" rev-parse --short HEAD)"
 }
+
+# RunAtLoad fires at login, often before the network is up: on 2026-09-05 the
+# FritzBox had been without DNS for 18 h and all eight stations failed within
+# one second. So wait for the API at the edge — not inside eight stations, and
+# not by retrying in Node. HEAD, not GET: the server ignores `limit=1`, and a
+# GET pulls the whole 260 KB station list, which a slow link fails inside the
+# timeout (review 2026-09-06). Ten minutes of sleeps, plus the probe timeouts.
+# The env overrides let tests/collect-hires.test.mjs drive the loop in seconds.
+NET_PROBE_URL="${NET_PROBE_URL:-https://www.pegelonline.wsv.de/webservices/rest-api/v2/stations.json?limit=1}"
+NET_WAIT_MAX="${NET_WAIT_MAX:-600}"
+NET_WAIT_STEP="${NET_WAIT_STEP:-30}"
+waited=0
+until probe_err="$(curl -sSfI -o /dev/null --max-time 10 "$NET_PROBE_URL" 2>&1)"; do
+  if (( waited == 0 )); then
+    printf '%s waiting for the network: %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$probe_err"
+  fi
+  if (( waited >= NET_WAIT_MAX )); then
+    printf '%s network unreachable for %ss, giving up: %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$waited" "$probe_err" >&2
+    report failed "hires collect skipped: network unreachable for ${waited}s, nothing on disk touched"
+    exit 1
+  fi
+  sleep "$NET_WAIT_STEP"
+  waited=$(( waited + NET_WAIT_STEP ))
+done
+if (( waited > 0 )); then
+  printf '%s network back after %ss\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$waited"
+fi
 
 printf '%s collect-hires start\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 if ! out="$(node scripts/forecast/collect-hires.mjs 2>&1)"; then

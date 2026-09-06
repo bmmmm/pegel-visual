@@ -95,7 +95,12 @@
     white-space: pre-wrap;
     overflow-x: auto;
   }
-  #screen { view-transition-name: screen; }
+  /* No view-transition-name on #screen. A named group is sized to the NEW
+     state, and a switch renders the short connecting screen first: Firefox
+     then squeezed the old plate (1382 px) and the chart that landed mid-fade
+     into that 224 px box for 0.35 s (measured 2026-09-06; Chrome does the
+     same to the old plate, more mildly). The root cross-fade below is
+     viewport-sized in both states and cannot stretch anything. */
   /* visually hidden, still spoken: the plate's prose summary for screen readers */
   .vh {
     position: absolute;
@@ -119,7 +124,7 @@
     #screen .heat td a, #screen .heat td button,
     #screen .heat th a, #screen .heat th button { min-block-size: 1.5rem; }
   }
-  ::view-transition-old(screen), ::view-transition-new(screen) { animation-duration: 0.35s; }
+  ::view-transition-old(root), ::view-transition-new(root) { animation-duration: 0.35s; }
   form {
     margin-top: 1.4em;
     padding-top: 1em;
@@ -3142,7 +3147,10 @@ const T = {
   yearsHeat: 'MONTHLY HEAT',
   yearsHeatCap: 'monthly mean water level by year',
   yearsHint: 'Pick a month cell for its hard numbers.',
-  yearsNoArchive: 'WSV keeps no multi-year archive for this gauge',
+  // one sentence, two plates (history + years). It used to be a T entry here
+  // and a byte-identical inline literal in historyViewModel; a mark that means
+  // the same thing in two places has to change in one.
+  noArchive: 'WSV keeps no multi-year archive for this gauge',
   yearsGrows: 'The local archive also grows with every visit.',
   yearsRange: 'LONG-TERM MONTHLY RANGE',
   yearsRangeThin: 'Needs at least one completed year — the archive reaches back decades:',
@@ -3968,7 +3976,17 @@ function historyViewModel() {
   const coveredDays = (Date.now() - arch[0][0]) / 864e5;
   let note = null;
   if (wd && coveredDays < wd * 0.8 && state.repoArchive === 'none') {
-    note = { kind: 'none', text: 'WSV keeps no multi-year archive for this gauge' };
+    note = { kind: 'none', text: T.noArchive };
+  } else if (wd && coveredDays < wd * 0.8 && state.repoArchive === 'rest-only') {
+    // WSV archives nothing for this gauge, but the hosted running year still
+    // carries what our own REST accumulation caught — so the window is short
+    // for a reason that will never resolve, and saying "import the archive"
+    // (the branch below) would promise an import that cannot deliver. The date
+    // comes from the FULL archive, not the windowed slice: on a 24H view
+    // arch[0][0] is yesterday, which is not when the record starts.
+    const first = state.archive.length ? state.archive[0][0] : arch[0][0];
+    note = { kind: 'rest-only',
+      text: `${T.noArchive} — this record starts ${new Date(first).toISOString().slice(0, 10)} and only grows forward` };
   } else if (wd && coveredDays < wd * 0.8) {
     note = { kind: 'short', text: `covers ${Math.round(coveredDays)} days so far — ` +
       ((state.feed && state.feed.reachNote) || 'import the WSV archive below') };
@@ -4164,7 +4182,9 @@ function renderHistory(h) {
     `<span class="lo">${esc(levelWithUnit(min, unit))}</span></div>`;
   const refs = h.marks.map(m => `<b>${esc(m.key)}</b> ${esc(fmtLevel(m.cm, unit))}`).join(' · ');
   const key = plateKey([
-    { sw: keySw('<polyline class="h-line" points="0,9 4,4 8,6 12,2"/>'), label: T.histDaily },
+    // line AND the water body under it: one mark of two classes, so the fill the
+    // chart draws under every reading is named here too (legend gate, 2026-09-06)
+    { sw: keySw('<polygon class="h-fill" points="0,9 4,4 8,6 12,2 12,12 0,12"/><polyline class="h-line" points="0,9 4,4 8,6 12,2"/>'), label: T.histDaily },
     h.banded && { sw: keySw('<polygon class="h-band" points="0,3 12,1 12,8 0,10"/>'), label: T.histBand },
     refs && { sw: keySw('<line class="href-line" x1="0" y1="6" x2="12" y2="6"/>'), html: refs },
     h.gaps > 0 && { sw: keySw('<polyline class="h-line" points="0,8 3,5"/><polyline class="h-line" points="9,6 12,3"/>'),
@@ -4724,8 +4744,11 @@ function yearsViewModel() {
     source: `${archiveSource()} daily archive · unvalidated raw data`, thin: false };
   if (st.daily.length < HIST_MIN_DAYS) {
     vm.thin = true;
-    vm.reason = state.repoArchive === 'none'
-      ? T.yearsNoArchive
+    // 'rest-only' means the same thing here as 'none': there is no multi-year
+    // archive to wait for. Only the history plate cares about the difference
+    // (one gauge has days to draw, the other has nothing at all).
+    vm.reason = state.repoArchive === 'none' || state.repoArchive === 'rest-only'
+      ? T.noArchive
       : `not enough history yet — fetching the ${archiveSource()} archive…`;
     return vm;
   }
@@ -7544,7 +7567,15 @@ async function loadRepoArchive() {
   const entry = (await loadRepoManifest() || {})[key];
   if (station !== forStation) return; // switched away while the manifest loaded
   if (entry) {
-    state.repoArchive = entry.none ? 'none' : 'available';
+    // three states, not two. `none` = nothing on disk at all, so the year
+    // fetches below are pointless. `noArchive` = WSV has no ZIP archive for
+    // this gauge (its prepare-download answers 303 to the error page), but the
+    // hosted running year still holds what our own REST accumulation caught —
+    // ~111 lock, weir and foreign gauges, Neuwied Stadt among them. Collapsing
+    // that into `none` would skip the fetch and blank a chart that has 56 real
+    // days to draw; collapsing it into `available` is what told readers to
+    // "import the WSV archive below" for months.
+    state.repoArchive = entry.none ? 'none' : entry.noArchive ? 'rest-only' : 'available';
     state.archiveSource = entry.source || null;
     scheduleRender();
     if (entry.none) return; // known gap — skip the pointless fetches
@@ -7767,7 +7798,10 @@ function buildReportSections(note) {
   const archive = [
     `- history range: ${historyKey}`,
     `- points in local archive: ${state.archive.length}`,
-    `- hosted archive loaded: ${state.repoArchive === 'available'}${state.repoArchive === 'available' ? ` (source: ${archiveSource()})` : ''}`,
+    // the raw state, not a boolean: 'none', 'rest-only' and "manifest still
+    // loading" all used to report `false` here, so a bug report could not say
+    // whether a gauge has no archive or simply had not finished fetching one
+    `- hosted archive: ${state.repoArchive || 'not resolved'}${state.repoArchive === 'available' ? ` (source: ${archiveSource()})` : ''}`,
   ];
 
   const viewport = [

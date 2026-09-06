@@ -162,28 +162,35 @@ export async function collectStation(uuid, { out, fetchImpl = fetch, now = new D
   return { uuid, name, ...run, total: all.length, gaps: gapCount(all) };
 }
 
-export async function main(argv = process.argv.slice(2)) {
+export async function main(argv = process.argv.slice(2), { fetchImpl = fetch, log = console } = {}) {
   const opt = (name, fallback) => {
     const i = argv.indexOf('--' + name);
     return i >= 0 && argv[i + 1] && !argv[i + 1].startsWith('--') ? argv[i + 1] : fallback;
   };
   const out = opt('out', join(REPO, 'tmp-forecast', 'hires'));
   const uuids = opt('stations', null) ? opt('stations').split(',') : Object.keys(STATIONS);
+  // The summary is the wrapper's wall post, so "points on disk" has to be read
+  // from the disk: summed over the fetches, a run into a dead network said
+  // "0 points on disk" over 67 310 untouched points (2026-09-05). "(unchanged)"
+  // is measured the same way — disk before against disk after — not inferred
+  // from the failure count, since a station can throw after writing a shard.
+  const pointsOnDisk = () => uuids.reduce((n, uuid) => n + readAllPoints(join(out, uuid)).length, 0);
+  const before = pointsOnDisk();
   let ok = 0;
   let failed = 0;
-  let total = 0;
   for (const uuid of uuids) {
     try {
-      const r = await collectStation(uuid, { out });
-      total += r.total;
+      const r = await collectStation(uuid, { out, fetchImpl });
       ok++;
-      console.log(`${r.name}: fetched ${r.fetched}, added ${r.added}, total ${r.total}, gaps ${r.gaps}`);
+      log.log(`${r.name}: fetched ${r.fetched}, added ${r.added}, total ${r.total}, gaps ${r.gaps}`);
     } catch (e) {
       failed++;
-      console.error(`${STATIONS[uuid] || uuid}: ${e.message}`);
+      log.error(`${STATIONS[uuid] || uuid}: ${e.message}`);
     }
   }
-  console.log(`done · ${ok} stations · ${total} points on disk · ${failed} failed`);
+  const onDisk = pointsOnDisk();
+  const unchanged = ok === 0 && onDisk === before ? ' (unchanged)' : '';
+  log.log(`done · ${ok} stations · ${onDisk} points on disk${unchanged} · ${failed} failed`);
   return failed ? 1 : 0;
 }
 

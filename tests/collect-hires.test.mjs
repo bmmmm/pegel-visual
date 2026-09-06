@@ -1,10 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
-  STATIONS, STEP_MS, byMonth, collectStation, foldLegacy, gapCount, merge, normalize, readAllPoints, writeShards,
+  STATIONS, STEP_MS, byMonth, collectStation, foldLegacy, gapCount, main, merge, normalize, readAllPoints, writeShards,
 } from '../scripts/forecast/collect-hires.mjs';
 
 const KOELN = 'a6ee8177-107b-47dd-bcfd-30960ccc6e9c';
@@ -109,4 +111,57 @@ test('the collected set is addressed by UUID and names the Rhine KOBLENZ, not th
   assert.equal(STATIONS['4c7d796a-39f2-4f26-97a9-3aad01713e29'], 'KOBLENZ');
   assert.equal(Object.keys(STATIONS).length, 8);
   for (const uuid of Object.keys(STATIONS)) assert.match(uuid, /^[0-9a-f-]{36}$/);
+});
+
+// The summary line is what the wrapper puts on the wall. On 2026-09-05 a run
+// into a dead network read `0 stations · 0 points on disk · 8 failed` while
+// 67 310 points sat untouched on disk — the count came from the fetch, not the
+// disk, so a failed fetch looked like data loss.
+const capture = () => {
+  const lines = [], errs = [];
+  return { log: { log: s => lines.push(s), error: s => errs.push(s) }, lines, errs };
+};
+
+test('main: a run that fails every fetch still reports the points already on disk', async () => {
+  const out = mkdtempSync(join(tmpdir(), 'hires-'));
+  writeShards(out, KOELN, 'KÖLN', normalize(batch(0, 10)), new Date('2026-10-01T03:00:00Z'));
+  const { log, lines, errs } = capture();
+  const fetchImpl = async () => { throw new Error('fetch failed'); };
+  const code = await main(['--out', out, '--stations', KOELN], { fetchImpl, log });
+  assert.equal(code, 1);
+  assert.deepEqual(errs, ['KÖLN: fetch failed']);
+  assert.equal(lines.at(-1), 'done · 0 stations · 10 points on disk (unchanged) · 1 failed');
+  assert.equal(readAllPoints(join(out, KOELN)).length, 10, 'and the disk really is untouched');
+});
+
+test('main: a run that succeeds counts the disk too, without calling it unchanged', async () => {
+  const out = mkdtempSync(join(tmpdir(), 'hires-'));
+  writeShards(out, KOELN, 'KÖLN', normalize(batch(0, 10)), new Date('2026-10-01T03:00:00Z'));
+  const { log, lines, errs } = capture();
+  const fetchImpl = async () => ({ ok: true, json: async () => batch(5, 10) });
+  const code = await main(['--out', out, '--stations', KOELN], { fetchImpl, log });
+  assert.equal(code, 0);
+  assert.deepEqual(errs, []);
+  assert.equal(lines.at(-1), 'done · 1 stations · 15 points on disk · 0 failed');
+});
+
+// The wrapper waits for the network before it lets node run. The rig: an
+// unreachable probe host, a one-second budget, HOME moved so the wrapper's own
+// PATH prefix (~/.local/bin, where wallii lives) finds nothing, and a wallii shim
+// in front that records the post instead of making it.
+test('wrapper: a dead network is waited for and reported as a skip, before node ever runs', () => {
+  const shim = mkdtempSync(join(tmpdir(), 'hires-shim-'));
+  const wall = join(shim, 'wall.log');
+  writeFileSync(join(shim, 'wallii'), `#!/bin/sh\necho "$@" >> ${JSON.stringify(wall)}\n`, { mode: 0o755 });
+  const script = fileURLToPath(new URL('../scripts/forecast/collect-hires.sh', import.meta.url));
+  const r = spawnSync('bash', [script], {
+    encoding: 'utf8', timeout: 60000,
+    env: { ...process.env, HOME: mkdtempSync(join(tmpdir(), 'hires-home-')), PATH: `${shim}:${process.env.PATH}`,
+      NET_PROBE_URL: 'https://nonexistent.invalid/', NET_WAIT_MAX: '1', NET_WAIT_STEP: '1' },
+  });
+  assert.equal(r.status, 1, `exit 1, got ${r.status}; stderr: ${r.stderr}`);
+  assert.match(r.stdout, /waiting for the network: curl/, 'the wait is logged, with curl’s own reason');
+  assert.doesNotMatch(r.stdout, /collect-hires start/, 'node never ran');
+  assert.match(r.stderr, /network unreachable for 1s, giving up/);
+  assert.match(readFileSync(wall, 'utf8'), /--outcome failed .*network unreachable for 1s, nothing on disk touched/);
 });

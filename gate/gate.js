@@ -38,6 +38,13 @@ const cardOf = mo => (mo && mo.checkpoint ? `https://huggingface.co/${mo.checkpo
 // verbatim as an href, so anything that is not plain https is dropped
 const httpsOnly = u => (typeof u === 'string' && /^https:\/\//.test(u) ? u : null);
 const nameOf = mo => (mo && mo.label) || 'the model';
+// a model that cannot ship carries the glyph wherever its name is printed on
+// its own — the ONE way to spell such a label, so a new surface cannot name
+// the line bare (the key entries spell the clause out in words as well)
+const labelNC = mo => `${nameOf(mo)}${mo && mo.shippable === false ? ` ${NC_GLYPH}` : ''}`;
+// the same name for text that is READ ALOUD (aria-label, data-say): a screen
+// reader says "balance scale" for the glyph, or nothing — so the words instead
+const spoken = mo => `${nameOf(mo)}${mo && mo.shippable === false ? ' (non-commercial, never shipped)' : ''}`;
 export const SKILL_DOMAIN = [-0.2, 0.2];   // fixed across blocks and targets, so bars stay comparable
 export const RATIO_DOMAIN = [0.5, 2.0];    // error relative to the blend; 1.0 is the bar
 export const PICP_DOMAIN = [0.6, 1.0];
@@ -46,18 +53,26 @@ export const PANEL_IDS = ['lead', 'skill', 'error', 'calib', 'clim', 'short', 'm
 
 // More than one candidate can sit on this sheet. Which ones are DRAWN is state in
 // the URL — one independent on/off per model, and the last one on cannot be
-// switched off. The first enabled model in manifest order is the PRIMARY: the one
-// picture at the top draws every model that is on, while the panels below, which
-// carry one number per gauge, speak for the primary and say its name.
+// switched off. One of them is the PRIMARY: the manifest names it (`primary`,
+// written by gate.py out of the registry — a different axis from `shipped`, and
+// today a line that can never ship), and the first enabled model stands in when
+// the primary is off or has no report for the target in view. The one picture at
+// the top draws every model that is on, while the panels below, which carry one
+// number per gauge, speak for the primary and say its name — and everything that
+// reads in a row (chips, verdicts, lids, titles) puts the primary first.
 //
 // A model's mark is bound to the MODEL, not to its position, so a line does not
-// change shape when its neighbour is switched off. Meaning never rides on hue
-// alone: the second model's curve is dashed and its error mark is hollow.
+// change shape when its neighbour is switched off. Each mark carries a shape, a
+// dash pattern AND a hue of its own (gate.css binds `--m1…--m4` to these names),
+// because neither half is enough on its own: hue alone dies in greyscale, and a
+// dash pattern is unreadable exactly where two candidates lie on each other —
+// which on this sheet is everywhere.
 export const MODEL_MARKS = ['tfm', 'tfm-alt', 'tfm-3', 'tfm-4'];
 // what the page falls back to when models.json is missing — the shipped model as
 // it was addressed before there was a manifest
 export const LEGACY_MANIFEST = {
   shipped: '2p5',
+  primary: '2p5',
   models: [{ key: '2p5', label: 'TimesFM 2.5', id: 'timesfm-2.5-200m', params: '200M', shippable: true,
              checkpoint: 'google/timesfm-2.5-200m-pytorch', license: 'Apache-2.0', license_url: '',
              files: { 'seasonal-mid': { json: 'seasonal-mid/report.json' }, 'seasonal-max': { json: 'seasonal-max/report.json' }, 'short-mid': { json: 'short-mid/report.json' } } }],
@@ -75,7 +90,14 @@ export const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;'
 export const attr = (name, v) => v == null || v === '' ? '' : ` ${name}="${esc(v)}"`;
 
 const num = (v, d = 3) => (v == null || Number.isNaN(v)) ? '—' : (typeof v === 'number' ? v.toFixed(d) : String(v));
-const signed = (v, d = 3) => (v == null || Number.isNaN(v)) ? '—' : (v > 0 ? '+' : '') + v.toFixed(d);
+// a value that rounds to zero prints as zero, with no sign: "-0.00" puts a sign
+// on a difference the figure has just said it cannot see (measured on the band
+// label of days 31–90, where both candidates sit within 0.005 of the blend)
+export const signed = (v, d = 3) => {
+  if (v == null || Number.isNaN(v)) return '—';
+  const s = v.toFixed(d);
+  return Number(s) === 0 ? s.replace('-', '') : (v > 0 ? '+' : '') + s;
+};
 const pct = (frac, [lo, hi]) => Math.max(0, Math.min(100, ((frac - lo) / (hi - lo)) * 100));
 const clampInfo = (v, [lo, hi]) => ({ x: pct(Math.max(lo, Math.min(hi, v)), [lo, hi]), clipped: v < lo ? 'lo' : v > hi ? 'hi' : null });
 const pval = p => p == null || Number.isNaN(p) ? '—' : p < 0.001 ? '< 0.001' : p.toFixed(3);
@@ -128,6 +150,15 @@ const CLAUSE_TEXT = {
 };
 const CLAUSE_NAME = { A1: 'pooled skill', A2: 'regime vote', A3: 'bootstrap CI', A4: 'significance', A5: 'calibration', A6: 'CRPS skill', A7: 'contamination probe' };
 
+// the clauses of one run, spelled out — the primary's feed the verdict sentence,
+// and with two candidates drawn the clauses fold shows each model's own
+function clauseList(report) {
+  return Object.entries(report.clauses || {}).map(([id, c]) => ({
+    id, pass: !!c.pass, name: CLAUSE_NAME[id] || id,
+    text: (CLAUSE_TEXT[id] || (d => JSON.stringify(d)))(c.detail),
+  }));
+}
+
 function stationOrder(report) {
   // regimes in the order the report votes them; members inside a regime as reported
   const out = [];
@@ -159,7 +190,7 @@ export function skillRows(report, block, key = 'ss', modelLabel = 'TimesFM') {
 
 // the curve over the lead day: error of every method relative to the blend,
 // pooled as the median of the five regimes' ratios or for one gauge
-// The one picture. `models` are the enabled candidates in manifest order, each
+// The one picture. `models` are the enabled candidates, primary first, each
 // with the report it was measured in; the baselines are the same windows for all
 // of them, so they are read once, from the primary.
 function leadModel(models, state) {
@@ -209,6 +240,47 @@ function leadModel(models, state) {
   return { station, stations, H, series, curves, gap, blendCm: src.per_h.blend, blocks, cursor: proto[state.block][1] };
 }
 
+// Direct labels: every line says its own name at the end of its run, so the
+// first look needs no legend at all. Two curves that finish a hair apart would
+// print their names on top of each other, so the stack is spread — and a spread
+// label's y is therefore NOT its value.
+//
+// Which is fine until the drawing shades one half of the frame with a MEANING.
+// The first version of this only ever pushed DOWN, and down is exactly the half
+// painted "better than the blend": measured on the committed reports, 13 of 40
+// labels printed on the wrong side of that boundary — climatology ends at ×1.005,
+// worse than the blend, and its name sat 16 points inside the shaded half of a
+// sheet whose verdict is NO-SHIP. A reader taking the two things at face value
+// read the opposite of the finding.
+//
+// So `split` is a wall the stack may not cross: names for lines above the bar
+// stack upwards inside [lo, split], names for lines below it downwards inside
+// [split, hi]. A label can still be some way from its line — it cannot be on the
+// wrong side of the one boundary this picture gives a meaning to. When a band
+// holds more names than it has room for, they crowd rather than escape the
+// frame: an overlap is legible as an overlap, a label outside the plot is not.
+export const LABEL_GAP = 8.5;   // per cent of the plot's height, ≈ one line of the label type
+function spread(sorted, gap, lo, hi) {
+  const out = sorted.map(it => ({ ...it }));
+  for (let i = 0; i < out.length; i++) out[i].y = Math.max(lo, Math.max(out[i].y, i === 0 ? lo : out[i - 1].y + gap));
+  for (let i = out.length - 1; i >= 0; i--) out[i].y = Math.max(lo, Math.min(out[i].y, i === out.length - 1 ? hi : out[i + 1].y - gap));
+  return out;
+}
+export function stackLabels(items, gap = LABEL_GAP, lo = 0, hi = 100, split = null) {
+  const clean = items.filter(it => typeof it.y === 'number' && Number.isFinite(it.y))
+    .map(it => ({ ...it, y: Math.max(lo, Math.min(hi, it.y)) }))
+    .sort((a, b) => a.y - b.y);
+  if (split == null) return spread(clean, gap, lo, hi);
+  // the bands stop half a point SHORT of the wall, not on it: a label clamped to
+  // exactly `split` renders at the rounded `top:66.67%` of a boundary at
+  // 66.666…%, which reads — and measures — as being on the other side of it
+  const edge = 0.5;
+  return [
+    ...spread(clean.filter(it => it.y <= split), gap, lo, split - edge),
+    ...spread(clean.filter(it => it.y > split), gap, split + edge, hi),
+  ];
+}
+
 // what the readout says for one lead day — the slider's value text, too
 export function leadSay(L, day) {
   const i = Math.max(1, Math.min(L.H, day)) - 1;
@@ -218,31 +290,68 @@ export function leadSay(L, day) {
 }
 
 export function buildModel(reports, parsed) {
-  // only models that actually loaded a mid report can be offered; the first one
-  // enabled is the PRIMARY and every per-gauge number on this sheet is its own
+  // only models that actually loaded a mid report can be offered; the PRIMARY
+  // (below) is the manifest's when it is on, and every per-gauge number on this
+  // sheet is its own
   const all = (reports.models || []).filter(mo => {
     const r = reports.byKey[mo.key];
     return r && r.seasonal && r.seasonal.mid;
   });
   const keys = all.map(mo => mo.key);
+  // the manifest's word on which model leads — whether or not it is on
+  const lead = keys.includes(reports.primary) ? reports.primary : keys[0];
   const wanted = parsed.models && parsed.models.length ? keys.filter(k => parsed.models.includes(k)) : keys;
-  const enabled = wanted.length ? wanted : keys.slice(0, 1);  // the last one on cannot be switched off
-  const primary = enabled[0];
-  const seasonal = reports.byKey[primary].seasonal;
-  const short = reports.byKey[primary].short;
-  // a target whose report did not load falls back to mid — and SAYS mid everywhere,
-  // instead of labelling the mid run as the max run
-  const targets = Object.keys(TARGETS).map(k => ({ k, label: TARGETS[k], available: !!(Object.hasOwn(seasonal, k) && seasonal[k]) }));
+  const enabled = wanted.length ? wanted : [lead];  // a selection that names nothing that loaded falls back to the primary
+  // a target exists if ANY model in view was measured on it — read from the
+  // primary alone, a target only the other model has would vanish from the sheet
+  // while that model is drawn. A target whose report did not load falls back to
+  // mid — and SAYS mid everywhere, instead of labelling the mid run as the max run
+  const has = (k, t) => { const r = reports.byKey[k]; return !!(r && r.seasonal && Object.hasOwn(r.seasonal, t) && r.seasonal[t]); };
+  const targets = Object.keys(TARGETS).map(k => ({ k, label: TARGETS[k], available: enabled.some(key => has(key, k)) }));
   const state = { ...parsed, target: targets.some(t => t.k === parsed.target && t.available) ? parsed.target : 'mid' };
+  // the primary is the manifest's, when it is on and was measured on this
+  // target; otherwise the first enabled model that was
+  const primary = [reports.primary, ...enabled].find(k => k && enabled.includes(k) && has(k, state.target)) || enabled[0];
+  const order = [primary, ...keys.filter(k => k !== primary)];
+  // the CHIPS keep the manifest's order whatever is switched on: a control that
+  // changes places when it is used cannot be found again — so the row leads with
+  // the manifest's primary even while that model is off, and only what is DRAWN
+  // (verdicts, lids, titles) follows the primary actually in view
+  const chipOrder = [lead, ...keys.filter(k => k !== lead)];
+  const seasonal = reports.byKey[primary].seasonal;
+  // the 15-minute grid is its own test set: the primary's run when it has one,
+  // else the first enabled model's — and the panel names whose it draws. Read
+  // from the primary alone, one missing short report made the whole panel vanish
+  // while the other model's was on disk.
+  const shortOf = [primary, ...enabled].map(k => ({ k, s: reports.byKey[k] && reports.byKey[k].short })).find(x => x.s) || null;
+  const short = shortOf && shortOf.s;
   const report = seasonal[state.target];
-  // every enabled model's report for the target in view, in manifest order
+  // every enabled model's report for the target in view, primary first
   const repOf = k => {
     const r = reports.byKey[k];
     return r && r.seasonal ? (r.seasonal[state.target] || null) : null;
   };
-  const drawn = all.filter(mo => enabled.includes(mo.key) && repOf(mo.key))
-    .map(mo => ({ ...mo, mark: markOf(all, mo.key), report: repOf(mo.key) }));
-  const models = all.map(mo => ({
+  // every candidate carries its OWN run header, so the model panel can describe
+  // each line it draws — checkpoint, licence, config hash, versions, timings —
+  // instead of describing the primary's run under two names
+  const headOf = rep => {
+    const hh = rep.header;
+    return {
+      generated: hh.generated, model: hh.model, license: hh.model_license, checkpoint: hh.checkpoint, git: hh.git,
+      fingerprint: hh.config_fingerprint, versions: hh.versions || {}, elapsed: hh.elapsed_s, reproduced: hh.reproduced_by_run,
+      windows: Object.values(rep.station_info || {}).reduce((a, s) => a + (s.test || 0), 0),
+      stations: Object.keys(rep.stations || {}).length, regimes: Object.keys(rep.regimes || {}).length,
+      protocol: hh.protocol, config: hh.forecast_config || {}, threads: hh.torch_threads,
+      sha: hh.tfm_sha256, repeat: hh.repeat_identical, kind: hh.horizon_kind,
+    };
+  };
+  // primary first, then manifest order — while the MARK and the skill panel's
+  // SLOT stay bound to the manifest index, so a line keeps its hue, its dash and
+  // its hatch whoever leads
+  const byOrder = ks => ks.map(k => all.find(mo => mo.key === k));
+  const drawn = byOrder(order).filter(mo => enabled.includes(mo.key) && repOf(mo.key))
+    .map(mo => ({ ...mo, mark: markOf(all, mo.key), slot: all.findIndex(x => x.key === mo.key) + 1, report: repOf(mo.key), head: headOf(repOf(mo.key)) }));
+  const models = byOrder(chipOrder).map(mo => ({
     ...mo, mark: markOf(all, mo.key), on: enabled.includes(mo.key),
     // a model with no report for the target in view cannot be drawn at all, so
     // its chip goes dead rather than staying lit over a sheet that is silent
@@ -251,10 +360,7 @@ export function buildModel(reports, parsed) {
   const h = report.header;
   const block = state.block;
   const pooled = report.pooled.blocks[block];
-  const clauses = Object.entries(report.clauses).map(([id, c]) => ({
-    id, pass: !!c.pass, name: CLAUSE_NAME[id] || id,
-    text: (CLAUSE_TEXT[id] || (d => JSON.stringify(d)))(c.detail),
-  }));
+  const clauses = clauseList(report);
   const regimes = Object.entries(report.regimes).map(([name, r]) => ({ name, members: r.members, ...r.blocks[block] }));
   // one bar per model in view, each read out of its own report and carrying its
   // own mark — the drawing and the sentence under it must agree on which is which
@@ -263,14 +369,14 @@ export function buildModel(reports, parsed) {
     rows: stationOrder(report).map(({ station, regime }) => {
       const bars = perModelRows.map(({ mo, rows }) => {
         const r = rows.find(x => x.station === station);
-        return r ? { key: mo.key, label: mo.label, mark: mo.mark, ...r } : null;
+        return r ? { key: mo.key, label: mo.label, mark: mo.mark, slot: mo.slot, ...r } : null;
       }).filter(Boolean);
       return { station, regime, bars, say: bars.map(b => b.say).join(' ') };
     }),
     pooled: {
       bars: drawn.map(mo => {
         const p = mo.report.pooled.blocks[block];
-        return { key: mo.key, label: mo.label, mark: mo.mark, ss: p.ss, lo: p.ci95[0], hi: p.ci95[1] };
+        return { key: mo.key, label: mo.label, mark: mo.mark, slot: mo.slot, ss: p.ss, lo: p.ci95[0], hi: p.ci95[1] };
       }),
       // the sheet's own pooled number stays the primary run's, for the prose and
       // the screen-reader summary that speak in the singular
@@ -318,6 +424,7 @@ export function buildModel(reports, parsed) {
     };
   });
   const shortModel = short ? {
+    model: all.find(mo => mo.key === shortOf.k) || null,
     verdict: short.verdict, reasons: short.provisional_reasons || [],
     need: short.thresholds.short_origins_min, needRises: short.thresholds.short_rise_events_min,
     stations: Object.entries(short.stations).map(([name, s]) => ({ name, origins: s.origins, rises: s.rise_events, blocks: s.blocks })),
@@ -330,13 +437,42 @@ export function buildModel(reports, parsed) {
   const pb = b => report.pooled.blocks[b].ss;
   const rel = v => Math.abs(v) < 0.02 ? 'draws' : `is ${pctStr(v)} ${v < 0 ? 'behind' : 'ahead'}`;
   const climLongT = Object.entries(report.stations).map(([n, s]) => ({ n, v: Math.abs(s.blocks['h31-90'].ss_clim_vs_blend) })).sort((a, b) => b.v - a.v);
-  const gist = `On the ${TARGETS[state.target]} target ${(drawn[0] || {}).label || 'the model'} beats the blend by ${pctStr(pb('h1-14'))} at two weeks, ${rel(pb('h15-30'))} at a month and ${rel(pb('h31-90'))} by three months — the bar was ${pctStr(report.thresholds.A1_pooled_ss_min)} in every block, and beyond a month a calendar does as well.`;
+  // The gist names every candidate in view with ITS OWN pooled numbers, and the
+  // PRIMARY leads — the same state the panels below speak for, not a sort of the
+  // gist's own (it used to put the non-shippable line first by licence, which
+  // agreed with the primary by accident). Drawing a model and then writing the
+  // shipped model's numbers under it — which is what one label plus `pb()` did —
+  // is the same failure as a curve labelled with another curve's skill.
+  const ssOf = (mo, b) => mo.report.pooled.blocks[b].ss;
+  const arc = mo => `${pctStr(ssOf(mo, 'h1-14'))} at two weeks, ${rel(ssOf(mo, 'h15-30'))} at a month and ${rel(ssOf(mo, 'h31-90'))} by three months`;
+  const barStr = pctStr(report.thresholds.A1_pooled_ss_min);
+  const noneClears = drawn.length > 0 && drawn.every(mo => !(mo.report.clauses.A1 || {}).pass);
+  // a line that cannot ship says so in the subtitle whether it is read alone or
+  // beside the shipped one — the single-model sentence used to drop the clause,
+  // so a sheet read for the challenger alone opened without it
+  const ncNote = mo => (mo && mo.shippable === false ? ' — measured here, never shipped' : '');
+  // The subtitle is on a budget: the lead plot has to stay whole on a 390x844
+  // phone, and gate-check measures it there. So the candidate in focus gets the
+  // full arc and the others one number each — a second full arc cost three lines
+  // on the CI runner's wider glyphs and pushed the drawing off the first screen.
+  const gist = drawn.length > 1
+    ? `On the ${TARGETS[state.target]} target ${drawn[0].label} beats the blend by ${arc(drawn[0])}` +
+      `${ncNote(drawn[0])}; ` +
+      drawn.slice(1).map(mo => `${mo.shippable ? 'the shipped ' : ''}${mo.label} manages ${pctStr(ssOf(mo, 'h1-14'))}${mo.shippable ? '' : ` ${NC_GLYPH}`}`).join('; ') +
+      `. ${noneClears ? `Neither reaches the ${barStr} bar.` : `The bar was ${barStr} in every block.`}`
+    : `On the ${TARGETS[state.target]} target ${(drawn[0] || {}).label || 'the model'} beats the blend by ${drawn[0] ? arc(drawn[0]) : `${pctStr(pb('h1-14'))} at two weeks, ${rel(pb('h15-30'))} at a month and ${rel(pb('h31-90'))} by three months`} — the bar was ${barStr} in every block, and beyond a month a calendar does as well${ncNote(drawn[0])}.`;
   const positive = regimes.filter(r => r.ss > 0).length;
   const B = v => `<b>${esc(v)}</b>`;
+  // a fact that stands for ONE run says whose it is when more than one is drawn.
+  // Name, colon, then the figures: the colon binds the name to what follows, and
+  // no number ends up directly in front of `TimesFM` — the trap skillRows avoids
+  // the other way round, by putting the centimetres BEFORE the name (`2.5 cm for
+  // TimesFM 3.0`), because `TimesFM 2.5 cm` spells the other candidate's label
+  const whose = drawn.length > 1 ? `${B(labelNC(drawn[0]))}: ` : '';
   const facts = [
     { k: 'setup', html: `${B(nStations)} gauges in ${B(nRegimes)} regimes · ${B(report.pooled.n_origins)} test origins per gauge, ${B(thousands(windows))} windows from ${B(String(h.protocol.test_from).slice(0, 4))} · ${B(thousands(h.protocol.context))} days in, ${B(h.protocol.horizon)} days out` },
-    { k: BLOCK_LABEL[block], html: `pooled skill ${B(signed(pooled.ss, 2))} against the blend (95 % CI ${B(signed(pooled.ci95[0], 2))} to ${B(signed(pooled.ci95[1], 2))}), ${B(positive)} of ${B(nRegimes)} regimes ahead — the bar was ${B(signed(report.thresholds.A1_pooled_ss_min, 2))}` },
-    { k: 'calibration', html: `the 80 % band covered ${B(num(pooled.picp80.tfm * 100, 0) + ' %')} of days at ${BLOCK_LABEL[block]} (the blend's own band ${B(num(pooled.picp80.blend * 100, 0) + ' %')}); CRPS skill ${B(signed(pooled.ss_crps, 2))}` },
+    { k: BLOCK_LABEL[block], html: `${whose}pooled skill ${B(signed(pooled.ss, 2))} against the blend (95 % CI ${B(signed(pooled.ci95[0], 2))} to ${B(signed(pooled.ci95[1], 2))}), ${B(positive)} of ${B(nRegimes)} regimes ahead — the bar was ${B(signed(report.thresholds.A1_pooled_ss_min, 2))}` },
+    { k: 'calibration', html: `${whose}the 80 % band covered ${B(num(pooled.picp80.tfm * 100, 0) + ' %')} of days at ${BLOCK_LABEL[block]} (the blend's own band ${B(num(pooled.picp80.blend * 100, 0) + ' %')}); CRPS skill ${B(signed(pooled.ss_crps, 2))}` },
     { k: 'climatology', html: `from day 31 plain climatology sits within ${B(climLongT[1] ? pctStr(climLongT[1].v) : '—')} of the blend at every gauge but ${B(climLongT[0] ? climLongT[0].n : '—')} — the long horizon needs a calendar, not a model` },
     { k: 'run', html: `${B(Math.max(1, Math.round((h.elapsed_s || 0) / 60)) + ' min')} on a laptop CPU, ${h.reproduced_by_run ? 'reproduced bit for bit by a second run' : 'second run not compared'} · ${B(h.model)}, ${B(h.model_license)}` +
       ((drawn[0] || {}).shippable === false ? ' — measured here, never shipped' : ' — the version is pinned exactly, so this run can be repeated') },
@@ -354,6 +490,14 @@ export function buildModel(reports, parsed) {
     climWorst: climLong[0] ? climLong[0].n : '—',
     climRest: climLong[1] ? pctStr(climLong[1].v) : '—',
     windows: Object.values(mid.station_info).reduce((a, s) => a + (s.test || 0), 0),
+    // the same three numbers for every candidate in view, each out of its own mid
+    // run — the basics follow the model chips like the rest of the sheet
+    each: drawn.map(mo => {
+      const r = (reports.byKey[mo.key].seasonal || {}).mid || mo.report;
+      const b1 = r.pooled.blocks['h1-14'].ss, b90 = r.pooled.blocks['h31-90'].ss;
+      return { key: mo.key, label: mo.label, shippable: mo.shippable !== false, params: mo.params,
+        h1: pctStr(b1), h90: pctStr(b90), h90sign: b90 < 0 ? 'behind' : 'ahead' };
+    }),
   };
   const m = {
     state, targets, verdict: report.verdict, clauses, block, target: state.target, gist, facts, story,
@@ -379,18 +523,18 @@ export function buildModel(reports, parsed) {
     void: report.void || [],
   };
   // the panels actually rendered, in order — the index is built from this list
-  const primaryLabel = m.primary ? m.primary.label : 'the model';
+  const primaryLabel = m.primary ? labelNC(m.primary) : 'the model';
   // the panels that now draw a bar per model name every model they draw; the
   // ones that still speak for one run (the chain, the short grid) name that one
-  const drawnLabel = m.drawn.length ? m.drawn.map(mo => mo.label).join(' + ') : primaryLabel;
+  const drawnLabel = m.drawn.length ? m.drawn.map(labelNC).join(' + ') : primaryLabel;
   m.panels = [
     // the panels that print ONE number per gauge say whose number it is
     { id: 'skill', title: `Skill by gauge · ${drawnLabel} · ${TARGETS[state.target]} · ${BLOCK_LABEL[block]}`, hook: 'seven gauges, five regime votes, the bootstrap interval', render: renderSkill },
     { id: 'error', title: `Error by method · ${BLOCK_LABEL[block]}`, hook: 'every baseline’s MAE next to the blend’s, gauge by gauge', render: renderError },
     { id: 'calib', title: `Calibration · ${drawnLabel} · ${BLOCK_LABEL[block]}`, hook: 'how often the 80 % band held, and the PIT histograms', render: renderCalib },
     { id: 'clim', title: `Climatology alone · ${BLOCK_LABEL[block]}`, hook: 'Finding 2: the calendar against the blend', render: renderClim },
-    shortModel ? { id: 'short', title: `Short horizon · ${primaryLabel} · ${shortModel.verdict}`, hook: 'hours to two days — still collecting, no verdict yet', render: renderShort } : null,
-    { id: 'model', title: `The model, and the chain it runs in · ${primaryLabel}`, hook: `what ${primaryLabel} is, where the weights come from, and the seven steps from archive to this sheet`, render: renderModel },
+    shortModel ? { id: 'short', title: `Short horizon · ${shortModel.model ? labelNC(shortModel.model) : primaryLabel} · ${shortModel.verdict}`, hook: 'hours to two days — still collecting, no verdict yet', render: renderShort } : null,
+    { id: 'model', title: `The model${m.drawn.length > 1 ? 's' : ''}, and the chain ${m.drawn.length > 1 ? 'they run' : 'it runs'} in · ${drawnLabel}`, hook: `what ${drawnLabel} ${m.drawn.length > 1 ? 'are' : 'is'}, where the weights come from, and the seven steps from archive to this sheet`, render: renderModel },
     { id: 'method', title: 'Method', hook: 'how it was measured, and what it cannot prove', render: renderMethod },
     { id: 'basics', title: 'Basics', hook: 'the model, the bar and the verdict in three short paragraphs', render: renderBasics },
   ].filter(Boolean);
@@ -428,12 +572,33 @@ function plateKey(items) {
     `<dd><span class="lg">${it.sw}<span class="lgn">${esc(it.label)}</span></span></dd>`).join('') + '</dl>';
 }
 
+// `cls` adds the chip's own classes (a model chip carries its `m-<mark>`, which
+// is where its hue comes from) and `sw` a swatch the caller already built — the
+// same swatch the key draws, so a chip names the line it switches.
 function ctlRow(label, items, aria) {
+  // ONE class join for both branches: the state-inversion bug the chip tests
+  // guard against came from a link and a disabled span drifting apart
+  const cls = (it, state) => [it.cls, state].filter(Boolean).join(' ');
+  const chip = it =>
+    it.off ? `<span${attr('class', cls(it, it.on ? 'off on' : 'off'))} aria-disabled="true"${it.on ? ' aria-current="true"' : ''}${attr('title', it.title)}${attr('data-ctl', it.ctl)}>${it.sw || ''}${esc(it.off)}</span>` :
+    `<a${attr('href', it.href)}${attr('class', cls(it, it.on ? 'on' : ''))}${it.on ? ' aria-current="true"' : ''}${attr('title', it.title)}${attr('data-focus', it.focus)}${attr('data-ctl', it.ctl)}>${it.sw || ''}${esc(it.label)}</a>`;
+  // A label and the chips it names travel as one group (.grp): on a phone the
+  // row wraps between groups, so "HORIZON" never stands alone at a line's end
+  // while its chips start the next one. On a wide plate the group is
+  // display:contents and the row reads exactly as before.
+  const groups = [];
+  const open = lbl => groups.push({ lbl, chips: [] });
+  if (label) open(label);
+  for (const it of items) {
+    if (it.lbl) open(it.lbl);
+    else {
+      if (!groups.length) open(null);
+      groups[groups.length - 1].chips.push(chip(it));
+    }
+  }
   return `<nav class="p-tabs"${attr('aria-label', aria || label)}>` +
-    (label ? `<span class="p-tabs-lbl">${esc(label)}</span>` : '') +
-    items.map(it => it.lbl ? `<span class="p-tabs-lbl">${esc(it.lbl)}</span>` :
-      it.off ? `<span${attr('class', it.on ? 'off on' : 'off')} aria-disabled="true"${it.on ? ' aria-current="true"' : ''}${attr('title', it.title)}${attr('data-ctl', it.ctl)}>${esc(it.off)}</span>` :
-      `<a${attr('href', it.href)}${attr('class', it.on ? 'on' : '')}${it.on ? ' aria-current="true"' : ''}${attr('title', it.title)}${attr('data-focus', it.focus)}${attr('data-ctl', it.ctl)}>${esc(it.label)}</a>`).join('') +
+    groups.map(g => '<span class="grp">' +
+      (g.lbl ? `<span class="p-tabs-lbl">${esc(g.lbl)}</span>` : '') + g.chips.join('') + '</span>').join('') +
     '</nav>';
 }
 
@@ -450,12 +615,12 @@ const lbl = (station, regime) => `<span class="lbl">${esc(station)}${regime ? `<
 // the colour follows the model too (light fill for the first, dark for the
 // second) — position, fill and the mark on the value all say the same thing, so
 // none of them carries the difference alone. The hatch angle stays the sign.
-function skillBar(ss, tie, slot = '') {
+function skillBar(ss, tie, slot = '', mark = '') {
   const { x, clipped } = clampInfo(ss, SKILL_DOMAIN);
   const zero = pct(0, SKILL_DOMAIN);
   const left = Math.min(x, zero), width = Math.abs(x - zero);
   const cls = tie ? 'tie' : ss >= 0 ? 'pos' : 'neg';
-  return `<span class="bar ${cls}${slot ? ' ' + slot : ''}"${attr('style', `left:${left.toFixed(2)}%;width:${width.toFixed(2)}%`)}></span>` +
+  return `<span class="bar ${cls}${slot ? ' ' + slot : ''}${mark ? ` m-${mark}` : ''}"${attr('style', `left:${left.toFixed(2)}%;width:${width.toFixed(2)}%`)}></span>` +
     (clipped ? `<span class="clip ${clipped}"${attr('style', `left:${x.toFixed(2)}%`)}></span>` : '');
 }
 
@@ -468,25 +633,55 @@ function renderBack() {
 function renderVerdict(m) {
   // the sentence is assembled from the clauses that actually passed, so a re-run
   // that flips one cannot leave the page praising something that failed
-  const passed = id => (m.clauses.find(c => c.id === id) || {}).pass;
+  // "both are honest" has to hold in BOTH reports, not in the primary's alone —
+  // the sentence is about every candidate the plural claims for
+  const passed = id => m.drawn.length
+    ? m.drawn.every(mo => (mo.report.clauses[id] || {}).pass)
+    : (m.clauses.find(c => c.id === id) || {}).pass;
   const honest = [passed('A5') ? 'calibrated' : null, passed('A7') ? 'no better on the recent years than on the old ones' : null].filter(Boolean);
   const why = m.verdict === 'SHIP'
     ? 'Every pre-registered clause held. The model may ship.'
     : m.verdict === 'VOID'
       ? 'The run is invalid; no verdict was formed.'
-      : `At least one pre-registered clause failed.${honest.length ? ` The model is honest — ${honest.join(', and ')} — but` : ' It is'} not better than the blend past two weeks.`;
+      : `At least one pre-registered clause failed.${honest.length ? ` ${m.drawn.length > 1 ? 'Both candidates are' : 'The model is'} honest — ${honest.join(', and ')} — but` : ' It is'} not better than the blend past two weeks.`;
   // with more than one candidate in view the headline verdict is the primary's,
-  // and each model states its own underneath rather than sharing one word
-  const others = m.verdicts.length > 1 ? `<ul class="vmodels" aria-label="verdict per model">` + m.verdicts.map(v =>
-    `<li><span class="nm">${esc(v.label)}${v.shippable ? '' : ` <span class="nc" title="non-commercial weights: measured, never shipped">${NC_GLYPH}</span>`}</span>` +
+  // and each model states its own underneath rather than sharing one word. A
+  // line that cannot ship gets the row even alone: next to the verdict word is
+  // where a reader of that sheet looks first, and the glyph belongs there
+  const others = m.verdicts.length > 1 || m.verdicts.some(v => !v.shippable) ? `<ul class="vmodels" aria-label="verdict per model">` + m.verdicts.map(v =>
+    `<li${attr('class', v.mark ? `m-${v.mark}` : '')}>${v.mark ? swLine(`ln ln-${v.mark}`) : ''}` +
+    `<span class="nm">${esc(v.label)}${v.shippable ? '' : ` <span class="nc" title="non-commercial weights: measured, never shipped">${NC_GLYPH}</span>`}</span>` +
     `<span class="vw ${v.verdict === 'SHIP' ? 'pass' : 'fail'}">${esc(v.verdict)}</span>` +
     `<span class="vn">${esc(v.passed)} of ${esc(v.total)} clauses</span></li>`).join('') + `</ul>` : '';
   return `<div class="verdict"><span class="word">${esc(m.verdict)}</span><span class="why">${esc(why)}</span></div>` + others +
-    (m.void.length ? `<ul class="p-empty">${m.void.map(v => `<li>${esc(v)}</li>`).join('')}</ul>` : '') +
-    `<ul class="clauses" aria-label="clauses">` + m.clauses.map(c =>
-      `<li class="${c.pass ? 'pass' : 'fail'}"><button type="button" aria-pressed="false"${attr('data-say', `${c.id} ${c.pass ? 'passed' : 'failed'} — ${c.text}`)}>` +
-      `<span class="g" aria-hidden="true">${c.pass ? '✓' : '✗'}</span><span class="vh">${c.pass ? 'passed' : 'failed'}</span>${esc(c.id)} ${esc(c.name)}</button></li>`).join('') +
-    `</ul><p class="p-readout" id="clause-readout"><span class="hint">Pick a clause for what it demanded and what was measured.</span></p>`;
+    (m.void.length ? `<ul class="p-empty">${m.void.map(v => `<li>${esc(v)}</li>`).join('')}</ul>` : '');
+}
+
+// The clauses are the verdict's evidence, not the verdict: seven chips is a lot
+// of sheet to walk past on the way to the drawing, and nobody reads them until
+// they want to know WHY. Folded, with the count on the lid.
+// With two candidates drawn there are two verdicts, so there are two lists of
+// evidence: one row of chips per model, headed by its own mark, and the lid
+// counts each by name — "2 of 7 held" with no name would be the primary's count
+// standing in for both.
+function renderClauses(m) {
+  const many = m.drawn.length > 1;
+  const groups = many ? m.drawn.map(mo => ({ mo, clauses: clauseList(mo.report) })) : [{ mo: m.primary, clauses: m.clauses }];
+  const list = ({ mo, clauses }) =>
+    // the glyph is for the eye: what is announced or read out says the name
+    // and, for a line that cannot ship, the words
+    (many ? `<p class="cl-model${mo.mark ? ` m-${mo.mark}` : ''}">${mo.mark ? swLine(`ln ln-${mo.mark}`) : ''}<b>${esc(labelNC(mo))}</b></p>` : '') +
+    `<ul class="clauses"${attr('aria-label', many ? `clauses, ${spoken(mo)}` : 'clauses')}>` + clauses.map(c =>
+      `<li class="${c.pass ? 'pass' : 'fail'}"><button type="button" aria-pressed="false"${attr('data-say', `${many ? `${spoken(mo)}: ` : ''}${c.id} ${c.pass ? 'passed' : 'failed'} — ${c.text}`)}>` +
+      `<span class="g" aria-hidden="true">${c.pass ? '✓' : '✗'}</span><span class="vh">${c.pass ? 'passed' : 'failed'}</span>${esc(c.id)} ${esc(c.name)}</button></li>`).join('') + `</ul>`;
+  // name, colon, count: with one separator for "between groups" and "inside a
+  // group" the lid read `2 of 7 held · TimesFM 3.0 · 5 of 7 held · TimesFM 2.5`
+  // and bound each count to the OTHER model's name
+  const lid = groups.map(g => `${many ? `${labelNC(g.mo)}: ` : ''}${g.clauses.filter(c => c.pass).length} of ${g.clauses.length} held`).join(' · ');
+  return fold('clauses', 'the seven clauses, one by one',
+    groups.map(list).join('') +
+    `<p class="p-readout" id="clause-readout"><span class="hint">Pick a clause for what it demanded and what was measured.</span></p>`,
+    lid);
 }
 
 // the curve: x is the lead day, y the error relative to the blend on a log axis
@@ -528,21 +723,53 @@ function renderLead(m) {
   const L = m.lead;
   const s = m.state;
   const head = `<h2 class="p-h2" tabindex="-1">Error by lead day · ${esc(L ? (L.station === 'pooled' ? 'five regimes, one vote each' : L.station) : '')}</h2>`;
-  if (!L) return `<section id="lead" class="p-block">${head}<p class="p-empty p-dim">This report carries no per-day curve; re-run gate.py to add it.</p></section>`;
+  // The control row moved inside this section when it moved into a fold, so this
+  // early return now owns it too: a report with no per-day curve is a state the
+  // page supports, and returning without the chips left the reader stuck on
+  // whatever ?target= and ?block= the URL carried, with nothing to change them.
+  if (!L) return `<section id="lead" class="p-block">${head}` +
+    fold('settings', 'model, target and horizon',
+      renderControls(m), `${m.drawn.map(labelNC).join(' + ')} · ${TARGETS[s.target]} · ${BLOCK_LABEL[s.block]}`) +
+    `<p class="p-empty p-dim">This report carries no per-day curve; re-run gate.py to add it.</p></section>`;
   const chips = ctlRow('gauge', [
     { href: stateHref(s, { lead: 'pooled', panel: 'lead' }), label: 'five regimes', on: L.station === 'pooled', focus: 'lead', title: 'the median of the five pooled gauges’ ratios, day by day' },
     ...L.stations.map(n => ({ href: stateHref(s, { lead: n, panel: 'lead' }), label: n, on: L.station === n, focus: 'lead' })),
   ], 'gauge drawn in the curve');
   const bands = L.blocks.map(b => `<span class="lb${b.on ? ' on' : ''}"${attr('style', `left:${((b.from - 1) / L.H * 100).toFixed(2)}%;width:${((b.to - b.from + 1) / L.H * 100).toFixed(2)}%`)}></span>`).join('');
-  // the band labels are the block chips of this chart: each one is the same link the filter row carries
-  const bandLabels = L.blocks.map(b => `<a${attr('href', stateHref(s, { block: b.name, panel: 'lead' }))}${attr('class', b.on ? 'on' : '')}${b.on ? ' aria-current="true"' : ''} data-focus="lead"${attr('style', `left:${((b.from - 1) / L.H * 100).toFixed(2)}%;width:${((b.to - b.from + 1) / L.H * 100).toFixed(2)}%`)}${attr('title', `${BLOCK_LABEL[b.name]}: ${L.curves.length > 1 ? `${m.primary ? m.primary.label : 'the primary model'} skill` : 'skill'} ${signed(b.ss, 3)}${L.station === 'pooled' ? ', median of the five gauges' : ''}`)}><span class="lbn">${esc(`${b.from}–${b.to}`)}</span><b>${esc(signed(b.ss, 2))}</b></a>`).join('');
+  // the band labels are the block chips of this chart: each one is the same link
+  // the filter row carries. Their skill is the PRIMARY's, and with two curves
+  // drawn the number wears the primary's own line swatch — a title attribute is
+  // not a name a touch reader ever sees. (Inside the <b>: the label is a flex
+  // column, so a swatch beside it would take a line of its own.) Where the band
+  // is too narrow for swatch and number both — a 390 px phone — the CSS hides
+  // the swatch and keeps the number: it is this plate's own estimator, which no
+  // other line on the sheet repeats, and it is the primary's, the model the
+  // subtitle is about.
+  const many = L.curves.length > 1;
+  const pSw = many && m.primary && m.primary.mark ? swLine(`ln ln-${m.primary.mark}`) : '';
+  const bandLabels = L.blocks.map(b => `<a${attr('href', stateHref(s, { block: b.name, panel: 'lead' }))}${attr('class', b.on ? 'on' : '')}${b.on ? ' aria-current="true"' : ''} data-focus="lead"${attr('style', `left:${((b.from - 1) / L.H * 100).toFixed(2)}%;width:${((b.to - b.from + 1) / L.H * 100).toFixed(2)}%`)}${attr('title', `${BLOCK_LABEL[b.name]}: ${many ? `${m.primary ? labelNC(m.primary) : 'the primary model'} skill` : 'skill'} ${signed(b.ss, 3)}${L.station === 'pooled' ? ', median of the five gauges' : ''}`)}><span class="lbn">${esc(`${b.from}–${b.to}`)}</span><b>${pSw}${esc(signed(b.ss, 2))}</b></a>`).join('');
   // the baselines are the same windows for every model, so they are drawn once;
-  // each model in view adds its own line, told apart by its dash, not its hue
+  // each model in view adds its own line, told apart by its dash and its hue
   const paths = [
-    ...['persist', 'clim'].map(k => ({ cls: `ln-${k}`, name: k === 'clim' ? 'climatology' : 'persistence', ...leadPath(L.series[k], L.H) })),
-    ...L.curves.map(c => ({ cls: `ln-${c.mark}`, name: c.label, ...leadPath(c.ratios, L.H) })),
+    ...['persist', 'clim'].map(k => ({ cls: `ln-${k}`, name: k === 'clim' ? 'climatology' : 'persistence', vals: L.series[k], ...leadPath(L.series[k], L.H) })),
+    ...L.curves.map(c => ({ cls: `ln-${c.mark}`, name: c.label, vals: c.ratios, ...leadPath(c.ratios, L.H) })),
   ];
   const lines = paths.map(p => `<path class="ln ${p.cls}"${attr('d', p.d)}/>`).join('');
+  // every line says its own name where it ends, so the first look reads without
+  // the key. The swatch carries the hue and the dash — the name itself stays
+  // full ink, because a label is text and text is where contrast is cheapest.
+  const endY = vals => {
+    for (let i = vals.length - 1; i >= 0; i--) {
+      const v = vals[i];
+      if (v != null && !Number.isNaN(v) && v > 0) return leadY(Math.max(LEAD_DOMAIN[0], Math.min(LEAD_DOMAIN[1], v))) / LEAD_HGT * 100;
+    }
+    return null;
+  };
+  // the blend gets no end label: it IS the ×1 line of the scale and the edge of
+  // the shaded zone, so one more name crowding that height would only push
+  // the three that mean something further from where they actually end
+  const ends = stackLabels(paths.map(p => ({ cls: p.cls, name: p.name, y: endY(p.vals) })), LABEL_GAP, 0, 100, leadY(1) / LEAD_HGT * 100)
+    .map(e => `<span class="end"${attr('style', `top:${e.y.toFixed(2)}%`)}>${swLine(`ln ${e.cls}`)}<b>${esc(e.name)}</b></span>`).join('');
   const clips = paths.flatMap(p => p.clips.map(c => `<span class="clip ${c.dir} ${p.cls}"${attr('style', `left:${leadXpct(c.day, L.H)}%`)}${attr('title', `${p.name} beyond ×${LEAD_DOMAIN[c.dir === 'up' ? 1 : 0]} on ${c.from === c.to ? `day ${c.from}` : `days ${c.from}–${c.to}`}`)}></span>`)).join('');
   const cx = leadX(L.cursor, L.H).toFixed(2);
   const say = leadSay(L, L.cursor);
@@ -560,13 +787,28 @@ function renderLead(m) {
       L.curves.map(c => `<td>×${r2(c.ratios[i])}</td>`).join('') +
       `<td>×${r2(L.series.clim[i])}</td><td>×${r2(L.series.persist[i])}</td><td>${num(L.blendCm[i], 1)}</td></tr>`).join('') +
     `</tbody></table></div></details>`;
+  const keyBody = `<p class="p-dim">Each method's error divided by the blend's, day by day out to ${esc(L.H)}: below the line is better than the blend. ${L.curves.length > 1 ? 'Both candidates win' : 'The model wins'} early and ${L.curves.length > 1 ? 'hand' : 'hands'} over to the calendar; persistence never recovers. The hatched band is the horizon block in view — the band labels switch it, as does the settings fold above the chart; the vertical rule is a cursor — drag it, or use the arrow keys.</p>`;
+  // the settings sit directly above the drawing they relabel, folded shut with
+  // their state on the lid: a control a screen away from its chart is a control
+  // nobody connects to it, and a shut fold that does not say "daily max, days
+  // 31–90" is a sheet keeping its own state secret
+  const settingsState = [m.drawn.map(labelNC).join(' + '),
+    TARGETS[s.target], BLOCK_LABEL[s.block],
+    L.station === 'pooled' ? 'five regimes' : L.station].filter(Boolean).join(' · ');
   return `<section id="lead" class="p-block">${head}` +
-    `<p class="p-dim">Each method's error divided by the blend's, day by day out to ${esc(L.H)}: below the line is better than the blend. The model wins early and hands over to the calendar; persistence never recovers. The hatched band is the horizon block in view — the band labels switch it, as does the row above the chart; the vertical rule is a cursor — drag it, or use the arrow keys.</p>` +
-    chips +
-    `<div class="plot"><div class="lead-bands">${bandLabels}</div><div class="vscale" aria-hidden="true">${vscale}</div><div class="plot-box">${bands}${svg}${clips}</div>` +
+    fold('settings', 'model, target, horizon and gauge', renderControls(m) + chips, settingsState) +
+    // the half of the frame that means "better than the blend" is shaded, so the
+    // sign of the whole picture is readable before a single number is
+    `<div class="plot"><div class="lead-bands"${many ? ' data-many' : ''}>${bandLabels}</div><div class="vscale" aria-hidden="true">${vscale}</div>` +
+    `<div class="plot-box">${bands}<span class="better" aria-hidden="true"${attr('style', `top:${(leadY(1) / LEAD_HGT * 100).toFixed(2)}%`)}><i>better than the blend</i></span>${svg}${clips}</div>` +
+    `<div class="ends" aria-hidden="true">${ends}</div>` +
     `<div class="ticks lead-ticks" aria-hidden="true">${ticks}</div></div>` +
     `<p class="p-readout" data-readout><b>${esc(say)}</b></p>` +
-    plateKey([
+    // the lid carries the caveat, not the body: the sentence that keeps the end
+    // labels honest is no use to a first look if it is behind the disclosure a
+    // first look never opens
+    fold('leadkey', 'what each line is, and what this picture cannot prove',
+      keyBody + plateKey([
       ...L.curves.map(c => ({
         sw: swLine(`ln ln-${c.mark}`),
         label: `${c.label}${c.shippable === false ? ` ${NC_GLYPH} — measured here, never shipped: its weights are non-commercial` : ''}`,
@@ -574,13 +816,15 @@ function renderLead(m) {
       { sw: swLine('ln ln-clim'), label: 'climatology (day-of-year mean of earlier years)' },
       { sw: swLine('ln ln-persist'), label: 'persistence — today’s level, held' },
       { sw: swLine('ln-blend'), label: 'the blend, ×1.00 — the bar' },
-      { sw: '<span class="sw"><span class="lb on" style="position:relative;display:block;height:12px;width:12px"></span></span>', label: 'the horizon block in view — pick one by its label, or in the row above the chart' },
+      { sw: '<span class="sw"><span class="better" style="position:relative;display:block;height:12px;width:12px;top:0"></span></span>', label: 'the shaded zone below the bar: a line in here beat the blend that day' },
+      { sw: '<span class="sw"><span class="lb on" style="position:relative;display:block;height:12px;width:12px"></span></span>', label: 'the horizon block in view — pick one by its label, or in the settings fold above the chart' },
       { sw: '<span class="sw"><span class="lb" style="position:relative;display:block;height:12px;width:12px"></span></span>', label: 'block boundaries — days 14 and 30, each labelled with its skill' },
       { sw: '<span class="sw"><svg viewBox="0 0 12 12" aria-hidden="true"><line class="ln-cur" x1="6" y1="0" x2="6" y2="12"/></svg></span>', label: 'the cursor; the line under the chart reads its day' },
       { note: `The y axis is logarithmic, ×${LEAD_DOMAIN[0]} to ×${LEAD_DOMAIN[1]}; a ▴ or ▾ marks days a curve runs above or below the frame (climatology in its first days).` },
-      L.curves.length > 1 && L.gap ? { note: `Both candidates are drawn here, and they lie on each other: their widest daily gap is ${(L.gap.d * 100).toFixed(1)} points of the blend's own error, on day ${L.gap.day}, where ${L.gap.ahead} is the lower of the two. That closeness IS the finding — this picture cannot separate them, and the skill panel's numbers barely can. The band labels print ${m.primary ? m.primary.label : 'the first curve'}'s skill, and the panels below — which carry one number per gauge — speak for it too; switch the others off to read this sheet for one of them alone.` } : null,
+      L.curves.length > 1 && L.gap ? { note: `Both candidates are drawn here, and they lie on each other: their widest daily gap is ${(L.gap.d * 100).toFixed(1)} points of the blend's own error, on day ${L.gap.day}, where ${L.gap.ahead} is the lower of the two. That closeness IS the finding — a hue and a dash each tell you WHICH curve you are on, but nothing separates them by value, and the skill panel's numbers barely can. The band labels print ${m.primary ? labelNC(m.primary) : 'the first curve'}'s skill, marked with its line, and the panels below — which carry one number per gauge — speak for it too; switch the others off to read this sheet for one of them alone.` } : null,
       L.station === 'pooled' ? { note: 'Pooled here means the median of the five regime gauges — of their day-by-day ratios in the curve and of their block skills in the band labels — so the Rhine and the Elbe do not outvote the Saar by their centimetres. Clause A1 in the facts pools centimetres instead; the blend MAE in the readout is that cm-pooled figure.' } : null,
-    ]) + table + '</section>';
+      { note: 'The names on the right sit at the end of their own line, spread apart where two would otherwise print on top of each other — so a name points at a line, it does not read a value off the scale. They never cross the ×1.00 bar, though: a name in the shaded half belongs to a line that ended in it.' },
+    ]) + table, 'names sit beside their line, not on its value') + '</section>';
 }
 
 function renderFacts(m) {
@@ -594,12 +838,15 @@ function renderIndex(m) {
     `</ul></nav>`;
 }
 
-// The one row that relabels the whole sheet. It sits directly above the curve
-// because that is the drawing it changes first: measured in Chrome before this
-// move, the chips sat 1 121 px below the curve's head (2 173 on a phone) and a
-// click scrolled the curve 1 166 px off the top of the screen. Now the chip
-// focuses the curve, and the drawing the reader is comparing stays in front of
-// them. The panels below read the same state; the index is what leads into them.
+// The one row that relabels the whole sheet. It lives in the `settings` fold,
+// shut, directly above the curve — never below it and never on its own screen:
+// measured in Chrome before that move, the chips sat 1 121 px below the curve's
+// head (2 173 on a phone) and a click scrolled the curve 1 166 px off the top.
+// A chip still focuses the curve, so the drawing the reader is comparing stays
+// in front of them, and the fold survives the re-render its own click causes.
+// The lid states what the row is set to, because a shut drawer is the only
+// place the sheet still says which target and horizon the picture is drawn for.
+// The panels below read the same state; the index is what leads into them.
 function renderControls(m) {
   const s = m.state;
   const on = m.models.filter(mo => mo.on).map(mo => mo.key);
@@ -609,11 +856,19 @@ function renderControls(m) {
   const modelChips = m.models.length < 2 ? [] : [
     ...m.models.map(mo => {
       const label = mo.label + (mo.shippable === false ? ` ${NC_GLYPH}` : '');
-      if (mo.missing) return { ctl: 'model', off: label, title: `${mo.label} has no ${TARGETS[s.target]} report — it cannot be drawn here` };
-      if (mo.on && on.length === 1) return { ctl: 'model', off: label, on: true, title: `${mo.label} is the only model in view — switch another on first` };
+      // the chip wears the model's hue and its curve: `m-<mark>` sets --mc for
+      // the whole chip, the swatch repeats the dash the drawing uses, so the
+      // name and the line it switches are the same mark in two places
+      const cls = mo.mark ? `mchip m-${mo.mark}` : null;
+      const sw = mo.mark ? swLine(`ln ln-${mo.mark}`) : '';
+      // a model with no report for this target has no curve on the sheet, so its
+      // chip carries no swatch either — a line swatch pointing at nothing drawn
+      // is the one thing worse than a chip with no mark at all
+      if (mo.missing) return { ctl: 'model', cls, off: label, title: `${mo.label} has no ${TARGETS[s.target]} report — it cannot be drawn here` };
+      if (mo.on && on.length === 1) return { ctl: 'model', cls, sw, off: label, on: true, title: `${mo.label} is the only model in view — switch another on first` };
       const next = mo.on ? on.filter(k => k !== mo.key) : m.models.filter(x => x.on || x.key === mo.key).map(x => x.key);
       return {
-        ctl: 'model',
+        ctl: 'model', cls, sw,
         href: stateHref(s, { models: next.length === m.models.length ? null : next, panel: 'lead' }),
         label, on: mo.on, focus: 'lead',
         title: mo.on ? `stop drawing ${mo.label}` : `draw ${mo.label} too${mo.shippable === false ? ' — measured, never shipped' : ''}`,
@@ -635,6 +890,17 @@ function renderControls(m) {
   ], m.models.length < 2 ? 'target and horizon block' : 'model, target and horizon block');
 }
 
+// A fold, closed, whose lid states what is inside it. This is how the sheet keeps
+// its first look to a verdict and a drawing: a reader who wants the seven clauses
+// or the whole control row opens the one that says so, and a reader who does not
+// is never asked to walk past them. The lid must always name the CURRENT state —
+// a shut fold hiding "daily max, days 31–90" while the drawing shows them would
+// be a sheet lying about itself.
+function fold(id, lid, body, state = '') {
+  return `<details class="fold"${attr('id', id)}><summary><span class="fl">${esc(lid)}</span>` +
+    (state ? `<span class="fs">${esc(state)}</span>` : '') + `</summary><div class="foldbody">${body}</div></details>`;
+}
+
 // a panel: the summary is the focus and click target; the visually hidden h2
 // keeps the heading in the outline (an h2 inside summary loses its semantics)
 function renderPanel(p, m) {
@@ -648,20 +914,24 @@ function renderSkill(m) {
   const zero = pct(0, SKILL_DOMAIN), thr = pct(k.threshold, SKILL_DOMAIN);
   const refs = `<span class="zero"${attr('style', `left:${zero.toFixed(2)}%`)}></span><span class="thr"${attr('style', `left:${thr.toFixed(2)}%`)}></span>`;
   const many = k.pooled.bars.length > 1;
-  const slot = i => (many ? `m${i + 1}` : '');
+  // the slot — upper and hatched, or lower and solid — is the model's, by its
+  // manifest index, like its hue: it must not move to the other candidate when
+  // the primary changes, because hatched-against-solid is the mark that tells
+  // the two bars apart at a glance
+  const slot = b => (many ? `m${b.slot}` : '');
   const trk = inner => `<span class="track${many ? ' two' : ''}">${refs}${inner}</span>`;
   // the value column carries the model's own mark when more than one is drawn,
   // so a number never depends on the reader remembering which bar sits on top
   const val = (b, text, sig) => `<span class="vm">${many ? sw(b.mark) : ''}${esc(text)}${sig ? '<span class="sig" title="DM p below 0.10">●</span>' : ''}</span>`;
-  const ciBar = (b, i) => `<span class="ci ${slot(i)}"${attr('style', `left:${pct(Math.max(SKILL_DOMAIN[0], b.lo), SKILL_DOMAIN).toFixed(2)}%;width:${(pct(Math.min(SKILL_DOMAIN[1], b.hi), SKILL_DOMAIN) - pct(Math.max(SKILL_DOMAIN[0], b.lo), SKILL_DOMAIN)).toFixed(2)}%`)}></span>`;
+  const ciBar = b => `<span class="ci ${slot(b)}"${attr('style', `left:${pct(Math.max(SKILL_DOMAIN[0], b.lo), SKILL_DOMAIN).toFixed(2)}%;width:${(pct(Math.min(SKILL_DOMAIN[1], b.hi), SKILL_DOMAIN) - pct(Math.max(SKILL_DOMAIN[0], b.lo), SKILL_DOMAIN)).toFixed(2)}%`)}></span>`;
   const pooledSay = `Pooled over ${k.pooled.stations.join(', ')} (${k.pooled.n} test origins each, ${BLOCK_LABEL[m.block]}): ` +
     k.pooled.bars.map(b => `${signed(b.ss)} for ${b.label}, moving-block bootstrap 95 % CI ${signed(b.lo)} to ${signed(b.hi)}`).join('; ') +
     `. Clause A1 asks for ${signed(k.threshold, 2)}.`;
   const rows = rowOpen('pooled', pooledSay) + `<span class="lbl">pooled · 5 regimes</span>` +
-    trk(k.pooled.bars.map((b, i) => skillBar(b.ss, false, slot(i)) + ciBar(b, i)).join('')) +
+    trk(k.pooled.bars.map(b => skillBar(b.ss, false, slot(b), b.mark) + ciBar(b)).join('')) +
     `<span class="val">${k.pooled.bars.map(b => val(b, signed(b.ss), false)).join('')}</span></div>` +
     k.rows.map(r => rowOpen('', r.say) + lbl(r.station, r.regime) +
-      trk(r.bars.map((b, i) => skillBar(b.ss, b.tie, slot(i))).join('')) +
+      trk(r.bars.map(b => skillBar(b.ss, b.tie, slot(b), b.mark)).join('')) +
       `<span class="val">${r.bars.map(b => val(b, signed(b.ss), b.sig)).join('')}</span></div>`).join('');
   const regimeLine = k.regimes.map(r => `${r.name} ${signed(r.ss)}`).join(' · ');
   // one row per gauge AND model, rather than a column pair per model: the columns
@@ -669,18 +939,18 @@ function renderSkill(m) {
   const table = `<details class="tbl"><summary>table</summary><div class="tblwrap"><table><thead><tr><th>station</th><th>regime</th>${many ? '<th>model</th>' : ''}<th>model MAE</th><th>blend MAE</th><th>skill</th><th>tie</th><th>DM z</th><th>p</th></tr></thead><tbody>` +
     k.rows.map(r => r.bars.map(b => `<tr><td>${esc(r.station)}</td><td>${esc(r.regime)}</td>${many ? `<td>${esc(b.label)}</td>` : ''}<td>${num(b.model, 1)}</td><td>${num(b.blend, 1)}</td><td>${signed(b.ss)}</td><td>${b.tie ? 'yes' : 'no'}</td><td>${num(b.z, 2)}</td><td>${pval(b.p)}</td></tr>`).join('')).join('') +
     `</tbody></table></div></details>`;
-  return `<p class="p-dim">1 − MAE<sub>model</sub> / MAE<sub>blend</sub>. Positive means the model beat the persistence-to-climatology blend; the bar had to reach ${esc(signed(k.threshold, 2))} pooled. Regime medians for ${esc(nameOf(m.primary))}: ${esc(regimeLine)}.</p>` +
+  return `<p class="p-dim">1 − MAE<sub>model</sub> / MAE<sub>blend</sub>. Positive means the model beat the persistence-to-climatology blend; the bar had to reach ${esc(signed(k.threshold, 2))} pooled. Regime medians for ${esc(labelNC(m.primary))}: ${esc(regimeLine)}.</p>` +
     `<div class="rows">${rows}</div>` + axis([-0.2, -0.1, 0, 0.1, 0.2], SKILL_DOMAIN, v => signed(v, 1)) +
     `<p class="p-readout" data-readout><span class="hint">Hover or pick a row for the numbers behind it.</span></p>` +
     plateKey([
-      ...(many ? m.drawn.map((mo, i) => ({
-        sw: swBar(`pos m${i + 1}`) + sw(mo.mark),
+      ...(many ? m.drawn.map(mo => ({
+        sw: swBar(`pos m${mo.slot} m-${mo.mark}`) + sw(mo.mark),
         // "hatched" and "solid" hold in both colour schemes; "pale"/"dark" would
         // swap over, because the line colour is the DARKER one only on paper
-        label: `${mo.label} — ${i === 0 ? 'the upper bar, hatched' : 'the lower bar, solid'}, and this mark beside its number`,
+        label: `${labelNC(mo)} — ${mo.slot === 1 ? 'the upper bar, hatched' : 'the lower bar, solid'}, in its own colour, and this mark beside its number`,
       })) : []),
-      { sw: swBar('pos'), label: 'better than the blend — the hatch leans right' },
-      { sw: swBar('neg'), label: 'worse than the blend — the hatch leans left' },
+      { sw: swBar(`pos${many ? '' : ` m-${(m.drawn[0] || {}).mark || 'tfm'}`}`), label: 'better than the blend — the hatch leans right, and the bar grows right of zero' },
+      { sw: swBar(`neg${many ? '' : ` m-${(m.drawn[0] || {}).mark || 'tfm'}`}`), label: 'worse than the blend — the hatch leans left, and the bar grows left of zero' },
       { sw: swBar('tie'), label: 'a tie — under 2 cm apart, neither win nor loss' },
       { sw: swRule('zero'), label: 'zero — as good as the blend' },
       { sw: '<span class="sw"><span class="ci" style="position:relative;display:block;top:5px;width:12px"></span></span>', label: 'bootstrap 95 % CI (pooled row)' },
@@ -745,7 +1015,7 @@ function renderCalib(m) {
   const table = `<details class="tbl"><summary>table</summary><div class="tblwrap"><table><thead><tr><th>station</th>${many ? '<th>model</th>' : ''}<th>PICP80 model</th><th>PICP80 blend</th>${Array.from({ length: 10 }, (_, i) => `<th>PIT ${i}</th>`).join('')}</tr></thead><tbody>` +
     m.calib.map(r => r.models.map(x => `<tr><td>${esc(r.station)}</td>${many ? `<td>${esc(x.label)}</td>` : ''}<td>${num(x.picp, 3)}</td><td>${num(r.blend, 3)}</td>${x.pit.map(f => `<td>${num(f * 100, 1)}</td>`).join('')}</tr>`).join('')).join('') +
     `</tbody></table></div></details>`;
-  return `<p class="p-dim">How often the model's 80 % interval actually contained the reading. Inside the shaded band is clause A5; the dashed line is the ideal 80 %. Below, the PIT histograms: a flat profile means the deciles are honest, a U means the band is too narrow, a hump too wide.</p>` +
+  return `<p class="p-dim">How often ${many ? 'each candidate’s' : 'the model’s'} 80 % interval actually contained the reading. Inside the shaded band is clause A5; the dashed line is the ideal 80 %. Below, the PIT histograms: a flat profile means the deciles are honest, a U means the band is too narrow, a hump too wide.</p>` +
     `<div class="rows">${rows}</div>` + axis([0.6, 0.7, 0.8, 0.9, 1.0], PICP_DOMAIN, v => num(v * 100, 0) + ' %') +
     `<p class="p-readout" data-readout><span class="hint">Hover or pick a row for coverage and CRPS.</span></p>` +
     `<div class="pits">${pits}</div>` +
@@ -781,7 +1051,7 @@ function renderShort(m) {
   // the model's own name, and the cm value BEFORE it: "TimesFM 3.0 2.5 cm" would
   // spell the other candidate's label out of a name and a number that only look
   // adjacent — a sheet read for one model must not contain the other's name at all
-  const label = nameOf(m.primary);
+  const label = nameOf(s.model || m.primary);
   const rows = s.stations.map(st => {
     const o = Math.min(100, (st.origins / s.need) * 100);
     const say = `${st.name}: ${st.origins} of ${s.need} independent 48-hour origins collected, ${st.rises} rise events (${s.needRises} needed). ` +
@@ -806,9 +1076,19 @@ function renderShort(m) {
 function renderBasics(m) {
   const k = m.story;
   return `<div class="prose">` +
-    `<p><b>Model and question.</b> ${a(cardOf(m.primary), nameOf(m.primary))} is Google's ${esc((m.primary && m.primary.params) || '')}-parameter foundation model for time series; it forecasts <em>zero-shot</em>, untrained on the series at hand. Could it beat something trivial on 26 years of daily archive? ${esc(thousands(k.windows))} windows on seven gauges, run twice to prove it reproduces.</p>` +
+    // subject and verdict follow the model chips; the bar does not, because the
+    // blend is the same bar for every candidate
+    `<p><b>Model and question.</b> ${(k.each.length ? k.each : [{ label: nameOf(m.primary), params: (m.primary || {}).params }]).map((x, i) =>
+      `${i ? ' and ' : ''}${a(cardOf(m.drawn[i] || m.primary), x.label)}${x.shippable === false ? ` ${NC_GLYPH}` : ''} (${esc(x.params || '')})`).join('')} ` +
+      `${k.each.length > 1 ? 'are' : 'is'} Google's foundation model${k.each.length > 1 ? 's' : ''} for time series, forecasting <em>zero-shot</em> — untrained here. Could ${k.each.length > 1 ? 'either' : 'it'} beat something trivial on 26 years of archive? ${esc(thousands(k.windows))} windows on seven gauges, each run twice.</p>` +
     `<p><b>The bar.</b> Not persistence: a two-line blend, today's level decaying into the day-of-year norm, already beats it by ${esc(k.persistGain)} at KÖLN over three months. The model had to beat that blend by ten percent, pooled, in every block; the Rhine trio votes once.</p>` +
-    `<p><b>The verdict.</b> ${esc(k.verdict)}. At two weeks ${esc(nameOf(m.primary))} beats the blend by ${esc(k.h1)}, under the bar; at a month it draws; at three months it is ${esc(k.h90)} ${esc(k.h90sign)}. Its bands are honest. Beyond a month climatology alone sits within ${esc(k.climRest)} of the bar everywhere but ${esc(k.climWorst)}: the long horizon needs a calendar, not a model.</p>` +
+    // the candidates share one sentence rather than one each: Basics is capped at
+    // 150 words, and a second full verdict paragraph blew through it
+    `<p><b>The verdict.</b> ${esc(k.verdict)}. ` +
+      (k.each.length > 1
+        ? `At two weeks ${k.each.map(x => `${esc(x.label)} beats the blend by ${esc(x.h1)}`).join(', ')} — all under the bar; at three months ${esc(k.each.map(x => `${x.h90} ${x.h90sign}`).join(' and '))}.`
+        : `At two weeks ${esc(nameOf(m.primary))} beats the blend by ${esc(k.h1)}, under the bar; at a month it draws; at three months it is ${esc(k.h90)} ${esc(k.h90sign)}.`) +
+      ` ${k.each.length > 1 ? 'Both are calibrated' : 'Its bands are honest'}. Beyond a month climatology alone sits within ${esc(k.climRest)} of the bar everywhere but ${esc(k.climWorst)}: the long horizon needs a calendar, not a model.</p>` +
     `<p class="p-dim">Code: <a href="https://github.com/bmmmm/pegel-visual/tree/main/scripts/forecast">scripts/forecast</a>; the markdown reports sit beside this page.</p></div>`;
 }
 
@@ -819,38 +1099,72 @@ function renderBasics(m) {
 function renderModel(m) {
   const h = m.head, c = h.config || {}, pr = h.protocol || {};
   const v = h.versions || {};
+  // every candidate in view, each with its own run header
+  const who = (m.drawn.length ? m.drawn : [m.primary].filter(Boolean));
   const step = (cls, name, detail) => `<li class="fn ${cls}"><b>${esc(name)}</b><span>${detail}</span></li>`;
   const chain = `<ol class="flow">` +
     step('src', 'PEGELONLINE daily archive', `one min and one max per day, from the ${a(LINKS.archive, 'archive branch')} — closed years only, because the running year is still being rewritten and a gate built on it would not reproduce`) +
     step('step', 'loaders.py — windows', `gaps of up to three days interpolated, longer ones drop the window; a new origin every ${esc(pr.step)} days, ${esc(thousands(pr.context))} days of context, ${esc(pr.horizon)} days to forecast`) +
     step('step', 'baselines.py — the bar', 'persistence, day-of-year climatology, the blend between them, seasonal naive 365, an upstream OLS — computed first, on exactly these windows') +
-    step('model', `tfm.py — ${nameOf(m.primary)}`, `the same windows, nothing else: no rain, no upstream gauge, no calendar feature. ${esc(c.per_core_batch_size)} per batch on CPU in float32, seed 0, ${esc(h.threads)} threads; of its quantile channels the point forecast is the median — which channel that is differs between the lines, so tfm.py asserts it on every call — and the median is what gets scored`) +
+    step('model', `tfm.py — ${m.drawn.length ? m.drawn.map(mo => mo.label).join(' and ') : nameOf(m.primary)}`, `the same windows, nothing else: no rain, no upstream gauge, no calendar feature. ${esc(c.per_core_batch_size)} per batch on CPU in float32, seed 0, ${esc(h.threads)} threads; of its quantile channels the point forecast is the median — which channel that is differs between the lines, so tfm.py asserts it on every call — and the median is what gets scored`) +
     step('step', 'metrics.py — the scores', 'MAE and CRPS per lead day, the 80 % coverage, the PIT histogram, and a Diebold-Mariano test that knows the windows overlap') +
-    step('step', 'gate.py — the clauses', `each pre-registered threshold checked in turn; a run whose ForecastConfig does not hash to ${esc(h.fingerprint)}, or whose origin grid was truncated, is VOID rather than a verdict`) +
+    step('step', 'gate.py — the clauses', `each pre-registered threshold checked in turn; a run whose ForecastConfig does not hash to ${who.length > 1 ? who.map(mo => `${esc((mo.head || h).fingerprint)} for ${esc(labelNC(mo))}`).join(' or ') : esc(h.fingerprint)}, or whose origin grid was truncated, is VOID rather than a verdict`) +
     step('out', 'report.json — this page', 'the same file in every panel here, and its markdown twin beside it; nothing on this sheet is typed by hand') +
     `</ol>`;
-  const cmds = `<details class="cmds"><summary>the two commands behind this sheet</summary><div class="tblwrap"><pre><code>` +
-    esc('uv run python backtest.py --horizon ' + (h.kind || 'seasonal') + ' --target ' + m.target + ' \\\n    --archive ../../archive --out ../../tmp-forecast/results/' + (h.kind || 'seasonal') + '-' + m.target + '\n' +
-        'uv run python gate.py --results ../../tmp-forecast/results/' + (h.kind || 'seasonal') + '-' + m.target + ' \\\n    --compare ../../tmp-forecast/results/' + (h.kind || 'seasonal') + '-' + m.target + '-repeat') +
+  // the commands that produced what is drawn — one pair per candidate, and the
+  // challenger's carries the flags that actually run it: a copied command line
+  // would silently rerun the shipped model
+  const kind = h.kind || 'seasonal';
+  const cmdFor = mo => {
+    const dir = `../../tmp-forecast/results/${kind}-${m.target}${mo.shippable === false ? `-${mo.key}` : ''}`;
+    const grp = mo.shippable === false ? 'uv run --no-group model --group model-nc python' : 'uv run python';
+    const sel = mo.shippable === false ? ` --model ${mo.key}` : '';
+    return `${grp} backtest.py --horizon ${kind} --target ${m.target}${sel} \\\n    --archive ../../archive --out ${dir}\n` +
+      `${grp} gate.py --results ${dir} \\\n    --compare ${dir}-repeat`;
+  };
+  const cmds = `<details class="cmds"><summary>the commands behind this sheet</summary><div class="tblwrap"><pre><code>` +
+    esc(who.map(mo => (who.length > 1 ? `# ${mo.label}\n` : '') + cmdFor(mo)).join('\n')) +
     `</code></pre><p class="p-dim">Weights are pulled once from the model card and cached locally; the run took ${esc(num(h.elapsed, 0))} s on a laptop CPU. CI installs the same environment <em>without</em> the model group and runs the window, baseline and licence tests only — the gate itself is run by hand, because a re-run consumes the test set.</p></div></details>`;
-  return `<div class="prose"><p>${a(cardOf(m.primary), nameOf(m.primary))} is Google's foundation model for time series: decoder-only, ${esc((m.primary && m.primary.params) || '')} parameters, ` +
-    `pre-trained on other people's series and applied here <em>zero-shot</em> — it saw no gauge of this archive in training, and nothing was fitted to one. ` +
-    `<em>Decoder-only</em> means it continues a series the way a language model continues a sentence, reading it in patches of days rather than words. ` +
-    `The architecture is the ${a(LINKS.paper, 'ICML 2024 paper')}'s; the weights carried here are ${esc(h.license)}, checkpoint ${a(cardOf(m.primary), h.checkpoint)}, loaded through the ` +
-    `${a(LINKS.pkg, 'timesfm package')} pinned to ${esc(v.timesfm)} — both pins are deliberate. ` +
-    (m.primary && m.primary.shippable === false
-      ? `These weights are <b>non-commercial</b> ${NC_GLYPH}: this repo is GPL-3.0, so this line is measured here and its numbers published, but it can never be the model the site ships, however it scores.`
-      : `These weights are permissively licensed, which is why this line is the one the site ships.`) + `</p>` +
-    `<p class="p-dim">What follows is the chain the ${esc(thousands(h.windows))} scored windows travel, from the archive to the picture at the top of this sheet. Only one link in it is the model.</p></div>` +
+  // one paragraph per candidate in view, out of that candidate's own header: the
+  // panel is what the reader opens to check the model claim, so a line that is
+  // drawn and not described here is a claim with no evidence behind it
+  // what the lines share is said once; each candidate then gets the four things
+  // that actually differ — size, licence, checkpoint, package pin — because two
+  // paragraphs that open with the same clause read as one paragraph repeated
+  const many = who.length > 1;
+  const licence = mo => (mo.shippable === false
+    ? `<b>non-commercial</b> ${NC_GLYPH} — this repo is GPL-3.0, so this line is measured here and its numbers published, but it can never be the model the site ships, however it scores`
+    : `permissively licensed, which is why this line is the one the site ships`);
+  const para = mo => {
+    const hh = mo.head || h, vv = (hh.versions || {});
+    return many
+      ? `<p>${a(cardOf(mo), nameOf(mo))} — ${esc(mo.params || '')} parameters, checkpoint ${a(cardOf(mo), hh.checkpoint)}, through the ${a(LINKS.pkg, 'timesfm package')} pinned to ${esc(vv.timesfm)}. ` +
+        `The weights are ${esc(hh.license)}: ${licence(mo)}.</p>`
+      : `<p>${a(cardOf(mo), nameOf(mo))} is Google's foundation model for time series: decoder-only, ${esc(mo.params || '')} parameters, ` +
+        `pre-trained on other people's series and applied here <em>zero-shot</em> — it saw no gauge of this archive in training, and nothing was fitted to one. ` +
+        `<em>Decoder-only</em> means it continues a series the way a language model continues a sentence, reading it in patches of days rather than words. ` +
+        `The architecture is the ${a(LINKS.paper, 'ICML 2024 paper')}'s; the weights carried here are ${esc(hh.license)}, checkpoint ${a(cardOf(mo), hh.checkpoint)}, loaded through the ` +
+        `${a(LINKS.pkg, 'timesfm package')} pinned to ${esc(vv.timesfm)} — both pins are deliberate. These weights are ${licence(mo)}.</p>`;
+  };
+  const shared = many
+    ? `<p>TimesFM is Google's foundation model for time series: decoder-only, pre-trained on other people's series and applied here <em>zero-shot</em> — neither line saw a gauge of this archive in training, and nothing was fitted to one. ` +
+      `<em>Decoder-only</em> means it continues a series the way a language model continues a sentence, reading it in patches of days rather than words. ` +
+      `The architecture is the ${a(LINKS.paper, 'ICML 2024 paper')}'s. Two of its lines are measured here, on the same windows, and both pins are deliberate.</p>`
+    : '';
+  return `<div class="prose">${shared}${who.map(para).join('')}` +
+    `<p class="p-dim">What follows is the chain the ${esc(thousands(h.windows))} scored windows travel, from the archive to the picture at the top of this sheet — the same windows for every candidate; only the model link changes.</p></div>` +
     chain +
     plateKey([
       { sw: swNode('src'), label: 'data this run reads' },
       { sw: swNode('step'), label: `a step in this repo (${'scripts/forecast'})` },
       { sw: swNode('model'), label: 'the foreign model — the only link that is not ours' },
       { sw: swNode('out'), label: 'what every panel on this page is drawn from' },
-      { note: `Run ${h.generated}, git ${h.git}, timesfm ${v.timesfm} · torch ${v.torch} · numpy ${v.numpy}. ` +
-        (h.repeat ? 'The same batch forecast twice gave identical numbers, ' : 'The repeat check did not run, ') +
-        (h.reproduced ? `and a second full run reproduced every number (sha256 ${String(h.sha || '').slice(0, 12)}…).` : 'and no second full run was compared.') },
+      ...who.map(mo => {
+        const hh = mo.head || h, vv = (hh.versions || {});
+        return { note: `${who.length > 1 ? `${mo.label}: ` : ''}run ${hh.generated}, git ${hh.git}, timesfm ${vv.timesfm} · torch ${vv.torch} · numpy ${vv.numpy}. ` +
+          (hh.repeat ? 'The same batch forecast twice gave identical numbers, ' : 'The repeat check did not run, ') +
+          (hh.reproduced ? `and a second full run reproduced every number (sha256 ${String(hh.sha || '').slice(0, 12)}…).` : 'and no second full run was compared.') };
+      }),
     ]) + cmds + `<p class="p-dim">All of it: ${a(LINKS.code, 'scripts/forecast')}.</p>`;
 }
 
@@ -860,14 +1174,15 @@ function renderMethod(m) {
     `<p>Rolling-origin backtest on the daily archive, closed years 2000–2025: 1 024 days of context, 90 days of horizon, one origin every 7 days. Origins before 2016 (676 per gauge) fit the blend's τ and its residual deciles; origins from 2016 (${esc(h.windows / h.stations)} per gauge, ${esc(h.windows)} in all) are scored. A 90-day embargo separates the two.</p>` +
     `<p>The bar is the <b>blend</b> — e<sup>−h/τ</sup>·today + (1 − e<sup>−h/τ</sup>)·climatology(day) — not persistence: at days 31–90 the blend already beats persistence by a quarter, so a win over persistence would be a win over nothing. Overlapping windows are not independent samples: significance comes from Diebold-Mariano tests with a Newey-West variance (lag 13) and a moving-block bootstrap over origins (block 26), and the Rhine trio votes once, by its median.</p>` +
     `<ul><li>Every threshold and the ForecastConfig were fixed before the first model run; a run with a different config, a truncated grid, or one that does not reproduce bit for bit is VOID, not a verdict.</li>` +
-    `<li>${esc(nameOf(m.primary))} has no published corpus manifest. PEGELONLINE is open and CAMELS-DE covers German basins, so the archive may be in its training data — and the later the checkpoint, the more of A7's own recent side can sit inside that window. Clause A7 compares recent against old origins; it is a probe, not a proof.</li>` +
+    `<li>${esc(m.drawn.length > 1 ? `Neither ${m.drawn.map(labelNC).join(' nor ')} has a` : `${labelNC(m.primary)} has no`)} published corpus manifest. PEGELONLINE is open and CAMELS-DE covers German basins, so the archive may be in its training data — and the later the checkpoint, the more of A7's own recent side can sit inside that window. Clause A7 compares recent against old origins; it is a probe, not a proof.</li>` +
     `<li>The blend's τ and residual deciles are fitted on the pre-2016 origins, which favours the blend slightly on A7's old side.</li>` +
     `<li>The daily-max target run (switch the target chip above) tells the same story: the crest is no easier to forecast than the mid.</li></ul></div>`;
 }
 
 function renderFoot(m) {
-  const h = m.head;
-  const v = h.versions || {};
+  // a report's grid, from the directory it sits in: seasonal-mid and short-mid
+  // are two test sets, and "(mid)" twice per model named neither
+  const gridOf = dir => (dir.startsWith('short-') ? 'short' : dir.replace(/^seasonal-/, ''));
   return `<footer id="plate-foot">` +
     m.verdicts.map(mv => {
       const vh = mv.head, vv = vh.versions || {};
@@ -876,12 +1191,17 @@ function renderFoot(m) {
         (mv.shippable ? '' : ` ${NC_GLYPH} measured, never shipped`) +
         ` · ${a(LINKS.pkg, 'timesfm')} ${esc(vv.timesfm)} · torch ${esc(vv.torch)} · numpy ${esc(vv.numpy)} · config ${esc(vh.config_fingerprint)}</p>`;
     }).join('') +
-    `<p><span class="lbl">run</span>${esc(h.generated)} · git ${esc(h.git)} · ${esc(num(h.elapsed, 0))} s on CPU, float32` +
-    (h.reproduced ? ` · reproduced bit for bit by a second full run at ${esc(h.reproduced)}` : ' · second full run: not compared') + `</p>` +
+    // one run line per model drawn: each run has its own timestamp, git and
+    // clock, and a single line under two model lines was the primary's, unnamed
+    m.verdicts.map(mv => {
+      const vh = mv.head;
+      return `<p><span class="lbl">run</span>${m.verdicts.length > 1 ? `${esc(labelNC(mv))} · ` : ''}${esc(vh.generated)} · git ${esc(vh.git)} · ${esc(num(vh.elapsed_s, 0))} s on CPU, float32` +
+        (vh.reproduced_by_run ? ` · reproduced bit for bit by a second full run at ${esc(vh.reproduced_by_run)}` : ' · second full run: not compared') + `</p>`;
+    }).join('') +
     `<p><span class="lbl">source</span>PEGELONLINE (WSV) daily archive on the <a href="https://github.com/bmmmm/pegel-visual/tree/archive">archive branch</a> · ` +
     m.drawn.flatMap(mo => Object.entries(mo.files || {})
       .filter(([, f]) => f && f.md)
-      .map(([dir, f]) => `${a(f.md, `${m.drawn.length > 1 ? `${mo.label} ` : ''}report (${dir.replace(/^(seasonal|short)-/, '')})`)} · `)).join('') +
+      .map(([dir, f]) => `${a(f.md, `${m.drawn.length > 1 ? `${mo.label} ` : ''}report (${gridOf(dir)})`)} · `)).join('') +
     `<a href="https://github.com/bmmmm/pegel-visual/tree/main/scripts/forecast">the gate's code</a></p>` +
     `<p><span class="lbl">not</span>a forecast product. Nothing on this sheet predicts a river; it measures whether a model could, and the answer was no.</p>` +
     renderBack() +
@@ -890,18 +1210,29 @@ function renderFoot(m) {
 
 export function screenSummary(m) {
   const k = m.skill;
-  return `Forecast gate, ${m.verdict}. ${nameOf(m.primary)} against the persistence-to-climatology blend, ${TARGETS[m.target]} target, ${BLOCK_LABEL[m.block]}: pooled skill ${signed(k.pooled.ss)} with a 95 % interval from ${signed(k.pooled.lo)} to ${signed(k.pooled.hi)}. ` +
-    `${m.clauses.filter(c => c.pass).length} of ${m.clauses.length} clauses passed.`;
+  // one clause per model drawn: a reader who cannot see the bars has to be told
+  // that there are two of them, and which number belongs to which
+  const many = k.pooled.bars.length > 1;
+  const each = k.pooled.bars.map(b => `${many ? `${b.label} ` : ''}pooled skill ${signed(b.ss)} with a 95 % interval from ${signed(b.lo)} to ${signed(b.hi)}`).join('; ');
+  return `Forecast gate, ${m.verdict}. ${many ? `${k.pooled.bars.length} candidates` : nameOf(m.primary)} against the persistence-to-climatology blend, ${TARGETS[m.target]} target, ${BLOCK_LABEL[m.block]}: ` +
+    `${each || `pooled skill ${signed(k.pooled.ss)} with a 95 % interval from ${signed(k.pooled.lo)} to ${signed(k.pooled.hi)}`}. ` +
+    `${m.clauses.filter(c => c.pass).length} of ${m.clauses.length} clauses passed${many ? ` for ${nameOf(m.primary)}` : ''}.`;
 }
 
+// The first look is a verdict and a drawing. Everything that used to stand
+// between them — seven clause chips, three rows of controls, three lines of
+// prose, a 250-word key — is still here, one fold away, each lid naming what it
+// holds and the state it is in. Measured before this order: on a 390 px phone
+// the chart started 1 213 px down, so the picture the sheet is FOR was not on
+// the first screen at all, and on a 900 px desktop it was cut off at 661 px.
 export function renderPage(m) {
   return `<p class="vh">${esc(screenSummary(m))}</p>` +
     renderBack() +
     `<header class="p-head"><h1 tabindex="-1"><a href="../">PEGEL://</a> · FORECAST GATE</h1>` +
     `<p class="p-sub">${esc(m.gist)}</p></header>` +
     renderVerdict(m) +
-    renderControls(m) +
     renderLead(m) +
+    renderClauses(m) +
     renderFacts(m) +
     renderIndex(m) +
     m.panels.map(p => renderPanel(p, m)).join('') +
@@ -1070,7 +1401,10 @@ function draw(opts = {}) {
   const m = buildModel(reports, state);
   // what the reader had open stays open: the panels, and the table twins inside them (by position)
   const open = [...root.querySelectorAll('details[open]')].map(d => {
-    if (d.classList.contains('panel')) return { id: d.id };
+    // folds too, and for the same reason: the settings fold IS the control row,
+    // so a chip inside it that closed its own fold on every click would be a
+    // control you can use exactly once
+    if (d.classList.contains('panel') || d.classList.contains('fold')) return { id: d.id };
     const panel = d.closest('details.panel, #lead');  // the panel, or the curve's section — not the id-less <section> inside a panel
     return panel ? { id: panel.id, tbl: [...panel.querySelectorAll('details.tbl')].indexOf(d) } : null;
   }).filter(Boolean);
@@ -1099,8 +1433,9 @@ export async function loadReports() {
     const [mid, max, short] = await Promise.all([at('seasonal-mid'), at('seasonal-max'), at('short-mid')]);
     byKey[mo.key] = { seasonal: { mid, max: max || undefined }, short: short || undefined };
   }));
-  // a model whose mid report did not answer cannot be offered at all
-  return { models: listed.filter(mo => byKey[mo.key] && byKey[mo.key].seasonal.mid), byKey };
+  // a model whose mid report did not answer cannot be offered at all; the
+  // primary is the manifest's word, and buildModel falls back when it is not on
+  return { models: listed.filter(mo => byKey[mo.key] && byKey[mo.key].seasonal.mid), byKey, primary: typeof manifest.primary === 'string' ? manifest.primary : null };
 }
 
 export async function main() {

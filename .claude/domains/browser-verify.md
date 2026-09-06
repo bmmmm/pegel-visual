@@ -44,6 +44,10 @@ memory `browser-verify-cdp-recipe` points here as the source.
   `closed.json` + `current.json` into `archive/<uuid>/` next to the worktree's
   `index.html`, then serve it — that is how new code meets real data before it
   is deployed. `?station=BONN&history=5y` drives the range straight from the URL.
+  In a worktree, `ln -s <main checkout>/archive archive` is the quick way to the
+  same data — but `git status` then shows it as `??`, because the ignore rule
+  `/archive/` matches a directory, not a symlink. Remove the link before the
+  commit (2026-09-06).
 - **Driving the live browser: the tab has to be VISIBLE.** A tab that is
   minimised, on another Space or fully covered by another window reports
   `document.visibilityState === 'hidden'`, and Chrome then stops serving
@@ -55,3 +59,11 @@ memory `browser-verify-cdp-recipe` points here as the source.
   A second trap: with browser zoom on, the extension's screenshot is a crop in
   device pixels, so image coordinates are `css * devicePixelRatio` — click by
   element `ref`, not by pixels read off the picture.
+- **A layout measured on this Mac is not a measurement of the CI runner.** The
+  same subtitle wrapped to three lines more on the runner's fonts, and
+  `gate-check`'s "the drawing is whole on the first screen" went from 819 px of
+  844 locally to 884 on the runner — green here, red on main (2026-09-04). Chrome
+  is the same build; the fonts are not. So when prose grows against a measured
+  edge, leave room for a third of the block again, and cap the string's length in
+  a unit test — that check runs the same everywhere, which is the whole point of
+  putting the budget there rather than in the browser.

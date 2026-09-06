@@ -1,18 +1,43 @@
-/* The forecast gate as a survey plate — the same tokens, rules and components
-   as index.html, trimmed to what this sheet draws. Marks are HTML/CSS spans
+/* The forecast gate as a survey plate — index.html's tokens, rules and
+   components, trimmed to what this sheet draws. Four deliberate departures, all
+   below: --dim and --mid are a step darker than the app's and --rule a step
+   stronger, because almost everything on this sheet is set small; --wash is new,
+   for the hatches that lie UNDER a drawing rather than beside it; and the
+   candidates get a hue each (--m1…--m4), because the app never draws two models
+   on one axis. Marks are HTML/CSS spans
    positioned in percent inside a track, so the geometry scales with the plate
    while the text stays text; every mark class here is also a legend swatch. */
 :root {
   color-scheme: light dark;
   --paper: light-dark(#fbfbf9, #121417);
   --ink: light-dark(#141414, #e8e6e1);
-  --dim: light-dark(#737373, #7d848a);
-  --mid: light-dark(#5c5c5c, #9aa0a4);
+  /* darker than index.html's own --dim/--mid on purpose: this sheet sets almost
+     all of its secondary text at 0.66–0.85em, where 4.6:1 is not enough to read.
+     Measured on the paper below — dim 6.0:1, mid 8.2:1 light, 6.7 / 8.3 dark. */
+  --dim: light-dark(#616161, #969ca1);
+  --mid: light-dark(#4d4d4d, #a9afb3);
   --water: light-dark(#a8cede, #5b8aa3);
   --dry: light-dark(#f0dcae, #4a3d1c);
   --water-line: light-dark(#2f6d8f, #9fd4ec);
   --dry-line: light-dark(#8f6410, #e3bb63);
-  --rule: color-mix(in oklab, var(--ink) 22%, transparent);
+  --rule: color-mix(in oklab, var(--ink) 32%, transparent);
+  /* the two hatched washes — the acceptance band and the horizon block in view —
+     stayed behind when --rule went up: they sit UNDER the curves, and at 32 % on
+     dark paper the shading read as the loudest thing in the frame */
+  --wash: color-mix(in oklab, var(--ink) 22%, transparent);
+  /* One hue per candidate, in slot order — two curves that lie on each other
+     cannot be told apart by a dash pattern alone. The pair that actually ships
+     on this sheet is m1 against m2: the water blue and its complement. m3/m4 are
+     the spare slots of MODEL_MARKS, held here so a third candidate is never
+     water blue again; five marks (these four plus the climatology ochre) on one
+     wheel cannot all sit 90° apart, so the wide separation is spent where it is
+     drawn. The thresholds are NOT stated here — `tests/gate-page.test.mjs`
+     measures every gap and every ratio off these very hex values, and a comment
+     cannot go stale against a number that is asserted. */
+  --m1: var(--water-line);
+  --m2: light-dark(#8c0f42, #e87ba2);
+  --m3: light-dark(#256b44, #86cda1);
+  --m4: light-dark(#6b3f9e, #c4a6f0);
   --font-text: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
   --font-data: ui-monospace, 'SF Mono', Monaco, 'Cascadia Mono', monospace;
   --lbl: 11rem;
@@ -33,7 +58,7 @@ body {
 a { color: var(--ink); }
 :where(a, button, [tabindex]):focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
 /* what a chip or index link just opened: the ring must show whatever the focus heuristic thinks */
-details.panel > summary:focus, #lead h2[tabindex]:focus, h1[tabindex]:focus { outline: 2px solid var(--ink); outline-offset: 3px; }
+details.panel > summary:focus, details.fold > summary:focus, #lead h2[tabindex]:focus, h1[tabindex]:focus { outline: 2px solid var(--ink); outline-offset: 3px; }
 main {
   margin: 5vh auto 4vh;
   padding: 1.6em 1.8em;
@@ -59,12 +84,15 @@ main {
 .p-back a { text-decoration: none; }
 .p-back a:hover, .p-back a:focus-visible { text-decoration: underline; }
 #plate-foot .p-back { margin: 0.9em 0 0; font-size: 1em; }
+/* a section head is a rule in full ink, not a grey hairline: at 0.85em uppercase
+   the line carries as much of the heading as the letters do */
 .p-h2 {
-  font-size: 0.8em;
+  font-size: 0.85em;
+  font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.07em;
   margin: 1.3em 0 0.4em;
-  border-bottom: 1px solid var(--rule);
+  border-bottom: 1px solid var(--ink);
   padding-bottom: 0.25em;
 }
 .p-block { margin-top: 1.8em; }
@@ -98,17 +126,28 @@ main {
 .verdict .why { font-size: 0.95em; max-width: 46rem; }
 /* with more than one candidate in view each states its own verdict here; the
    headline word above stays the primary's, the one the panels speak for */
-.vmodels { list-style: none; margin: 0.7em 0 0; padding: 0; display: flex; flex-wrap: wrap; gap: 0.3em 1.6ch; font-size: 0.92em; }
-.vmodels li { display: flex; align-items: baseline; gap: 0.7ch; }
-.vmodels .nm { font-weight: 600; }
-.vmodels .vw { font-family: var(--font-data); letter-spacing: 0.04em; }
-.vmodels .vw.pass { color: var(--water-line); }
+/* one entry per candidate, and the entry is the candidate's colour: its own
+   curve swatch, its name in its own hue, on a rule in that hue. Two names in
+   the same ink a space apart read as one sentence about one model. */
+.vmodels { list-style: none; margin: 0.7em 0 0; padding: 0; display: flex; flex-wrap: wrap; gap: 0.5em 1.2em; font-size: 0.92em; }
+.vmodels li { display: flex; align-items: center; gap: 0.7ch; border-left: 3px solid var(--mc, var(--ink)); padding: 0.05em 0 0.05em 0.8ch; }
+.vmodels .nm { font-weight: 700; color: var(--mc, var(--ink)); }
+/* the verdict word stays full ink, both ways. Tinting FAIL ochre cost it 17.8:1
+   for a distinction the word NO-SHIP already makes in letters; and PASS in the
+   water blue was worse still now that the same blue means "TimesFM 2.5" three
+   centimetres away — a SHIP printed for the carmine candidate would have come
+   out in the other candidate's colour, inside its own carmine-edged entry. */
+.vmodels .vw { font-family: var(--font-data); letter-spacing: 0.04em; font-weight: 600; }
 .vmodels .vn { color: var(--mid); }
 /* the licence mark: a glyph, never a colour on its own. On a chip it rides in
    the label's own text; the control row spells out what it means, because a
    title attribute is unreachable with a finger. */
 .vmodels .nc { font-size: 1.05em; }
 .clauses { list-style: none; margin: 1em 0 0; padding: 0; display: flex; flex-wrap: wrap; gap: 0.4em 0.5ch; }
+/* with two candidates drawn, each list of clauses is headed by its model's own
+   mark — the hue through --mc, the dash through the swatch, the name in words */
+.cl-model { display: flex; align-items: center; gap: 0.6ch; margin: 1em 0 0; font-size: 0.92em; color: var(--mc, var(--ink)); }
+.cl-model + .clauses { margin-top: 0.4em; }
 .clauses button {
   font: inherit;
   font-family: var(--font-data);
@@ -137,9 +176,18 @@ main {
   margin: 0.7em 0 0.9em;
   font-family: var(--font-data);
   font-size: 0.85em;
+  /* --mc INHERITS, and the locked-on chip below falls back to the ink only when
+     nobody set it. Without this reset, a control row placed inside any
+     model-coloured box would hand that model's hue to every target and block
+     chip in it — measured: gate-check's palette pass goes red on exactly that,
+     and green again with this line. A chip declares its own hue or has none. */
+  --mc: initial;
 }
 .p-tabs-lbl { font-size: 0.8em; text-transform: uppercase; letter-spacing: 0.07em; color: var(--dim); margin-right: 0.4ch; }
-.p-tabs-lbl:not(:first-child) { margin-left: 0.8ch; }
+/* a label and its chips are one group; on a wide plate the group has no box of
+   its own, so the row lays out exactly as it did when the chips were loose */
+.p-tabs .grp { display: contents; }
+.p-tabs .grp:not(:first-child) > .p-tabs-lbl { margin-left: 0.8ch; }
 .p-tabs a {
   font: inherit;
   display: inline-flex;
@@ -152,6 +200,17 @@ main {
   white-space: nowrap;
 }
 .p-tabs .on, .p-tabs a:hover { background: var(--ink); color: var(--paper); }
+/* a model chip is painted in the model's own hue and carries its curve as a
+   swatch, so the row above the chart says which line each name switches. On
+   the lit chip the hue becomes the ground and the swatch drops to the chip's
+   own text colour — a stroke in --mc on a --mc fill would be an empty box. */
+.p-tabs .mchip { color: var(--mc); border-color: var(--mc); gap: 0.6ch; }
+.p-tabs a.mchip:hover, .p-tabs .mchip.on { background: var(--mc); color: var(--paper); border-color: var(--mc); }
+.p-tabs .mchip .ln { stroke: var(--mc); stroke-width: 2; }
+.p-tabs .mchip.on .ln, .p-tabs a.mchip:hover .ln { stroke: currentColor; }
+/* unavailable stays the greyed dashed box it was: it has no curve to name */
+.p-tabs .off.mchip:not(.on) { color: var(--dim); border-color: var(--rule); }
+.p-tabs .off.mchip:not(.on) .ln { stroke: var(--dim); }
 @media (pointer: coarse) {
   .p-tabs a, .clauses button { min-block-size: 2.4rem; }
   .row { min-block-size: 2.4rem; }
@@ -168,7 +227,7 @@ main {
   cursor: default;
 }
 .row[tabindex] { cursor: pointer; }
-.row:hover, .row:focus-visible { background: color-mix(in oklab, var(--ink) 6%, transparent); outline-offset: -2px; }
+.row:hover, .row:focus-visible { background: color-mix(in oklab, var(--ink) 11%, transparent); outline-offset: -2px; }
 .row.head { color: var(--dim); font-size: 0.72em; text-transform: uppercase; letter-spacing: 0.06em; }
 .row.pooled { border-bottom: 1px solid var(--rule); margin-bottom: 0.3em; padding-bottom: 0.4em; }
 .row.pooled .lbl { font-weight: 700; }
@@ -180,11 +239,9 @@ main {
 .track > * { position: absolute; top: 0; height: 100%; }
 /* reference lines: solid hairline for zero / the blend, dashed for a threshold */
 .zero, .one { width: 0; border-left: 1px solid var(--ink); }
-.thr { width: 0; border-left: 1px dashed var(--ink); opacity: 0.55; }
+.thr { width: 0; border-left: 1px dashed var(--ink); opacity: 0.75; }
 /* skill bars: direction by hue AND hatch, so the sign survives greyscale */
 .bar { top: 15%; height: 70%; border: 1px solid var(--ink); forced-color-adjust: none; }
-.bar.pos { background: repeating-linear-gradient(45deg, var(--water) 0 3px, var(--water-line) 3px 4px); }
-.bar.neg { background: repeating-linear-gradient(135deg, var(--dry) 0 3px, var(--dry-line) 3px 4px); }
 .bar.tie { background: color-mix(in oklab, var(--ink) 14%, var(--paper)); border-style: dashed; }
 /* two candidates in one row: the first sits above the second and keeps the pale
    fill; the second inverts to the saturated line colour. Position, fill and the
@@ -194,12 +251,16 @@ main {
 .track.two .bar { height: 30%; }
 .track.two .bar.m1 { top: 11%; }
 .track.two .bar.m2 { top: 59%; }
-/* the second candidate is a SOLID fill in the same sign colour, against the
-   first's hatch — inverting the hatch instead only swapped two shades of the
-   same blue and read as one bar drawn twice (measured 2026-09-04). The sign
-   still travels with the hue and with the side of zero the bar grows from. */
-.bar.m2.pos { background: var(--water-line); }
-.bar.m2.neg { background: var(--dry-line); }
+/* A bar wears its model's `--mc`, the same hue as that candidate's curve, chip
+   and verdict line — so the colour means the MODEL everywhere on the plate, and
+   never the model here and the sign there. The sign is left to the hatch angle
+   and to the side of zero the bar grows from, which is why the second candidate
+   is a SOLID fill rather than an inverted hatch: two weights of one hue read as
+   one bar drawn twice (measured 2026-09-04). */
+.bar.pos, .bar.neg { background-color: var(--mc, var(--water-line)); }
+.bar.pos { background-image: repeating-linear-gradient(45deg, var(--paper) 0 1px, transparent 1px 4px); }
+.bar.neg { background-image: repeating-linear-gradient(135deg, var(--paper) 0 1px, transparent 1px 4px); }
+.bar.m2.pos, .bar.m2.neg { background-image: none; }
 .bar.m2.tie { background: color-mix(in oklab, var(--ink) 45%, var(--paper)); }
 .ci { top: 48%; height: 0; border-top: 2px solid var(--ink); }
 .track.two .ci.m1 { top: 26%; }
@@ -215,17 +276,24 @@ main {
 .clip::after { content: '▸'; position: absolute; right: -0.2em; top: -0.15em; font-size: 0.8em; color: var(--ink); }
 .clip.lo::after { content: '◂'; right: auto; left: -0.2em; }
 /* the shaded acceptance band (calibration): a fill, bounded, hatched */
-.band { top: 10%; height: 80%; background: repeating-linear-gradient(45deg, transparent 0 3px, var(--rule) 3px 4px); border-inline: 1px solid var(--rule); }
-.link { top: 50%; height: 0; border-top: 1px solid var(--ink); opacity: 0.5; }
+.band { top: 10%; height: 80%; background: repeating-linear-gradient(45deg, transparent 0 3px, var(--wash) 3px 4px); border-inline: 1px solid var(--rule); }
+.link { top: 50%; height: 0; border-top: 1px solid var(--ink); opacity: 0.7; }
 /* point marks: one shape per method, centred on their value */
 .mk { width: 12px; height: 12px; top: 50%; transform: translate(-50%, -50%); }
 .mk svg { display: block; width: 12px; height: 12px; overflow: visible; }
-.mk-tfm { fill: var(--water-line); stroke: var(--ink); stroke-width: 1; }
+/* `m-<mark>` binds a model's hue to anything that names it — a chip, a verdict
+   line, a swatch — through one inherited `--mc`, so a candidate's colour is
+   declared once and the drawing and its labels can never drift apart. */
+.m-tfm { --mc: var(--m1); }
+.m-tfm-alt { --mc: var(--m2); }
+.m-tfm-3 { --mc: var(--m3); }
+.m-tfm-4 { --mc: var(--m4); }
+.mk-tfm { fill: var(--m1); stroke: var(--ink); stroke-width: 1; }
 /* one shape per candidate, none of them a near-twin of a baseline's: `persist`
    is a hollow circle, `up` a diamond, `clim`/`snaive` triangles */
-.mk-tfm-alt { fill: var(--water-line); stroke: var(--ink); stroke-width: 1; }
-.mk-tfm-3 { fill: var(--paper); stroke: var(--ink); stroke-width: 1.4; }
-.mk-tfm-4 { fill: none; stroke: var(--ink); stroke-width: 1.2; }
+.mk-tfm-alt { fill: var(--m2); stroke: var(--ink); stroke-width: 1; }
+.mk-tfm-3 { fill: var(--m3); stroke: var(--ink); stroke-width: 1.4; }
+.mk-tfm-4 { fill: none; stroke: var(--m4); stroke-width: 1.6; }
 .mk-blend { fill: var(--ink); stroke: none; }
 .mk-persist { fill: var(--paper); stroke: var(--ink); stroke-width: 1.2; }
 .mk-clim { fill: var(--dry); stroke: var(--dry-line); stroke-width: 1.2; }
@@ -291,12 +359,44 @@ th:first-child, td:first-child { text-align: left; }
 /* ---- the picture: error by lead day, three lines on a log axis ---- */
 .plot {
   display: grid;
-  grid-template-columns: 2.6rem 1fr;
+  /* the label column is a fixed track: every label inside it is absolutely
+     positioned, and those contribute nothing to a max-content column, so an
+     intrinsic width collapses to zero and the names come out clipped */
+  --ends: 6.6rem;
+  grid-template-columns: 2.6rem 1fr var(--ends);
   grid-template-rows: auto auto auto;
   margin-top: 0.4em;
   font-family: var(--font-data);
 }
 .plot .lead-bands { grid-column: 2; grid-row: 1; position: relative; height: 2.5em; font-size: 0.68em; color: var(--mid); }
+/* Direct labels, third column: each line names itself where it stops, so the
+   first look needs no key. stackLabels() has already spread them so two curves
+   that finish a hair apart do not print on top of each other — which is why the
+   label's height is NOT its value, and the scale stays on the left. */
+.plot .ends { grid-column: 3; grid-row: 2; position: relative; font-size: 0.68rem; padding-left: 0.6ch; }
+.plot .end {
+  position: absolute; left: 0.6ch;
+  display: flex; align-items: center; gap: 0.5ch;
+  transform: translateY(-50%);
+  white-space: nowrap; line-height: 1;
+}
+.plot .end b { font-weight: 600; color: var(--ink); }
+@container plate (max-width: 40rem) {
+  /* the width lives here, the template that uses it in the block further down —
+     both must move together, or the track and its column disagree */
+  .plot { --ends: 5.2rem; }
+  .plot .ends { font-size: 0.58rem; }
+  .plot .end { gap: 0.35ch; }
+  .plot .end .sw, .plot .end .sw svg { width: 9px; height: 9px; }
+  /* Measured on a 390 px phone: the 1–14 band is 33 px wide and "+0.08" already
+     fills it, so swatch and number cannot share it, and overflow:hidden would
+     crop the swatch without a word. With two curves drawn the SWATCH goes, not
+     the number: the figure is the lead plate's own estimator (the median of the
+     five gauges — the facts pool centimetres, a different number) and must stay
+     on the sheet; it is the primary's, the same model the subtitle above is
+     about, and the readout under the chart names it first. */
+  .plot .lead-bands[data-many] b .sw { display: none; }
+}
 .plot .lead-bands > a {
   position: absolute; top: 0; bottom: 0;
   display: flex; flex-direction: column; justify-content: flex-end; align-items: center;
@@ -307,12 +407,15 @@ th:first-child, td:first-child { text-align: left; }
 .plot .lead-bands > a:first-child { border-left: 0; }
 .plot .lead-bands > a:hover, .plot .lead-bands > a:focus-visible { color: var(--ink); text-decoration: underline; }
 .plot .lead-bands > a.on { color: var(--ink); }
-.plot .lead-bands b { font-weight: 600; color: var(--ink); }
+/* the number wears the primary's line swatch when two curves are drawn (gate.js
+   puts it INSIDE the <b>: the label is a flex column) */
+.plot .lead-bands b { font-weight: 600; color: var(--ink); display: inline-flex; align-items: center; gap: 0.3ch; }
 .p-tabs .off { display: inline-flex; align-items: center; border: 1px dashed var(--rule); color: var(--dim); padding: 0.15em 0.8ch; white-space: nowrap; }
 /* a chip can be disabled because it is UNAVAILABLE or because it is the last one
    still on. The second is the active chip: painting it like the first would show
-   the model in view as greyed out and the one switched off as available. */
-.p-tabs .off.on { background: var(--ink); color: var(--paper); border-style: solid; border-color: var(--ink); cursor: default; }
+   the model in view as greyed out and the one switched off as available.
+   `--mc` is set only on a model chip, so a target or block chip keeps the ink. */
+.p-tabs .off.on { background: var(--mc, var(--ink)); color: var(--paper); border-style: solid; border-color: var(--mc, var(--ink)); cursor: default; }
 .sw.sig { color: var(--water-line); }
 .plot .vscale { grid-column: 1; grid-row: 2; position: relative; font-size: 0.66rem; color: var(--mid); }
 .plot .vscale span { position: absolute; right: 0.6ch; transform: translateY(-50%); white-space: nowrap; }
@@ -327,26 +430,50 @@ th:first-child, td:first-child { text-align: left; }
 /* the horizon blocks, behind the drawing: a hairline between blocks, a hatch on the picked one */
 .lb { position: absolute; top: 0; bottom: 0; border-left: 1px solid var(--mid); }
 .plot-box > .lb:first-child { border-left: 0; }  /* the plot's own edge; the key's swatch keeps its line */
-.lb.on { background: repeating-linear-gradient(45deg, transparent 0 3px, var(--rule) 3px 4px); }
-/* the lines share one stroke width whatever the plot's stretch; dash and hue tell them apart */
-.ln { fill: none; stroke-width: 2; vector-effect: non-scaling-stroke; stroke-linejoin: round; stroke-linecap: round; }
-.ln-tfm { stroke: var(--water-line); }
-.ln-tfm-alt { stroke: var(--water-line); stroke-dasharray: 8 3 2 3; }
-.ln-tfm-3 { stroke: var(--water-line); stroke-dasharray: 1 3; }
-.ln-tfm-4 { stroke: var(--water-line); stroke-dasharray: 12 3 1 3 1 3; }
-.ln-clim { stroke: var(--dry-line); stroke-dasharray: 7 4; }
-.ln-persist { stroke: var(--ink); stroke-dasharray: 2 4; }
-.ln-blend { stroke: var(--ink); stroke-width: 1; vector-effect: non-scaling-stroke; }
+.lb.on { background: repeating-linear-gradient(45deg, transparent 0 3px, var(--wash) 3px 4px); }
+/* the half of the frame that means "better than the blend". A flat tint, not a
+   hatch: it lies under everything and must never compete with the block hatch
+   crossing it, let alone with a curve. */
+/* not one percentage for both themes: the same 30 % of --water is a whisper on
+   paper and a slab on dark ground, where it swallowed half the frame */
+.better {
+  position: absolute; left: 0; right: 0; bottom: 0; pointer-events: none;
+  /* --water resolves per scheme, so the two mixes each get the hue their own
+     scheme already uses — no hex repeated here to drift from the token */
+  background: color-mix(in oklab, var(--water) var(--better-a), transparent);
+  --better-a: 34%;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .better { --better-a: 16%; } }
+/* the zone says what it is inside itself, bottom left, where no curve of this
+   sheet has ever run — the picture then needs no key to state its sign */
+.better i {
+  position: absolute; left: 0.8ch; bottom: 0.3em;
+  font-family: var(--font-data); font-size: 0.66rem; font-style: normal;
+  letter-spacing: 0.04em; color: var(--mid); white-space: nowrap;
+}
+.sw .better i { display: none; }
+/* The lines share one stroke width whatever the plot's stretch; dash and hue
+   tell them apart. Weight tells something else: the candidates are what this
+   sheet is ABOUT, the baselines are what they are measured against, and the
+   blend is the bar — three ranks, so the first look lands on the right one. */
+.ln { fill: none; stroke-width: 2.5; vector-effect: non-scaling-stroke; stroke-linejoin: round; stroke-linecap: round; }
+.ln-tfm { stroke: var(--m1); }
+.ln-tfm-alt { stroke: var(--m2); stroke-dasharray: 8 3 2 3; }
+.ln-tfm-3 { stroke: var(--m3); stroke-dasharray: 1 3; }
+.ln-tfm-4 { stroke: var(--m4); stroke-dasharray: 12 3 1 3 1 3; }
+.ln-clim { stroke: var(--dry-line); stroke-width: 1.5; stroke-dasharray: 7 4; }
+.ln-persist { stroke: var(--ink); stroke-width: 1.5; stroke-dasharray: 2 4; }
+.ln-blend { stroke: var(--ink); stroke-width: 2; vector-effect: non-scaling-stroke; }
 .ln-cur { stroke: var(--ink); stroke-width: 1.5; vector-effect: non-scaling-stroke; stroke-dasharray: 4 3; pointer-events: none; }
 .plot-box .clip { position: absolute; top: 0; height: 0; pointer-events: none; }
 .plot-box .clip::after { right: auto; left: 0; top: -0.2em; transform: translateX(-50%); font-size: 0.75em; }
 .plot-box .clip.up::after { content: '▴'; }
 .plot-box .clip.dn::after { content: '▾'; top: auto; bottom: -0.2em; }
 .plot-box .clip.ln-clim::after { color: var(--dry-line); }
-.plot-box .clip.ln-tfm::after { color: var(--water-line); }
-.plot-box .clip.ln-tfm-alt::after,
-.plot-box .clip.ln-tfm-3::after,
-.plot-box .clip.ln-tfm-4::after { color: var(--water-line); }
+.plot-box .clip.ln-tfm::after { color: var(--m1); }
+.plot-box .clip.ln-tfm-alt::after { color: var(--m2); }
+.plot-box .clip.ln-tfm-3::after { color: var(--m3); }
+.plot-box .clip.ln-tfm-4::after { color: var(--m4); }
 
 /* ---- in brief: five lines, the numbers bold ---- */
 .facts { list-style: none; margin: 0.4em 0 0; padding: 0; font-size: 0.9em; max-width: 56rem; }
@@ -401,23 +528,50 @@ th:first-child, td:first-child { text-align: left; }
 .tblwrap pre { margin: 0.2em 0 0.6em; overflow-x: auto; }
 .tblwrap code { font-family: var(--font-data); font-size: 0.85em; line-height: 1.6; white-space: pre; }
 
+/* ---- folds: one line that says what it holds and what state it is in ----
+   Lighter than a panel lid on purpose: a panel is a section of the sheet, a fold
+   is a drawer beside the drawing. The state on the lid is the load-bearing part
+   — shut, it is the only place the sheet still says which target and horizon the
+   picture above it is drawn for. */
+details.fold { margin: 0.5em 0 0.7em; }
+details.fold > summary {
+  list-style: none;
+  cursor: pointer;
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 0.9ch;
+  padding: 0.25em 0;
+  font-size: 0.78em;
+}
+details.fold > summary::-webkit-details-marker { display: none; }
+details.fold > summary::before { content: '▸'; font-family: var(--font-data); color: var(--ink); flex: none; }
+details.fold[open] > summary::before { content: '▾'; }
+details.fold > summary .fl { color: var(--mid); }
+details.fold > summary .fs { font-family: var(--font-data); color: var(--ink); font-weight: 600; }
+details.fold > summary:hover .fl, details.fold > summary:focus-visible .fl { color: var(--ink); }
+details.fold > .foldbody { padding: 0.1em 0 0.3em; border-left: 2px solid var(--rule); padding-left: 1ch; margin-left: 0.2ch; }
+details.fold > .foldbody > .p-tabs:first-child { margin-top: 0.3em; }
+details.fold > .foldbody > .p-key { margin-top: 0.6em; }
+@media (pointer: coarse) { details.fold > summary { min-block-size: 2.4rem; align-items: center; } }
+
 /* ---- panels: closed sheets with a heading for a lid ---- */
 details.panel { margin-top: 1.2em; }
 details.panel > summary {
   list-style: none;
   cursor: pointer;
-  font-size: 0.8em;
+  font-size: 0.85em;
+  font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.07em;
   padding: 0.45em 0 0.3em;
-  border-bottom: 1px solid var(--rule);
+  border-bottom: 1px solid var(--ink);
   display: flex; align-items: baseline; gap: 0.8ch;
 }
 details.panel > summary::-webkit-details-marker { display: none; }
-details.panel > summary::before { content: '▸'; font-family: var(--font-data); color: var(--dim); flex: none; }
+details.panel > summary::before { content: '▸'; font-family: var(--font-data); color: var(--ink); flex: none; }
 details.panel[open] > summary::before { content: '▾'; }
-details.panel > summary:hover { border-bottom-color: var(--ink); }
-details.panel[open] > summary { border-bottom-color: var(--ink); }
+/* the lid is already an ink rule when shut; open or under the pointer it thickens,
+   so "which sheet am I in" survives without a second colour */
+details.panel > summary:hover { border-bottom-width: 2px; background: color-mix(in oklab, var(--ink) 7%, transparent); }
+details.panel[open] > summary { border-bottom-width: 2px; }
 details.panel > section { padding-top: 0.2em; }
 
 /* a container cannot query itself, so the narrow tokens land on the rows */
@@ -425,8 +579,15 @@ details.panel > section { padding-top: 0.2em; }
   .rows, .axis { --lbl: 6.5rem; --val: 4.5rem; }
   .verdict .word { font-size: 1.9em; }
   .facts li { grid-template-columns: 5.2rem 1fr; }
-  .plot { grid-template-columns: 2.1rem 1fr; }
+  /* three columns here too — a two-column template leaves the label track's
+     `grid-column: 3` to an implicit column the container never budgeted for,
+     and the whole plot overflows its own plate */
+  .plot { grid-template-columns: 2.1rem 1fr var(--ends); }
   .plot .plot-box svg { aspect-ratio: 5 / 3; }
+  /* on a phone the row wraps between groups, never between a label and its
+     first chip: "HORIZON" used to end one line while its chips began the next */
+  .p-tabs .grp { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 0.35em 0.5ch; }
+  .p-tabs .grp:not(:first-child) > .p-tabs-lbl { margin-left: 0; }
 }
 @media (max-width: 40rem) {
   main { padding: 1.1em 0.9em; }

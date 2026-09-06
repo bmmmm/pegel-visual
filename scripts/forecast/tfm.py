@@ -207,6 +207,12 @@ MODELS = {
     },
 }
 SHIPPED = "2p5"
+# The line the gate page reads for by DEFAULT when more than one is drawn: its
+# numbers stand alone in the facts, the clauses, the band labels and the panels,
+# and the others are named beside it. A different question from SHIPPED — this
+# is the newest measurement, and it may be (today: is) a line whose weights can
+# never ship. Nothing that decides what the repo ships may read this name.
+PRIMARY = "3p0"
 
 # What the rest of the code said before there was more than one model. Every
 # caller that means "the model this repo ships" keeps reading these.

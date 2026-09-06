@@ -4,7 +4,7 @@
 // shrunken closed.json, and the month-boundary edge on day 1.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
@@ -17,7 +17,7 @@ const {
   capturedDays, checkRecency, checkTotalsLiveness, checkCoverage,
   checkChangeStatuses, compareShard, compareCurrent, compareClosed,
   checkShardShape, checkCurrentShape, checkClosedShape,
-  checkManifestShape, checkOverviewShape, checkRunningYearContinuity,
+  checkManifestShape, checkOverviewShape, checkRunningYearContinuity, checkNoArchiveMarkers,
 } = await import('../scripts/check-archive-consistency.mjs');
 
 // shard fixture: counts[i] = stations reporting on day i, null = day not captured
@@ -207,6 +207,36 @@ test('R5: closed.json bundles must span their years too', () => {
   assert.match(checkClosedShape({}, 'p')[0], /not an array/);
 });
 
+test('R7: the no-archive markers have to survive the rebuild', () => {
+  // 739 stations, 111 of them gauges WSV never archived — the real proportion
+  const build = marked => Object.fromEntries(Array.from({ length: 739 }, (_, i) => [
+    'u' + i,
+    i < marked
+      ? { n: 'Neuwied Stadt', w: 'RHEIN', from: 2026, to: 2026, noArchive: true }
+      : { n: 'BONN', w: 'RHEIN', from: 2000, to: 2026 },
+  ]));
+  assert.deepEqual(checkNoArchiveMarkers({ stations: build(111) }), [], 'the healthy fleet');
+
+  // exactly the state this rule exists for: every marker derived away, every
+  // gauge reading as a normal archived one
+  const collapsed = checkNoArchiveMarkers({ stations: build(0) });
+  assert.equal(collapsed.length, 1);
+  assert.match(collapsed[0], /^R7: manifest\.json marks 0 stations/);
+  assert.match(collapsed[0], /the client caveat that depends on it is dead/);
+
+  assert.equal(checkNoArchiveMarkers({ stations: build(79) }).length, 1, 'one under the floor is red');
+  assert.deepEqual(checkNoArchiveMarkers({ stations: build(80) }), [], 'the floor itself is not');
+
+  // `none` (nothing on disk at all) counts too — it is the same claim about the
+  // same gauges, made when there is not even a REST year to show
+  const noneOnly = Object.fromEntries(Array.from({ length: 739 }, (_, i) => [
+    'u' + i, i < 90 ? { n: 'X', w: 'Y', none: true } : { n: 'BONN', w: 'RHEIN', from: 2000, to: 2026 },
+  ]));
+  assert.deepEqual(checkNoArchiveMarkers({ stations: noneOnly }), []);
+
+  assert.deepEqual(checkNoArchiveMarkers(null), [], 'a missing manifest is R5 business, not double-reported');
+});
+
 test('R5: manifest and overview floors', () => {
   const stations = n => Object.fromEntries(Array.from({ length: n }, (_, i) => ['u' + i, { n: 'X', w: 'Y' }]));
   assert.deepEqual(checkManifestShape({ stations: stations(700) }), []);
@@ -330,10 +360,16 @@ function seedRepo({ runningFirstDay = 0 } = {}) {
   mkdirSync(join(arch, 'totals'), { recursive: true });
   writeFileSync(join(arch, 'snapshots', '2026-08.json'),
     JSON.stringify(mkShard(2026, 8, Array(21).fill(450)))); // through today, 450 stations
+  // The last 111 stand for the lock, weir and foreign gauges WSV serves live
+  // but never archived: a running year built from the REST window alone, and
+  // the endpoint's verdict recorded beside it. A healthy fleet always has them
+  // (R7), and R6 must leave them out — their `from` is the running year.
   writeFileSync(join(arch, 'manifest.json'), JSON.stringify({
     generated: NOW,
-    stations: Object.fromEntries(Array.from({ length: 700 },
-      (_, i) => ['u' + i, { n: 'X', w: 'Y', from: 2000, to: 2026 }])),
+    stations: Object.fromEntries(Array.from({ length: 700 }, (_, i) => ['u' + i,
+      i < 589
+        ? { n: 'X', w: 'Y', from: 2000, to: 2026 }
+        : { n: 'X', w: 'Y', from: 2026, to: 2026, noArchive: true }])),
   }));
   // R6's candidate set: 450 stations, by default with a continuous running
   // year. Without real current.json files the rule would fire on the empty
@@ -397,6 +433,32 @@ test('CLI: --skip R6 lets the daily snapshot push through a broken running year'
   const { code, stdout } = runChecker(repo, {}, ['--skip', 'R6']);
   assert.equal(code, 0, stdout);
   assert.doesNotMatch(stdout, /R6/);
+});
+
+test('CLI: R7 — a rebuild that derives the no-archive markers away is red', () => {
+  // exactly the 2026-09-03 production shape: every gauge reads as a normally
+  // archived one, and the manifest looks perfectly healthy to R1-R6
+  const repo = seedRepo();
+  const path = join(repo, 'archive', 'manifest.json');
+  const m = JSON.parse(readFileSync(path, 'utf8'));
+  for (const e of Object.values(m.stations)) delete e.noArchive;
+  writeFileSync(path, JSON.stringify(m));
+  const { code, stdout } = runChecker(repo);
+  assert.equal(code, 1);
+  assert.match(stdout, /::error::R7: manifest\.json marks 0 stations as having no WSV archive \(min 80\)/);
+});
+
+test('CLI: --skip R7 lets the daily snapshot push through it', () => {
+  // the snapshot job writes neither current.json nor manifest.json — same
+  // reasoning as --skip R6 above
+  const repo = seedRepo();
+  const path = join(repo, 'archive', 'manifest.json');
+  const m = JSON.parse(readFileSync(path, 'utf8'));
+  for (const e of Object.values(m.stations)) delete e.noArchive;
+  writeFileSync(path, JSON.stringify(m));
+  const { code, stdout } = runChecker(repo, {}, ['--skip', 'R7']);
+  assert.equal(code, 0, stdout);
+  assert.doesNotMatch(stdout, /R7/);
 });
 
 test('CLI: a brand-new month shard (untracked) is still shape-checked', () => {

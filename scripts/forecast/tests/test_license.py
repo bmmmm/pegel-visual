@@ -168,6 +168,15 @@ def test_the_page_publishes_only_the_shipped_reports():
             for path in where.values():
                 assert path.rsplit("/", 1)[-1].split(".")[0] == stem, \
                     f"{m['key']} points at {path}, which is not its own {stem}.*"
+    # The second axis: which model the plate SPEAKS for by default. It is allowed
+    # to be the line that can never ship — that is the whole point of measuring a
+    # challenger — but it must be a model the manifest lists, or the page is sent
+    # to a line it cannot draw. That the sheet then SAYS "never shipped" for that
+    # model alone is the page's sentence to keep, and tests/gate-page.test.mjs
+    # asserts it on the rendered subtitle (a grep here matched strings the file
+    # carried before the sentence existed).
+    listed = [m["key"] for m in manifest["models"]]
+    assert manifest["primary"] in listed, f"the manifest's primary {manifest['primary']!r} is not a model it lists"
 
 
 def test_the_committed_manifest_matches_the_registry_and_disk():
@@ -178,6 +187,8 @@ def test_the_committed_manifest_matches_the_registry_and_disk():
     assert manifest["shipped"] == tfm.SHIPPED
     listed = {m["key"] for m in manifest["models"]}
     assert listed <= set(tfm.MODELS), f"manifest names an unregistered model: {listed - set(tfm.MODELS)}"
+    assert manifest["primary"] == tfm.PRIMARY and manifest["primary"] in listed, \
+        f"the committed manifest's primary {manifest['primary']!r} is not the registry's ({tfm.PRIMARY}) or not listed"
     for m in manifest["models"]:
         entry = tfm.MODELS[m["key"]]
         for field in ("checkpoint", "license", "license_url", "shippable", "id", "params", "label"):

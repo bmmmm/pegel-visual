@@ -3,9 +3,7 @@
 - **Tests:** `node --test` — `tests/extract.mjs` evaluiert das Inline-Script aus `index.html` gegen Browser-Stubs (kein jsdom, kein Netz): `loadApp({search, now, width})`, dann `app.run('<expr>')` im App-Scope.
 - **Node-Scripts mit Netzwerk laufen am Sandbox-Proxy vorbei:** undici/`fetch` kennt `HTTP_PROXY` nicht → `ENOTFOUND www.pegelonline.wsv.de`, obwohl `curl` denselben Host erreicht. Das ist die Sandbox, nicht DNS und nicht die App — ein Bypass pro Call statt Debugging (betrifft `scripts/fetch-wsv-archive.mjs` und Ad-hoc-Node gegen die WSV-APIs).
 - **`archive`-Branch = GitHub-only Orphan-Datenbranch.** Pushes dorthin triggern nie einen Workflow (kein `.github/` im gepushten Commit) — Deploys brauchen den expliziten `gh workflow run pages.yml --ref main`; das Reseed-Runbook steht im Header von `scripts/fetch-wsv-archive.mjs`.
-- **`current.json` hat zwei Quellen, und nur eine kann zurückblicken.** Der wöchentliche REST-Lauf (`--current`) reicht ~31 Tage; der monatliche ZIP-Lauf (`--running`, erster Montag) liest das **ganze** Laufjahr neu und ist die Autorität. Der ZIP-Endpunkt akzeptiert ein Enddatum in der Zukunft und liefert bis zur letzten Messung (gemessen 2026-09-03: BONN 2026-01-01 … 09-03, 23 566 Punkte, 0 fehlende Tage) — `requestEnd(CURRENT_YEAR)` ist also richtig. Mit nur dem monatlichen REST-Lauf ließen zwei abgebrochene Läufe Januar–Juli 2026 in **jedem** WSV-`current.json` leer, ein halbes Jahr lang, während R1–R5 grün blieben. **R6** (`check-archive-consistency.mjs`) bewacht seitdem Vorderkante, Hinterkante und Lücktage der Flotte; `--skip R6` im Snapshot-Job ist Absicht: der schreibt `current.json` nie und würde sonst für einen fremden Defekt seine Tagesslots verlieren.
-- **Ein Pegel, den WSV nie archiviert hat, ist kein Fehlschlag.** ~111 Schleusen- und Wehrpegel sind live auf REST, haben aber keine ZIP-Zeitreihe; der `prepare`-Endpunkt antwortet mit 303 auf `/errorpages/errorException`. Sie zählen getrennt — sonst liest sich der gesunde Gap-Sweep (626 übersprungen, nur die aussichtslosen versucht) als 100 % Fehlerquote, und **jeder** geplante Lauf stirbt rot vor seinem Push (so geschehen bis 2026-09-03). Die Unterscheidung hängt an `closed.json`: wer schon Jahre hat, kann sein Archiv nicht „nie gehabt" haben — dieselbe Antwort ist dort ein echter Fehlschlag.
-- **Drei Rhein-Pegel sind nicht heilbar** (Basel-Rheinhalle, KONSTANZ-RHEIN, Neuwied Stadt, `from=2026`): kein ZIP vor 2026. `totals/2026.json` → `rivers.RHEIN.n` startet deshalb bei 33 und steigt am 10.07. auf 36 — das ist korrekt, kein Loch.
+- **WSV-Archiv-Pipeline: die gemessenen Fakten stehen am Code, nicht hier.** Die Kurzfassung: `current.json` hat zwei Quellen, und nur der monatliche ZIP-Lauf (`--running`) kann zurückblicken — der wöchentliche REST-Lauf reicht ~31 Tage (Modi-Header von `scripts/fetch-wsv-archive.mjs`). ~111 Pegel ohne WSV-Archiv sind kein Fehlschlag: das 303 des `prepare`-Endpunkts ist die Tatsache, `markNoArchive` hält es in `meta.json` fest, nur der ZIP-Pfad löscht es, und `closed.json` unterscheidet „nie gehabt" von Ausfall (Kommentare an `prepare`, `hasClosedYears`, `markNoArchive`, `buildManifest` ebendort). **R6** und **R7** in `scripts/check-archive-consistency.mjs` bewachen Laufjahr und Marker; ihre Kommentare tragen die Kalibrierung, die fünf Pegel, die R6 nach Konstruktion nicht sieht, und die zwei stillgelegten. Warum `rivers.RHEIN.n` 2026 bei 33 startet und am 10.07. auf 36 springt, steht an `finalizeYear` in `scripts/build-river-totals.mjs`.
 
 ## Display layer: the survey plate
 
@@ -35,20 +33,25 @@
   `keySw`) instead of scaling it, and switch its animation off for `.sw` at a
   specificity that actually wins. Neither failure is visible to the tests —
   only a real browser catches an empty swatch.
-- **A test that greps the whole page proves less than it looks.** `renderTotal:
-  falling days are hatched` passed for months on the class name while no hatch
-  existed; rewritten as `includes('fill="url(#tb-fell)"')` it would then have
-  passed on the legend's own swatch. Anchor an assertion to the element it is
-  about — `/<rect[^>]*fill="url\(#tb-fell\)"[^>]*class="db fell"/` — and put
-  the fix back OUT to watch it go red before believing it.
+- **Two marks of one family, inverted, are not two marks.** Drawing a second
+  candidate's bar as the first's hatch with its two colours swapped looked
+  separable in the CSS and read as one bar drawn twice in the browser — the
+  fills are the same hue at two weights. What separates at a glance is a change
+  of KIND: hatched against solid, keeping the sign on the hue and on the side of
+  zero the bar grows from. Same trap in words: `pale` / `dark` swap over between
+  the colour schemes, `hatched` / `solid` do not. And a value column only the
+  tests have seen will have its glyphs on the wrong lines.
+- **Anchor an assertion to the element it is about, never to the whole page.**
+  A class-name grep passed for months while no hatch existed, and a plain
+  `includes()` would pass on the legend's own swatch — the `tb-fell` regex in
+  `tests/logic.test.mjs` is the form. Put the fix back OUT and watch it go red
+  before believing it.
 - **`app.fire('keydown', {key})` / `app.fire('popstate')`** reach the real
   handlers: the harness collects window/document listeners, and `app.source`
   hands you the script text for structural checks (the dead-`cmd:`-target
   guard reads the dispatcher's own branches out of it).
-- **Conventions the test harness depends on:** every `*ViewModel()` and
-  `render*()` is a **top-level `function` declaration** (a `const` arrow inside
-  a block is unreachable from `app.run`), and no renderer may ever emit the
-  literal closing `script` tag — `tests/logic.test.mjs` guards both.
+- **Every `*ViewModel()` and `render*()` is a top-level `function`
+  declaration** — a `const` arrow inside a block is unreachable from `app.run`.
 - **Never interpolate a raw value into markup** — always `${esc(v)}`, or
   `attr()` for attributes. A hostile-station-name test covers the renderers.
 - **Palette is split fill/line:** pastels (`--water`, `--bed`, `--dry`) are
@@ -63,13 +66,11 @@
   clause A1's cm-pooled figure — a review caught the curve sitting on ×1.00
   under a label that said −0.04. Where two estimators must coexist, the key
   says which is which.
-- **A gauge does not necessarily report centimetres.** 69 of 737 W series are
-  metres above a datum (`m+NN`, `m+PNP`); the unit rides in the same `W.json`
-  the client fetches. Print a level with `fmtLevel`/`levelWithUnit` in the
-  gauge's OWN unit, and convert with `toCm()` only where a threshold is
-  involved — `TREND_FLAT` and `RISING_FLAT` are noise floors for a gauge that
-  ticks in whole centimetres. Elevation goes through `elevOf()`: a metre gauge
-  IS the elevation and often carries no `gaugeZero` at all.
+- **A gauge does not necessarily report centimetres** — 69 of 737 W series are
+  metres above a datum, and the unit comes with the reading. Print a level with
+  `fmtLevel`/`levelWithUnit` in the gauge's OWN unit, convert with `toCm()`
+  only at a threshold, and take elevation from `elevOf()`; the measurement and
+  the noise-floor reasoning stand at those functions in `index.html`.
 - **The history chart's x axis is TIME.** `bucketSeries` tiles the window by
   timestamp, not by array index, because the archive changes cadence inside a
   window (15-minutely for 16 days, hourly to a year, 6-hourly beyond). An

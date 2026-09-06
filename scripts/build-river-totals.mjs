@@ -200,7 +200,16 @@ export function accumulateTotals({ manifest, unitsDoc, archiveDir, currentYear, 
   return { byYear, provisionalFrom, included, excluded, unattributed };
 }
 
-// year-file JSON: round the float sums once, null where no gauge reported
+// year-file JSON: round the float sums once, null where no gauge reported.
+//
+// `n` may step UP mid-year, and that is not a hole: rivers.RHEIN.n for 2026
+// starts at 33 and rises to 36 on 07-10, because three Rhine gauges have no
+// ZIP archive at all (Basel-Rheinhalle, KONSTANZ-RHEIN, Neuwied Stadt —
+// prepare-download answers 303 to the error page, measured 2026-09-04) and
+// their current.json is the union of weekly REST windows, which first reached
+// them on 2026-07-10. 114 gauges fleet-wide share that front edge: the rest of
+// the August outage, which the monthly ZIP heal cannot reach for a gauge WSV
+// never archived. The Rhine is only the slice that showed in the totals.
 export function finalizeYear(y, yearAcc, provisionalFrom, nowIso) {
   const rivers = {};
   for (const river of [...yearAcc.keys()].sort()) {
