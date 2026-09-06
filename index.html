@@ -7255,7 +7255,7 @@ function mergeLanukIndex(m) {
   };
   let added = 0;
   for (const [no, g] of Object.entries(m.gauges)) {
-    if (!g || g.noSeries) continue; // a temperature-only site is not a gauge here
+    if (!g || g.noSeries || g.empty) continue; // a temperature-only site, or an advertised series without a value, is not a gauge here
     const up = String(g.n || '').toUpperCase();
     if (!up) continue;
     const id = 'lanuk-' + no;

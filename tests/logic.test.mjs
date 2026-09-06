@@ -4108,9 +4108,15 @@ test('lanuk index: names join the finder sets, a WSV name is never overwritten',
   const before = app.run(`JSON.stringify(stationMeta.get('BONN'))`);
   const added = app.run(`mergeLanukIndex(${JSON.stringify({
     ...NRW_MANIFEST,
-    gauges: { ...NRW_MANIFEST.gauges, 1: { n: 'Bonn', w: 'Rhein', from: '2024-09-04', to: '2026-09-02' } },
+    gauges: {
+      ...NRW_MANIFEST.gauges,
+      1: { n: 'Bonn', w: 'Rhein', from: '2024-09-04', to: '2026-09-02' },
+      // advertised S, delivered without a value (four Rur gauges, 2026-09-06): not a gauge here
+      123456: { n: 'St. Obermaubach UW', w: 'Rur', b: '282', site: '104', src: 'station', empty: true },
+    },
   })})`);
-  assert.equal(added, 4, 'four gauges with a series; the temperature-only site and the WSV collision stay out');
+  assert.equal(added, 4, 'four gauges with a series; the temperature-only site, the empty series and the WSV collision stay out');
+  assert.equal(app.run(`knownStations.has('ST. OBERMAUBACH UW')`), false, 'an empty series never reaches the finder');
   assert.equal(app.run(`JSON.stringify(stationMeta.get('BONN'))`), before, 'BONN is still the WSV entry');
   assert.equal(app.run(`knownStations.has('MENDEN_1')`), true);
   assert.equal(app.run(`stationMeta.get('MENDEN_1').id`), 'lanuk-2729100000100');
