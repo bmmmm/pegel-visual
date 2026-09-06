@@ -23,6 +23,7 @@ const {
   MIN_FULL_TRIPLES, MIN_GAUGES,
 } = await import('../scripts/check-nrw-consistency.mjs');
 const { daysInYear } = await import('../scripts/fetch-wsv-archive.mjs');
+const { build: buildPrecip } = await import('../scripts/build-nrw-precip.mjs');
 
 // ---------- fixtures ----------
 
@@ -70,8 +71,27 @@ function mkGauges(n, { stationCount = 48, triples = 130, years = FULL_YEARS } = 
 const mkMany = (kind, n, years = [[2026, { to: SEP2_2026 }]]) =>
   new Map(Array.from({ length: n }, (_, i) => [kind[0] + i, mkStation(kind, kind[0] + i, { years })]));
 
+// Coordinates the fixture needs since N8: the areal rule places every station
+// on the NRW box, and a gauge without a usable pair never receives rain. Rain
+// gauge j sits exactly on gauge floor(j/3), so the assignment is unambiguous
+// and 104 of the 300 gauges end up with a set of three — over N8's floor of 80,
+// without building a 300-deep routing chain the test would pay for on every run.
+const RAIN_PER_GAUGE = 3;
+// 0.005 deg ~ 556 m between clusters — 300 gauges have to fit inside the box's
+// 2.8 degrees of latitude, and a rain gauge sits ON its cluster, so the nearest
+// neighbour is never a tie.
+const fixLat = i => 51 + i * 0.005;
+export const gaugeCoords = i => ({ lat: fixLat(i), lon: 7 });
+const rainCoords = j => ({ lat: fixLat(Math.floor(j / RAIN_PER_GAUGE)), lon: 7 });
+
 const topologyOf = gauges => ({
-  basins: { 272: { name: 'Sieg', rivers: ['Sieg'], gauges: [...gauges.keys()].slice(0, 20), rain: [], temp: [], mouth: 'g0' } },
+  schema: 1,
+  // `basins[].gauges` stays the 20 N1 has always checked; `gauges` is the
+  // routing graph the areal rule reads, and that one is the whole fleet.
+  basins: { 272: { name: 'Sieg', river: 'Sieg', rivers: ['Sieg'], gauges: [...gauges.keys()].slice(0, 20), noLevel: [], rain: Array.from({ length: N_RAIN }, (_, j) => 'r' + j), temp: [], mouth: 'g0' } },
+  gauges: Object.fromEntries([...gauges.keys()].map((no, i) => [no, {
+    id: no, name: no, water: 'Sieg', basin: '272', siteNo: '100', km2: 100 + i, down: null,
+  }])),
 });
 
 function healthyFleet() {
@@ -334,7 +354,7 @@ test('N5: rain and temperature plausibility', () => {
   rain.mm[1] = -0.1; rain.imax[2] = 'x'; rain.cov = { 1: 101 };
   const v = checkShardShape('rain', rain, 'p');
   assert.equal(v.length, 3, v.join('\n'));
-  assert.match(v[0], /mm negative or not a number on 1 day/);
+  assert.match(v[0], /mm outside 0\.\.1000 or not a number on 1 day/);
   assert.match(v[1], /imax negative or not a number on 1 day/);
   assert.match(v[2], /cov: 1 entr/);
   const temp = mkShard('temp', 't', 2026);
@@ -526,21 +546,26 @@ const N_GAUGES = 300, N_RAIN = 313, N_TEMP = 108;
 function writeTree(root) {
   const nrw = join(root, 'nrw');
   const manifest = manifestOf();
-  const write = (kind, no, s) => {
+  const write = (kind, no, s, coords) => {
     const dir = join(nrw, kind, no);
     mkdirSync(dir, { recursive: true });
-    writeFileSync(join(dir, 'meta.json'), JSON.stringify(s.meta));
+    writeFileSync(join(dir, 'meta.json'), JSON.stringify({ ...s.meta, ...coords, catchmentNo: '272', unit: kind === 'rain' ? 'mm' : 'cm' }));
     for (const [y, doc] of s.shards) writeFileSync(join(dir, `${y}.json`), JSON.stringify(doc));
     manifest[kind][no] = { n: no, w: 'W', b: '272', src: s.meta.src || 'bulk', from: WINDOW.from, to: WINDOW.to, days: s.days.length };
   };
   const gauges = mkGauges(N_GAUGES);
-  for (const [no, s] of gauges) write('gauges', no, s);
-  for (const [no, s] of mkMany('rain', N_RAIN)) write('rain', no, s);
-  for (const [no, s] of mkMany('temp', N_TEMP)) write('temp', no, s);
+  let i = 0;
+  for (const [no, s] of gauges) write('gauges', no, s, gaugeCoords(i++));
+  let j = 0;
+  for (const [no, s] of mkMany('rain', N_RAIN)) write('rain', no, s, rainCoords(j++));
+  for (const [no, s] of mkMany('temp', N_TEMP)) write('temp', no, s, {});
   writeFileSync(join(nrw, 'manifest.json'), JSON.stringify(manifest));
-  writeFileSync(join(nrw, 'registry.json'), JSON.stringify(Array.from({ length: 617 }, (_, i) => ({ station_no: 's' + i }))));
+  writeFileSync(join(nrw, 'registry.json'), JSON.stringify(Array.from({ length: 617 }, (_, i2) => ({ station_no: 's' + i2 }))));
   writeFileSync(join(nrw, 'topology.json'), JSON.stringify(topologyOf(gauges)));
   writeFileSync(join(nrw, 'runs.json'), JSON.stringify({ runs: [{ at: NOW, fetched: 4 }] }));
+  // N8 reads a product the collector does not write: the fixture has to build it
+  // the same way CI does, between the collector and the gate.
+  buildPrecip({ tree: nrw, out: join(nrw, 'precip'), generated: NOW.slice(0, 10) });
 }
 
 const SEED = mkdtempSync(join(tmpdir(), 'pegel-nrw-seed-'));
@@ -562,6 +587,11 @@ const shardPath = (repo, kind, no, y) => join(repo, 'nrw', kind, no, `${y}.json`
 const readShard = (repo, kind, no, y) => JSON.parse(execFileSync('cat', [shardPath(repo, kind, no, y)], { encoding: 'utf8' }));
 const writeShard = (repo, kind, no, y, doc) => writeFileSync(shardPath(repo, kind, no, y), JSON.stringify(doc));
 const manifestPath = repo => join(repo, 'nrw', 'manifest.json');
+// Every hand-edit of the mirror changes what the areal rule would produce from
+// it. CI rebuilds between the collector and the gate; a test that edits the
+// tree and then expects a green gate has to do the same, or it is asserting
+// that N8(e) is asleep.
+const rebuildPrecip = repo => buildPrecip({ tree: join(repo, 'nrw'), out: join(repo, 'nrw', 'precip'), generated: NOW.slice(0, 10) });
 const readManifest = repo => JSON.parse(execFileSync('cat', [manifestPath(repo)], { encoding: 'utf8' }));
 
 test('CLI: an untouched healthy checkout is green and prints the fleet numbers', () => {
@@ -620,11 +650,15 @@ test('CLI: a merge that nulls a stored slot is red, a merge that revises it is g
   const doc = readShard(repo, 'gauges', 'g60', 2026);
   doc.mean[50] = 77; doc.max[50] = 80; doc.min[50] = 70; // revision inside the window
   writeShard(repo, 'gauges', 'g60', 2026, doc);
+  rebuildPrecip(repo);
   let r = runChecker(repo);
   assert.equal(r.code, 0, r.stdout);
-  assert.match(r.stdout, /1 changed files/);
+  // two, not one: revising a level day also moves that gauge's response.json,
+  // because the derived product is a function of the mirror and gets rebuilt
+  assert.match(r.stdout, /2 changed files/);
   doc.mean[51] = null; doc.max[51] = null;
   writeShard(repo, 'gauges', 'g60', 2026, doc);
+  rebuildPrecip(repo);
   r = runChecker(repo);
   assert.equal(r.code, 1);
   assert.match(r.stdout, /::error::N4: nrw\/gauges\/g60\/2026\.json: mean: 1 slot\(s\) went non-null -> null \(first day index 51\)/);
@@ -661,6 +695,7 @@ test('CLI: --allow-prune lets a deliberate deletion through, --skip silences a r
   const m = readManifest(repo);
   delete m.gauges.g250;
   writeFileSync(manifestPath(repo), JSON.stringify(m));
+  rebuildPrecip(repo);
   let r = runChecker(repo);
   assert.equal(r.code, 1);
   assert.match(r.stdout, /git status D/);
@@ -703,4 +738,148 @@ test('CLI: readProduct attaches manifest entries and stored days', () => {
   assert.equal(g0.days.length, 364);
   assert.equal(gauges.get('g100').days.length, 729);
   assert.equal(gauges.get('g100').shards.size, 3);
+});
+
+// ---------- N8: the derived areal-rain product ----------
+// Each clause on a hand-broken product, so the rule is shown red on exactly the
+// defect it exists for. The three counters (f/g/h) are drift rules and need a
+// HEAD to drift against; the shape rules stand on their own.
+
+const {
+  checkPrecipShape, checkPrecipDrift, checkImplausibleRainStock,
+  MIN_PRECIP_SERIES, MIN_RECEIVING_NODES, MAX_MM_DAY_RAW,
+} = await import('../scripts/check-nrw-consistency.mjs');
+
+const HEALTHY_INDEX = {
+  schema: 1, counts: {
+    routingNodes: 298, receivingNodes: 276, relayedExcluded: 21, badCoordNodes: 1,
+    rainAssignedBasin: 302, rainAssignedOrphan: 12, rainUnassigned: 5,
+    withSeries: 94, withoutRain: 60, cyclicNodes: 2,
+  },
+  unassigned: [{ no: 'x', why: 'coords' }], far: [], gauges: {},
+};
+// one gauge, one 2025 shard, a set of two rain gauges it owns
+const precipProduct = (over = {}) => new Map([['g1', {
+  meta: { set: [{ no: 'r1', at: 'g1' }, { no: 'r2', at: 'g1' }], ...(over.meta || {}) },
+  shards: new Map([[2025, {
+    id: 'g1', y: 2025,
+    mm: Array(365).fill(5), n: Array(365).fill(2),
+    med: Array(365).fill(5), mx: Array(365).fill(5),
+    ...(over.shard || {}),
+  }]]),
+}]]);
+const RAIN_IDS = new Set(['r1', 'r2']);
+const TOPO_GAUGES = { g1: {} };
+
+test('N8: the healthy product is green', () => {
+  assert.deepEqual(checkPrecipShape(HEALTHY_INDEX, precipProduct(), RAIN_IDS, TOPO_GAUGES), []);
+  assert.deepEqual(checkPrecipDrift(HEALTHY_INDEX, HEALTHY_INDEX), []);
+});
+
+test('N8a: an mm value over the areal bound, and an n over the set size', () => {
+  const mm = Array(365).fill(5); mm[7] = 401;
+  const v = checkPrecipShape(HEALTHY_INDEX, precipProduct({ shard: { mm } }), RAIN_IDS, TOPO_GAUGES);
+  assert.match(v.join('\n'), /mm outside 0\.\.400 on 1 day\(s\)/);
+  const n = Array(365).fill(2); n[7] = 3;
+  const w = checkPrecipShape(HEALTHY_INDEX, precipProduct({ shard: { n } }), RAIN_IDS, TOPO_GAUGES);
+  assert.match(w.join('\n'), /n outside 0\.\.2 on 1 day\(s\)/);
+});
+
+test('N8a: an array that is not daysInYear long', () => {
+  const v = checkPrecipShape(HEALTHY_INDEX, precipProduct({ shard: { mm: Array(300).fill(5) } }), RAIN_IDS, TOPO_GAUGES);
+  assert.match(v.join('\n'), /mm\.length != 365/);
+});
+
+test('N8b: mm null with a non-zero n, and n 0 with a value — both directions', () => {
+  const mm = Array(365).fill(5); mm[3] = null;                    // n stays 2
+  const a = checkPrecipShape(HEALTHY_INDEX, precipProduct({ shard: { mm } }), RAIN_IDS, TOPO_GAUGES);
+  assert.match(a.join('\n'), /mm null <=> n 0 violated on \d+ day\(s\), first at day index 3/);
+  const n = Array(365).fill(2); n[3] = 0;                         // mm stays 5
+  const b = checkPrecipShape(HEALTHY_INDEX, precipProduct({ shard: { n } }), RAIN_IDS, TOPO_GAUGES);
+  assert.match(b.join('\n'), /mm null <=> n 0 violated/);
+});
+
+test('N8b: med and mx follow mm — a value under a null day is a leak from the filter', () => {
+  const mm = Array(365).fill(5), n = Array(365).fill(2), med = Array(365).fill(5);
+  mm[9] = null; n[9] = 0;                                          // a legitimate non-day…
+  const v = checkPrecipShape(HEALTHY_INDEX, precipProduct({ shard: { mm, n, med } }), RAIN_IDS, TOPO_GAUGES);
+  assert.match(v.join('\n'), /mm null <=> n 0 violated/, '…but med still carries a number');
+});
+
+test('N8c: a rain station owned by two gauges', () => {
+  const products = precipProduct();
+  products.set('g2', {
+    meta: { set: [{ no: 'r1', at: 'g2' }] },   // r1 already belongs to g1
+    shards: new Map(),
+  });
+  const v = checkPrecipShape(HEALTHY_INDEX, products, RAIN_IDS, { g1: {}, g2: {} });
+  assert.match(v.join('\n'), /rain station r1 is owned by both g1 and g2/);
+});
+
+test('N8d: a set naming a rain station with no directory, and a gauge not in the topology', () => {
+  const v = checkPrecipShape(HEALTHY_INDEX, precipProduct({ meta: { set: [{ no: 'ghost', at: 'g1' }] } }), RAIN_IDS, TOPO_GAUGES);
+  assert.match(v.join('\n'), /set names rain station ghost, which has no nrw\/rain\/ directory/);
+  const w = checkPrecipShape(HEALTHY_INDEX, precipProduct(), RAIN_IDS, {});
+  assert.match(w.join('\n'), /precip\/g1: not a gauge in topology\.json/);
+});
+
+test('N8i: the floors are exact counts, and an empty product cannot pass them', () => {
+  const thin = { ...HEALTHY_INDEX, counts: { ...HEALTHY_INDEX.counts, withSeries: MIN_PRECIP_SERIES - 1, receivingNodes: MIN_RECEIVING_NODES - 1 } };
+  const v = checkPrecipShape(thin, precipProduct(), RAIN_IDS, TOPO_GAUGES);
+  assert.match(v.join('\n'), new RegExp(`only ${MIN_PRECIP_SERIES - 1} gauges carry a series, floor is ${MIN_PRECIP_SERIES}`));
+  assert.match(v.join('\n'), new RegExp(`only ${MIN_RECEIVING_NODES - 1} receiving nodes, floor is ${MIN_RECEIVING_NODES}`));
+  const empty = { ...HEALTHY_INDEX, counts: { ...HEALTHY_INDEX.counts, withSeries: 0, receivingNodes: 0 } };
+  assert.equal(checkPrecipShape(empty, new Map(), RAIN_IDS, TOPO_GAUGES).length, 2);
+});
+
+test('N8: a missing or wrong-schema index is one violation, not a silent pass', () => {
+  assert.deepEqual(checkPrecipShape(null, new Map(), RAIN_IDS, TOPO_GAUGES), ['N8: precip/index.json missing, unparseable or not schema 1']);
+  assert.deepEqual(checkPrecipShape({ schema: 2, counts: {}, gauges: {} }, new Map(), RAIN_IDS, TOPO_GAUGES).length, 1);
+});
+
+test('N8f/g: bad coordinates and unassignable rain gauges may drift by two, not three', () => {
+  const drift = d => ({ ...HEALTHY_INDEX, counts: { ...HEALTHY_INDEX.counts, badCoordNodes: 1 + d } });
+  assert.deepEqual(checkPrecipDrift(drift(2), HEALTHY_INDEX), []);
+  assert.match(checkPrecipDrift(drift(3), HEALTHY_INDEX).join('\n'), /badCoordNodes 1 -> 4, drift over 2/);
+  const un = d => ({ ...HEALTHY_INDEX, counts: { ...HEALTHY_INDEX.counts, rainUnassigned: 5 + d } });
+  assert.deepEqual(checkPrecipDrift(un(2), HEALTHY_INDEX), []);
+  assert.match(checkPrecipDrift(un(3), HEALTHY_INDEX).join('\n'), /rainUnassigned 5 -> 8, drift over 2/);
+});
+
+test('N8f: the total count of unusable coordinates has a hard ceiling, HEAD or no HEAD', () => {
+  const many = { ...HEALTHY_INDEX, counts: { ...HEALTHY_INDEX.counts, badCoordNodes: 5 }, unassigned: Array.from({ length: 5 }, (_, i) => ({ no: `x${i}`, why: 'coords' })) };
+  assert.match(checkPrecipDrift(many, null).join('\n'), /10 stations have unusable coordinates, ceiling is 8/);
+});
+
+test('N8h: the cycle set must equal HEAD exactly — a changed one is read, not mirrored', () => {
+  const three = { ...HEALTHY_INDEX, counts: { ...HEALTHY_INDEX.counts, cyclicNodes: 3 } };
+  const v = checkPrecipDrift(three, HEALTHY_INDEX);
+  assert.match(v.join('\n'), /cyclicNodes 2 -> 3/);
+  assert.match(v.join('\n'), /3 cyclic nodes, the known set is 2/);
+  // a cycle that DISAPPEARS is also a change worth reading
+  const one = { ...HEALTHY_INDEX, counts: { ...HEALTHY_INDEX.counts, cyclicNodes: 0 } };
+  assert.match(checkPrecipDrift(one, HEALTHY_INDEX).join('\n'), /cyclicNodes 2 -> 0/);
+});
+
+test('N8: the stock of implausible raw rain days is watched, not forbidden', () => {
+  const shard = mm => new Map([['r1', { shards: new Map([[2025, { mm }]]) }]]);
+  // the mirror's own 595.9 mm day must not make the gate red
+  assert.deepEqual(checkImplausibleRainStock(shard([595.9, 1, 2])), []);
+  const many = [595.9, 500, 450, 420];
+  assert.match(checkImplausibleRainStock(shard(many)).join('\n'), /4 rain days over 400 mm, ceiling is 3/);
+});
+
+test('N5: the raw rain ceiling is 1000 mm — the 595.9 mm day in the mirror stays green', () => {
+  const n = daysInYear(2026);
+  const mk = v => { const mm = Array(n).fill(0); mm[0] = v; return { id: 'r', y: 2026, mm, imax: Array(n).fill(0), cov: {} }; };
+  assert.deepEqual(checkShardShape('rain', mk(595.9), 'p', { id: 'r', y: 2026 }), []);
+  assert.match(checkShardShape('rain', mk(MAX_MM_DAY_RAW + 1), 'p', { id: 'r', y: 2026 }).join('\n'), /mm outside 0\.\.1000/);
+  assert.match(checkShardShape('rain', mk(-1), 'p', { id: 'r', y: 2026 }).join('\n'), /mm outside 0\.\.1000/);
+});
+
+test('N4: precip/ may shrink — it is derived, and N8 floors are what stop it vanishing', () => {
+  const changes = [{ status: 'D', path: 'nrw/precip/g1/2025.json' }, { status: 'D', path: 'nrw/gauges/g1/2025.json' }];
+  const v = checkRegressionStatuses(changes);
+  assert.equal(v.length, 1, 'the mirrored gauge deletion is still red');
+  assert.match(v[0], /nrw\/gauges\/g1\/2025\.json/);
 });

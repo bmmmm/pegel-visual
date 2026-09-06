@@ -87,12 +87,20 @@ jobs:
         # --max-months, --allow-prune) are deliberately NOT passed: the mirror
         # only grows.
         run: node scripts/fetch-nrw-archive.mjs --out nrw-branch/nrw --out-hires nrw-hires-branch/nrw-hires
-      - name: Consistency gate (N1-N7)
+      - name: Bake areal precipitation
+        # Between the collector and the gate, deliberately: the areal product is
+        # a pure function of the mirror the previous step just wrote, so it must
+        # be recomputed from THAT tree, and the gate's N8 then checks the bytes
+        # it produced. Never merged into the collector — a derived product that
+        # a checkout cannot reproduce is not derived, it is remembered.
+        run: node scripts/build-nrw-precip.mjs --tree nrw-branch/nrw
+      - name: Consistency gate (N1-N8)
         # content-level guard before anything is pushed: fleet completeness,
         # recency, window coverage, no regression against the branch HEAD,
-        # shapes and plausibility, alert-stage integrity, and bulk coverage
+        # shapes and plausibility, alert-stage integrity, bulk coverage
         # against the high-water mark — the silent failure where the ZIP loses
-        # stations while every single series still looks healthy
+        # stations while every single series still looks healthy — and the
+        # areal-rain product's own shape, ownership and drift counters
         run: node scripts/check-nrw-consistency.mjs --tree nrw-branch/nrw --git nrw-branch
       - name: Commit and push nrw
         id: push

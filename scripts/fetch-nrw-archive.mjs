@@ -233,6 +233,10 @@ import { pathToFileURL } from 'node:url';
 import {
   daysInYear, zipEntries, unzipNamed, reportRunOutcome, PLAUSIBLE_MIN_CM, PLAUSIBLE_MAX_CM,
 } from './fetch-wsv-archive.mjs';
+// The coordinate box belongs to the areal-rain rule, so it is defined there and
+// imported here rather than restated: a station the map places must be a station
+// the rule can assign, and one definition cannot drift from the other.
+import { usableCoords } from './build-nrw-precip.mjs';
 
 export const BASE = 'https://hochwasserportal.nrw/data';
 export const LICENSE = 'dl-de/zero-2.0';
@@ -1081,6 +1085,15 @@ export function buildManifest({ out, registry, topo, basinOf, coverage, exportAt
     const e = { n: meta.name };
     if (kind !== 'rain') e.w = meta.water || '';
     e.b = meta.catchmentNo ?? null;
+    // Coordinates, but only the ones inside the NRW box: without them every
+    // LANUK gauge sits unplaced on the ?rivers map (mergeLanukIndex reads la/lo),
+    // and with the unfiltered ones Ruenderoth's Gauss-Krueger pair would place a
+    // gauge in the Atlantic. Same predicate the areal-rain assignment uses, so a
+    // station is either placed AND assignable or neither.
+    if (usableCoords(meta)) { e.la = meta.lat; e.lo = meta.lon; }
+    // Distance to the mouth — deliberately NOT `km`: the app reads `km` as river
+    // kilometre FROM THE SOURCE, and these two run in opposite directions.
+    if (kind === 'gauges' && meta.distToConflKm != null) e.dc = meta.distToConflKm;
     if (kind === 'gauges') { e.site = meta.siteNo; e.src = meta.src; }
     if (span.from) { e.from = span.from; e.to = span.to; e.days = span.days; }
     if (meta.noSeries) e.noSeries = true;

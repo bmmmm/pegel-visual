@@ -54,6 +54,32 @@
 //                     station tables, neither is a superset of the other). The
 //                     failure no other gate sees: the ZIP silently losing
 //                     stations while every single series looks healthy.
+//   N8 areal rain     the derived `precip/` product of build-nrw-precip.mjs.
+//                     (a) shape: arrays daysInYear long, 0 <= mm <= 400,
+//                     0 <= n <= |set|; (b) `mm === null <=> n === 0` — the
+//                     invariant that lets the plate draw a no-data column and
+//                     the gate tell a thin day from a missing one; (c) every
+//                     rain station belongs to AT MOST ONE gauge (`set[].at` is
+//                     the owner; a station appearing under two owners would be
+//                     double-counted through the nesting); (d) references
+//                     resolve — every product gauge is in topology.json, every
+//                     `set[].no` exists under `nrw/rain/`; (e) the committed
+//                     bytes ARE what the rule produces, proven by running the
+//                     builder in --check mode (writes nothing); (f)/(g)/(h)
+//                     the three "how much reality is broken" counters may only
+//                     drift by 2 against HEAD — bad coordinates, unassignable
+//                     rain gauges, and the down-edge cycle, whose count must
+//                     equal HEAD exactly; (i) floors, not shares:
+//                     withSeries >= 80 and receivingNodes >= 260.
+//                     Measured 2026-09-06: 298 routing nodes, 276 receiving
+//                     (21 WSV relays + 1 Gauss-Krueger gauge excluded), rain
+//                     302 basin + 12 orphan + 5 unassigned, 94 gauges with a
+//                     series, 60 with no rain gauge upstream, 2 cyclic nodes.
+//                     Note on (f)-(h): the two Issel-registered rain gauges in
+//                     the Eifel (55040051, 55048925 — 150 km from the nearest
+//                     Issel gauge) are assigned through the ORPHAN path by
+//                     construction, so the basin/orphan split is 302/12, not
+//                     the 304/10 a reading that ignores MAX_ASSIGN_KM predicts.
 //
 // Deliberate limits, as in the sibling gate: N4 compares against the branch's
 // own HEAD, so a base poisoned by a force-push looks clean to it — branch
@@ -80,6 +106,7 @@ import { execFileSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 import { checkChangeStatuses, dayNum } from './check-archive-consistency.mjs';
 import { daysInYear, PLAUSIBLE_MIN_CM, PLAUSIBLE_MAX_CM } from './fetch-wsv-archive.mjs';
+import { build as buildPrecip } from './build-nrw-precip.mjs';
 import { mezParts } from './snapshot-wsv.mjs';
 
 const now = process.env.PEGEL_NOW ? new Date(process.env.PEGEL_NOW) : new Date();
@@ -124,6 +151,18 @@ export const MIN_FULL_TRIPLES = 110;  // measured 130 gauges with Info_1
 export const HIGH_WATER_SLACK = 0.03; // 3 percentage points
 export const MAX_NO_SERIES_GROWTH = 2;
 export const MAX_STATION_DROP = 5;
+// N5 rain ceiling: not weather, a defect. Measured maximum in the mirror is
+// 595.9 mm (39169741, 2026-06-30); the German record is 312 mm.
+export const MAX_MM_DAY_RAW = 1000;
+// N8 drift allowances — the counters of what is broken in the source may move,
+// but not silently. Measured 2026-09-06: 1 bad-coordinate node, 5 unassignable
+// rain gauges (4 coords + Bottrop-Eigen at 15.5 km), 2 cyclic nodes, 1 day over
+// the areal plausibility bound.
+export const MAX_BROKEN_DRIFT = 2;
+export const MAX_BAD_COORDS_TOTAL = 8;   // 1 node + 4 rain gauges today
+export const MIN_PRECIP_SERIES = 80;     // measured 94
+export const MIN_RECEIVING_NODES = 260;  // measured 276
+export const MAX_IMPLAUSIBLE_RAIN_DAYS = 3; // measured 1 (the 595.9 mm day)
 
 // series keys per product; the sparse per-day object rides alongside
 export const PRODUCTS = {
@@ -289,7 +328,12 @@ export function checkWindowDepth(gauges, { nowDate, window, collectionStart: sta
 
 export function checkRegressionStatuses(changes, allowPrune = false) {
   if (allowPrune) return [];
-  return checkChangeStatuses(changes).map(m => m.replace(/^R4:/, 'N4:'));
+  // precip/ is DERIVED and may shrink: a gauge that drops below three upstream
+  // rain gauges loses its files, and a product that kept history its inputs no
+  // longer imply would be a promise, not a reading. N8's floors (withSeries,
+  // receivingNodes) are what stops it shrinking to nothing.
+  const mirrored = changes.filter(c => !/(^|\/)precip\//.test(c.path));
+  return checkChangeStatuses(mirrored).map(m => m.replace(/^R4:/, 'N4:'));
 }
 
 // a changed year shard keeps every stored value: a slot goes non-null -> null
@@ -405,7 +449,16 @@ export function checkShardShape(kind, doc, path, { id = null, y = null } = {}) {
     // pegel_tagesmaxima.txt) and no mean at all (0 rows) — so no rule here
   } else if (kind === 'rain') {
     const mm = arr('mm'), imax = arr('imax');
-    sweep('mm negative or not a number', d => mm[d] != null && (!isNum(mm[d]) || mm[d] < 0));
+    // An upper bound as well as a lower one — but NOT the areal rule's 400 mm.
+    // The mirror holds a real 595.9 mm/24h day (39169741, 2026-06-30) against a
+    // German record of 312 mm, so a 400 mm rule here would be red from birth,
+    // and a rule that is born red is a rule that gets skipped. 1000 mm is not
+    // weather in Germany under any circumstance; it is a sensor or a parser.
+    // The areal builder drops everything over 400 from its mean (that is the
+    // estimator's business), the mirror keeps the reading raw, and the growth
+    // of the implausible stock is watched by N8 instead of forbidden here.
+    const outMm = x => x != null && (!isNum(x) || x < 0 || x > MAX_MM_DAY_RAW);
+    sweep(`mm outside 0..${MAX_MM_DAY_RAW} or not a number`, d => outMm(mm[d]));
     sweep('imax negative or not a number', d => imax[d] != null && (!isNum(imax[d]) || imax[d] < 0));
   } else {
     const mean = arr('mean'), max = arr('max');
@@ -553,6 +606,111 @@ export const isYearShard = name => /^\d{4}\.json$/.test(name);
 
 // registry.json is "raw-near": a row array, or an object keyed by station_no,
 // or {stations: …} — count rows whichever way it comes
+// ---------- N8 areal rain ----------
+
+// Structural rules over the committed precip tree. These hold even if the
+// BUILDER is wrong — `--check` only proves "the bytes are what the generator
+// makes today", which is a different claim from "the product is coherent".
+export function checkPrecipShape(index, products, rainIds, topologyGauges, {
+  minSeries = MIN_PRECIP_SERIES, minReceiving = MIN_RECEIVING_NODES, maxMm = 400,
+} = {}) {
+  const v = [];
+  if (!index || index.schema !== 1 || !index.counts || !index.gauges) return ['N8: precip/index.json missing, unparseable or not schema 1'];
+  const c = index.counts;
+
+  // (i) floors, exact counts — an empty product cannot pass
+  if (!(c.withSeries >= minSeries)) v.push(`N8: precip: only ${c.withSeries} gauges carry a series, floor is ${minSeries}`);
+  if (!(c.receivingNodes >= minReceiving)) v.push(`N8: precip: only ${c.receivingNodes} receiving nodes, floor is ${minReceiving}`);
+
+  // (c) ownership is a partition of the assigned rain gauges: a station under
+  // two owners would be counted twice everywhere the nesting overlaps
+  const ownerOf = new Map();
+  for (const [no, p] of products) {
+    if (!p.meta) { v.push(`N8: precip/${no}/meta.json: missing`); continue; }
+    // (d) references
+    if (topologyGauges && !topologyGauges[no]) v.push(`N8: precip/${no}: not a gauge in topology.json`);
+    for (const s of p.meta.set || []) {
+      if (rainIds && !rainIds.has(String(s.no))) v.push(`N8: precip/${no}/meta.json: set names rain station ${s.no}, which has no nrw/rain/ directory`);
+      const prev = ownerOf.get(String(s.no));
+      if (prev == null) ownerOf.set(String(s.no), String(s.at));
+      else if (prev !== String(s.at)) v.push(`N8: rain station ${s.no} is owned by both ${prev} and ${s.at}`);
+    }
+    const setSize = (p.meta.set || []).length;
+    for (const [y, doc] of p.shards) {
+      const path = `precip/${no}/${y}.json`;
+      if (!doc || doc.y !== y || String(doc.id) !== String(no)) { v.push(`N8: ${path}: does not name itself`); continue; }
+      const n = daysInYear(y);
+      for (const k of ['mm', 'n', 'med', 'mx']) {
+        if (!Array.isArray(doc[k]) || doc[k].length !== n) v.push(`N8: ${path}: ${k}.length != ${n}`);
+      }
+      const mm = doc.mm || [], cnt = doc.n || [], med = doc.med || [], mx = doc.mx || [];
+      let bad = 0, inv = 0, cntBad = 0, firstInv = -1;
+      for (let d = 0; d < n; d++) {
+        // (a) shape
+        if (mm[d] != null && (!isNum(mm[d]) || mm[d] < 0 || mm[d] > maxMm)) bad++;
+        if (!(Number.isInteger(cnt[d]) && cnt[d] >= 0 && cnt[d] <= setSize)) cntBad++;
+        // (b) the invariant the plate draws and the estimator relies on
+        if ((mm[d] == null) !== (cnt[d] === 0)) { inv++; if (firstInv < 0) firstInv = d; }
+        if ((mm[d] == null) !== (med[d] == null) || (mm[d] == null) !== (mx[d] == null)) inv++;
+      }
+      if (bad) v.push(`N8: ${path}: mm outside 0..${maxMm} on ${bad} day(s)`);
+      if (cntBad) v.push(`N8: ${path}: n outside 0..${setSize} on ${cntBad} day(s)`);
+      if (inv) v.push(`N8: ${path}: mm null <=> n 0 violated on ${inv} day(s), first at day index ${firstInv}`);
+    }
+  }
+  return v;
+}
+
+// The three counters of what is broken in the SOURCE. They are allowed to move
+// — a station gets new coordinates, a new one arrives broken — but only by two
+// per run, and the down-edge cycle count not at all: a third cycle is a
+// topology change that has to be read before it is mirrored.
+export function checkPrecipDrift(index, head, {
+  maxDrift = MAX_BROKEN_DRIFT, maxBadCoords = MAX_BAD_COORDS_TOTAL,
+} = {}) {
+  const v = [];
+  if (!index || !index.counts) return v;
+  const c = index.counts, h = head && head.counts ? head.counts : null;
+  const coordsTotal = c.badCoordNodes + (index.unassigned || []).filter(u => u.why === 'coords').length;
+  if (coordsTotal > maxBadCoords) v.push(`N8: ${coordsTotal} stations have unusable coordinates, ceiling is ${maxBadCoords}`);
+  if (h) {
+    if (c.badCoordNodes > h.badCoordNodes + maxDrift) v.push(`N8: badCoordNodes ${h.badCoordNodes} -> ${c.badCoordNodes}, drift over ${maxDrift}`);
+    if (c.rainUnassigned > h.rainUnassigned + maxDrift) v.push(`N8: rainUnassigned ${h.rainUnassigned} -> ${c.rainUnassigned}, drift over ${maxDrift}`);
+    if (c.cyclicNodes !== h.cyclicNodes) v.push(`N8: cyclicNodes ${h.cyclicNodes} -> ${c.cyclicNodes} — a changed cycle set is read, not mirrored`);
+  }
+  if (c.cyclicNodes > 2) v.push(`N8: ${c.cyclicNodes} cyclic nodes, the known set is 2 (Erkrath <-> Eigen)`);
+  return v;
+}
+
+// How many raw rain days sit above the areal plausibility bound. Not forbidden
+// (the mirror is raw), but a growing stock is a source or parser change.
+export function checkImplausibleRainStock(rain, { maxDays = MAX_IMPLAUSIBLE_RAIN_DAYS, bound = 400 } = {}) {
+  let n = 0;
+  const where = [];
+  for (const [no, s] of rain) {
+    for (const [y, doc] of s.shards) {
+      for (const x of (doc.mm || [])) if (x != null && isNum(x) && x > bound) { n++; if (where.length < 3) where.push(`${no}/${y} ${x} mm`); }
+    }
+  }
+  return n > maxDays ? [`N8: ${n} rain days over ${bound} mm, ceiling is ${maxDays} (${where.join(', ')})`] : [];
+}
+
+// The precip tree's own reader: same per-station shape as readProduct, but the
+// `basins/` subtree is a sibling product, not a station, and index/overview are
+// files at the root — none of them a gauge directory.
+export function readPrecip(precipDir) {
+  const out = new Map();
+  if (!existsSync(precipDir)) return out;
+  for (const ent of readdirSync(precipDir, { withFileTypes: true })) {
+    if (!ent.isDirectory() || ent.name === 'basins') continue;
+    const dir = join(precipDir, ent.name);
+    const shards = new Map();
+    for (const f of readdirSync(dir)) if (isYearShard(f)) shards.set(Number(f.slice(0, 4)), readJson(join(dir, f)));
+    out.set(ent.name, { meta: readJson(join(dir, 'meta.json')), shards, response: readJson(join(dir, 'response.json')) });
+  }
+  return out;
+}
+
 export function registrySize(doc) {
   if (Array.isArray(doc)) return doc.length;
   if (!doc || typeof doc !== 'object') return 0;
@@ -700,6 +858,28 @@ async function main() {
   }
   if (on('N6')) violations.push(...checkAlertStages(fleet.gauges));
   if (on('N7')) violations.push(...checkCoverageMarks(manifest, headManifest));
+  if (on('N8')) {
+    const precipDir = join(treeDir, 'precip');
+    if (!existsSync(precipDir)) {
+      violations.push('N8: precip/ missing — run scripts/build-nrw-precip.mjs before the gate');
+    } else {
+      const index = readJson(join(precipDir, 'index.json'));
+      const rainIds = new Set(fleet.rain.keys());
+      violations.push(...checkPrecipShape(index, readPrecip(precipDir), rainIds, topology && topology.gauges));
+      violations.push(...checkPrecipDrift(index, readHead(gitDir, `${prefix}/precip/index.json`)));
+      violations.push(...checkImplausibleRainStock(fleet.rain));
+      // (e) the committed bytes ARE the rule's output. A tree that merely looks
+      // coherent can still be stale — a hand-edited shard, a builder change
+      // nobody re-ran. --check writes nothing and lists what differs.
+      try {
+        const r = buildPrecip({ tree: treeDir, out: precipDir, check: true, generated: (index && index.generated) || isoOfNum(todayNum(now)) });
+        for (const d of r.out.diffs.slice(0, 10)) violations.push(`N8: precip is not what the rule produces — ${d}`);
+        if (r.out.diffs.length > 10) violations.push(`N8: ... and ${r.out.diffs.length - 10} more precip files differ from the rule`);
+      } catch (e) {
+        violations.push(`N8: could not recompute precip: ${e.message}`);
+      }
+    }
+  }
 
   for (const n of notes) console.log(`note: ${n}`);
   if (violations.length) {
