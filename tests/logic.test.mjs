@@ -4959,3 +4959,59 @@ test('PRECIPITATION: the level line is named as the midrange it is, and only whe
   assert.match(seeded, /the midrange is \(mean\+max\)\/2, so the line sits high there/);
   app.run('state.lowIsMeanUntil = null');
 });
+
+test('RESPONSE: a truncated artefact is a stated reason, not a page that hangs', async () => {
+  const app = await precipApp();
+  for (const bad of ['{}', '{"lags":[]}', '{"lags":[],"events":null}', '{"lags":"nope","events":{}}']) {
+    const vm = app.run(`(() => { state.precip.response = ${bad}; return responseViewModel(); })()`);
+    assert.equal(vm.empty, true, `${bad} must degrade, not throw`);
+    assert.ok(vm.reason, 'and say why');
+  }
+  // a non-numeric rPeak does not reach toFixed()
+  const html = app.run(`(() => {
+    state.precip.response = { lags: [{ lag: 0, r: 0.5, n: 200 }], peakLag: 0, rPeak: 'nope', nPeak: 200,
+      events: { thresholdMm: 10, n: 30, risePer10mm: 4 } };
+    return renderResponse(responseViewModel());
+  })()`);
+  assert.ok(!/r = /.test(html), 'a string rPeak is not printed as a correlation');
+  assert.match(html, /\+4 per 10 mm areal rain/, 'an artefact without a unit falls back to the bare one');
+});
+
+test('RESPONSE: a falling catchment prints a minus, not "+-"', async () => {
+  const app = await precipApp();
+  const html = app.run(`(() => {
+    state.precip.response = { ...state.precip.response, events: { thresholdMm: 10, n: 30, risePer10mm: -1.2 } };
+    return renderResponse(responseViewModel());
+  })()`);
+  assert.match(html, /-1\.2 cm per 10 mm areal rain/);
+  assert.ok(!html.includes('+-'), 'the sign is read off the number, not prepended');
+});
+
+test('RESPONSE: the collector’s own reason survives instead of one generic sentence', async () => {
+  const app = await precipApp();
+  const html = app.run(`(() => {
+    state.precip.response = { lags: [{ lag: 1, r: 0.4, n: 200 }], peakLag: 1, rPeak: 0.4, nPeak: 200,
+      events: { thresholdMm: 10, n: 3, risePer10mm: null },
+      reason: 'too few pairs at the peak lag (64 < 120)' };
+    return renderResponse(responseViewModel());
+  })()`);
+  assert.match(html, /too few pairs at the peak lag \(64 &lt; 120\)/,
+    'the collector distinguishes two reasons; the plate must not flatten them into one');
+});
+
+test('?rain: a chip wider than the mirror says how much there is', async () => {
+  const app = await rainApp();
+  const html = app.run('renderRain(rainViewModel())');
+  // the fixture holds 90 days, so no chip is over it
+  assert.ok(!/the mirror holds/.test(html), 'a window the mirror can fill needs no caveat');
+  const short = app.run(`(() => {
+    const d = JSON.parse(JSON.stringify(state.rain.data));
+    d.window.days = 40;
+    for (const b of d.basins) { b.mm = b.mm.slice(0, 40); b.n = b.n.slice(0, 40); }
+    state.rain = { data: d, error: null };
+    rainDays = 90;
+    return renderRain(rainViewModel());
+  })()`);
+  assert.match(short, /90 days — the mirror holds 40/, 'and one it cannot says so on the chip itself');
+  app.run('rainDays = 30');
+});

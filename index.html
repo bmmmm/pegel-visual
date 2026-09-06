@@ -4615,15 +4615,22 @@ function responseViewModel() {
   const p = state.precip;
   if (!p || p.reason) return null;
   const r = p.response;
-  if (!r) return { empty: true, reason: T.respMissing };
-  if (r.peakLag == null && r.events.risePer10mm == null) return { empty: true, reason: r.reason || T.respMissing };
-  const lags = (r.lags || []).map(l => ({ ...l, r: l.r == null ? 0 : l.r }));
+  // the SHAPE, not just the presence: a truncated artefact would otherwise
+  // throw out of render(), which runs inside a rAF callback that swallows it
+  if (!r || !Array.isArray(r.lags) || !r.events) return { empty: true, reason: (r && r.reason) || T.respMissing };
+  const rise = typeof r.events.risePer10mm === 'number' ? r.events.risePer10mm : null;
+  const rPeak = typeof r.rPeak === 'number' ? r.rPeak : null;
+  if (r.peakLag == null && rise == null) return { empty: true, reason: r.reason || T.respMissing };
+  const lags = r.lags.map(l => ({ ...l, r: l.r == null ? 0 : l.r }));
   const max = Math.max(0.2, ...lags.map(l => Math.abs(l.r)));
   return {
-    empty: false, lags, max, peakLag: r.peakLag, rPeak: r.rPeak, nPeak: r.nPeak,
-    rise: r.events.risePer10mm, events: r.events.n, threshold: r.events.thresholdMm,
+    empty: false, lags, max, peakLag: r.peakLag, rPeak, nPeak: r.nPeak || 0,
+    rise, events: r.events.n || 0, threshold: r.events.thresholdMm,
     align: r.align || '', unit: (r.unit && r.unit.rise) || 'per 10 mm areal rain',
-    weak: r.rPeak != null && Math.abs(r.rPeak) < 0.2, thin: r.nPeak > 0 && r.nPeak < 30,
+    // the collector tells "too few pairs at the peak lag" from "too few rain
+    // events"; flattening both into one sentence throws away which it was
+    reason: r.reason || null,
+    weak: rPeak != null && Math.abs(rPeak) < 0.2, thin: r.nPeak > 0 && r.nPeak < 30,
   };
 }
 
@@ -4654,9 +4661,11 @@ function renderResponse(r) {
     attr('aria-label', `${T.response}: correlation per lag 0 to 7 days, peak at lag ${r.peakLag}`));
   const axis = `<div class="rs-axis">` +
     r.lags.map(l => `<span>${l.lag}</span>`).join('') + '</div>';
+  // the sign is read, not assumed: the rise is a median of per-event maxima and
+  // is not sign-constrained, so a falling catchment would have read "+-1.2 cm"
   const say = r.rise != null && r.peakLag != null
-    ? `<p class="say">${esc(`+${r.rise} ${r.unit}, ${T.respPeakAt} ${r.peakLag} (${r.events} ${plural(r.events, 'event')} ≥ ${r.threshold} mm)`)}</p>`
-    : `<p class="p-dim">${esc(T.respNoSlope)}</p>`;
+    ? `<p class="say">${esc(`${r.rise >= 0 ? '+' : ''}${r.rise} ${r.unit}, ${T.respPeakAt} ${r.peakLag} (${r.events} ${plural(r.events, 'event')} ≥ ${r.threshold} mm)`)}</p>`
+    : `<p class="p-dim">${esc(r.reason || T.respNoSlope)}</p>`;
   const key = plateKey([
     { sw: keySw('<rect class="rs-bar" x="3" y="2" width="6" height="8"/>'), label: T.respPos },
     { sw: keySw('<rect class="rs-neg" x="3" y="2" width="6" height="8"/>'), label: T.respNeg },
@@ -5736,7 +5745,7 @@ function rainViewModel() {
     if (dt.getUTCDate() === 1) months.push({ i, label: MONTH_ABBR[dt.getUTCMonth()] });
   }
   return {
-    kind: 'rain', days, rows, months, bins: d.bins || [],
+    kind: 'rain', days, have, rows, months, bins: d.bins || [],
     from: to == null ? '' : rainDayISO(to - days + 1), to: to == null ? '' : rainDayISO(to),
     exportAt: d.sourceExportAt || null, align: d.align || '',
     summary: screenSummary(),
@@ -5748,9 +5757,11 @@ function renderRain(vm) {
   const vh = `<p class="vh">${esc(vm.summary)}</p>`;
   const head = `<header class="p-head"><h1>${esc(T.rainTitle)}</h1>` +
     `<p class="p-sub">${esc(T.rainSub)}</p></header>`;
+  // the collector's own window, read off the file: a literal here goes silently
+  // wrong the day OVERVIEW_DAYS moves, or after a reseed
   const ctl = ctlRow(T.showLabel, RAIN_WINDOWS.map(n => ({
     t: 'cmd:rw:' + n, label: n + 'D', on: n === rainDays,
-    title: `${n} ${T.precipDays} — the collector's window is 90`,
+    title: n > vm.have ? `${n} ${T.precipDays} — the mirror holds ${vm.have}` : `${n} ${T.precipDays}`,
   })), 'rain range');
   const cols = vm.months.map(m =>
     `<span${attr('style', `left:${((m.i + 0.5) / Math.max(1, vm.days) * 100).toFixed(2)}%`)}>${esc(m.label)}</span>`).join('');
