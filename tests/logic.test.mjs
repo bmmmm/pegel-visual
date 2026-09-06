@@ -4011,7 +4011,7 @@ const NRW_MANIFEST = {
   // which gauges have a baked areal-rain product, and why the others do not
   precip: {
     2729100000100: { n: 5, up: 3, series: true },
-    2741500000100: { n: 2, up: 1, series: false, why: 'only 2 rain gauges upstream (needs 3)' },
+    2741500000100: { n: 2, up: 1, series: false, why: 'only 2 rain gauges upstream <b>(needs 3)</b>' },
   },
   gauges: {
     2729100000100: { n: 'Menden_1', w: 'Sieg', b: '272', site: '100', src: 'bulk', from: '2024-09-04', to: '2026-09-02', days: 729 },
@@ -4070,7 +4070,10 @@ const NRW_PRECIP_META = {
   schema: 1, id: '2729100000100', name: 'Menden_1', water: 'Sieg', basin: '272', km2: 2825,
   unit: 'mm/d', method: 'unweighted mean over the reporting rain gauges of the upstream closure',
   dayBoundary: '07:00+01:00', levelDayBoundary: '00:00+01:00',
-  align: 'rain day d = [d 07:00, d+1 07:00) MEZ; overlaps level day d 17 h, d+1 7 h',
+  // markup in the two fields that DO reach the plate: `align` is printed in the
+  // key verbatim, and the reviewer's red-proof showed `set[].name` never does —
+  // it is read for its length alone, so a hostile name there proves nothing
+  align: 'rain day d = [d 07:00, d+1 07:00) MEZ<img src=x onerror=1>; overlaps level day d 17 h, d+1 7 h',
   minCoveragePct: 50, maxMmPerDay: 400, nRain: 5, nUpstream: 3,
   upstream: ['2721390000100', '2729100000100'],
   set: [{ no: '51089370', name: 'Hennef<script>', km: 3.13, via: 'orphan', at: '2729100000100' }],
@@ -4554,9 +4557,16 @@ test('PRECIPITATION: the window follows the history chips and ends on the mirror
   const vm = k => app.run(`(() => { historyKey = '${k}'; return precipViewModel(); })()`);
   const wide = vm('30d');
   assert.equal(wide.empty, false);
-  // Sep 2 2026 is the manifest's rain edge; the clock in this harness is Sep 4
-  assert.equal(app.run(`rainDayISO(precipViewModel().to)`), '2026-09-02',
-    'the right edge is the mirror’s newest rain day, not today');
+  // Anchored to the LAST DRAWN COLUMN, not to `to`: `to` is assigned from the
+  // edge directly, so an assertion on it survives every column moving. The
+  // reviewer proved that by shifting the whole grid three days and watching
+  // this test stay green.
+  assert.equal(app.run(`rainDayISO(precipViewModel().cols.at(-1).to)`), '2026-09-02',
+    'the newest column drawn IS the mirror’s newest rain day, not today');
+  assert.equal(app.run(`rainDayISO(precipViewModel().to)`), '2026-09-02', 'and the model agrees with its own drawing');
+  // …and the printed edge in the key is that same column
+  const html30 = app.run('renderPrecip(precipViewModel())');
+  assert.ok(html30.includes('not today: 2026-09-02'), 'the key prints the day the last column stands for');
   assert.equal(wide.cols.length, 30, '30 days, one column each at this width');
   assert.equal(wide.step, 1);
   const narrow = vm('1y');
@@ -4610,6 +4620,9 @@ test('PRECIPITATION: the key names both clocks, both units and the nesting', asy
   const html = app.run(`(() => { historyKey = '30d'; return renderPrecip(precipViewModel()); })()`);
   const key = html.slice(html.indexOf('<dl class="p-key">'));
   assert.match(key, /rain day runs 07:00 → 07:00 MEZ, a gauge day 00:00 → 24:00/, 'two clocks, in the key, not in prose elsewhere');
+  // the mirror's own `align` string reaches the key — escaped, whatever it holds
+  assert.ok(key.includes('&lt;img src=x onerror=1&gt;'), 'align is escaped on its way in');
+  assert.ok(!key.includes('<img src=x'), 'and never arrives as markup');
   assert.match(key, /two units and two scales/);
   assert.match(key, /inherits every rain gauge above it/, 'the nesting is stated where the set size is');
   assert.match(key, /5 gauges over 2825 km²/, 'real numbers, from the product’s own meta');
@@ -4619,9 +4632,11 @@ test('PRECIPITATION: the key names both clocks, both units and the nesting', asy
 test('PRECIPITATION: a gauge with too few rain gauges says why, and fetches nothing', async () => {
   const app = await precipApp('?station=ARLOFF');
   const p = app.run('state.precip');
-  assert.equal(p.reason, 'only 2 rain gauges upstream (needs 3)', 'the manifest’s own reason, verbatim');
+  assert.equal(p.reason, 'only 2 rain gauges upstream <b>(needs 3)</b>', 'the manifest’s own reason, verbatim');
   const html = app.run('renderPrecip(precipViewModel())');
   assert.match(html, /only 2 rain gauges upstream/);
+  assert.ok(!html.includes('<b>(needs 3)</b>'), 'and the mirror’s own text is escaped on its way to the plate');
+  assert.ok(html.includes('&lt;b&gt;'));
   assert.match(html, /class="p-dim"/, 'a degradation, not an empty box');
   assert.deepEqual(nrwUrls(app).filter(u => u.startsWith('nrw/precip/')), [],
     'the manifest said no, so not one byte of /precip/ was asked for');
@@ -4827,4 +4842,120 @@ test('the rain grid gets its own width, and the wave chassis it borrows still fi
   const page = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
   assert.match(page, /\.rain-wrap[^}]*--wave-min/s, 'the rain grid widens the chassis it shares with the wave');
   assert.match(page, /\.heat\.wave, \.heat\.rain \{[^}]*min-width: var\(--wave-min\)/s);
+});
+
+// ---------- what the WP2 review found, each with the test that was missing ----------
+
+test('?rain: the spoken summary is about the rain, not about a WSV connection', async () => {
+  const app = await rainApp();
+  const say = app.run('screenSummary()');
+  assert.match(say, /^Rainfall per NRW basin, 30 days to 2026-09-02: 3 basins/);
+  assert.match(say, /no live feed/);
+  assert.ok(!/PEGELONLINE/.test(say), 'the plate draws a LANUK mirror; the summary must not name the live WSV API');
+  assert.match(say, /Wettest week: Sieg 19 mm/, 'and it names what the reader would look for');
+  // it must not recurse into the view model that reads it
+  assert.equal(app.run('rainViewModel().summary'), say);
+  // …and the same sentence reaches the plate and the screen-reader label
+  await app.run('render()');
+  assert.ok(app.run(`document.getElementById('screen').innerHTML`).includes('Rainfall per NRW basin'));
+});
+
+test('?rain: the basin count in the foot is the number of rows drawn', async () => {
+  const app = await rainApp();
+  const html = app.run('renderRain(rainViewModel())');
+  assert.ok(html.includes('<span>3 basins</span>'), `the fixture has three basins: ${html.slice(html.indexOf('pf-flow'), html.indexOf('pf-flow') + 90)}`);
+  // one row, singular — a hardcoded count would say "16 basins" over one row
+  const one = app.run(`(() => {
+    state.rain = { data: { ...state.rain.data, basins: state.rain.data.basins.slice(0, 1) }, error: null };
+    return renderRain(rainViewModel());
+  })()`);
+  assert.ok(one.includes('<span>1 basin</span>'), 'and it counts, and it agrees on the plural');
+});
+
+test('?rain: a row without its arrays is a stated failure, not a page that hangs', async () => {
+  const app = await rainApp();
+  const vm = app.run(`(() => {
+    const bad = JSON.parse(JSON.stringify(state.rain.data));
+    delete bad.basins[1].mm;             // one malformed row out of three
+    state.rain = { data: bad, error: null };
+    return rainViewModel();
+  })()`);
+  assert.equal(vm, null, 'the view model refuses the shape rather than throwing out of render()');
+  // …and render() then shows the stated error instead of sitting on "loading…"
+  await app.run('render()');
+  const screen = app.run(`document.getElementById('screen').innerHTML`);
+  assert.match(screen, /not shaped the way this page reads it/);
+  assert.ok(!/Reading the mirror/.test(screen), 'not the loading state, which never ends');
+});
+
+test('PRECIPITATION: a gauge the collector never routed says so, not "too few rain gauges"', async () => {
+  const app = await precipApp();
+  // a WSV relay: it forwards rain downstream and receives none, so the manifest
+  // has no entry for it at all — and no `why` either
+  const html = app.run(`(() => {
+    state.precip = null;
+    loadPrecip('MENDEN_1', '2710080', undefined);
+    return renderPrecip(precipViewModel());
+  })()`);
+  assert.match(html, /forwards rain downstream but is not a receiving node/);
+  assert.ok(!/fewer than three rain gauges/.test(html), 'a routing claim the code never measured must not be printed');
+  // and a fetch that failed is its own reason, not either of those
+  const failed = app.run(`(() => {
+    state.precip = { no: 'x', n: 5, reason: T.precipFetchFailed };
+    return renderPrecip(precipViewModel());
+  })()`);
+  assert.match(failed, /did not load/);
+});
+
+test('PRECIPITATION: the window never reaches past the mirror’s own rain record', async () => {
+  const app = await precipApp();
+  // the fixture's rain window opens 2024-09-04; ALL must not draw January 2024
+  const vm = app.run(`(() => { historyKey = 'all'; return precipViewModel(); })()`);
+  // the window opens 2024-09-04; the oldest COLUMN may start up to step-1 days
+  // earlier, because a column covers whole days — but it must not start in
+  // January, which is where the oldest SHARD begins
+  const from = app.run(`rainDayISO(precipViewModel().cols[0].from)`);
+  assert.ok(from >= '2024-08-29' && from <= '2024-09-04', `the oldest column starts at the window, not at the shard: ${from}`);
+  assert.equal(app.run(`rainDayISO(precipViewModel().windowFrom)`), '2024-09-04', 'and the model knows the window itself');
+  // no column stands ENTIRELY for days the mirror does not hold: that is what
+  // used to be drawn as `pr-nd`, blaming the rain gauges for the source window
+  const outside = vm.cols.filter(c => c.seen === 0);
+  assert.deepEqual(outside, [], 'no column is drawn for days no shard covers');
+  app.run(`historyKey = '30d'`);
+});
+
+test('PRECIPITATION: a window wider than the record says so instead of drawing gaps', async () => {
+  const app = await precipApp();
+  const wide = app.run(`(() => { historyKey = '5y'; return precipViewModel(); })()`);
+  assert.equal(wide.clamped, true, 'five years over a two-year mirror is clamped');
+  const html = app.run(`(() => { historyKey = '5y'; return renderPrecip(precipViewModel()); })()`);
+  assert.match(html, /the window is shorter than the chip asks: the mirror’s rain record starts 2024-09-04/,
+    'and it names the WINDOW, not the oldest column, which may start a few days earlier');
+  const narrow = app.run(`(() => { historyKey = '30d'; return precipViewModel(); })()`);
+  assert.equal(narrow.clamped, false, 'and a window the mirror can fill is not');
+});
+
+test('PRECIPITATION: the level line is named as the midrange it is, and only when drawn', async () => {
+  const app = await precipApp();
+  // before the archive lands there is no line: no swatch for it, and no "break"
+  // blaming the gauge for a fetch that has not finished
+  const cold = app.run(`(() => { state.archive = []; historyKey = '30d'; return renderPrecip(precipViewModel()); })()`);
+  assert.match(cold, /own readings are still loading, so no level line is drawn yet/);
+  assert.ok(!cold.includes('class="pr-level"'), 'and no swatch advertises a line that is nowhere in the drawing');
+  assert.ok(!/break — the gauge reported nothing/.test(cold), 'an absent line has no breaks in it');
+
+  await app.run('loadRepoArchive()');
+  app.run(`state.archive = loadArchive('MENDEN_1')`);
+  const html = app.run(`(() => { historyKey = '30d'; return renderPrecip(precipViewModel()); })()`);
+  assert.ok(html.includes('class="pr-level"'), 'with readings, the line and its swatch are both there');
+  assert.match(html, /midrange over the same columns — \(min\+max\)\/2, the same series HISTORY draws/,
+    'the line is the archive’s two points a day averaged, and the key says which figure that is');
+  assert.ok(!/daily mean over the same columns/.test(html), 'never "the daily mean", which is a third figure the shard also carries');
+  // and where the source published no minimum, the line is (mean+max)/2 — said, not hidden
+  const seeded = app.run(`(() => {
+    state.lowIsMeanUntil = Date.now();
+    return renderPrecip(precipViewModel());
+  })()`);
+  assert.match(seeded, /the midrange is \(mean\+max\)\/2, so the line sits high there/);
+  app.run('state.lowIsMeanUntil = null');
 });

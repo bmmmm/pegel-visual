@@ -121,6 +121,7 @@ Flags are matched case-insensitively and combine, e.g. `--station KÖLN
 - `--rivers` — the rivers map (same as `map` in the app bar or `?rivers`)
 - `--rising` — the rising board (same as `rising` or `?rising`)
 - `--total` — the total overview (same as `totals` or `?total`)
+- `--rain` — rainfall per NRW basin (same as `rain` or `?rain`)
 - `--adsb URL` — set your ADS-B receiver URL; `--adsb` with no value clears it
 - `--ais URL` — set your AIS receiver URL; `--ais` with no value clears it
 - `--history RANGE` — the history window: `24h`, `3d`, `7d`, `15d`, `30d`,
@@ -247,6 +248,43 @@ river at monthly grain, one fetch for the zoomed-out levels;
 per visited year). The weekly archive workflow rebuilds it from the full
 per-station archive; the daily snapshot workflow appends today, marking
 snapshot-sourced days as provisional until the next rebuild.
+
+## Rainfall per basin
+
+`rain` (or `?rain`, `--rain`) draws the areal daily rainfall of all sixteen
+NRW basins, day by day, from the LANUK mirror. The 30D/60D/90D chips widen
+the window and are shareable links:
+
+```
+?rain
+?rain&w=90
+```
+
+Two things separate this grid from the wave view it borrows its chassis from.
+The ramp is **fixed in millimetres** — the collector's own 50/80/95 %
+quantiles over its 90-day window, printed in the key — so a wet week looks wet
+next to a dry one, where WAVE scales every row to its own gauge. And the Σ7d
+column is the collector's number, not the page's: days without a reading are
+not counted, and the tooltip says how many there were.
+
+The right edge is the mirror's newest rain day **with a reading**, which is not
+today and not even the newest day the source window names: the export runs
+mid-afternoon and a rain day starts at 07:00, so the current day is always half
+a day short. There is no live feed for this source at all, and the foot says so.
+
+A basin whose name is not a link has no gauged river of its own (the Emscher).
+
+Each LANUK station page carries the same data for its own catchment — a
+**PRECIPITATION** block with the areal rain over every rain gauge that drains
+into that gauge, drawn against the gauge's own level in the same columns, and a
+**RESPONSE** block with the measured correlation between the two at lags 0 to 7
+days plus the rise per 10 mm. A gauge with fewer than three rain gauges upstream
+says so instead of drawing a thin mean.
+
+The aggregate is baked on the `nrw` branch by `scripts/build-nrw-precip.mjs`
+(`nrw/precip/`), which is a pure function of the mirror: any checkout can
+recompute it byte-for-byte, and `--check` proves the committed bytes are the
+ones the rule produces.
 
 ## Whole-river mode
 

@@ -1672,6 +1672,7 @@
     <a href="?rivers" data-nav="rivers">all waters map</a>
     · <a href="?rising" data-nav="rising">who's rising</a>
     · <a href="?total" data-nav="total">all rivers summed</a>
+    · <a href="?rain" data-nav="rain">rainfall per basin</a>
   </nav>
 </dialog>
 <footer>
@@ -2019,6 +2020,19 @@ function screenSummary() {
       `${d.counts.steady} steady, in cm per day; ${d.counts.tidal} tidal gauges excluded.` +
       (top ? ` Fastest: ${top}.` : '');
   }
+  if (mode === 'rain') {
+    if (!state.rain) return 'Reading the mirrored rainfall…';
+    if (state.rain.error) return 'The rainfall overview failed to load.';
+    // straight off the file, NOT through rainViewModel(): the view model takes
+    // its own summary from here, and reading it back would recurse
+    const d = state.rain.data;
+    if (!d || !Array.isArray(d.basins)) return 'The rainfall overview is there but not in the shape this page reads.';
+    const wet = d.basins.filter(b => b.sum7 != null).sort((a, b) => b.sum7 - a.sum7).slice(0, 3);
+    const to = (d.window && d.window.to) || '—';
+    return `Rainfall per NRW basin, ${rainDays} days to ${to}: ${d.basins.length} ${plural(d.basins.length, 'basin')}, ` +
+      `areal daily means from the LANUK mirror, no live feed.` +
+      (wet.length ? ` Wettest week: ${wet.map(b => `${b.name} ${b.sum7} mm`).join(', ')}.` : '');
+  }
   if (mode === 'total') {
     if (!state.total) return 'Summing every gauge reading…';
     if (state.total.error) return 'The total overview failed to load.';
@@ -2221,7 +2235,12 @@ function precipYears() {
 // product the mirror does not have for it.
 async function loadPrecip(forStation, no, entry) {
   if (!entry || !entry.series) {
-    state.precip = { no, n: (entry && entry.n) || 0, reason: (entry && entry.why) || T.precipNoProduct };
+    // The collector's own words when it has them. When it has none, this gauge
+    // is not a receiving node at all — a WSV relay, or the one gauge whose
+    // coordinates are Gauss-Krueger — and saying "fewer than three rain gauges"
+    // would be a claim about a routing decision that was never made for it.
+    state.precip = { no, n: (entry && entry.n) || 0,
+      reason: (entry && entry.why) || (entry ? T.precipNoProduct : T.precipNotRouted) };
     scheduleRender();
     return;
   }
@@ -2230,7 +2249,8 @@ async function loadPrecip(forStation, no, entry) {
   ]);
   if (station !== forStation || mode !== 'station') return; // switched away while fetching
   if (!meta) {
-    state.precip = { no, n: entry.n, reason: T.precipNoProduct };
+    // a fetch that failed is not a gauge without rain: say which it was
+    state.precip = { no, n: entry.n, reason: T.precipFetchFailed };
   } else {
     const years = {};
     precipYears().forEach((y, i) => { if (shards[i]) years[y] = shards[i]; });
@@ -3261,7 +3281,11 @@ const T = {
   precipDays: 'days',
   precipNd: 'no rain gauge stood behind this column — not a dry day',
   precipBase: 'the 0 mm line the bars hang from',
-  precipLevel: 'the gauge’s daily mean over the same columns',
+  precipLevel: 'the gauge’s daily midrange over the same columns — (min+max)/2, the same series HISTORY draws',
+  precipSeedLine: 'on days before the source published a minimum the midrange is (mean+max)/2, so the line sits high there',
+  precipNoLevel: 'the gauge’s own readings are still loading, so no level line is drawn yet',
+  precipNotRouted: 'no areal rain for this gauge: it forwards rain downstream but is not a receiving node (a federal relay, or a gauge whose coordinates the source has wrong)',
+  precipFetchFailed: 'the areal rain for this gauge did not load',
   precipGap: 'the gauge reported nothing here, so the level line stops',
   precipSameRow: 'both read off the drawn row, not off a wider window',
   precipMean: 'unweighted mean over the reporting rain gauges of the upstream catchment',
@@ -3271,6 +3295,7 @@ const T = {
   precipUnits: 'two units and two scales in one drawing',
   precipThin: 'thin set — an areal mean over this few gauges is a local reading, not a catchment',
   precipEdge: 'right edge is the mirror’s newest rain day, not today:',
+  precipClamped: 'the window is shorter than the chip asks: the mirror’s rain record starts',
   precipNoProduct: 'no areal rain for this gauge: fewer than three rain gauges drain into it',
   precipNoWindow: 'the mirror does not say which day its rain record ends on',
   // rain -> level response
@@ -3374,7 +3399,7 @@ const T = {
   rainBasinNotCatchment: 'a basin is the source’s own grouping, not one gauge’s catchment — the station plates carry those',
   rainNoRiver: 'no gauged river of its own',
   rainNoRiverKey: 'a basin name that is not a link has no gauged river of its own (Emscher)',
-  rainBasins: '16 basins',
+  rainBasins: 'basins',
   rainBasin: 'basin',
   rainDaysCol: 'daily rainfall',
   rainSum7Col: 'Σ7d',
@@ -4435,9 +4460,18 @@ function precipViewModel() {
     const s = p.years[y];
     return s && Array.isArray(s[arr]) ? s[arr][i] : undefined;
   };
-  // the oldest day the loaded shards can answer for
-  let first = edge;
-  for (const y of Object.keys(p.years)) first = Math.min(first, Date.UTC(Number(y), 0, 1) / 864e5);
+  // The oldest day the MIRROR holds, not the oldest day its shards span: a year
+  // file starts on January 1 whatever the source window does, and drawing those
+  // leading nulls as `pr-nd` would blame the rain gauges for days that were
+  // never collected. The window is the source's word; the shards are just how
+  // it is stored.
+  const win = lanukManifestInfo && lanukManifestInfo.window && lanukManifestInfo.window.rain;
+  let first = win && win.from ? rainDayNum(win.from) : edge;
+  for (const y of Object.keys(p.years)) first = Math.max(first, Math.min(first, Date.UTC(Number(y), 0, 1) / 864e5));
+  if (!win || !win.from) {
+    first = edge;
+    for (const y of Object.keys(p.years)) first = Math.min(first, Date.UTC(Number(y), 0, 1) / 864e5);
+  }
   const days = preset.d ? Math.min(preset.d, edge - first + 1) : (edge - first + 1);
   // whole days per column, so no day is counted in two columns and none is
   // silently dropped between them
@@ -4479,10 +4513,15 @@ function precipViewModel() {
     }
     for (let c = 0; c < cols.length; c++) if (counts[c]) lvl[c] = sums[c] / counts[c];
   }
+  // A break is a break IN a line. Before loadRepoArchive lands there is no line,
+  // and counting every column as one silence made the key blame the gauge for a
+  // fetch that had not finished.
   let gaps = 0;
-  for (let c = 0, inGap = false; c < cols.length; c++) {
-    if (lvl[c] != null) { inGap = false; continue; }
-    if (!inGap) { gaps++; inGap = true; }
+  if (lvl.some(v => v != null)) {
+    for (let c = 0, inGap = false; c < cols.length; c++) {
+      if (lvl[c] != null) { inGap = false; continue; }
+      if (!inGap) { gaps++; inGap = true; }
+    }
   }
   const lo = Math.min(...lvl.filter(v => v != null)), hi = Math.max(...lvl.filter(v => v != null));
 
@@ -4491,6 +4530,17 @@ function precipViewModel() {
     sumMm: Math.round(sumMm * 10) / 10, maxCol,
     level: Number.isFinite(lo) ? { lo, hi } : null,
     from: cols.length ? cols[0].from : edge, to: edge,
+    // the chip asked for more days than the mirror has: the plate says so
+    // instead of drawing the shortfall as missing rain gauges. `windowFrom` is
+    // the mirror's own first rain day — the OLDEST COLUMN may begin up to
+    // step-1 days before it, because a column covers whole days and the window
+    // is not a multiple of the step; that column counts only the days that
+    // exist, so it is short, not wrong.
+    clamped: !!(preset.d && days < preset.d),
+    windowFrom: first,
+    // the level line is (min+max)/2, and on a day whose minimum the source never
+    // published it is (mean+max)/2 — the same seam HISTORY names, named here too
+    seed: state.lowIsMeanUntil != null && cols.length > 0 && cols[0].from * 864e5 <= state.lowIsMeanUntil,
     n: p.n, km2: meta.km2 ?? null, nUpstream: meta.nUpstream || 0,
     align: meta.align || '', unit: gaugeUnit(),
   };
@@ -4533,13 +4583,14 @@ function renderPrecip(p) {
   }
   const chart = svgWrap(`0 0 ${W} ${H}`, parts.join(''),
     ' class="chart precip" preserveAspectRatio="none" role="img"' +
-    attr('aria-label', `${T.precip}: ${p.sumMm} mm over ${p.label}, ${p.n} rain gauges, against the gauge's daily mean`));
+    attr('aria-label', `${T.precip}: ${p.sumMm} mm over ${p.label}, ${p.n} rain gauges, against the gauge's daily midrange`));
   const days = p.step === 1 ? T.precipDay : `${p.step} ${T.precipDays}`;
   const key = plateKey([
     { sw: keySw('<rect class="pr-bar" x="3" y="0" width="6" height="9"/><line class="pr-base" x1="0" y1="0.5" x2="12" y2="0.5"/>'), label: `${T.precipBar} (${esc(days)})` },
     { sw: keySw('<rect class="pr-nd" x="1" y="1" width="10" height="10"/>'), label: T.precipNd },
     { sw: keySw('<line class="pr-base" x1="0" y1="6" x2="12" y2="6"/>'), label: T.precipBase },
-    { sw: keySw('<polyline class="pr-level" points="0,9 4,4 8,6 12,2"/>'), label: T.precipLevel },
+    p.level && { sw: keySw('<polyline class="pr-level" points="0,9 4,4 8,6 12,2"/>'), label: T.precipLevel },
+    !p.level && { note: T.precipNoLevel },
     p.gaps > 0 && { note: `${p.gaps} ${plural(p.gaps, 'break')} — ${T.precipGap}` },
     { note: `Σ ${p.sumMm} mm · max ${p.maxCol} mm — ${T.precipSameRow}` },
     { note: p.km2 != null
@@ -4549,8 +4600,10 @@ function renderPrecip(p) {
     { note: T.precipTwoClocks },
     p.align && { note: p.align },
     { note: `${T.precipUnits} — mm/d, ${p.unit}` },
+    p.seed && { note: T.precipSeedLine },
     p.n <= 3 && { note: `${T.precipThin} (${p.n})`, warn: true },
     { note: `${T.precipEdge} ${rainDayISO(p.to)}` },
+    p.clamped && { note: `${T.precipClamped} ${rainDayISO(p.windowFrom)}` },
   ]);
   return head + `<div class="precip-wrap">${chart}</div>${key}</section>`;
 }
@@ -5653,7 +5706,11 @@ function precipBin(mm, bins) {
 
 function rainViewModel() {
   const d = state.rain && state.rain.data;
-  if (!d || !Array.isArray(d.basins)) return null;
+  // every row, not just the array: one row without `mm` used to throw out of
+  // render(), and render() runs inside a rAF callback that swallows the
+  // exception — the plate then sits on "loading…" for ever, with no error and
+  // no retry. A shape guard here is what turns that into a stated failure.
+  if (!d || !Array.isArray(d.basins) || !d.basins.every(b => b && Array.isArray(b.mm) && Array.isArray(b.n))) return null;
   const have = d.window && d.window.days ? d.window.days : (d.basins[0] ? d.basins[0].mm.length : 0);
   const days = Math.min(rainDays, have);
   const start = have - days;
@@ -5730,7 +5787,7 @@ function renderRain(vm) {
     `<th scope="col" class="vh" colspan="${vm.days}">${esc(T.rainDaysCol)}</th>` +
     `<th scope="col" class="rsum-h">${esc(T.rainSum7Col)}</th></tr></thead>` +
     `<tbody>${rows}</tbody></table></div>` +
-    `<div class="pf-flow"><span>${esc(T.rainBasins)}</span><span>${esc(T.timeRight)} →</span></div>` +
+    `<div class="pf-flow"><span>${esc(`${vm.rows.length} ${plural(vm.rows.length, T.rainBasin)}`)}</span><span>${esc(T.timeRight)} →</span></div>` +
     key + '</section>';
 }
 
@@ -8683,9 +8740,15 @@ function render() {
   setSourceLine(vm.source);
 }
 
+// The source line of a plate that is not drawn yet. It has to name the source
+// the plate WILL have, not the one most plates have: ?rain is fed by the LANUK
+// mirror, and saying PEGELONLINE over it is false while it loads and false
+// again when it fails.
+const pendingSource = () => (mode === 'rain' ? `${LANUK} · ${T.noLiveFeed}` : T.sourceWsv);
+
 function setScreenLoading(what) {
   setScreenPlate(renderState('loading', what, T.loadBody));
-  setSourceLine(T.sourceWsv);
+  setSourceLine(pendingSource());
 }
 
 function setScreenError(msg) {
@@ -8693,7 +8756,7 @@ function setScreenError(msg) {
   setScreenPlate(renderState('error', T.errorTitle, msg,
     `<p class="state-actions">${navOpen('cmd:retry')}${esc(T.tryAgain)}${navClose('cmd:retry')}` +
     ` <a href="#" id="state-report">${esc(T.reportThis)}</a></p>`));
-  setSourceLine(T.sourceWsv);
+  setSourceLine(pendingSource());
 }
 
 let fitted = false;
