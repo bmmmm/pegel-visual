@@ -68,6 +68,11 @@ memory `browser-verify-cdp-recipe` points here as the source.
   A second trap: with browser zoom on, the extension's screenshot is a crop in
   device pixels, so image coordinates are `css * devicePixelRatio` — click by
   element `ref`, not by pixels read off the picture.
+- **`body.innerHTML.includes()` is not a page check** — it matches the script's
+  own string table and the global footer, so an assertion written that way is
+  true before the page renders anything. Read `#screen`'s `innerText` instead
+  (2026-09-06: 44 false FAILs out of one wrong anchor). This and the bullet
+  below are the same rule, once for the text layer and once for the drawing.
 - **In the browser, the key's swatches ARE the drawing — anchor at `.scene-plot`,
   not at `svg.scene`.** A swatch reuses the drawing's classes *and* its element
   (`keySw` emits `<svg class="sw scene">`), so `#screen svg.scene g.boat` counts
