@@ -24,6 +24,16 @@ updates:
   # fresh — they are pre-registered experiment parameters, and moving one
   # invalidates the report measured with it. A bump belongs in a deliberate
   # re-run, never in an automated PR. See scripts/forecast/pyproject.toml.
+  #
+  # The BARE `dependency-name` below is the deliberate form, not an oversight.
+  # Adding `update-types:` would fence the rule out of the security path —
+  # "update-types only affects version updates, not security updates. Security
+  # updates will always be created regardless" (GitHub docs, controlling-
+  # dependencies-updated) — and a security PR against a frozen experiment
+  # parameter is still an automated bump this pin must not get. Nothing is lost
+  # by it: Dependabot ALERTS come from the dependency graph and no dependabot.yml
+  # key can switch them off, so an advisory still shows up. Only the automatic
+  # fix PR is suppressed, which is exactly the intent above.
   - package-ecosystem: uv
     directory: /scripts/forecast
     schedule:
