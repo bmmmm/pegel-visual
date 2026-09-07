@@ -166,6 +166,20 @@ holds the raw seed under `nrw-hires/raw/2026-09-04/`). Gate
 different rain day boundary, and a derived minimum would put R6 at risk for
 the whole WSV fleet.
 
+**A local `github/nrw` ref is a date, not a fact — and nothing on disk
+contradicts it.** These branches have no working tree, so a stale
+remote-tracking ref reads exactly like a current one: `git show
+github/nrw:nrw/manifest.json` answers confidently out of whenever you last
+fetched. On 2026-09-08 that made an agent report `nrw/precip/` as "not
+materialized on the branch" while the deployed site was serving all 276 entries
+of it. Before treating either data branch as evidence: `git fetch github nrw
+nrw-hires`, or — faster and authoritative for the question that usually
+matters, *what do readers actually get* — `curl` the Pages URL
+(`https://bmmmm.github.io/pegel-visual/nrw/manifest.json`, `nrw/precip/index.json`,
+`nrw/gauges/<id>/meta.json`). For `nrw-hires`, which Pages never mounts,
+`gh api "repos/bmmmm/pegel-visual/git/trees/nrw-hires?recursive=1"` lists the
+tree without fetching it — quote the URL, zsh globs the `?`.
+
 Merge policy is the **inverse** of the WSV extreme-union: inside the source
 window the fresh value wins (the source declares unchecked raw data and
 revises downward too), outside it the stored value is frozen; a fresh `null`
