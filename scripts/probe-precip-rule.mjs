@@ -90,6 +90,30 @@ export function runVariant(bench, opts) {
   return out;
 }
 
+// THE REFERENCE, open-coded on purpose — the one function in this file that
+// does NOT go through precipMembers. Without it the self-test compares the
+// identity variant against itself and reports delta 0 whatever the machinery
+// does, which is the "green by construction" failure this repo has already been
+// bitten by four times. This is the pre-2026-09-08 rule written out: the union
+// of the OWNED stations over the upstream closure, nothing else.
+export function referenceRun(bench) {
+  const { nodes, assign, up, from, to } = bench;
+  const out = new Map();
+  for (const no of assign.recv) {
+    const set = [...closure(no, up)].sort(cmpNo)
+      .flatMap(s => (assign.own.get(s) || []))
+      .sort(cmpNo);
+    const rec = { no, n: set.length, set, rPeak: null, product: false };
+    out.set(no, rec);
+    if (set.length < MIN_SET_FOR_SERIES) continue;
+    const ser = arealSeries(set.map(r => ({ no: r, series: bench.rainOf(r) })), from, to);
+    if (!ser.mm.some(v => v != null)) continue;
+    rec.product = true;
+    rec.rPeak = responseStats(ser.mm, bench.levelOf(no), { from, to, id: no, nRain: set.length, unit: nodes[no].unit || 'cm' }).rPeak;
+  }
+  return out;
+}
+
 // How far a member sits from its gauge relative to the radius of a circle of
 // the gauge's own catchment area — the plan's honesty test. A member outside
 // that radius is not necessarily wrong, but it is not "the catchment" either.
@@ -190,23 +214,35 @@ function main(argv) {
     `axis ${bench.to - bench.from + 1} days`);
   console.log(`identity: ${baseProducts} gauges with a product, ${baseR} of them with a peak r`);
 
-  const dump = { tree, generated: new Date().toISOString(), baseline: { products: baseProducts, withR: baseR }, variants: {} };
-  let identityClean = null;
+  // THE SELF-TEST, and it runs whether or not `identity` was asked for: the
+  // variant machinery against a reference that never touches it. Comparing the
+  // identity variant to `base` would be comparing it to itself.
+  const ref = referenceRun(bench);
+  const mismatched = [], setDiff = [];
+  for (const [no, r] of ref) {
+    const b = base.get(no);
+    if (!b) { setDiff.push(`${no}: missing from the variant run`); continue; }
+    if (b.set.join(',') !== r.set.join(',')) setDiff.push(`${no}: ${b.set.length} vs ${r.set.length} members`);
+    if (r.rPeak == null && b.rPeak == null) continue;
+    if (r.rPeak == null || b.rPeak == null || Math.abs(r.rPeak - b.rPeak) > 1e-9) mismatched.push(`${no}: ${b.rPeak} vs ${r.rPeak}`);
+  }
+  const identityClean = mismatched.length === 0 && setDiff.length === 0;
+  console.log(`self-test: the identity variant against an independent reading of the old rule — ` +
+    `${ref.size} gauges, ${setDiff.length} with a different set, ${mismatched.length} with a different peak r` +
+    (identityClean ? '' : `: ${[...setDiff, ...mismatched].slice(0, 5).join('; ')}`));
+  if (!identityClean) console.log('  !! the bench does not reproduce the rule it claims to — every number below is void');
+
+  const dump = { tree, generated: new Date().toISOString(), baseline: { products: baseProducts, withR: baseR }, selfTest: { ok: identityClean, gauges: ref.size }, variants: {} };
   for (const name of want) {
     const run = name === 'identity' ? base : runVariant(bench, VARIANTS[name]);
     const c = compare(bench, base, run);
-    if (name === 'identity') {
-      const off = c.deltas.filter(x => Math.abs(x.d) > 1e-12);
-      identityClean = off.length === 0 && c.compared === baseR;
-      console.log(`self-test: identity through the variant machinery — ${c.compared}/${baseR} gauges compared, ` +
-        `${off.length} with a non-zero delta` + (off.length ? `: ${off.slice(0, 5).map(x => `${x.no} ${x.d}`).join(', ')}` : ''));
-      if (!identityClean) console.log('  !! the bench does not reproduce the shipping rule — every number below is void');
-    }
     console.log(row(name, c));
     dump.variants[name] = { opts: VARIANTS[name], ...c, deltas: c.deltas.map(x => ({ no: x.no, d: x.d, from: x.from, to: x.to })) };
   }
   if (jsonOut) { writeFileSync(jsonOut, JSON.stringify(dump, null, 1)); console.log(`wrote ${jsonOut}`); }
-  if (want.includes('identity') && !identityClean) process.exit(1);
+  // A failed self-test exits non-zero whatever was asked for — the numbers above
+  // are void, and a bench that prints them under exit 0 is worse than none.
+  if (!identityClean) process.exit(1);
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] || '').href) main(process.argv);

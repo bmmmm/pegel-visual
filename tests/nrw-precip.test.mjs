@@ -442,7 +442,7 @@ test('a level day the source aggregated below 95 % accuracy is not observed', ()
 // is its CI-able twin: a synthetic tree, three named gauges, no network.
 
 test('bench: the identity variant IS the pre-version-2 rule, to 1e-9, on three named gauges', async () => {
-  const { loadBench, runVariant, VARIANTS } = await import('../scripts/probe-precip-rule.mjs');
+  const { loadBench, runVariant, VARIANTS, referenceRun } = await import('../scripts/probe-precip-rule.mjs');
   const { readRainSeries, readLevelSeries, dayAxis, readTree } = await import('../scripts/build-nrw-precip.mjs');
   const tmp = mkdtempSync(join(tmpdir(), 'precip-bench-'));
   const Y = 2025, n = daysInYear(Y);
@@ -484,6 +484,16 @@ test('bench: the identity variant IS the pre-version-2 rule, to 1e-9, on three n
     assert.ok(want.rPeak != null, `${no}: the fixture has to produce a peak, or this proves nothing`);
     assert.ok(Math.abs(run.get(no).rPeak - want.rPeak) < 1e-9,
       `${no}: bench ${run.get(no).rPeak} vs rule ${want.rPeak}`);
+  }
+
+  // The CLI's own self-test path, on the same tree. `referenceRun` is the one
+  // function in the bench that does not go through `precipMembers` — the first
+  // cut of this bench compared the identity variant against ITSELF and printed
+  // "delta 0" no matter what the machinery did.
+  const ref = referenceRun(bench);
+  for (const no of ['low', 'mid', 'high']) {
+    assert.deepEqual(ref.get(no).set, run.get(no).set, `${no}: reference and variant build the same set`);
+    assert.ok(Math.abs(ref.get(no).rPeak - run.get(no).rPeak) < 1e-9, `${no}: and the same peak r`);
   }
   rmSync(tmp, { recursive: true, force: true });
 });

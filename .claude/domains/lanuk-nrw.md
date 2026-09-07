@@ -144,7 +144,10 @@ floor fires on 28 gauges and reaches at most 29.05 km.
 **What was measured before a line of it was written** (all on the real mirror,
 `scripts/probe-precip-rule.mjs`, whose `identity` variant reproduces the old
 rule at delta exactly 0 on all 92 comparable gauges — that self-test is the
-first thing to run and the only one that can invalidate every other number):
+first thing to run and the only one that can invalidate every other number.
+It compares against `referenceRun`, the one function in the bench that does NOT
+go through `precipMembers`; the first cut compared the identity variant against
+ITSELF and would have printed "delta 0" whatever the machinery did):
 
 | variant | median Δ peak-r | better/worse | z | gauges with a product | set med/p90 | members outside the equivalent radius | identical neighbour sets |
 |---|---|---|---|---|---|---|---|
