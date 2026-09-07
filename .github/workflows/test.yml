@@ -71,6 +71,37 @@ jobs:
         run: node scripts/home-check.mjs --shots tmp-browser-shots/home
         env:
           CHROME: google-chrome
+
+      # The station PRECIPITATION/RESPONSE plates and ?rain. Unlike the two
+      # above these need DATA, so the `nrw` branch is mounted the way pages.yml
+      # mounts it — and the precip product is REBUILT from that tree first.
+      # Rebuilding is the point: it makes this check a function of (this
+      # commit's code + the branch's raw data), so the run that changes the
+      # assignment rule is checked against what that rule produces, not against
+      # whatever the last collector run happened to bake.
+      #
+      # Until 2026-09-08 verify-precip.mjs ran in no workflow at all — the
+      # plates it covers were verified by hand and then by nobody. A check that
+      # only a human remembers to run is not a check.
+      - name: Mount the nrw data branch (skips loudly when there is none)
+        if: ${{ !cancelled() }}
+        id: nrw
+        run: |
+          if git ls-remote --exit-code --heads origin nrw >/dev/null; then
+            git fetch origin nrw --depth 1
+            git worktree add /tmp/nrw-branch FETCH_HEAD
+            cp -R /tmp/nrw-branch/nrw ./nrw
+            node scripts/build-nrw-precip.mjs --tree nrw
+            echo 'have=yes' >> "$GITHUB_OUTPUT"
+          else
+            echo 'have=no' >> "$GITHUB_OUTPUT"
+            echo '::warning::no nrw branch on this remote — the PRECIPITATION/RESPONSE and ?rain plates were NOT verified in a browser on this run'
+          fi
+      - if: ${{ !cancelled() && steps.nrw.outputs.have == 'yes' }}
+        run: node scripts/verify-precip.mjs --shots tmp-browser-shots/precip
+        env:
+          CHROME: google-chrome
+
       - if: failure()
         uses: actions/upload-artifact@v7
         with:

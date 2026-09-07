@@ -73,16 +73,25 @@ const mkMany = (kind, n, years = [[2026, { to: SEP2_2026 }]]) =>
 
 // Coordinates the fixture needs since N8: the areal rule places every station
 // on the NRW box, and a gauge without a usable pair never receives rain. Rain
-// gauge j sits exactly on gauge floor(j/3), so the assignment is unambiguous
-// and 104 of the 300 gauges end up with a set of three — over N8's floor of 80,
-// without building a 300-deep routing chain the test would pay for on every run.
+// gauge j sits exactly on a gauge cluster, so the assignment is unambiguous and
+// no nearest-neighbour tie is ever needed.
+//
+// SPREAD ACROSS THE WHOLE FLEET, not over its first third. Until rule version 2
+// this was floor(j/3), which piled all 313 rain gauges onto gauges 0..104 and
+// left the other 195 with no product at all — 104 of 300, comfortably over the
+// floor of 80 that N8 had then. Version 2 raised the floor to 260 (measured 275
+// of 276 on the real mirror), and a fixture that is two thirds desert cannot
+// reach it: the 15 km ring plus the 45 km knn cap got to 184 and the CLI tests
+// went red. That is a property of a straight line of gauges 108 km long, not of
+// the rule — the real fleet has rain gauges throughout — so the fixture now
+// spreads them, and every gauge has one within a cluster or two.
 const RAIN_PER_GAUGE = 3;
 // 0.005 deg ~ 556 m between clusters — 300 gauges have to fit inside the box's
 // 2.8 degrees of latitude, and a rain gauge sits ON its cluster, so the nearest
 // neighbour is never a tie.
 const fixLat = i => 51 + i * 0.005;
 export const gaugeCoords = i => ({ lat: fixLat(i), lon: 7 });
-const rainCoords = j => ({ lat: fixLat(Math.floor(j / RAIN_PER_GAUGE)), lon: 7 });
+const rainCoords = j => ({ lat: fixLat(Math.floor(j * N_GAUGES / N_RAIN)), lon: 7 });
 
 const topologyOf = gauges => ({
   schema: 1,
@@ -750,17 +759,25 @@ const {
   MIN_PRECIP_SERIES, MIN_RECEIVING_NODES, MAX_MM_DAY_RAW,
 } = await import('../scripts/check-nrw-consistency.mjs');
 
+// The rule block is part of the fixture, not decoration: since version 2 the
+// gate reads its per-member distance bounds out of it rather than keeping a
+// second copy, so an index without one has to be able to say so.
+const HEALTHY_RULE = {
+  ruleVersion: 2, maxAssignKm: 100, maxOrphanKm: 10, localKm: 15, knnFloor: 3, minSetForSeries: 3,
+};
 const HEALTHY_INDEX = {
-  schema: 1, counts: {
+  schema: 1, rule: HEALTHY_RULE, counts: {
     routingNodes: 298, receivingNodes: 276, relayedExcluded: 21, badCoordNodes: 1,
     rainAssignedBasin: 302, rainAssignedOrphan: 12, rainUnassigned: 5,
-    withSeries: 94, withoutRain: 60, cyclicNodes: 2,
+    withSeries: 275, withoutRain: 0, cyclicNodes: 2,
+    memberships: { basin: 949, orphan: 45, local: 1406, knn: 42 },
+    stationsInNoSet: 5, stationsInNoSetIds: ['a', 'b', 'c', 'd', 'e'],
   },
   unassigned: [{ no: 'x', why: 'coords' }], far: [], gauges: {},
 };
 // one gauge, one 2025 shard, a set of two rain gauges it owns
 const precipProduct = (over = {}) => new Map([['g1', {
-  meta: { set: [{ no: 'r1', at: 'g1' }, { no: 'r2', at: 'g1' }], ...(over.meta || {}) },
+  meta: { set: [{ no: 'r1', at: 'g1', via: 'basin', km: 4 }, { no: 'r2', at: 'g1', via: 'basin', km: 9 }], ...(over.meta || {}) },
   shards: new Map([[2025, {
     id: 'g1', y: 2025,
     mm: Array(365).fill(5), n: Array(365).fill(2),
@@ -837,11 +854,126 @@ test('N8h: the cycle members are compared, not only how many there are', () => {
 test('N8c: a rain station owned by two gauges', () => {
   const products = precipProduct();
   products.set('g2', {
-    meta: { set: [{ no: 'r1', at: 'g2' }] },   // r1 already belongs to g1
+    meta: { set: [{ no: 'r1', at: 'g2', via: 'basin', km: 4 }] },   // r1 already belongs to g1
     shards: new Map(),
   });
   const v = checkPrecipShape(HEALTHY_INDEX, products, RAIN_IDS, { g1: {}, g2: {} });
   assert.match(v.join('\n'), /rain station r1 is owned by both g1 and g2/);
+});
+
+// ---------- N8c: membership, the three clauses that replaced the partition ----------
+// The old rule was "one station, one owner", and it was a partition. Version 2
+// makes membership many-to-many, so that check would now be false by
+// construction — these are what stand in its place, and each is broken by hand
+// here so it is known to be able to go red.
+
+const memberSet = set => new Map([['g1', { meta: { set }, shards: new Map() }]]);
+const RAIN_IDS3 = new Set(['r1', 'r2', 'r3']);
+const TOPO_G1 = { g1: {} };
+const shapeOf = (index, set) => checkPrecipShape(index, memberSet(set), RAIN_IDS3, TOPO_G1).join('\n');
+
+test('N8c2: every member is held to the bound of its OWN via, read out of the product', () => {
+  const over = v => shapeOf(HEALTHY_INDEX, [{ no: 'r1', at: 'g1', via: v.via, km: v.km }]);
+  assert.match(over({ via: 'basin', km: 101 }), /r1 is 101 km away via "basin", over that via's bound of 100 km/);
+  assert.match(over({ via: 'orphan', km: 11 }), /r1 is 11 km away via "orphan", over that via's bound of 10 km/);
+  assert.match(over({ via: 'local', km: 16 }), /r1 is 16 km away via "local", over that via's bound of 15 km/);
+  // …and each of those is green one step inside its own bound
+  for (const ok of [{ via: 'basin', km: 100 }, { via: 'orphan', km: 10 }, { via: 'local', km: 15 }]) {
+    assert.doesNotMatch(over(ok), /over that via's bound/, `${ok.via} at ${ok.km} km is legal`);
+  }
+});
+
+test('N8c2: the bounds come from the PRODUCT, so a rule that widens its ring is not red for it', () => {
+  const wide = { ...HEALTHY_INDEX, rule: { ...HEALTHY_RULE, localKm: 25 } };
+  const member = [{ no: 'r1', at: 'g1', via: 'local', km: 22 }];
+  assert.match(shapeOf(HEALTHY_INDEX, member), /over that via's bound of 15 km/, '22 km is out under a 15 km rule');
+  assert.doesNotMatch(shapeOf(wide, member), /over that via's bound/, 'and in under a 25 km one — one copy of the number, not two');
+});
+
+test('N8c2: a via the rule does not enable, and a via that is no way in at all', () => {
+  const v1 = { ...HEALTHY_INDEX, rule: { ...HEALTHY_RULE, localKm: null } };
+  assert.match(shapeOf(v1, [{ no: 'r1', at: 'g1', via: 'local', km: 4 }]),
+    /r1 arrived via "local", which this rule version does not enable/);
+  assert.match(shapeOf(HEALTHY_INDEX, [{ no: 'r1', at: 'g1', via: 'sympathy', km: 4 }]),
+    /r1 has via "sympathy", which is not a way into a set/);
+  assert.match(shapeOf(HEALTHY_INDEX, [{ no: 'r1', at: 'g1', via: 'basin' }]),
+    /r1 carries no distance — a guess must not look like a measurement/);
+});
+
+test('N8c2: a local or knn member that names someone else as its node', () => {
+  assert.match(shapeOf(HEALTHY_INDEX, [{ no: 'r1', at: 'g9', via: 'local', km: 4 }]),
+    /r1 arrived via "local" but names g9 as its node, not this gauge/);
+  // …while a basin member naming an upstream node is exactly right
+  assert.doesNotMatch(shapeOf(HEALTHY_INDEX, [{ no: 'r1', at: 'g9', via: 'basin', km: 4 }]), /names g9 as its node/);
+});
+
+test('N8c2: the knn floor may only fire where nothing else reached, and only up to the floor', () => {
+  // a knn member in a set that already had three of its own
+  const tooMany = [
+    { no: 'r1', at: 'g1', via: 'local', km: 4 }, { no: 'r2', at: 'g1', via: 'local', km: 5 },
+    { no: 'r3', at: 'g1', via: 'local', km: 6 }, { no: 'r1', at: 'g1', via: 'knn', km: 20 },
+  ];
+  assert.match(shapeOf(HEALTHY_INDEX, tooMany), /the knn floor fired on a set that already had 3 members/);
+  // a floor that filled past its own size
+  const four = [
+    { no: 'r1', at: 'g1', via: 'knn', km: 20 }, { no: 'r2', at: 'g1', via: 'knn', km: 21 },
+    { no: 'r3', at: 'g1', via: 'knn', km: 22 }, { no: 'ghost', at: 'g1', via: 'knn', km: 23 },
+  ];
+  assert.match(shapeOf(HEALTHY_INDEX, four), /the knn floor filled the set to 4, not to 3/);
+  // and the legitimate case is green
+  const three = [
+    { no: 'r1', at: 'g1', via: 'knn', km: 20 }, { no: 'r2', at: 'g1', via: 'knn', km: 21 },
+    { no: 'r3', at: 'g1', via: 'knn', km: 22 },
+  ];
+  assert.doesNotMatch(shapeOf(HEALTHY_INDEX, three), /knn floor/);
+});
+
+test('N8c3: the HYDROLOGICAL origin is still a partition, and geometry is deliberately not', () => {
+  const two = new Map([
+    ['g1', { meta: { set: [{ no: 'r1', at: 'g1', via: 'basin', km: 4 }] }, shards: new Map() }],
+    ['g2', { meta: { set: [{ no: 'r1', at: 'g2', via: 'basin', km: 5 }] }, shards: new Map() }],
+  ]);
+  assert.match(checkPrecipShape(HEALTHY_INDEX, two, RAIN_IDS3, { g1: {}, g2: {} }).join('\n'),
+    /rain station r1 is owned by both g1 and g2/);
+  // the same station as a LOCAL member of two gauges is the whole point of
+  // version 2 — many-to-many membership — and must not be flagged
+  const shared = new Map([
+    ['g1', { meta: { set: [{ no: 'r1', at: 'g1', via: 'local', km: 4 }] }, shards: new Map() }],
+    ['g2', { meta: { set: [{ no: 'r1', at: 'g2', via: 'local', km: 5 }] }, shards: new Map() }],
+  ]);
+  assert.deepEqual(checkPrecipShape(HEALTHY_INDEX, shared, RAIN_IDS3, { g1: {}, g2: {} }), []);
+});
+
+test('N8j: a rule change may not ride in on its own drift allowance', () => {
+  const v1 = { ...HEALTHY_INDEX, rule: { ...HEALTHY_RULE, ruleVersion: 1 } };
+  const at = (ver, counts = {}) => ({
+    ...HEALTHY_INDEX, rule: { ...HEALTHY_RULE, ruleVersion: ver },
+    counts: { ...HEALTHY_INDEX.counts, ...counts },
+  });
+  // a bump with no pre-registered entry
+  assert.match(checkPrecipDrift(at(7), v1).join('\n'),
+    /rule version 1 -> 7 with no pre-registered counts/);
+  // a bump whose numbers disagree with what was registered for it
+  assert.match(checkPrecipDrift(at(2, { withSeries: 200 }), v1).join('\n'),
+    /rule version 2: withSeries is 200, pre-registered 275 \(slack 2\)/);
+  // the real thing: version 2's own numbers against a version 1 HEAD
+  assert.deepEqual(checkPrecipDrift(at(2), v1), []);
+  // and the version change suppresses the HEAD drift comparison, which would
+  // otherwise read every intended move as a regression
+  assert.deepEqual(checkPrecipDrift(at(2), { ...v1, counts: { ...v1.counts, cyclicNodes: 9 } }), [],
+    'a HEAD from before the rule change is not a baseline');
+});
+
+test('N8g: the list of rain stations in no set at all may not grow', () => {
+  const noSet = n => ({ ...HEALTHY_INDEX, counts: { ...HEALTHY_INDEX.counts, stationsInNoSet: n, stationsInNoSetIds: ['a', 'b'] } });
+  assert.deepEqual(checkPrecipDrift(noSet(7), HEALTHY_INDEX), [], 'two more is the same slack every counter gets');
+  assert.match(checkPrecipDrift(noSet(8), HEALTHY_INDEX).join('\n'),
+    /rain stations in no set at all 5 -> 8, drift over 2 \(a, b\)/);
+  // across a rule change the comparison is against the pre-registered number,
+  // not against a HEAD that predates the rule
+  const v1 = { ...HEALTHY_INDEX, rule: { ...HEALTHY_RULE, ruleVersion: 1 } };
+  const bumped = { ...noSet(9), rule: HEALTHY_RULE };
+  assert.match(checkPrecipDrift(bumped, v1).join('\n'), /rain stations in no set at all 5 -> 9/);
 });
 
 test('N8d: a set naming a rain station with no directory, and a gauge not in the topology', () => {
@@ -970,7 +1102,7 @@ test('CLI: N8 counters are red when the product shrinks below its floor', () => 
   writeFileSync(p, JSON.stringify(ix));
   const { code, stdout } = runChecker(repo);
   assert.equal(code, 1);
-  assert.match(stdout, /::error::N8: precip: only 3 gauges carry a series, floor is 80/);
+  assert.match(stdout, new RegExp(`::error::N8: precip: only 3 gauges carry a series, floor is ${MIN_PRECIP_SERIES}`));
 });
 
 const { buildManifest } = await import('../scripts/fetch-nrw-archive.mjs');

@@ -874,7 +874,7 @@
   .h-fill { fill: color-mix(in oklab, var(--water) 55%, transparent); }
   .h-line { fill: none; stroke: var(--water-line); stroke-width: 1.6; vector-effect: non-scaling-stroke; }
   .href-line { stroke: var(--ink); stroke-width: 1; stroke-dasharray: 5 4; opacity: 0.5; vector-effect: non-scaling-stroke; }
-  /* ---- areal rain over the catchment ---- */
+  /* ---- the rain field around the gauge ---- */
   .precip-wrap { margin-left: var(--axis-gutter); }
   .precip { height: 7.2rem; border-bottom: 1px solid var(--ink); }
   /* a fill wide enough to read, bounded by the ink hairline every area on this
@@ -2114,9 +2114,10 @@ const state = {
   // source name, so a third source only ever touches the loader layer.
   feed: null,
   lanuk: null,      // LANUK-only extras (stages, catchment, down, note) — never in state.gauge
-  // the baked areal rainfall of this gauge's upstream catchment, LANUK only:
+  // the baked rain FIELD around this gauge, LANUK only — not areal rain over a
+  // catchment, see the T.precip* block:
   // { no, years: {y: shard}, response, meta, n, reason } | { no, reason } | null.
-  // `reason` is why there is no series (fewer than three rain gauges upstream) —
+  // `reason` is why there is no series (fewer than three rain gauges in reach) —
   // the plate prints it rather than drawing nothing.
   precip: null,
   neighborsNote: null, // why the neighbour profile is empty, when the loader knows (null = still locating)
@@ -2185,7 +2186,7 @@ function lanukMeta(no) {
   return lanukMetaCache.get(no);
 }
 
-// ---------- the areal-rain product (nrw/precip/, see scripts/build-nrw-precip.mjs) ----------
+// ---------- the rain-field product (nrw/precip/, see scripts/build-nrw-precip.mjs) ----------
 
 const precipShardCache = new Map(); // "<no>/<y>" -> Promise<shard|null>
 const precipMetaCache = new Map();  // "<no>" -> Promise<meta|null>
@@ -3175,9 +3176,17 @@ const T = {
   histDaily: 'the reading over time',
   histBand: 'min–max inside one pixel column',
   histGapKey: 'the gauge reported nothing here, so the line stops rather than guess across it',
-  // areal rain over the gauge's own catchment (nrw/precip/)
+  // The rain FIELD around the gauge (nrw/precip/) — not areal precipitation
+  // over its catchment, and the wording here is the only place a reader can
+  // learn the difference. No watershed is consulted anywhere in the pipeline:
+  // the source publishes none. Since rule version 2 (2026-09-08) a set is the
+  // gauge's hydrological rain plus every rain gauge within 15 km of the gauge
+  // itself, floored to the 3 nearest — measured on the mirror, 74 % of members
+  // sit outside a circle of the gauge's own catchment area. "Areal rain over
+  // the catchment" would be a claim this product cannot back, which is why the
+  // word is gone from every string below.
   precip: 'PRECIPITATION',
-  precipBar: 'areal rain per column',
+  precipBar: 'rain around the gauge, per column',
   precipDay: 'one day',
   precipDays: 'days',
   precipNd: 'no rain gauge stood behind this column — not a dry day',
@@ -3185,19 +3194,19 @@ const T = {
   precipLevel: 'the gauge’s daily midrange over the same columns — (min+max)/2, the same series HISTORY draws',
   precipSeedLine: 'on days before the source published a minimum the midrange is (mean+max)/2, so the line sits high there',
   precipNoLevel: 'the gauge’s own readings are still loading, so no level line is drawn yet',
-  precipNotRouted: 'no areal rain for this gauge: it forwards rain downstream but is not a receiving node (a federal relay, or a gauge whose coordinates the source has wrong)',
-  precipFetchFailed: 'the areal rain for this gauge did not load',
+  precipNotRouted: 'no rain field for this gauge: it forwards rain downstream but is not a receiving node (a federal relay, or a gauge whose coordinates the source has wrong)',
+  precipFetchFailed: 'the rain field for this gauge did not load',
   precipGap: 'the gauge reported nothing here, so the level line stops',
   precipSameRow: 'both read off the drawn row, not off a wider window',
-  precipMean: 'unweighted mean over the reporting rain gauges of the upstream catchment',
+  precipMean: 'unweighted mean over the reporting rain gauges in reach of this gauge — those draining to it or upstream of it, plus every one within 15 km. A rain field around the gauge, not areal rain over its catchment',
   precipNoArea: 'catchment area unknown for this gauge',
-  precipNested: 'a gauge downstream inherits every rain gauge above it, so two gauges on one river do not have separate rain',
+  precipNested: 'a gauge downstream inherits every rain gauge above it, and neighbours share the ones between them — two gauges on one river do not have separate rain',
   precipTwoClocks: 'two clocks: a rain day runs 07:00 → 07:00 MEZ, a gauge day 00:00 → 24:00',
   precipUnits: 'two units and two scales in one drawing',
-  precipThin: 'thin set — an areal mean over this few gauges is a local reading, not a catchment',
+  precipThin: 'thin set — a mean over this few gauges is one place’s weather, not a field',
   precipEdge: 'right edge is the mirror’s newest rain day, not today:',
   precipClamped: 'the window is shorter than the chip asks: the mirror’s rain record starts',
-  precipNoProduct: 'no areal rain for this gauge: fewer than three rain gauges drain into it',
+  precipNoProduct: 'no rain field for this gauge: fewer than three rain gauges are in reach of it',
   precipNoWindow: 'the mirror does not say which day its rain record ends on',
   // rain -> level response
   response: 'RESPONSE · rain → level',
@@ -3206,7 +3215,7 @@ const T = {
   respZero: 'no correlation',
   respPeak: 'the strongest lag',
   respTwoEstimators: 'two estimators: the bars are Pearson r, the sentence is a slope',
-  respWeak: 'weak at every lag — this gauge does not follow its catchment’s rain',
+  respWeak: 'weak at every lag — this gauge does not follow the rain around it',
   respThin: 'few days behind the peak: read it as an indication, not a measurement',
   respPeakAt: 'peaking at lag',
   respNoSlope: 'too few rain events to state a rise per 10 mm',
@@ -4225,7 +4234,7 @@ function renderHistory(h) {
     `<div class="hist-wrap">${scale}${chart}</div>${axis}${key}</section>`;
 }
 
-// ---------- areal rain over the catchment, and its response ----------
+// ---------- the rain field around the gauge, and its response ----------
 
 // Rain days are calendar days in the mirror's own index (day 0 = Jan 1), so the
 // plate works in absolute day numbers and only touches shards at the edges.
@@ -4428,7 +4437,7 @@ function responseViewModel() {
   return {
     empty: false, lags, max, peakLag: r.peakLag, rPeak, nPeak: r.nPeak || 0,
     rise, events: r.events.n || 0, threshold: r.events.thresholdMm,
-    align: r.align || '', unit: (r.unit && r.unit.rise) || 'per 10 mm areal rain',
+    align: r.align || '', unit: (r.unit && r.unit.rise) || 'per 10 mm of rain around the gauge',
     // the collector tells "too few pairs at the peak lag" from "too few rain
     // events"; flattening both into one sentence throws away which it was
     reason: r.reason || null,
@@ -6854,7 +6863,7 @@ function switchStation(name, push = true) {
   state.archiveSource = null;
   state.feed = null;        // the loader that answers says what fed it
   state.lanuk = null;
-  state.precip = null;      // the areal rain belongs to the gauge that was left
+  state.precip = null;      // the rain field belongs to the gauge that was left
   state.neighborsNote = null;
   state.lowIsMeanUntil = null;
   state.archive = loadArchive(station);
@@ -7706,7 +7715,7 @@ function mergeLanukIndex(m) {
     generated: m.generated || null, sourceExportAt: m.sourceExportAt || null,
     license: m.license || null, window: m.window || null,
   };
-  // which gauges have a baked areal-rain product, and why the others do not.
+  // which gauges have a baked rain-field product, and why the others do not.
   // Read before any /precip/ fetch, so a gauge without one costs no request and
   // the plate can name the reason instead of showing an empty box.
   lanukPrecipIndex = m.precip || null;

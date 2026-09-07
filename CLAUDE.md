@@ -39,16 +39,21 @@ because they are the ones you break without knowing you are in that domain:
 ## LANUK NRW (`scripts/fetch-nrw-archive.mjs`, `build-nrw-precip.mjs`, `nrw-update.yml`, branches `nrw`/`nrw-hires`)
 
 Its own file: **`.claude/domains/lanuk-nrw.md`** — read it before touching the
-collector, the **areal-rain product** (`nrw/precip/`, its N1–**N8** gate, the
+collector, the **rain-field product** (`nrw/precip/`, its N1–**N8** gate, the
 `?rain` mode, the station PRECIPITATION/RESPONSE blocks), the data branches or
-the LANUK seam in `index.html`. Four things to carry without opening it: the source has **no CORS and no live feed** (a daily export, ~24 h
+the LANUK seam in `index.html`. Five things to carry without opening it: the source has **no CORS and no live feed** (a daily export, ~24 h
 old, mirrored into two GitHub-only orphan branches); its window **rolls**, so a
 missed day is gone for good and the merge policy is the inverse of the WSV
 extreme-union; **WeatherNext** was evaluated on 2026-09-04 and rejected on four
-independent grounds — do not reopen it without new facts; and there are **two
+independent grounds — do not reopen it without new facts; there are **two
 clocks in one source**, a rain day against a gauge day, so the right edge of
 every rain drawing is the collector's own `lastRainDay`, never `window.rain.to`
-and never the clock. Every figure behind these lives in the file.
+and never the clock; and the per-gauge product is **not areal rain over a
+catchment** — no watershed is consulted anywhere, it is the rain FIELD around
+the gauge (rule version 2, `scripts/probe-precip-rule.mjs` is the bench that
+chose it), and area weighting, per-station travel time and the hourly response
+lag were each **measured and killed** against a pre-registered criterion. Every
+figure behind these lives in the file.
 
 ## Forecast gate (`scripts/forecast/`, `gate/`)
 

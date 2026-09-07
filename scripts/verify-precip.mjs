@@ -10,17 +10,28 @@
 // hold the tree under test, with nrw/precip/ built by scripts/build-nrw-precip.mjs.
 //   node scripts/verify-precip.mjs
 //   LANUK_BASE_URL=https://bmmmm.github.io/pegel-visual/ node scripts/verify-precip.mjs
-import { mkdirSync, writeFileSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
+import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { sleep, serve, chrome, session, checker, killChildren } from './lib/cdp.mjs';
 
 // the checkout this file lives in — a worktree runs its own copy, and a
 // hardcoded path would send every worktree's run at the main checkout
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
-const SHOTS = join(ROOT, 'tmp-shots');  // gitignored: pictures are evidence, not source
+const args = Object.fromEntries(process.argv.slice(2).map((a, i, all) => a.startsWith('--') ? [a.slice(2), all[i + 1] && !all[i + 1].startsWith('--') ? all[i + 1] : true] : []).filter(x => x.length));
+const SHOTS = resolve(args.shots || join(ROOT, 'tmp-shots'));  // gitignored: pictures are evidence, not source
 mkdirSync(SHOTS, { recursive: true });
 const BASE_URL = process.env.LANUK_BASE_URL || null;
+// A missing tree has to say WHAT is missing, and it must be RED rather than a
+// quiet pass. This script reads the worktree's own nrw/, which only exists once
+// the data branch is mounted there; an ENOENT on a shard 200 lines down reads
+// like a broken product instead of a setup step nobody ran.
+if (!BASE_URL && !existsSync(join(ROOT, 'nrw', 'precip', 'index.json'))) {
+  console.error('FAIL: no nrw/precip/ in this checkout — mount the `nrw` data branch under ./nrw and run\n' +
+    '      node scripts/build-nrw-precip.mjs --tree nrw\n' +
+    '      (or point LANUK_BASE_URL at a deployed site). Refusing to pass without checking anything.');
+  process.exit(1);
+}
 const manifest = BASE_URL
   ? await (await fetch(BASE_URL + 'nrw/manifest.json')).json()
   : JSON.parse(readFileSync(join(ROOT, 'nrw', 'manifest.json'), 'utf8'));
@@ -35,7 +46,18 @@ const STATION_READY = 'state.gauge && state.gauge.currentMeasurement && state.ar
 const PAGES = [
   { q: '?station=MENDEN_1', ready: STATION_READY, name: 'menden', kind: 'station' },
   { q: '?station=MENDEN_1&history=1y', ready: STATION_READY, name: 'menden-1y', kind: 'station' },
-  { q: '?station=ARLOFF', ready: STATION_READY, name: 'arloff-thin', kind: 'station' },
+  // The two states that are NOT "a normal gauge with a normal set", picked
+  // fresh for rule version 2 — under version 1 ARLOFF stood here as the gauge
+  // with no product, and version 2 gave it one (its 15 km ring holds nine).
+  // A fixture that quietly starts testing the ordinary case is worse than no
+  // fixture: it stays green and covers nothing.
+  //   LINNENKAMP  the ONE receiving gauge still without a product: three rain
+  //               gauges in reach, one of which reports nothing at all
+  //   OEDT        a set the knn floor built (local/knn/knn at 12.3/16.2/16.9
+  //               km) — the thin-set caveat has to be on the plate, and the
+  //               chart has to be there too
+  { q: '?station=OEDT', ready: STATION_READY, name: 'oedt-floored', kind: 'station', thin: true, no: '2861700000100' },
+  { q: '?station=LINNENKAMP', ready: STATION_READY, name: 'linnenkamp-none', kind: 'station', noProduct: true, no: '3215510000100' },
   { q: '?station=BONN', ready: 'state.gauge && state.gauge.currentMeasurement', name: 'bonn-wsv', kind: 'wsv' },
   { q: '?rain', ready: 'state.rain && state.rain.data', name: 'rain-30', kind: 'rain' },
   { q: '?rain&w=90', ready: 'state.rain && state.rain.data', name: 'rain-90', kind: 'rain' },
@@ -111,6 +133,22 @@ const MEASURE = `(() => {
     };
   }
   out.precipRequests = 'see network';
+  // THE PRECIPITATION PLATE'S OWN TEXT, anchored at the section that holds the
+  // precip chart — not at #screen and not at a bare .p-key, both of which sweep in
+  // the scene's key, the history plate's and the response plate's. A caveat
+  // asserted against the whole page passes on any plate printing anything
+  // similar, which is the failure the house rules name by name.
+  const precipSection = [...document.querySelectorAll('#screen section.p-block')]
+    .find(s => s.querySelector('.chart.precip') || /^PRECIPITATION/.test((s.querySelector('.p-h2') || {}).textContent || ''));
+  // Every <dd> of the key, not only the .lgn labels: plateKey renders a
+  // { note } entry as a bare <dd> with no .lgn inside it, and the caveats this
+  // plate has to print are ALL notes. A first cut read .lgn and reported "the
+  // retired wording is gone" against a list that could not contain it.
+  out.precipPlate = precipSection ? {
+    key: [...precipSection.querySelectorAll('.p-key dd')].map(e => e.textContent),
+    dim: [...precipSection.querySelectorAll('.p-dim')].map(e => e.textContent),
+    text: precipSection.innerText,
+  } : null;
   return out;
 })()`;
 
@@ -146,7 +184,7 @@ async function run(cdp, base, vp) {
       check(m.wide.length === 0, `${pg.name}: nothing sticks out to the right`, m.wide.join(', '));
       check(m.scroll.w <= m.scroll.inner + 1, `${pg.name}: the page does not scroll sideways`, `${m.scroll.w} > ${m.scroll.inner}`);
 
-      if (pg.kind === 'station' && pg.name !== 'arloff-thin') {
+      if (pg.kind === 'station' && !pg.noProduct) {
         const p = m.precip;
         check(!!p, `${pg.name}: the precipitation chart is drawn`);
         if (p) {
@@ -161,12 +199,31 @@ async function run(cdp, base, vp) {
         check(!!r && r.bars === 8, `${pg.name}: eight response bars, lag 0 through 7`, r ? String(r.bars) : 'no chart');
         check(!!r && r.peak === 1, `${pg.name}: exactly one peak marker`, r ? String(r.peak) : '-');
         check(!!r && r.minBarW >= 8, `${pg.name}: every response bar is at least 8 px wide`, r ? `min ${r.minBarW.toFixed(1)}` : '-');
-        check(!!r && /per 10 mm areal rain/.test(r.sentence), `${pg.name}: the slope sentence names its unit`, r ? r.sentence : '-');
+        check(!!r && /per 10 mm of rain around the gauge/.test(r.sentence), `${pg.name}: the slope sentence names its unit`, r ? r.sentence : '-');
       }
-      if (pg.name === 'arloff-thin') {
-        check(!m.precip, 'arloff: no chart, because there is no product');
+      if (pg.noProduct) {
+        check(!m.precip, `${pg.name}: no chart, because there is no product`);
         check(precipReqs.filter(r => !r.url.endsWith('overview.json')).length === 0,
-          'arloff: the manifest said no, so no /precip/ shard was fetched', precipReqs.map(r => r.url).join(', '));
+          `${pg.name}: the manifest said no, so no /precip/ shard was fetched`, precipReqs.map(r => r.url).join(', '));
+        // The COLLECTOR's own words, compared against the collector's own file —
+        // not against a string this script also knows. A plate that invented a
+        // plausible reason would pass a `/no product/` regex.
+        const why = ((manifest.precip || {})[pg.no] || {}).why || '';
+        check(!!why, `${pg.name}: the manifest carries a reason at all`, JSON.stringify((manifest.precip || {})[pg.no]));
+        check(!!m.precipPlate && m.precipPlate.dim.some(t => t.trim() === why.trim()),
+          `${pg.name}: the plate prints the collector's own reason, word for word`,
+          `wanted "${why}" — plate has ${JSON.stringify(m.precipPlate && m.precipPlate.dim)}`);
+      }
+      if (pg.thin) {
+        // A set the knn floor had to build is the weakest thing this product
+        // ships, and the plate has to say so ON THE PLATE — anchored at the
+        // precipitation section, not at #screen.
+        const k = (m.precipPlate && m.precipPlate.key) || [];
+        check(k.some(t => /thin set/.test(t)), `${pg.name}: the thin-set caveat is in the precipitation key`, k.join(' | ').slice(0, 300));
+        check(k.some(t => /rain field around the gauge/.test(t)),
+          `${pg.name}: the key names what the number IS — a field, not a catchment mean`, k.join(' | ').slice(0, 400));
+        check(!k.some(t => /areal rain per column|of the upstream catchment/.test(t)),
+          `${pg.name}: and the retired wording is gone from it`, k.join(' | ').slice(0, 400));
       }
       if (pg.kind === 'wsv') {
         check(precipReqs.length === 0, 'BONN asks the mirror for nothing', precipReqs.map(r => r.url).join(', '));

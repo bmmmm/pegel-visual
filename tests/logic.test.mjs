@@ -4060,7 +4060,7 @@ const NRW_RESPONSE = {
     { lag: 6, r: -0.05, n: 700 }, { lag: 7, r: 0.01, n: 700 }],
   peakLag: 1, rPeak: 0.59, nPeak: 700,
   events: { thresholdMm: 10, n: 58, risePer10mm: 13.4 },
-  unit: { r: 'pearson', rise: 'cm per 10 mm areal rain' },
+  unit: { r: 'pearson', rise: 'cm per 10 mm of rain around the gauge' },
 };
 // 16 basins in the real file; three is enough to carry every case the plate has
 // to draw: a linked basin, a thin one, and one with no gauged river at all.
@@ -4516,7 +4516,7 @@ test('lanuk plates: a hostile gauge or water name never reaches markup unescaped
   assert.ok(!river.includes('<img'), 'river plate: the name is escaped in the trouble list and the index');
 });
 
-// ---------- PRECIPITATION and RESPONSE: the areal rain on the station plate ----------
+// ---------- PRECIPITATION and RESPONSE: the rain field on the station plate ----------
 
 const precipApp = async (search = '?station=MENDEN_1') => {
   const app = nrwApp({ search });
@@ -4638,7 +4638,7 @@ test('RESPONSE: the peak is marked, and the sentence names the other estimator',
   assert.match(svg, /class="rs-peak"/, 'the peak lag carries its own glyph');
   assert.match(svg, /class="rs-neg"/, 'lag 4-6 are negative in the fixture and draw as the other kind');
   assert.equal((svg.match(/class="rs-bar"|class="rs-neg"/g) || []).length, 8, 'one bar per lag, 0 through 7');
-  assert.match(html, /\+13\.4 cm per 10 mm areal rain, peaking at lag 1 \(58 events ≥ 10 mm\)/);
+  assert.match(html, /\+13\.4 cm per 10 mm of rain around the gauge, peaking at lag 1 \(58 events ≥ 10 mm\)/);
   assert.match(html, /two estimators: the bars are Pearson r, the sentence is a slope/);
   assert.match(html, /r = 0\.59 over 700 days/);
   assertNamed(svg, keyClasses(html), 'the response plate');
@@ -4947,7 +4947,7 @@ test('RESPONSE: a truncated artefact is a stated reason, not a page that hangs',
     return renderResponse(responseViewModel());
   })()`);
   assert.ok(!/r = /.test(html), 'a string rPeak is not printed as a correlation');
-  assert.match(html, /\+4 per 10 mm areal rain/, 'an artefact without a unit falls back to the bare one');
+  assert.match(html, /\+4 per 10 mm of rain around the gauge/, 'an artefact without a unit falls back to the bare one');
 });
 
 test('RESPONSE: a falling catchment prints a minus, not "+-"', async () => {
@@ -4956,7 +4956,7 @@ test('RESPONSE: a falling catchment prints a minus, not "+-"', async () => {
     state.precip.response = { ...state.precip.response, events: { thresholdMm: 10, n: 30, risePer10mm: -1.2 } };
     return renderResponse(responseViewModel());
   })()`);
-  assert.match(html, /-1\.2 cm per 10 mm areal rain/);
+  assert.match(html, /-1\.2 cm per 10 mm of rain around the gauge/);
   assert.ok(!html.includes('+-'), 'the sign is read off the number, not prepended');
 });
 

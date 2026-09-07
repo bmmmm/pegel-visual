@@ -10,10 +10,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 const {
-  build, assignRain, buildUp, closure, arealDay, arealSeries, responseStats,
+  build, assignRain, buildUp, closure, precipMembers, arealDay, arealSeries, responseStats,
   usableCoords, haversineKm, cmpNo, pearson, median, quantile,
   LAT_BOX, LON_BOX, MAX_ASSIGN_KM, MAX_ORPHAN_KM, MIN_COVERAGE_PCT,
   PLAUSIBLE_MAX_MM_DAY, MIN_SET_FOR_SERIES, MIN_RESPONSE_DAYS, MIN_EVENTS,
+  MAX_LOCAL_KM, KNN_FLOOR, MAX_KNN_KM, RULE, RULE_VERSION,
   yearStartDay, dayToISO,
 } = await import('../scripts/build-nrw-precip.mjs');
 const { daysInYear } = await import('../scripts/fetch-wsv-archive.mjs');
@@ -138,6 +139,101 @@ test('a rain gauge upstream is in every downstream gauge set exactly once (nesti
   const setOf = g => [...closure(g, up)].flatMap(s => a.own.get(s) || []);
   assert.deepEqual(setOf('high'), ['r']);
   assert.deepEqual(setOf('low'), ['r'], 'downstream inherits it — once, not twice');
+});
+
+// ---------- 1.3 membership (rule version 2) ----------
+// Three ways into a set, and each one has to be shown doing exactly its own job
+// and nothing else. The whole point of `via` is that a reader can tell a
+// hydrological member from a geometric one from a last-resort fill; a test suite
+// that only counted members would let the three blur into each other.
+
+const MEMBERS = { nodes: null, rain: null, assign: null, up: null };
+const membersOf = (nodes, rain, no, opts) => {
+  const assign = assignRain(nodes, rain);
+  return precipMembers(no, { nodes, rain, assign, up: buildUp(nodes), ...opts });
+};
+
+test('membership: with both knobs off the rule is exactly the pre-version-2 union over the closure', () => {
+  const nodes = {
+    low: { basin: '1', siteNo: '100', down: null, ...BASE },
+    high: { basin: '1', siteNo: '100', down: 'low', ...northOf(BASE, 10) },
+  };
+  const rain = {
+    r1: { name: 'r1', catchmentNo: '1', ...northOf(BASE, 10) },   // owned by high
+    r2: { name: 'r2', catchmentNo: '1', ...northOf(BASE, 1) },    // owned by low
+  };
+  const off = { localKm: null, knnFloor: 0 };
+  assert.deepEqual(membersOf(nodes, rain, 'high', off).map(m => [m.no, m.via, m.at]), [['r1', 'basin', 'high']]);
+  assert.deepEqual(membersOf(nodes, rain, 'low', off).map(m => [m.no, m.via, m.at]),
+    [['r1', 'basin', 'high'], ['r2', 'basin', 'low']], 'downstream still inherits, and the member still names its owner');
+});
+
+test('membership: the local ring adds a neighbour that drains nowhere near, and says so', () => {
+  // `far` is 12 km from `g` but belongs to another basin's gauge 1 km from it,
+  // so the hydrological rule never gives it to `g`. The 15 km ring does — and
+  // the member carries via "local" and the distance to THE GAUGE, not to its
+  // hydrological owner.
+  const nodes = {
+    g: { basin: '1', siteNo: '100', down: null, ...BASE },
+    other: { basin: '2', siteNo: '100', down: null, ...northOf(BASE, 13) },
+  };
+  const rain = { far: { name: 'far', catchmentNo: '2', ...northOf(BASE, 12) } };
+  assert.deepEqual(membersOf(nodes, rain, 'g', { localKm: null, knnFloor: 0 }), [], 'hydrology alone gives g nothing');
+  const withRing = membersOf(nodes, rain, 'g', { localKm: 15, knnFloor: 0 });
+  assert.equal(withRing.length, 1);
+  assert.equal(withRing[0].via, 'local');
+  assert.equal(withRing[0].at, 'g', 'a local member attaches to the gauge itself');
+  assert.ok(Math.abs(withRing[0].km - 12) < 0.05, `12 km to the gauge, got ${withRing[0].km}`);
+  assert.deepEqual(membersOf(nodes, rain, 'g', { localKm: 11, knnFloor: 0 }), [], 'and the ring is a real edge');
+});
+
+test('membership: the local ring is a real edge, taken from one side and refused from the other', () => {
+  const nodes = { g: { basin: '1', siteNo: '100', down: null, ...BASE } };
+  const at = km => ({ r: { name: 'r', catchmentNo: '9', ...northOf(BASE, km) } });
+  const ring = { localKm: MAX_LOCAL_KM, knnFloor: 0 };
+  assert.equal(membersOf(nodes, at(MAX_LOCAL_KM - 0.01), 'g', ring).length, 1, `${MAX_LOCAL_KM - 0.01} km is inside`);
+  assert.equal(membersOf(nodes, at(MAX_LOCAL_KM + 0.01), 'g', ring).length, 0, `${MAX_LOCAL_KM + 0.01} km is out`);
+});
+
+test('membership: the knn floor fills to exactly knnFloor and never touches a set that has enough', () => {
+  const nodes = { g: { basin: '1', siteNo: '100', down: null, ...BASE } };
+  // five stations spread past the ring, all in another basin so hydrology gives
+  // g nothing at all
+  const rain = Object.fromEntries([20, 22, 24, 26, 28].map((km, i) =>
+    [`r${i}`, { name: `r${i}`, catchmentNo: '9', ...northOf(BASE, km) }]));
+  const filled = membersOf(nodes, rain, 'g', { localKm: 15, knnFloor: 3 });
+  assert.deepEqual(filled.map(m => m.no), ['r0', 'r1', 'r2'], 'the three NEAREST, in station order');
+  assert.deepEqual(filled.map(m => m.via), ['knn', 'knn', 'knn']);
+  assert.deepEqual(filled.map(m => m.at), ['g', 'g', 'g']);
+
+  // Now give the ring three of its own. They sit past the 10 km orphan hop, so
+  // hydrology still gives g nothing and they can only arrive via the ring — and
+  // once they have, the floor must not add a fourth.
+  const near = Object.fromEntries([12, 13, 14].map((km, i) =>
+    [`n${i}`, { name: `n${i}`, catchmentNo: '9', ...northOf(BASE, km) }]));
+  const full = membersOf(nodes, { ...rain, ...near }, 'g', { localKm: 15, knnFloor: 3 });
+  assert.deepEqual(full.map(m => m.via), ['local', 'local', 'local'], 'the floor stayed out of it');
+  assert.equal(full.length, 3);
+});
+
+test('membership: the knn floor stops at its own bound — no product beats a set from 50 km away', () => {
+  const nodes = { g: { basin: '1', siteNo: '100', down: null, ...BASE } };
+  const rain = Object.fromEntries([50, 52, 54].map((km, i) =>
+    [`r${i}`, { name: `r${i}`, catchmentNo: '9', ...northOf(BASE, km) }]));
+  assert.deepEqual(membersOf(nodes, rain, 'g', { localKm: 15, knnFloor: 3, knnMaxKm: MAX_KNN_KM }), [],
+    'nothing within 45 km means no rain field, not a rain field from the next state');
+  assert.equal(membersOf(nodes, rain, 'g', { localKm: 15, knnFloor: 3, knnMaxKm: 60 }).length, 3,
+    'and the bound is the only thing stopping it');
+});
+
+test('membership: a member added twice by two different ways is still one member', () => {
+  // r is inside the ring AND assigned to g by basin. It must appear once, and
+  // the hydrological origin wins — that is the one a reader can act on.
+  const nodes = { g: { basin: '1', siteNo: '100', down: null, ...BASE } };
+  const rain = { r: { name: 'r', catchmentNo: '1', ...northOf(BASE, 5) } };
+  const m = membersOf(nodes, rain, 'g', { localKm: 15, knnFloor: 3 });
+  assert.equal(m.length, 1);
+  assert.equal(m[0].via, 'basin', 'hydrology is not overwritten by geometry');
 });
 
 // ---------- 1.2 areal mean ----------
@@ -309,7 +405,7 @@ test('response: 9 events is null, 10 is a number', () => {
 
 test('response: the unit rides along with the gauge, it is not assumed to be cm', () => {
   const r = responseStats([null], flat(1, 0), { from: 0, to: 0, id: 'x', nRain: 3, unit: 'm+NN' });
-  assert.equal(r.unit.rise, 'm+NN per 10 mm areal rain');
+  assert.equal(r.unit.rise, 'm+NN per 10 mm of rain around the gauge');
 });
 
 test('a level day the source aggregated below 95 % accuracy is not observed', () => {
@@ -332,6 +428,93 @@ test('a level day the source aggregated below 95 % accuracy is not observed', ()
   // Day 10 falling below 95 % kills delta(10) AND delta(11); day 11 sits at
   // exactly 95 and survives. Two more pairs gone: n-3.
   assert.equal(resp.lags[0].n, n - 3, 'the unobserved day costs two pairs, Jan 1 costs the third');
+  rmSync(tmp, { recursive: true, force: true });
+});
+
+// ---------- the measurement bench ----------
+// scripts/probe-precip-rule.mjs decided which rule ships. Every number it
+// printed is worthless if its `identity` variant is not the shipping rule, so
+// that claim gets a test of its own rather than a line in a report: identity
+// through the variant machinery must reproduce, to 1e-9, the peak r that
+// responseStats gives when driven straight off the union over the closure.
+//
+// The real check ran on the mirror (92 of 92 gauges at delta exactly 0). This
+// is its CI-able twin: a synthetic tree, three named gauges, no network.
+
+test('bench: the identity variant IS the pre-version-2 rule, to 1e-9, on three named gauges', async () => {
+  const { loadBench, runVariant, VARIANTS } = await import('../scripts/probe-precip-rule.mjs');
+  const { readRainSeries, readLevelSeries, dayAxis, readTree } = await import('../scripts/build-nrw-precip.mjs');
+  const tmp = mkdtempSync(join(tmpdir(), 'precip-bench-'));
+  const Y = 2025, n = daysInYear(Y);
+  // rain that actually drives the level, so rPeak is a number and not a null
+  const mm = Array.from({ length: n }, (_, d) => (d % 11 === 0 ? 12 : d % 3));
+  const mean = Array.from({ length: n }, (_, d) => 50 + (d > 0 && (d - 1) % 11 === 0 ? 20 : 0));
+  const rainOf = i => ({ basin: '1', ...northOf(BASE, i), years: { [Y]: { mm: mm.map(v => v + i) } } });
+  const tree = writeTree(join(tmp, 'nrw'), {
+    gauges: {
+      low: { ...BASE, basin: '1', km2: 300, down: null, years: { [Y]: { mean } } },
+      mid: { ...northOf(BASE, 40), basin: '1', km2: 200, down: 'low', years: { [Y]: { mean } } },
+      high: { ...northOf(BASE, 80), basin: '1', km2: 100, down: 'mid', years: { [Y]: { mean } } },
+    },
+    // three clusters, one per gauge, far enough apart that the nesting is the
+    // only thing that grows a set: low sees 9, mid 6, high 3
+    rain: {
+      r1: rainOf(1), r2: rainOf(2), r3: rainOf(3),
+      r4: rainOf(41), r5: rainOf(42), r6: rainOf(43),
+      r7: rainOf(81), r8: rainOf(82), r9: rainOf(83),
+    },
+    basins: { 1: { name: 'B', river: 'B', gauges: ['low', 'mid', 'high'], noLevel: [], rain: ['r1', 'r2', 'r3', 'r4', 'r5', 'r6', 'r7', 'r8', 'r9'], temp: [], mouth: 'low' } },
+  });
+
+  const bench = loadBench(tree);
+  const run = runVariant(bench, VARIANTS.identity);
+  const { from, to } = dayAxis(tree, readTree(tree).rain);
+
+  for (const no of ['low', 'mid', 'high']) {
+    // the OLD rule, written out here by hand rather than imported: union of the
+    // owned stations over the upstream closure, nothing else
+    const set = [...closure(no, bench.up)].sort(cmpNo)
+      .flatMap(s => (bench.assign.own.get(s) || []))
+      .sort(cmpNo);
+    assert.ok(set.length >= MIN_SET_FOR_SERIES, `${no} needs a set to compare at all`);
+    const ser = arealSeries(set.map(r => ({ no: r, series: readRainSeries(tree, r, from, to) })), from, to);
+    const want = responseStats(ser.mm, readLevelSeries(tree, no, from, to),
+      { from, to, id: no, nRain: set.length, unit: 'cm' });
+    assert.deepEqual(run.get(no).set, set, `${no}: the bench builds the same set`);
+    assert.ok(want.rPeak != null, `${no}: the fixture has to produce a peak, or this proves nothing`);
+    assert.ok(Math.abs(run.get(no).rPeak - want.rPeak) < 1e-9,
+      `${no}: bench ${run.get(no).rPeak} vs rule ${want.rPeak}`);
+  }
+  rmSync(tmp, { recursive: true, force: true });
+});
+
+test('bench: a variant that adds members changes the sets it was asked to change, and no others', async () => {
+  const { loadBench, runVariant, VARIANTS, compare } = await import('../scripts/probe-precip-rule.mjs');
+  const tmp = mkdtempSync(join(tmpdir(), 'precip-bench2-'));
+  const Y = 2025, n = daysInYear(Y);
+  const mm = Array.from({ length: n }, (_, d) => (d % 11 === 0 ? 12 : d % 3));
+  const mean = Array.from({ length: n }, (_, d) => 50 + (d > 0 && (d - 1) % 11 === 0 ? 20 : 0));
+  const rainOf = i => ({ basin: '1', ...northOf(BASE, i), years: { [Y]: { mm: mm.map(v => v + i) } } });
+  // `far` has three of its own; `near` has none and sits 8 km from far's cluster
+  const tree = writeTree(join(tmp, 'nrw'), {
+    gauges: {
+      far: { ...BASE, basin: '1', km2: 100, down: null, years: { [Y]: { mean } } },
+      near: { ...northOf(BASE, 8), basin: '2', km2: 100, down: null, years: { [Y]: { mean } } },
+    },
+    rain: { r1: rainOf(1), r2: rainOf(2), r3: rainOf(3) },
+    basins: { 1: { name: 'B', river: 'B', gauges: ['far'], noLevel: [], rain: ['r1', 'r2', 'r3'], temp: [], mouth: 'far' } },
+  });
+  const bench = loadBench(tree);
+  const base = runVariant(bench, VARIANTS.identity);
+  assert.equal(base.get('near').product, false, 'near has no rain field under the old rule');
+  assert.equal(base.get('far').product, true);
+
+  const ring = runVariant(bench, VARIANTS.km15);
+  const c = compare(bench, base, ring);
+  assert.equal(c.gained, 1, 'the ring gives near a number it did not have');
+  assert.equal(c.lost, 0, 'and takes none away');
+  assert.equal(ring.get('far').set.length, base.get('far').set.length, 'far already had all three — nothing to add');
+  assert.equal(c.compared, 1, 'only far can be compared: the gained gauge has no baseline, by construction');
   rmSync(tmp, { recursive: true, force: true });
 });
 
@@ -375,7 +558,9 @@ test('a gauge that falls below three rain gauges loses its files, it does not ke
   assert.equal(existsSync(join(out, 'g1', 'response.json')), false);
   const ix = JSON.parse(readFileSync(join(out, 'index.json'), 'utf8'));
   assert.equal(ix.gauges.g1.series, false);
-  assert.match(ix.gauges.g1.why, /only 2 rain gauges upstream/);
+  // "in reach", not "upstream": since rule version 2 a member can also be a
+  // neighbour inside the 15 km ring or a knn-floor fill
+  assert.match(ix.gauges.g1.why, /only 2 rain gauges in reach/);
   rmSync(tmp, { recursive: true, force: true });
 });
 

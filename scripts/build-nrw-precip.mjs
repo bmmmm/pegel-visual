@@ -66,6 +66,59 @@ export const MAX_ORPHAN_KM = 10;    // …a gauge of ANY basin only this far (Em
 export const MIN_COVERAGE_PCT = 50; // a day aggregated from less than half a day is not a day
 export const PLAUSIBLE_MAX_MM_DAY = 400; // above the German record (312 mm); 595.9 mm exists in the source
 export const MIN_SET_FOR_SERIES = 3;
+
+// ---------- the membership rule, version 2 (2026-09-08) ----------
+//
+// Until 2026-09-08 a rain gauge had exactly ONE owner — the nearest receiving
+// gauge of its own basin — and a gauge's set was the union of those over its
+// upstream closure. That rule was measured, not guessed at, and it is not as
+// crude as it looks: median assignment distance 5.7 km, p90 14.4 km. What it
+// was, was THIN: 93 of 276 receiving gauges had a number at all.
+//
+// Two additions, each measured on the real mirror with
+// scripts/probe-precip-rule.mjs before a line of this was written:
+//
+//   MAX_LOCAL_KM  every rain gauge within 15 km of the gauge itself joins its
+//                 set (`via: local`). Median delta peak-r +0.0043 over the 92
+//                 gauges that had a number before, 61 better / 26 worse,
+//                 sign-test z 3.75.
+//   KNN_FLOOR     where all of the above yields fewer than three, fill with the
+//                 three nearest (`via: knn`). It fires on 28 gauges and CANNOT
+//                 move an existing number — it only ever runs on sets that had
+//                 none. Coverage 93 -> 275 gauges.
+//
+// Why 15 km and not 25, when 25 measures BETTER (+0.0075 vs +0.0043): honesty.
+// At 25 km, 84.7 % of members sit outside the radius of a circle of their
+// gauge's own catchment area (74.1 % at 15 km, 69.6 % under the old rule), and
+// the median Jaccard of down-edge neighbours rises to 0.636 — two gauges on one
+// river would draw nearly the same picture. At 15 km it FALLS to 0.500 from the
+// old rule's 0.667. Anyone arriving later with "more is better" is looking at
+// the wrong column.
+//
+// What this product therefore IS, and what it is not: it is the rain field
+// AROUND the gauge, not areal precipitation over its catchment. No watershed is
+// consulted anywhere in this file — the source ships none. Everything the plate
+// prints has to say so, which is why `method` below is a paragraph and not a
+// word, and why every member carries its own `via` and `km`.
+export const MAX_LOCAL_KM = 15;
+export const KNN_FLOOR = 3;
+// The floor's own bound, and it is not decoration. Without it a gauge in a
+// region the source does not cover would silently be handed the three nearest
+// stations in the state — a set of three at 50 km is not a rain field around
+// anything, and "no rain gauge in reach" is the honest answer there. Measured
+// on the mirror: the furthest station the floor actually reaches is 29.05 km
+// (median 17.75, p90 25.09), so this is headroom, not a fit. A synthetic tree
+// in tests/nrw-consistency.test.mjs is what found the missing bound: its
+// gauges run down a line past the last rain station, and the floor happily
+// reached back 52 km for them.
+export const MAX_KNN_KM = 45;
+// Bumped whenever the two knobs move. The consistency gate compares a run
+// against HEAD, which is meaningless across a rule change; on a version change
+// it demands PRE-REGISTERED numbers instead (RULE_BASELINES over there).
+export const RULE_VERSION = 2;
+// The rule the product SHIPS, in one place so the builder, the gate and the
+// bench all read the same numbers rather than three copies of them.
+export const RULE = { localKm: MAX_LOCAL_KM, knnFloor: KNN_FLOOR };
 export const MIN_RESPONSE_DAYS = 120;
 export const EVENT_MM = 10;
 export const MIN_EVENTS = 10;
@@ -264,7 +317,13 @@ export function assignRain(nodes, rain) {
     assigned.push({ no, to: hit.no, km: round(hit.km, 2), via });
     if (hit.km > 25) far.push({ no, km: round(hit.km, 2), to: hit.no });
   }
-  return { recv, relayed, badCoord, own, assigned, unassigned, far };
+  // The hydrological origin as lookups, built once here rather than three times
+  // at the call sites. `own` stays the partition it always was — that is what
+  // N8's ownership clause asserts — while membership on top of it is many-to-many.
+  const viaOf = new Map(assigned.map(x => [x.no, x.via]));
+  const kmOf = new Map(assigned.map(x => [x.no, x.km]));
+  const owner = new Map(assigned.map(x => [x.no, x.to]));
+  return { recv, relayed, badCoord, own, assigned, unassigned, far, viaOf, kmOf, owner };
 }
 
 // ---------- 1.2 upstream closure and areal mean ----------
@@ -291,6 +350,50 @@ export function closure(no, up) {
     }
   }
   return seen;
+}
+
+// ---------- 1.3 membership ----------
+
+// The rain set behind ONE gauge. Deliberately a named function rather than four
+// lines inside build(): the measurement bench (scripts/probe-precip-rule.mjs)
+// drives this exact function with different options, so a variant is measured
+// against the shipping rule and not against a second copy of it.
+//
+// `localKm` and `knnFloor` default to OFF, which is the pre-2026-09-08 rule:
+// hydrological membership only — every station assigned to the gauge or to any
+// gauge upstream of it. Turning them on ADDS members, never removes any.
+export function precipMembers(no, { nodes, rain, assign, up, localKm = null, knnFloor = 0, knnMaxKm = MAX_KNN_KM }) {
+  const members = new Map();
+  for (const s of [...closure(no, up)].sort(cmpNo)) {
+    for (const r of (assign.own.get(s) || [])) {
+      members.set(r, { no: r, at: s, via: assign.viaOf.get(r) ?? null, km: assign.kmOf.get(r) ?? null });
+    }
+  }
+  const g = nodes[no];
+  const reachable = usableCoords(g)
+    ? Object.keys(rain).filter(r => usableCoords(rain[r])).sort(cmpNo).map(r => ({ no: r, km: haversineKm(rain[r], g) }))
+    : [];
+  if (localKm != null) {
+    for (const c of reachable) {
+      if (c.km > localKm || members.has(c.no)) continue;
+      members.set(c.no, { no: c.no, at: no, via: 'local', km: round(c.km, 2) });
+    }
+  }
+  // The floor fires only where everything above came up short, so it cannot
+  // change a set that already has one. Ties by distance go to the smaller
+  // station number, the same tie-break `nearest()` uses. It stops at
+  // `knnMaxKm`: a gauge the source does not cover keeps no product rather than
+  // being handed three stations from the other end of the state.
+  if (knnFloor > 0 && members.size < knnFloor) {
+    const byKm = [...reachable].sort((x, y) => x.km - y.km || cmpNo(x.no, y.no));
+    for (const c of byKm) {
+      if (members.size >= knnFloor) break;
+      if (c.km > knnMaxKm) break;
+      if (members.has(c.no)) continue;
+      members.set(c.no, { no: c.no, at: no, via: 'knn', km: round(c.km, 2) });
+    }
+  }
+  return [...members.values()].sort((x, y) => cmpNo(x.no, y.no));
 }
 
 // values: the day's readings of the set's reporting stations (already filtered).
@@ -330,7 +433,9 @@ export function responseStats(rainMm, level, { from, to, id, nRain, unit }) {
     nRain, minCoveragePct: MIN_COVERAGE_PCT, align: ALIGN_NOTE,
     lags: [], peakLag: null, rPeak: null, nPeak: 0,
     events: { thresholdMm: EVENT_MM, n: 0, risePer10mm: null },
-    unit: { r: 'pearson', rise: `${unit} per 10 mm areal rain` },
+    // "rain around the gauge", not "areal rain": the set is a rain FIELD, and
+    // the slope sentence is the one place on the plate that names its own input
+    unit: { r: 'pearson', rise: `${unit} per 10 mm of rain around the gauge` },
   };
   const len = rainMm.length;
   const obs = i => i >= 0 && i < len && !Number.isNaN(level[i]);
@@ -420,7 +525,10 @@ class Out {
 
 // ---------- the build ----------
 
-export function build({ tree, out, check = false, generated }) {
+// The inputs of the rule, read once. Exported because the measurement bench
+// (scripts/probe-precip-rule.mjs) must feed the REAL estimator the REAL inputs —
+// a probe that reads the tree its own way measures its own reader.
+export function readTree(tree) {
   const topo = readJson(join(tree, 'topology.json'));
   const manifest = readJson(join(tree, 'manifest.json'));
   if (!topo || !topo.gauges) throw new Error(`no topology.json under ${tree}`);
@@ -438,15 +546,24 @@ export function build({ tree, out, check = false, generated }) {
     const meta = readJson(join(tree, 'rain', no, 'meta.json'));
     if (meta) rain[no] = { no, name: meta.name || '', catchmentNo: meta.catchmentNo, lat: meta.lat, lon: meta.lon };
   }
+  return { topo, manifest, nodes, rain };
+}
+
+// The day axis spans every year present in the mirror.
+export function dayAxis(tree, rain) {
+  let minY = Infinity, maxY = -Infinity;
+  for (const no of Object.keys(rain)) for (const y of yearsIn(join(tree, 'rain', no))) { if (y < minY) minY = y; if (y > maxY) maxY = y; }
+  if (!Number.isFinite(minY)) throw new Error('no rain shards found');
+  return { minY, maxY, from: yearStartDay(minY), to: yearStartDay(maxY) + daysInYear(maxY) - 1 };
+}
+
+export function build({ tree, out, check = false, generated }) {
+  const { topo, manifest, nodes, rain } = readTree(tree);
 
   const a = assignRain(nodes, rain);
   const up = buildUp(nodes);
 
-  // The day axis spans every year present in the mirror.
-  let minY = Infinity, maxY = -Infinity;
-  for (const no of Object.keys(rain)) for (const y of yearsIn(join(tree, 'rain', no))) { if (y < minY) minY = y; if (y > maxY) maxY = y; }
-  if (!Number.isFinite(minY)) throw new Error('no rain shards found');
-  const from = yearStartDay(minY), to = yearStartDay(maxY) + daysInYear(maxY) - 1;
+  const { minY, maxY, from, to } = dayAxis(tree, rain);
 
   const rainSeries = new Map();
   const seriesOf = no => {
@@ -454,10 +571,7 @@ export function build({ tree, out, check = false, generated }) {
     return rainSeries.get(no);
   };
 
-  const owner = new Map();       // rain no -> gauge no
-  const via = new Map();         // rain no -> 'basin' | 'orphan'
-  const kmTo = new Map();
-  for (const x of a.assigned) { owner.set(x.no, x.to); via.set(x.no, x.via); kmTo.set(x.no, x.km); }
+  const owner = a.owner, via = a.viaOf, kmTo = a.kmOf;
 
   const o = new Out(out, check);
   const gauges = {};
@@ -466,12 +580,13 @@ export function build({ tree, out, check = false, generated }) {
 
   for (const no of a.recv) {
     const cl = [...closure(no, up)].sort(cmpNo);
-    const set = [];
-    for (const s of cl) for (const r of (a.own.get(s) || [])) set.push({ no: r, at: s });
-    set.sort((x, y) => cmpNo(x.no, y.no));
+    const set = precipMembers(no, { nodes, rain, assign: a, up, ...RULE });
     perGaugeSet.set(no, set);
     const entry = { n: set.length, up: cl.length, series: set.length >= MIN_SET_FOR_SERIES };
-    if (!entry.series) entry.why = set.length === 0 ? 'no rain gauge upstream' : `only ${set.length} rain gauge${set.length === 1 ? '' : 's'} upstream (needs ${MIN_SET_FOR_SERIES})`;
+    // "in reach", not "upstream": since rule version 2 a member can also be a
+    // neighbour within MAX_LOCAL_KM or a knn-floor fill, and a reason that says
+    // "upstream" would name the wrong rule to the one reader who ever sees it.
+    if (!entry.series) entry.why = set.length === 0 ? 'no rain gauge in reach' : `only ${set.length} rain gauge${set.length === 1 ? '' : 's'} in reach (needs ${MIN_SET_FOR_SERIES})`;
     gauges[no] = entry;
     if (set.length === 0) withoutRain++;
     if (!entry.series) continue;
@@ -489,8 +604,8 @@ export function build({ tree, out, check = false, generated }) {
       const silent = loaded.filter(s => s.series.every(Number.isNaN)).map(s => s.no);
       entry.series = false;
       entry.why = silent.length
-        ? `${set.length} rain gauges upstream, but ${silent.length} of them report nothing (${silent.join(', ')})`
-        : `${set.length} rain gauges upstream, but no day ever reached the reporting threshold`;
+        ? `${set.length} rain gauges in reach, but ${silent.length} of them report nothing (${silent.join(', ')})`
+        : `${set.length} rain gauges in reach, but no day ever reached the reporting threshold`;
       continue;
     }
     withSeries++;
@@ -498,19 +613,20 @@ export function build({ tree, out, check = false, generated }) {
     o.put(join(no, 'meta.json'), {
       schema: SCHEMA, id: no, name: node.name, water: node.water || '', basin: node.basin ?? null,
       km2: node.km2 ?? null, unit: 'mm/d',
-      // Say what the rule does, not what it sounds like: a rain gauge joins the
-      // NEAREST receiving gauge of its own basin within 100 km, and the set is
-      // the union of those over the upstream closure. That is not a catchment
-      // intersection — 17 of 94 sets hold a station further from its owner than
-      // the radius of a circle of the owner's own km², and the extreme is a
-      // 19.65 km² catchment owning a station 48.9 km away. The km² beside it is
-      // the gauge's real catchment area, which is why the two must not be read
-      // as one statement.
-      method: 'unweighted mean over the reporting rain gauges assigned to this gauge and to every gauge upstream of it; a rain gauge joins the nearest receiving gauge of its own basin (Thiessen with equal areas, not a catchment intersection)',
+      // Say what the rule does, not what it sounds like. The set is NOT a
+      // catchment intersection and this number is NOT areal precipitation over
+      // the catchment: no watershed is consulted anywhere, because the source
+      // publishes none. It is the rain field around the gauge, and the three
+      // ways in are named so a reader can tell a measurement from a fallback.
+      // Measured on this mirror: 74.1 % of members sit outside the radius of a
+      // circle of the gauge's own km². The km² beside this field is the gauge's
+      // REAL catchment area — the two must not be read as one statement.
+      method: `unweighted mean over the reporting rain gauges of this gauge's rain FIELD, which is: every gauge assigned to it or to any gauge upstream of it (via basin/orphan, the hydrological part), plus every rain gauge within ${MAX_LOCAL_KM} km of the gauge itself (via local), and where that yields fewer than ${MIN_SET_FOR_SERIES} the ${KNN_FLOOR} nearest instead (via knn). Thiessen with equal areas over that field — a rain field around the gauge, not areal precipitation over its catchment and not a catchment intersection`,
+      ruleVersion: RULE_VERSION,
       dayBoundary: RAIN_DAY_BOUNDARY, levelDayBoundary: LEVEL_DAY_BOUNDARY, align: ALIGN_NOTE,
       minCoveragePct: MIN_COVERAGE_PCT, maxMmPerDay: PLAUSIBLE_MAX_MM_DAY,
       nRain: set.length, nUpstream: cl.length, upstream: cl,
-      set: set.map(s => ({ no: s.no, name: rain[s.no].name, km: kmTo.get(s.no) ?? null, via: via.get(s.no) ?? null, at: s.at })),
+      set: set.map(s => ({ no: s.no, name: rain[s.no].name, km: s.km ?? null, via: s.via ?? null, at: s.at })),
     });
     // response.json is written even when it cannot be computed: a 404 under
     // /nrw/precip/ would make the browser check "every /nrw/ response is 2xx" red,
@@ -578,6 +694,20 @@ export function build({ tree, out, check = false, generated }) {
   });
 
   // ---------- index.json ----------
+  // Counted over the sets that actually SHIPPED a product: a membership in a set
+  // that was dropped for having no reporting station is not a membership anyone
+  // can read.
+  const memberships = { basin: 0, orphan: 0, local: 0, knn: 0 };
+  const covered = new Set();
+  for (const [no, entry] of Object.entries(gauges)) {
+    if (!entry.series) continue;
+    for (const s of perGaugeSet.get(no) || []) {
+      if (memberships[s.via] != null) memberships[s.via]++;
+      covered.add(s.no);
+    }
+  }
+  const inNoSet = Object.keys(rain).filter(r => !covered.has(r)).sort(cmpNo);
+
   const cyclic = [];
   for (const [no, g] of Object.entries(nodes)) {
     const d = g.down == null ? null : String(d0(g.down));
@@ -592,6 +722,19 @@ export function build({ tree, out, check = false, generated }) {
     rainAssignedOrphan: a.assigned.filter(x => x.via === 'orphan').length,
     rainUnassigned: a.unassigned.length,
     withSeries, withoutRain,
+    // Membership is many-to-many since rule version 2, so "how many stations
+    // were assigned" and "how many memberships exist" are two different
+    // questions and both get an answer. The `via` split is the one number that
+    // shows at a glance whether the hydrological part still carries the product
+    // or the 15 km ring has quietly become the whole rule.
+    memberships,
+    // The station-side half of the rule, as a READING rather than a promise:
+    // "every rain station lands in at least one set" is FALSE and cannot be made
+    // true — four stations have unusable coordinates and Bottrop-Eigen (Emscher)
+    // is 15.5 km from the nearest gauge of any basin. So the gate watches the
+    // list instead of asserting the wish; it may not grow.
+    stationsInNoSet: inNoSet.length,
+    stationsInNoSetIds: inNoSet,
     cyclicNodes: cyclic.sort(cmpNo).length,
     // the members, not only how many: the source could repair Erkrath/Eigen and
     // grow a different 2-cycle in the same run, and a count would not notice
@@ -606,8 +749,15 @@ export function build({ tree, out, check = false, generated }) {
   };
   o.put('index.json', {
     schema: SCHEMA, generated,
+    // The gate reads its per-member distance bounds OUT OF HERE rather than
+    // keeping a second copy: a check that restates a threshold goes red on
+    // legitimate output the day the rule moves, or stays silent the day it
+    // tightens. `ruleVersion` is what tells the gate that a HEAD comparison is
+    // meaningless for this run.
     rule: {
+      ruleVersion: RULE_VERSION,
       latBox: LAT_BOX, lonBox: LON_BOX, maxAssignKm: MAX_ASSIGN_KM, maxOrphanKm: MAX_ORPHAN_KM,
+      localKm: RULE.localKm, knnFloor: RULE.knnFloor, knnMaxKm: MAX_KNN_KM,
       minCoveragePct: MIN_COVERAGE_PCT, maxMmPerDay: PLAUSIBLE_MAX_MM_DAY, minSetForSeries: MIN_SET_FOR_SERIES,
     },
     counts,

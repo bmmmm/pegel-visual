@@ -105,29 +105,149 @@ Display filter for the two rivers: `catchment_name ∈ {Erft-,
 Siegeinzugsgebiet Östlich/Westlich}` **OR** `station_no` starts with
 `272`/`274` — 41 gauges (14 Erft, 27 Sieg); the OR is what keeps Betzdorf.
 
-## Areal rain (`scripts/build-nrw-precip.mjs`, `nrw/precip/`, gate rule N8)
+## The rain field around a gauge (`scripts/build-nrw-precip.mjs`, `nrw/precip/`, gate rule N8)
+
+**It is not areal precipitation over a catchment, and it never was.** No
+watershed is consulted anywhere in this pipeline — the source publishes none.
+The product is the rain FIELD around the gauge, and every string on the plate
+says so since 2026-09-08. Anyone who reintroduces the word "areal" for the
+per-gauge product is making a claim the data cannot back. (The `?rain` overview
+is a different product and IS a basin areal mean — that wording stays.)
 
 A SEPARATE script from the collector, on purpose: the product is a pure function
 of the committed `nrw/` tree, so `--check` can prove the committed bytes are the
 ones the rule makes. CI runs it between "Collect" and the gate.
 
-**The assignment rule, pre-registered and measured 2026-09-06.** A rain gauge
-joins the nearest RECEIVING gauge of its own basin within 100 km; failing that,
-the nearest gauge of any basin within 10 km; failing that it is unassigned, with
-the reason and the distance. Receiving = one of the 298 topology nodes that is
-not a WSV relay (`siteNo 102`, 21 of them) and has coordinates inside
-`[50.0, 52.8] x [5.5, 9.8]` — 276 of them. The relays and the one Gauss-Krüger
-gauge (2728510000200 Ruenderoth) stay IN the routing graph and forward rain
-downstream; dropping Ruenderoth would cost Menden_1 four upstream nodes.
-Result: **302 basin + 12 orphan + 5 unassigned**. Not 304/10: the two
+**The hydrological assignment, pre-registered and measured 2026-09-06.** A rain
+gauge is OWNED by the nearest RECEIVING gauge of its own basin within 100 km;
+failing that, the nearest gauge of any basin within 10 km; failing that it is
+unassigned, with the reason and the distance. Receiving = one of the 298
+topology nodes that is not a WSV relay (`siteNo 102`, 21 of them) and has
+coordinates inside `[50.0, 52.8] x [5.5, 9.8]` — 276 of them. The relays and the
+one Gauss-Krüger gauge (2728510000200 Ruenderoth) stay IN the routing graph and
+forward rain downstream; dropping Ruenderoth would cost Menden_1 four upstream
+nodes. Result: **302 basin + 12 orphan + 5 unassigned**. Not 304/10: the two
 Issel-registered gauges in the Eifel (55040051, 55048925) sit 150 km from the
 nearest Issel gauge, so MAX_ASSIGN_KM sends them down the orphan path — that
-clause is what the 100 km is FOR.
+clause is what the 100 km is FOR. Ownership is still a PARTITION, and N8c3
+still asserts it.
 
-**93 gauges get a series, not 94.** Three assigned rain gauges are not three
-reporting ones: 51020051 has a meta.json and no year shard at all, so
-2828300000200 could never clear a threshold of three and the builder withdraws
-the product rather than advertise 1096 null days.
+**Membership, rule version 2 (2026-09-08), is many-to-many on top of that.**
+A gauge's set is the union over its upstream closure (`via: basin|orphan`) PLUS
+every rain gauge within **15 km of the gauge itself** (`via: local`), and where
+that yields fewer than three, the **3 nearest** instead (`via: knn`, capped at
+45 km). Every member carries its own `via` and `km`, because a fallback must
+never look like a measurement. Result: **93 → 275 of 276** receiving gauges
+carry a series; memberships 949 basin / 45 orphan / 1406 local / 42 knn; the
+floor fires on 28 gauges and reaches at most 29.05 km.
+
+**What was measured before a line of it was written** (all on the real mirror,
+`scripts/probe-precip-rule.mjs`, whose `identity` variant reproduces the old
+rule at delta exactly 0 on all 92 comparable gauges — that self-test is the
+first thing to run and the only one that can invalidate every other number):
+
+| variant | median Δ peak-r | better/worse | z | gauges with a product | set med/p90 | members outside the equivalent radius | identical neighbour sets |
+|---|---|---|---|---|---|---|---|
+| identity (v1) | — | — | — | 93 | 5 / 20 | 69.6 % | 11 of 63 pairs, J 0.667 |
+| knn3 alone | 0.0000 | 0/0 | — | 270 | 3 / 9 | 71.0 % | 24 of 178, J 0.500 |
+| km10 | 0.0000 | 43/22 | 2.60 | 200 | 5 / 15 | 66.1 % | 8 of 136 |
+| **km15 + knn3** | **+0.0043** | **61/26** | **3.75** | **275** | **8 / 15** | **74.5 %** | **8 of 182, J 0.500** |
+| km25 | +0.0075 | 59/33 | 2.71 | 272 | 18 / 28 | 84.7 % | 4 of 179, **J 0.636** |
+
+**Why 15 km and not the better-scoring 25.** Honesty, and the numbers are in the
+last two columns: at 25 km, 84.7 % of members sit outside a circle of the
+gauge's own catchment area and the median Jaccard of down-edge neighbours climbs
+to 0.636 — two gauges on one river would draw nearly the same picture. At 15 km
+it FALLS to 0.500 from the old rule's 0.667. Anyone arriving later with "more is
+better" is reading the Δr column and ignoring the two beside it.
+
+**Two numbers not to misquote.** The +0.0043 holds only for the **92 gauges that
+already had a number**; for the 182 that gained one there is no comparison and
+can be none — the alternative there is not a worse number but no number. And
+the knn floor **cannot** move an existing number: it only ever runs on sets that
+had none, which is why km15 and km15+knn3 share a Δr to four decimals.
+
+**"Every rain station lands in at least one set" is FALSE and cannot be made
+true.** Measured: 5 stations stay out under the new rule, exactly as under the
+old one — 42188260, 43170736 and 44206586 sit at 0/0, 42182880 carries
+Gauss-Krüger coordinates, and 44075066 (Bottrop-Eigen, Emscher) is 15.5 km from
+the nearest gauge of any basin, just past the ring. The idea was proposed as a
+mechanism and survives as an **invariant**: N8 watches `stationsInNoSet` and the
+list may not grow. A wish asserted as a rule would have been born red.
+
+**275 gauges get a series, not 276.** 3215510000100 Linnenkamp has three rain
+gauges in reach of which one (43120089) reports nothing at all, so three in
+reach can never make three REPORTING and the builder withdraws the product
+rather than advertise 1096 null days. (Under rule version 1 the same clause
+cost 2828300000200 its product, via 51020051.)
+
+**A rule change may not ride in on its own drift allowance.** `index.json.rule`
+carries a `ruleVersion`; when it differs from HEAD's, N8 stops comparing against
+HEAD — every counter is supposed to move on that run — and demands the version's
+**pre-registered** numbers from `RULE_BASELINES` instead. A bump with no entry
+is red; a bump whose numbers disagree with the entry is red. `MIN_PRECIP_SERIES`
+was re-based 80 → 260 in the same commit, because 80 against 275 could not go
+red on anything short of the mirror vanishing.
+
+### Three ideas that were measured and killed
+
+Each had a pre-registered kill criterion, and each is recorded here so it is not
+re-proposed as a fresh insight. **Do not reopen without new facts.**
+
+- **Area weighting (Thiessen by real sub-catchment area) — killed 2026-09-07.**
+  Measured against `catchmentKm2`: median Δ peak-r **0.0000**, mean −0.0026,
+  20 better / 28 worse, and weighted-vs-unweighted correlate at 0.994. So
+  "Thiessen with EQUAL areas" is a **measured choice**, not a shrug.
+- **Travel time per rain station — killed twice.** Daily: **0 of 42** gauges
+  show the far part of their set responding later than the near part. Hourly:
+  6 later / 15 equal / 10 earlier *within* one set. Kirpich/Giandotti are dead
+  on their own — `gaugeDatum` exists on **24 of 310** gauges and there is no
+  DEM; and `distToConflKm` is not a network coordinate (**43 of 51** sets hold
+  an "upstream" station with a SMALLER value, Greven by −109 km).
+- **Hourly response lag per gauge — killed 2026-09-08 by its own stability
+  gate.** The signal is real and is the only genuinely new hydrology in the
+  repo: over the 66-day hires window, 76 of 85 estimable gauges give a lag,
+  median 2 h, p90 9 h, max 43 h, median peak r 0.351. But split the window in
+  half and re-estimate, and only **18 of 28 gauges agree within ±3 h = 64.3 %**
+  against a pre-registered floor of 2/3; |A−B| has a p90 of 10 h and a max of
+  18 h. A window that cannot reproduce its own number across its own halves may
+  not print one. (The churn gate PASSES — 3.7 rewrites/day at ±3 h against a
+  ceiling of 10 — but it was run with a fixed left edge, which is the
+  optimistic case, and it is moot while stability fails.) The bench is
+  `scripts/probe-hourly-lag.mjs`; re-run it when the window is longer.
+
+### Two gates run for later stages, and what they said
+
+- **GSK3C catchment polygons — stopped at the LICENCE gate, 2026-09-08.**
+  Reachable and cheap: `gsk3c_EPSG25832_Shape.zip`, **68.0 MB**, stable
+  `Content-Length`, `Last-Modified` frozen at 2016-04-21, and `Accept-Ranges:
+  bytes` — so its central directory can be read for a few kB instead of 68 MB
+  (32 entries, four shapefiles: `ezg`, `gew_flaeche`, `gew_kanal_plm`,
+  `stationierung`). But the package contains **no licence file of any kind**,
+  and the only licence-shaped fields in its in-ZIP ESRI metadata are unfilled
+  template placeholders ("REQUIRED: Restrictions and legal prerequisites…");
+  the dataset's own portal index entry carries none either. The repo's rule is
+  that the licence is read out of the package, not off a product page — that
+  confusion has cost this repo twice, at HydroBASINS and TimesFM 3.0 — so the
+  stage stops here. Its remaining gates (area reconstruction against the 257
+  known `catchmentKm2`, then effect on the bench) were never run, and per the
+  measurements above its expected effect on accuracy is near zero anyway: its
+  value would be honesty, not precision.
+- **A lead found while running that gate, not yet examined:** the same portal
+  publishes `umwelt_klima/wasser/oberflaechengewaesser/**gebietsniederschlaege**`
+  — "Gebietsniederschläge NRW", the operator's OWN areal precipitation. If that
+  is what it sounds like, it is the real version of the number this repo
+  approximates, and the whole 15 km ring is a workaround for a product that
+  exists. Nobody has opened it; it carries the same licence question as GSK3C.
+- **A rain arm in the forecast gate — the correlation pre-test SURVIVES, just.**
+  Rule v2's covariate against rule v1's, over the 93 gauges comparable under
+  both: median r **0.9787** against a kill threshold of 0.98, min 0.7796, and
+  49 of 93 below 0.98. So the two are *not* the same input — but a gate run
+  consumes the test set, `loaders.precip_sha256` VOIDs comparisons across
+  different precip bytes (the existing `plain` arm stops being a comparison, so
+  **three** arms would have to re-run), and the covariate filter shifts the
+  origin grid on every arm. That is a spend, not a step, and it waits for a
+  decision.
 
 **Two clocks, and they do not line up.** A rain day is [d 07:00, d+1 07:00) MEZ,
 a gauge day [d 00:00, d+1 00:00). Rain day d therefore CLOSES seven hours into
@@ -144,10 +264,14 @@ export runs mid-afternoon and a rain day starts at 07:00, so the source's newest
 day is always half a day short and reads back as no data. Both the ?rain grid
 and every station plate hang on that one value — one picture, one estimator.
 
-**Nesting is real.** rainSet(g) is the union over the whole upstream closure, so
-two gauges on one river share most of their rain. Every legend that prints a set
-size says so, and the forecast experiment picks one gauge per basin to get
-disjoint sets.
+**Nesting is real, and rule version 2 made it BETTER, not worse.** rainSet(g) is
+the union over the whole upstream closure plus the 15 km ring, so two gauges on
+one river share most of their rain — and now neighbours can share the stations
+between them as well. The fear was that widening the sets would make them
+interchangeable; measured, the opposite happened: identical down-edge-neighbour
+sets fell from 11 of 63 pairs to 8 of 182, and the median Jaccard from 0.667 to
+0.500. Every legend that prints a set size says so, and the forecast experiment
+picks one gauge per basin to get disjoint sets.
 
 `--out` refuses any directory not named `precip`: `prune()` unlinks what it did
 not write, and pointed at the mirror it removed gauges/, rain/ and topology.json

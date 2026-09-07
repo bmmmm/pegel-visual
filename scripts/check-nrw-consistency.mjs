@@ -63,10 +63,21 @@
 //                     same code; (b) `mm === null <=> n === 0`, and med/mx
 //                     follow mm — the invariant that lets the plate draw a
 //                     no-data column and the gate tell a thin day from a
-//                     missing one; (c) the rain sets are a partition: no
-//                     station twice in one set (it would enter the mean twice
+//                     missing one; (c) MEMBERSHIP, three clauses since rule
+//                     version 2 replaced the old single "one station, one
+//                     owner" partition — membership is many-to-many now, and a
+//                     partition test over it would simply be false: (c1) no
+//                     station twice in ONE set (it would enter the mean twice
 //                     while n and |set| both rise, so every other rule stays
-//                     green) and none under two owners; (d) references
+//                     green); (c2) every member holds the bound its own `via`
+//                     allows — basin <= maxAssignKm, orphan <= maxOrphanKm,
+//                     local <= localKm, knn only in a set of exactly knnFloor
+//                     and never past MAX_KNN_KM — with all four bounds READ OUT
+//                     OF index.json's own `rule` block, never restated here,
+//                     and a `via` the rule does not enable is a violation;
+//                     (c3) the HYDROLOGICAL origin is still a partition: a
+//                     basin/orphan member names the same owning node `at` in
+//                     every set it appears in. (d) references
 //                     resolve — every product gauge is in topology.json, every
 //                     `set[].no` exists under `nrw/rain/`; (e) the committed
 //                     bytes ARE what the rule produces, proven by running the
@@ -75,23 +86,40 @@
 //                     drift by 2 against HEAD — bad coordinates, unassignable
 //                     rain gauges, and the down-edge cycle, which must match
 //                     HEAD in COUNT and in MEMBERS (a repaired cycle plus a new
-//                     one elsewhere leaves the count at 2); (i) floors, not
-//                     shares: withSeries >= 80 and receivingNodes >= 260.
-//                     Measured 2026-09-06: 298 routing nodes, 276 receiving
-//                     (21 WSV relays + 1 Gauss-Krueger gauge excluded), rain
-//                     302 basin + 12 orphan + 5 unassigned, 93 gauges with a
-//                     series, 60 with no rain gauge upstream, 2 cyclic nodes.
-//                     Two notes on the numbers, both measured, both surprising:
+//                     one elsewhere leaves the count at 2), and the list of rain
+//                     stations that land in NO set may not grow; (i) floors, not
+//                     shares: withSeries >= 260 and receivingNodes >= 260;
+//                     (j) a RULE CHANGE does not get to move the counters
+//                     quietly — when index.json's `rule.ruleVersion` differs
+//                     from HEAD's, the drift comparison against HEAD is
+//                     meaningless, so the gate demands the version's
+//                     PRE-REGISTERED numbers from RULE_BASELINES instead. A
+//                     bumped version with no entry is red; a bumped version
+//                     whose numbers disagree with the entry is red.
+//                     Measured 2026-09-08 under rule version 2: 298 routing
+//                     nodes, 276 receiving (21 WSV relays + 1 Gauss-Krueger
+//                     gauge excluded), rain 302 basin + 12 orphan + 5
+//                     unassigned, 275 gauges with a series, 0 with no rain
+//                     gauge in reach, 2 cyclic nodes, memberships 949 basin /
+//                     45 orphan / 1406 local / 42 knn, 5 rain stations in no
+//                     set at all.
+//                     Three notes on the numbers, all measured, all surprising:
 //                     the two Issel-registered rain gauges in the Eifel
 //                     (55040051, 55048925 — 150 km from the nearest Issel
 //                     gauge) take the ORPHAN path by construction, so the
 //                     basin/orphan split is 302/12, not the 304/10 a reading
-//                     that ignores MAX_ASSIGN_KM predicts. And 93, not 94:
-//                     2828300000200 has three assigned rain gauges of which one
-//                     (51020051) has a meta.json and no year shard at all, so
-//                     three assigned can never make three REPORTING and the
-//                     builder withdraws the product rather than advertise 1096
-//                     null days.
+//                     that ignores MAX_ASSIGN_KM predicts. 275, not 276:
+//                     3215510000100's three nearest rain gauges all report
+//                     nothing, so three in reach can never make three
+//                     REPORTING and the builder withdraws the product rather
+//                     than advertise 1096 null days. And "every rain station
+//                     lands in at least one set" is FALSE and cannot be made
+//                     true — 42188260, 43170736 and 44206586 sit at 0/0,
+//                     42182880 carries Gauss-Krueger coordinates, and
+//                     44075066 (Bottrop-Eigen, Emscher) is 15.5 km from the
+//                     nearest gauge of any basin, just past the 15 km ring.
+//                     So the gate watches that list rather than asserting the
+//                     wish.
 //
 // Deliberate limits, as in the sibling gate: N4 compares against the branch's
 // own HEAD, so a base poisoned by a force-push looks clean to it — branch
@@ -118,7 +146,7 @@ import { execFileSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 import { checkChangeStatuses, dayNum } from './check-archive-consistency.mjs';
 import { daysInYear, PLAUSIBLE_MIN_CM, PLAUSIBLE_MAX_CM } from './fetch-wsv-archive.mjs';
-import { build as buildPrecip, PLAUSIBLE_MAX_MM_DAY } from './build-nrw-precip.mjs';
+import { build as buildPrecip, PLAUSIBLE_MAX_MM_DAY, MAX_KNN_KM } from './build-nrw-precip.mjs';
 import { mezParts } from './snapshot-wsv.mjs';
 
 const now = process.env.PEGEL_NOW ? new Date(process.env.PEGEL_NOW) : new Date();
@@ -172,9 +200,31 @@ export const MAX_MM_DAY_RAW = 1000;
 // the areal plausibility bound.
 export const MAX_BROKEN_DRIFT = 2;
 export const MAX_BAD_COORDS_TOTAL = 8;   // 1 node + 4 rain gauges today
-export const MIN_PRECIP_SERIES = 80;     // measured 94
+// Re-based in the same commit as rule version 2. It was 80 against a measured
+// 94; under a rule that floors every reachable gauge to three rain gauges,
+// 80 could not go red on anything short of the mirror vanishing. Measured 275
+// of 276 receiving nodes on 2026-09-08 — the one gap is a gauge whose three
+// nearest stations all report nothing, and the floor is set to catch the loss
+// of a dozen more, not to leave room for the product to quietly halve.
+export const MIN_PRECIP_SERIES = 260;    // measured 275 (was 80 against 94 under rule version 1)
 export const MIN_RECEIVING_NODES = 260;  // measured 276
 export const MAX_IMPLAUSIBLE_RAIN_DAYS = 3; // measured 1 (the 595.9 mm day)
+// The knn floor's bound is the estimator's, imported like every other one: a
+// gate with its own copy of a threshold goes red on legitimate output the day
+// the rule moves. Measured maximum 29.05 km against a bound of 45.
+// Pre-registered counts per rule version. A rule change makes the HEAD
+// comparison meaningless — every drift counter reads as a regression on the
+// run that ships it — so on a version change the gate compares against THESE
+// instead. Registering them is the price of changing the rule; a bump without
+// an entry here is red, and so is an entry that disagrees with the run.
+export const RULE_BASELINES = {
+  // measured 2026-09-08 on the `nrw` mirror of the 2026-09-07 export
+  2: { withSeries: 275, receivingNodes: 276, rainUnassigned: 5, badCoordNodes: 1, cyclicNodes: 2, stationsInNoSet: 5 },
+};
+// Slack on a pre-registered baseline: the source moves between the run that
+// registers the numbers and the run that first ships them. Two, the same
+// allowance the HEAD drift comparison gives.
+export const RULE_BASELINE_SLACK = 2;
 
 // series keys per product; the sparse per-day object rides alongside
 export const PRODUCTS = {
@@ -637,24 +687,63 @@ export function checkPrecipShape(index, products, rainIds, topologyGauges, {
   if (!(c.withSeries >= minSeries)) v.push(`N8: precip: only ${c.withSeries} gauges carry a series, floor is ${minSeries}`);
   if (!(c.receivingNodes >= minReceiving)) v.push(`N8: precip: only ${c.receivingNodes} receiving nodes, floor is ${minReceiving}`);
 
-  // (c) ownership is a partition of the assigned rain gauges: a station under
-  // two owners would be counted twice everywhere the nesting overlaps
+  // (c) membership. Rule version 2 made this many-to-many, so the old single
+  // "one station, one owner" partition is gone — it would now be false by
+  // construction, and a check that cannot hold is worse than none. Three
+  // clauses replace it, and each one has to be broken by hand and watched go
+  // red before it is believed.
+  //
+  // The bounds come OUT of the product's own `rule` block. A gate that keeps a
+  // second copy of a threshold goes red on legitimate output the day the rule
+  // moves, and silent the day it tightens.
+  const R = (index.rule || {});
+  const bound = {
+    basin: R.maxAssignKm, orphan: R.maxOrphanKm,
+    local: R.localKm ?? null, knn: R.knnFloor ? (R.knnMaxKm ?? MAX_KNN_KM) : null,
+  };
   const ownerOf = new Map();
   for (const [no, p] of products) {
     if (!p.meta) { v.push(`N8: precip/${no}/meta.json: missing`); continue; }
     // (d) references
     if (topologyGauges && !topologyGauges[no]) v.push(`N8: precip/${no}: not a gauge in topology.json`);
     const seenHere = new Set();
-    for (const s of p.meta.set || []) {
+    const set = p.meta.set || [];
+    const hydro = set.filter(s => s.via === 'basin' || s.via === 'orphan').length;
+    for (const s of set) {
       if (rainIds && !rainIds.has(String(s.no))) v.push(`N8: precip/${no}/meta.json: set names rain station ${s.no}, which has no nrw/rain/ directory`);
-      // the partition test proper: one set may not name a station twice. That
-      // is the double count — it enters mean/med/mx twice while n and setSize
-      // both rise, so every other rule stays green.
+      // (c1) one set may not name a station twice. That is the double count —
+      // it enters mean/med/mx twice while n and setSize both rise, so every
+      // other rule stays green.
       if (seenHere.has(String(s.no))) v.push(`N8: precip/${no}/meta.json: rain station ${s.no} is in the set twice — it would be counted twice in the mean`);
       seenHere.add(String(s.no));
-      const prev = ownerOf.get(String(s.no));
-      if (prev == null) ownerOf.set(String(s.no), String(s.at));
-      else if (prev !== String(s.at)) v.push(`N8: rain station ${s.no} is owned by both ${prev} and ${s.at}`);
+
+      // (c2) every member holds the bound its OWN via allows
+      if (!(s.via in bound)) { v.push(`N8: precip/${no}/meta.json: rain station ${s.no} has via "${s.via}", which is not a way into a set`); continue; }
+      if (bound[s.via] == null) { v.push(`N8: precip/${no}/meta.json: rain station ${s.no} arrived via "${s.via}", which this rule version does not enable`); continue; }
+      if (!(typeof s.km === 'number' && s.km >= 0)) v.push(`N8: precip/${no}/meta.json: rain station ${s.no} carries no distance — a guess must not look like a measurement`);
+      else if (s.km > bound[s.via] + 1e-9) v.push(`N8: precip/${no}/meta.json: rain station ${s.no} is ${s.km} km away via "${s.via}", over that via's bound of ${bound[s.via]} km`);
+      // local and knn attach to the gauge itself; basin/orphan name the
+      // upstream node that owns them
+      if ((s.via === 'local' || s.via === 'knn') && String(s.at) !== String(no)) {
+        v.push(`N8: precip/${no}/meta.json: rain station ${s.no} arrived via "${s.via}" but names ${s.at} as its node, not this gauge`);
+      }
+      // the floor fills a set to exactly knnFloor and fires ONLY where
+      // everything else came up short — a knn member in a set that is already
+      // big enough means the floor ran where it had no business running
+      if (s.via === 'knn') {
+        if (set.length !== R.knnFloor) v.push(`N8: precip/${no}/meta.json: the knn floor filled the set to ${set.length}, not to ${R.knnFloor}`);
+        if (hydro + set.filter(x => x.via === 'local').length >= R.minSetForSeries) {
+          v.push(`N8: precip/${no}/meta.json: the knn floor fired on a set that already had ${set.length - set.filter(x => x.via === 'knn').length} members`);
+        }
+      }
+      // (c3) the hydrological origin is STILL a partition: basin/orphan
+      // membership carries the one node that owns the station, and that node
+      // must be the same in every set the station appears in
+      if (s.via === 'basin' || s.via === 'orphan') {
+        const prev = ownerOf.get(String(s.no));
+        if (prev == null) ownerOf.set(String(s.no), String(s.at));
+        else if (prev !== String(s.at)) v.push(`N8: rain station ${s.no} is owned by both ${prev} and ${s.at}`);
+      }
     }
     const setSize = (p.meta.set || []).length;
     for (const [y, doc] of p.shards) {
@@ -697,12 +786,49 @@ export function checkPrecipShape(index, products, rainIds, topologyGauges, {
 // topology change that has to be read before it is mirrored.
 export function checkPrecipDrift(index, head, {
   maxDrift = MAX_BROKEN_DRIFT, maxBadCoords = MAX_BAD_COORDS_TOTAL,
+  baselines = RULE_BASELINES, slack = RULE_BASELINE_SLACK,
 } = {}) {
   const v = [];
   if (!index || !index.counts) return v;
-  const c = index.counts, h = head && head.counts ? head.counts : null;
+  const c = index.counts, headCounts = head && head.counts ? head.counts : null;
   const coordsTotal = c.badCoordNodes + (index.unassigned || []).filter(u => u.why === 'coords').length;
   if (coordsTotal > maxBadCoords) v.push(`N8: ${coordsTotal} stations have unusable coordinates, ceiling is ${maxBadCoords}`);
+
+  // (j) A RULE CHANGE MAY NOT RIDE IN ON ITS OWN DRIFT ALLOWANCE. Every counter
+  // below is a comparison against HEAD, and on the run that changes the rule
+  // that comparison says nothing: the numbers are SUPPOSED to move. So on a
+  // version change the gate stops comparing against HEAD and demands the
+  // version's pre-registered numbers instead. A bump with no entry is red, and
+  // a bump whose numbers disagree with the entry is red — which is what keeps
+  // "register the numbers" from meaning "write down whatever came out".
+  const ver = index.rule ? index.rule.ruleVersion ?? 1 : 1;
+  const headVer = head && head.rule ? head.rule.ruleVersion ?? 1 : ver;
+  const changed = headCounts != null && ver !== headVer;
+  if (changed) {
+    const b = baselines[ver];
+    if (!b) {
+      v.push(`N8: rule version ${headVer} -> ${ver} with no pre-registered counts — add an entry to RULE_BASELINES in the same commit that moves the rule`);
+    } else {
+      for (const [k, want] of Object.entries(b)) {
+        const got = c[k];
+        if (typeof got !== 'number') v.push(`N8: rule version ${ver}: index.json has no numeric \`${k}\` to compare against the pre-registered ${want}`);
+        else if (Math.abs(got - want) > slack) v.push(`N8: rule version ${ver}: ${k} is ${got}, pre-registered ${want} (slack ${slack}) — the rule change does not produce what was registered for it`);
+      }
+    }
+  }
+  // A rain station that lands in NO set at all is not forbidden — four have
+  // unusable coordinates and one sits just past the ring — but the list may not
+  // grow. This is the second half of "a station belongs to at least one gauge"
+  // in the only form that can actually be true, and the only form that can go
+  // red when the source moves a station.
+  if (typeof c.stationsInNoSet === 'number') {
+    const headNoSet = changed ? (baselines[ver] || {}).stationsInNoSet : headCounts ? headCounts.stationsInNoSet : null;
+    if (typeof headNoSet === 'number' && c.stationsInNoSet > headNoSet + maxDrift) {
+      v.push(`N8: rain stations in no set at all ${headNoSet} -> ${c.stationsInNoSet}, drift over ${maxDrift} (${(c.stationsInNoSetIds || []).join(', ')})`);
+    }
+  }
+
+  const h = changed ? null : headCounts;
   if (h) {
     if (c.badCoordNodes > h.badCoordNodes + maxDrift) v.push(`N8: badCoordNodes ${h.badCoordNodes} -> ${c.badCoordNodes}, drift over ${maxDrift}`);
     if (c.rainUnassigned > h.rainUnassigned + maxDrift) v.push(`N8: rainUnassigned ${h.rainUnassigned} -> ${c.rainUnassigned}, drift over ${maxDrift}`);
