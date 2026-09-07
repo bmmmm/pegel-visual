@@ -6,50 +6,28 @@
 // One look at the gate page's `rain` panel in a real browser, at both
 // widths: opened, measured, screenshot. The suite asserts its markup; this says
 // whether a reader can read it. Needs the sandbox bypass (loopback).
-import { spawn } from 'node:child_process';
-import { mkdirSync, mkdtempSync, writeFileSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createServer } from 'node:net';
+import { sleep, serve, chrome, session, checker, killChildren } from './lib/cdp.mjs';
 
 // the checkout this file lives in — a worktree runs its own copy, and a
 // hardcoded path would send every worktree's run at the main checkout
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const SHOTS = join(ROOT, 'tmp-shots');  // gitignored: pictures are evidence, not source
-const CHROME = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
 mkdirSync(SHOTS, { recursive: true });
-const sleep = ms => new Promise(r => setTimeout(r, ms));
-const freePort = () => new Promise((res, rej) => { const s = createServer(); s.listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => res(p)); }); s.on('error', rej); });
-const kids = [];
-let bad = 0;
-const check = (ok, what, d = '') => { console.log(`${ok ? 'ok  ' : 'FAIL'} ${what}${d ? ' — ' + d : ''}`); if (!ok) bad++; };
+const check = checker();
 
-const port = await freePort();
-kids.push(spawn('python3', ['-m', 'http.server', String(port), '--directory', ROOT, '--bind', '127.0.0.1'], { stdio: 'ignore' }));
-await sleep(700);
-const cport = await freePort();
-const profile = mkdtempSync(join(tmpdir(), 'rain-panel-'));
-kids.push(spawn(CHROME, ['--headless=new', '--disable-gpu', '--no-first-run', `--user-data-dir=${profile}`,
-  `--remote-debugging-port=${cport}`, '--remote-allow-origins=*', 'about:blank'], { stdio: ['ignore', 'ignore', 'pipe'] }));
-for (let i = 0; i < 120; i++) { await sleep(250); try { await fetch(`http://127.0.0.1:${cport}/json/version`); break; } catch { /* not up */ } }
+// GATE_BASE_URL=https://bmmmm.github.io/pegel-visual/ checks the deployed page
+const base = await serve({ root: ROOT, url: process.env.GATE_BASE_URL || null });
+const cdp = await chrome({ tag: 'rain-panel' });
 
 for (const vp of [{ n: 'desktop', w: 1280, h: 900 }, { n: 'phone', w: 390, h: 844, mobile: true }]) {
-  const t = await (await fetch(`http://127.0.0.1:${cport}/json/new?about:blank`, { method: 'PUT' })).json();
-  const ws = new WebSocket(t.webSocketDebuggerUrl);
-  await new Promise((res, rej) => { ws.onopen = res; ws.onerror = rej; });
-  let id = 0; const pend = new Map(); const errs = [];
-  ws.onmessage = e => {
-    const m = JSON.parse(e.data);
-    if (m.id && pend.has(m.id)) { const { res, rej } = pend.get(m.id); pend.delete(m.id); m.error ? rej(new Error(m.error.message)) : res(m.result); return; }
-    if (m.method === 'Runtime.exceptionThrown') errs.push(m.params.exceptionDetails.text);
-  };
-  const send = (method, params = {}) => new Promise((res, rej) => { const i = ++id; pend.set(i, { res, rej }); ws.send(JSON.stringify({ id: i, method, params })); });
-  const ev = async x => { const r = await send('Runtime.evaluate', { expression: x, returnByValue: true, awaitPromise: true }); if (r.exceptionDetails) throw new Error(r.exceptionDetails.text); return r.result.value; };
+  const s = await session(cdp);
+  const { send, evaluate: ev } = s;
+  const errs = s.events.exceptions;
   await send('Page.enable'); await send('Runtime.enable');
   await send('Emulation.setDeviceMetricsOverride', { width: vp.w, height: vp.h, deviceScaleFactor: 2, mobile: !!vp.mobile });
-    // GATE_BASE_URL=https://bmmmm.github.io/pegel-visual/ checks the deployed page
-  const base = process.env.GATE_BASE_URL || `http://127.0.0.1:${port}/`;
   await send('Page.navigate', { url: base + 'gate/#rain' });
   for (let i = 0; i < 60; i++) { await sleep(250); if (await ev(`!!document.querySelector('#rain')`).catch(() => false)) break; }
   await sleep(500);
@@ -78,7 +56,7 @@ for (const vp of [{ n: 'desktop', w: 1280, h: 900 }, { n: 'phone', w: 390, h: 84
     };
   })()`);
   console.log(`\n== ${vp.n}`);
-  if (!m) { check(false, `${vp.n}: the rain panel exists`); ws.close(); continue; }
+  if (!m) { check(false, `${vp.n}: the rain panel exists`); await s.close(); continue; }
   console.log(`  title: ${m.title}`);
   for (const r of m.rows) console.log(`  row: ${r}`);
   check(errs.length === 0, `${vp.n}: no uncaught exception`, errs.join(' | '));
@@ -100,9 +78,8 @@ for (const vp of [{ n: 'desktop', w: 1280, h: 900 }, { n: 'phone', w: 390, h: 84
   const full = await ev(`({ w: document.documentElement.scrollWidth, h: document.documentElement.scrollHeight })`);
   const shot = await send('Page.captureScreenshot', { captureBeyondViewport: true, clip: { x: 0, y: 0, width: full.w, height: Math.min(full.h, 6000), scale: 1 } });
   writeFileSync(join(SHOTS, `gate-${vp.n}-rain.png`), Buffer.from(shot.data, 'base64'));
-  ws.close();
+  await s.close();
 }
-for (const k of kids) k.kill();
-rmSync(profile, { recursive: true, force: true });
-console.log(`\n${bad ? `${bad} FAILURES` : 'all checks green'} — ${SHOTS}`);
-process.exit(bad ? 1 : 0);
+killChildren();
+console.log(`\n${check.failures ? `${check.failures} FAILURES` : 'all checks green'} — ${SHOTS}`);
+process.exit(check.failures ? 1 : 0);

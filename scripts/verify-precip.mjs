@@ -10,18 +10,15 @@
 // hold the tree under test, with nrw/precip/ built by scripts/build-nrw-precip.mjs.
 //   node scripts/verify-precip.mjs
 //   LANUK_BASE_URL=https://bmmmm.github.io/pegel-visual/ node scripts/verify-precip.mjs
-import { spawn } from 'node:child_process';
-import { mkdirSync, mkdtempSync, writeFileSync, rmSync, readFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, writeFileSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createServer } from 'node:net';
+import { sleep, serve, chrome, session, checker, killChildren } from './lib/cdp.mjs';
 
 // the checkout this file lives in — a worktree runs its own copy, and a
 // hardcoded path would send every worktree's run at the main checkout
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const SHOTS = join(ROOT, 'tmp-shots');  // gitignored: pictures are evidence, not source
-const CHROME = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
 mkdirSync(SHOTS, { recursive: true });
 const BASE_URL = process.env.LANUK_BASE_URL || null;
 const manifest = BASE_URL
@@ -32,57 +29,7 @@ const overview = BASE_URL
   : JSON.parse(readFileSync(join(ROOT, 'nrw', 'precip', 'overview.json'), 'utf8'));
 console.log(`nrw: export ${manifest.sourceExportAt}, precip ${manifest.counts.precip} gauges; overview ${overview.window.from}…${overview.window.to}, bins ${overview.bins.join('/')}`);
 
-const sleep = ms => new Promise(r => setTimeout(r, ms));
-const freePort = () => new Promise((res, rej) => { const s = createServer(); s.listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => res(p)); }); s.on('error', rej); });
-const children = [];
-let failures = 0;
-const check = (ok, what, detail = '') => { console.log(`${ok ? 'ok  ' : 'FAIL'} ${what}${detail ? ' — ' + detail : ''}`); if (!ok) failures++; };
-
-async function serve() {
-  const port = await freePort();
-  const p = spawn('python3', ['-m', 'http.server', String(port), '--directory', ROOT, '--bind', '127.0.0.1'], { stdio: 'ignore' });
-  children.push(p);
-  await sleep(700);
-  return `http://127.0.0.1:${port}/`;
-}
-async function chrome() {
-  const port = await freePort();
-  const profile = mkdtempSync(join(tmpdir(), 'precip-check-'));
-  const p = spawn(CHROME, ['--headless=new', '--disable-gpu', '--no-first-run', '--no-default-browser-check', `--user-data-dir=${profile}`,
-    `--remote-debugging-port=${port}`, '--remote-allow-origins=*', 'about:blank'], { stdio: ['ignore', 'ignore', 'pipe'] });
-  children.push(p);
-  p.stderr.on('data', () => {});
-  p.on('exit', () => rmSync(profile, { recursive: true, force: true }));
-  for (let i = 0; i < 120; i++) {
-    await sleep(250);
-    try { await fetch(`http://127.0.0.1:${port}/json/version`); return `http://127.0.0.1:${port}`; } catch { /* not up yet */ }
-  }
-  throw new Error('Chrome did not open its debugging port');
-}
-async function session(cdp) {
-  const t = await (await fetch(`${cdp}/json/new?about:blank`, { method: 'PUT' })).json();
-  const ws = new WebSocket(t.webSocketDebuggerUrl);
-  await new Promise((res, rej) => { ws.onopen = res; ws.onerror = rej; });
-  let id = 0;
-  const pending = new Map();
-  const events = { console: [], responses: [], exceptions: [] };
-  ws.onmessage = ev => {
-    const m = JSON.parse(ev.data);
-    if (m.id && pending.has(m.id)) { const { res, rej } = pending.get(m.id); pending.delete(m.id); m.error ? rej(new Error(m.error.message)) : res(m.result); return; }
-    if (m.method === 'Runtime.consoleAPICalled') events.console.push(`${m.params.type}: ${m.params.args.map(a => a.value ?? a.description ?? '').join(' ')}`);
-    if (m.method === 'Log.entryAdded') events.console.push(`${m.params.entry.level}: ${m.params.entry.text} ${m.params.entry.url || ''}`);
-    if (m.method === 'Runtime.exceptionThrown') events.exceptions.push(m.params.exceptionDetails.text + ' ' + ((m.params.exceptionDetails.exception || {}).description || ''));
-    if (m.method === 'Network.responseReceived') events.responses.push({ url: m.params.response.url, status: m.params.response.status });
-  };
-  const send = (method, params = {}) => new Promise((res, rej) => { const i = ++id; pending.set(i, { res, rej }); ws.send(JSON.stringify({ id: i, method, params })); });
-  const evaluate = async expr => {
-    const r = await send('Runtime.evaluate', { expression: expr, returnByValue: true, awaitPromise: true });
-    if (r.exceptionDetails) throw new Error(`${r.exceptionDetails.text} ${(r.exceptionDetails.exception || {}).description || ''} — in: ${expr.slice(0, 140)}`);
-    return r.result.value;
-  };
-  const close = async () => { ws.close(); await fetch(`${cdp}/json/close/${t.id}`).catch(() => {}); };
-  return { send, evaluate, close, events };
-}
+const check = checker();
 
 const STATION_READY = 'state.gauge && state.gauge.currentMeasurement && state.archive.length > 100 && state.precip';
 const PAGES = [
@@ -252,11 +199,11 @@ async function run(cdp, base, vp) {
   }
 }
 
-const base = BASE_URL || await serve();
-const cdp = await chrome();
+const base = await serve({ root: ROOT, url: BASE_URL });
+const cdp = await chrome({ tag: 'precip-check' });
 console.log(`serving ${base}`);
 await run(cdp, base, { name: 'desktop', width: 1280, height: 900 });
 await run(cdp, base, { name: 'phone', width: 390, height: 844, mobile: true });
-for (const c of children) c.kill();
-console.log(`\n${failures ? `${failures} FAILURES` : 'all checks green'} — screenshots in ${SHOTS}`);
-process.exit(failures ? 1 : 0);
+killChildren();
+console.log(`\n${check.failures ? `${check.failures} FAILURES` : 'all checks green'} — screenshots in ${SHOTS}`);
+process.exit(check.failures ? 1 : 0);

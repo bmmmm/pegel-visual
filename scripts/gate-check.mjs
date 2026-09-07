@@ -20,66 +20,16 @@
 //
 // What is a failure: any check printed as FAIL; exit code 1. The list of checks
 // is the contract of the page's behaviour — extend it with the page.
-import { spawn } from 'node:child_process';
-import { mkdirSync, mkdtempSync, writeFileSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { createServer } from 'node:net';
+import { sleep, serve, chrome, session, checker, helpers, killChildren } from './lib/cdp.mjs';
 
 const ROOT = resolve(new URL('..', import.meta.url).pathname);
-const CHROME = process.env.CHROME || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
 const args = Object.fromEntries(process.argv.slice(2).map((a, i, all) => a.startsWith('--') ? [a.slice(2), all[i + 1] && !all[i + 1].startsWith('--') ? all[i + 1] : true] : []).filter(x => x.length));
 const shots = resolve(args.shots || join(ROOT, 'tmp-forecast', 'gate-check'));
 mkdirSync(shots, { recursive: true });
 
-const sleep = ms => new Promise(r => setTimeout(r, ms));
-const freePort = () => new Promise((res, rej) => { const s = createServer(); s.listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => res(p)); }); s.on('error', rej); });
-
-const children = [];
-async function serve() {
-  if (args.url) return args.url;
-  const port = await freePort();
-  const p = spawn('python3', ['-m', 'http.server', String(port), '--directory', ROOT, '--bind', '127.0.0.1'], { stdio: 'ignore' });
-  children.push(p);
-  await sleep(600);
-  return `http://127.0.0.1:${port}/gate/`;
-}
-async function chrome() {
-  if (args.cdp) return args.cdp;
-  const port = await freePort();
-  const profile = mkdtempSync(join(tmpdir(), 'gate-check-'));
-  // CI runners: no user namespace for Chrome's own sandbox, and /dev/shm is tiny
-  const p = spawn(CHROME, ['--headless=new', '--disable-gpu', '--no-first-run', '--no-default-browser-check', `--user-data-dir=${profile}`,
-    `--remote-debugging-port=${port}`, '--remote-allow-origins=*', ...(process.env.CI ? ['--no-sandbox', '--disable-dev-shm-usage'] : []), 'about:blank'], { stdio: ['ignore', 'ignore', 'pipe'] });
-  children.push(p);
-  let stderr = '';
-  p.stderr.on('data', d => { stderr += d; if (stderr.length > 20000) stderr = stderr.slice(-20000); });  // drained, or a chatty Chrome blocks on a full pipe
-  let exited = null;
-  p.on('exit', (code, signal) => { exited = `${code ?? signal}`; rmSync(profile, { recursive: true, force: true }); });
-  console.log(`chrome ${CHROME} pid ${p.pid} on port ${port}`);
-  for (let i = 0; i < 120 && exited == null; i++) {
-    await sleep(250);
-    try { await fetch(`http://127.0.0.1:${port}/json/version`); return `http://127.0.0.1:${port}`; } catch { /* not up yet */ }
-  }
-  throw new Error(`Chrome did not open its debugging port (exit ${exited ?? 'still running'}); stderr:\n${stderr.trim().split('\n').slice(-25).join('\n')}`);
-}
-
-// a forty-line CDP client over the global WebSocket
-async function session(cdp) {
-  const t = await (await fetch(`${cdp}/json/new?about:blank`, { method: 'PUT' })).json();
-  const ws = new WebSocket(t.webSocketDebuggerUrl);
-  await new Promise((res, rej) => { ws.onopen = res; ws.onerror = rej; });
-  let id = 0;
-  const pending = new Map();
-  ws.onmessage = ev => { const m = JSON.parse(ev.data); if (m.id && pending.has(m.id)) { const { res, rej } = pending.get(m.id); pending.delete(m.id); m.error ? rej(new Error(m.error.message)) : res(m.result); } };
-  const send = (method, params = {}) => new Promise((res, rej) => { const i = ++id; pending.set(i, { res, rej }); ws.send(JSON.stringify({ id: i, method, params })); });
-  const evaluate = async expr => { const r = await send('Runtime.evaluate', { expression: expr, returnByValue: true, awaitPromise: true }); if (r.exceptionDetails) throw new Error(`${r.exceptionDetails.text} ${(r.exceptionDetails.exception || {}).description || ''} — in: ${expr.slice(0, 120)}`); return r.result.value; };
-  const close = async () => { ws.close(); await fetch(`${cdp}/json/close/${t.id}`).catch(() => {}); };
-  return { send, evaluate, close };
-}
-
-let failures = 0;
-const check = (ok, what, detail = '') => { console.log(`${ok ? '  ok ' : 'FAIL '} ${what}${detail ? ' — ' + detail : ''}`); if (!ok) failures++; };
+const check = checker();
 
 async function run(cdp, url, { name, width, height, mobile }) {
   console.log(`\n== ${name} (${width}×${height}${mobile ? ', mobile, coarse pointer' : ''})`);
@@ -94,45 +44,9 @@ async function run(cdp, url, { name, width, height, mobile }) {
   check(await s.evaluate('!!document.querySelector("#lead svg[data-lead]")'), 'the page rendered its curve');
   if (mobile) check(await s.evaluate('matchMedia("(pointer: coarse)").matches'), 'the emulated pointer is coarse');
 
-  const rect = sel => s.evaluate(`(() => { const e = document.querySelector(${JSON.stringify(sel)}); if (!e) return null; const r = e.getBoundingClientRect(); return { x: r.x, y: r.y, w: r.width, h: r.height }; })()`);
-  // The page scrolls `behavior: 'smooth'` (gate.js, focusFor), so a rect measured
-  // while a scroll is still running is a rect that has already moved by the time
-  // the click lands — the press falls in the gap between two chips, nothing
-  // happens, and every check after it fails for a reason that is not there. This
-  // waits for the page to stop moving before believing a measurement. It was a
-  // latent race: 24 px of new page height was enough to start losing the click.
-  const settle = async (tries = 40) => {
-    let last = null;
-    for (let i = 0; i < tries; i++) {
-      const y = await s.evaluate('scrollY');
-      if (y === last) return y;
-      last = y;
-      await sleep(50);
-    }
-    return last;
-  };
-  // A press is dispatched at a POINT, so the helper checks that the point still
-  // belongs to the element before spending it: a rect measured a frame too early
-  // sends the click into the gap between two chips, nothing happens, and every
-  // check downstream fails for a reason that is not there. It re-measures rather
-  // than guessing, and says so loudly if the point never becomes the element.
-  const click = async sel => {
-    if (!(await rect(sel))) throw new Error(`no element ${sel}`);
-    await s.evaluate(`document.querySelector(${JSON.stringify(sel)}).scrollIntoView({block:'center'})`);
-    let r2, hit = false;
-    for (let i = 0; i < 20 && !hit; i++) {
-      await settle();
-      r2 = await rect(sel);
-      hit = await s.evaluate(`(() => { const e = document.querySelector(${JSON.stringify(sel)}); const r = e.getBoundingClientRect(); const t = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2); return !!t && (t === e || e.contains(t)); })()`);
-      if (!hit) await sleep(50);
-    }
-    if (!hit) throw new Error(`the centre of ${sel} is not the element itself — something covers it, or it never stopped moving`);
-    const x = r2.x + r2.w / 2, y = r2.y + r2.h / 2;
-    await s.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y });
-    await s.send('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'left', clickCount: 1 });
-    await s.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button: 'left', clickCount: 1 });
-    await sleep(700); await settle();
-  };
+  // measuring and pressing on a page that scrolls `behavior: 'smooth'`
+  // (gate.js, focusFor) — scripts/lib/cdp.mjs carries why each one re-measures
+  const { rect, settle, click } = helpers(s);
   const active = () => s.evaluate('(() => { const a = document.activeElement; return a ? a.tagName.toLowerCase() + (a.id ? "#" + a.id : "") + (a.closest("details") ? " in details#" + a.closest("details").id : "") + (a.closest("section") && a.closest("section").id ? " in section#" + a.closest("section").id : "") : null; })()');
 
   // 1. load: everything closed, nothing overflows, the readout speaks
@@ -495,8 +409,8 @@ async function palette(cdp, url) {
   }
 }
 
-const url = await serve();
-const cdp = await chrome();
+const url = await serve({ root: ROOT, path: '/gate/', url: args.url === true ? null : args.url, settle: 600 });
+const cdp = await chrome({ tag: 'gate-check', cdp: args.cdp === true ? null : args.cdp });
 console.log(`page ${url}\ncdp  ${cdp}\nshots ${shots}`);
 try {
   for (const vp of [{ name: 'desktop', width: 1240, height: 900, mobile: false }, { name: 'phone', width: 390, height: 844, mobile: true }]) {
@@ -504,7 +418,7 @@ try {
   }
   try { await palette(cdp, url); } catch (e) { check(false, 'the palette pass threw', String(e.stack || e).split('\n').slice(0, 3).join(' | ')); }
 } finally {
-  for (const c of children) c.kill();
+  killChildren();
 }
-console.log(failures ? `\n${failures} check(s) FAILED` : '\nall checks passed');
-process.exit(failures ? 1 : 0);
+console.log(check.failures ? `\n${check.failures} check(s) FAILED` : '\nall checks passed');
+process.exit(check.failures ? 1 : 0);
