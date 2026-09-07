@@ -1,0 +1,291 @@
+[
+  {
+    "uuid": "4c7d796a-39f2-4f26-97a9-3aad01713e29",
+    "number": "25900700",
+    "shortname": "KOBLENZ",
+    "longname": "KOBLENZ",
+    "km": 591.49,
+    "agency": "STANDORT BINGEN",
+    "longitude": 7.604741,
+    "latitude": 50.35864,
+    "water": {
+      "shortname": "RHEIN",
+      "longname": "RHEIN"
+    },
+    "timeseries": [
+      {
+        "shortname": "W",
+        "longname": "WASSERSTAND ROHDATEN",
+        "unit": "cm",
+        "equidistance": 15,
+        "gaugeZero": {
+          "unit": "m. ü. NHN",
+          "value": 57.692,
+          "validFrom": "2019-11-01"
+        }
+      }
+    ]
+  },
+  {
+    "uuid": "dc407f1e-e25f-4995-9feb-5bacc8658149",
+    "number": "27100370",
+    "shortname": "Neuwied Stadt",
+    "longname": "NEUWIED STADT",
+    "km": 608.04,
+    "agency": "DEICHINFORMATIONSZENTRUM NEUWIED",
+    "longitude": 7.457453,
+    "latitude": 50.424277,
+    "water": {
+      "shortname": "RHEIN",
+      "longname": "RHEIN"
+    },
+    "timeseries": [
+      {
+        "shortname": "W",
+        "longname": "WASSERSTAND ROHDATEN",
+        "unit": "cm",
+        "equidistance": 15,
+        "gaugeZero": {
+          "unit": "m. ü. NHN",
+          "value": 52.86,
+          "validFrom": "1931-01-01"
+        }
+      }
+    ]
+  },
+  {
+    "uuid": "5735892a-ec65-4b29-97c5-50939aa9584e",
+    "number": "27100400",
+    "shortname": "ANDERNACH",
+    "longname": "ANDERNACH",
+    "km": 613.78,
+    "agency": "STANDORT BINGEN",
+    "longitude": 7.392056,
+    "latitude": 50.44339,
+    "water": {
+      "shortname": "RHEIN",
+      "longname": "RHEIN"
+    },
+    "timeseries": [
+      {
+        "shortname": "Q",
+        "longname": "ABFLUSS_ROHDATEN",
+        "unit": "m³/s",
+        "equidistance": 15
+      },
+      {
+        "shortname": "W",
+        "longname": "WASSERSTAND ROHDATEN",
+        "unit": "cm",
+        "equidistance": 15,
+        "gaugeZero": {
+          "unit": "m. ü. NHN",
+          "value": 51.504,
+          "validFrom": "2019-11-01"
+        }
+      }
+    ]
+  },
+  {
+    "uuid": "b45359df-c020-4314-adb1-d1921db642da",
+    "number": "27100700",
+    "shortname": "OBERWINTER",
+    "longname": "OBERWINTER",
+    "km": 638.19,
+    "agency": "STANDORT BINGEN",
+    "longitude": 7.210222,
+    "latitude": 50.61369,
+    "water": {
+      "shortname": "RHEIN",
+      "longname": "RHEIN"
+    },
+    "timeseries": [
+      {
+        "shortname": "W",
+        "longname": "WASSERSTAND ROHDATEN",
+        "unit": "cm",
+        "equidistance": 15,
+        "gaugeZero": {
+          "unit": "m. ü. NHN",
+          "value": 47.222,
+          "validFrom": "2019-11-01"
+        }
+      }
+    ]
+  },
+  {
+    "uuid": "593647aa-9fea-43ec-a7d6-6476a76ae868",
+    "number": "2710080",
+    "shortname": "BONN",
+    "longname": "BONN",
+    "km": 654.8,
+    "agency": "STANDORT KÖLN",
+    "longitude": 7.108045,
+    "latitude": 50.736398,
+    "water": {
+      "shortname": "RHEIN",
+      "longname": "RHEIN"
+    },
+    "timeseries": [
+      {
+        "shortname": "Q",
+        "longname": "ABFLUSS_ROHDATEN",
+        "unit": "m³/s",
+        "equidistance": 15
+      },
+      {
+        "shortname": "W",
+        "longname": "WASSERSTAND ROHDATEN",
+        "unit": "cm",
+        "equidistance": 15,
+        "gaugeZero": {
+          "unit": "m. ü. NHN",
+          "value": 42.713,
+          "validFrom": "2019-11-01"
+        }
+      }
+    ]
+  },
+  {
+    "uuid": "a6ee8177-107b-47dd-bcfd-30960ccc6e9c",
+    "number": "2730010",
+    "shortname": "KÖLN",
+    "longname": "KÖLN",
+    "km": 688,
+    "agency": "STANDORT KÖLN",
+    "longitude": 6.9633,
+    "latitude": 50.936949,
+    "water": {
+      "shortname": "RHEIN",
+      "longname": "RHEIN"
+    },
+    "timeseries": [
+      {
+        "shortname": "Q",
+        "longname": "ABFLUSS_ROHDATEN",
+        "unit": "m³/s",
+        "equidistance": 15
+      },
+      {
+        "shortname": "W",
+        "longname": "WASSERSTAND ROHDATEN",
+        "unit": "cm",
+        "equidistance": 15,
+        "gaugeZero": {
+          "unit": "m. ü. NHN",
+          "value": 35.038,
+          "validFrom": "2019-11-01"
+        }
+      },
+      {
+        "shortname": "WT",
+        "longname": "WASSERTEMPERATUR ROHDATEN",
+        "unit": "°C",
+        "equidistance": 15,
+        "comment": {
+          "shortDescription": "unplausible Werte.",
+          "longDescription": "unplausible Werte."
+        }
+      }
+    ]
+  },
+  {
+    "uuid": "8f7e5f92-1153-4f93-acba-ca48670c8ca9",
+    "number": "2750010",
+    "shortname": "DÜSSELDORF",
+    "longname": "DÜSSELDORF",
+    "km": 744.2,
+    "agency": "STANDORT DUISBURG",
+    "longitude": 6.769891,
+    "latitude": 51.225498,
+    "water": {
+      "shortname": "RHEIN",
+      "longname": "RHEIN"
+    },
+    "timeseries": [
+      {
+        "shortname": "Q",
+        "longname": "ABFLUSS_ROHDATEN",
+        "unit": "m³/s",
+        "equidistance": 15
+      },
+      {
+        "shortname": "W",
+        "longname": "WASSERSTAND ROHDATEN",
+        "unit": "cm",
+        "equidistance": 15,
+        "gaugeZero": {
+          "unit": "m. ü. NHN",
+          "value": 24.529,
+          "validFrom": "2019-11-01"
+        }
+      }
+    ]
+  },
+  {
+    "uuid": "c0f51e35-d0e8-4318-afaf-c5fcbc29f4c1",
+    "number": "2770010",
+    "shortname": "DUISBURG-RUHRORT",
+    "longname": "DUISBURG-RUHRORT",
+    "km": 780.8,
+    "agency": "STANDORT DUISBURG",
+    "longitude": 6.727927,
+    "latitude": 51.455345,
+    "water": {
+      "shortname": "RHEIN",
+      "longname": "RHEIN"
+    },
+    "timeseries": [
+      {
+        "shortname": "Q",
+        "longname": "ABFLUSS_ROHDATEN",
+        "unit": "m³/s",
+        "equidistance": 15
+      },
+      {
+        "shortname": "W",
+        "longname": "WASSERSTAND ROHDATEN",
+        "unit": "cm",
+        "equidistance": 15,
+        "gaugeZero": {
+          "unit": "m. ü. NHN",
+          "value": 16.106,
+          "validFrom": "2019-11-01"
+        }
+      }
+    ]
+  },
+  {
+    "uuid": "f33c3cc9-dc4b-4b77-baa9-5a5f10704398",
+    "number": "2770040",
+    "shortname": "WESEL",
+    "longname": "WESEL",
+    "km": 814,
+    "agency": "STANDORT DUISBURG",
+    "longitude": 6.60682,
+    "latitude": 51.646143,
+    "water": {
+      "shortname": "RHEIN",
+      "longname": "RHEIN"
+    },
+    "timeseries": [
+      {
+        "shortname": "Q",
+        "longname": "ABFLUSS_ROHDATEN",
+        "unit": "m³/s",
+        "equidistance": 15
+      },
+      {
+        "shortname": "W",
+        "longname": "WASSERSTAND ROHDATEN",
+        "unit": "cm",
+        "equidistance": 15,
+        "gaugeZero": {
+          "unit": "m. ü. NHN",
+          "value": 11.206,
+          "validFrom": "2019-11-01"
+        }
+      }
+    ]
+  }
+]

@@ -1,0 +1,75 @@
+{
+  "shortname": "W",
+  "longname": "WASSERSTAND ROHDATEN",
+  "unit": "cm",
+  "equidistance": 15,
+  "currentMeasurement": {
+    "timestamp": "2026-09-07T23:00:00+02:00",
+    "value": 88,
+    "stateMnwMhw": "low",
+    "stateNswHsw": "unknown"
+  },
+  "gaugeZero": {
+    "unit": "m. ü. NHN",
+    "value": 42.713,
+    "validFrom": "2019-11-01"
+  },
+  "characteristicValues": [
+    {
+      "shortname": "GlW",
+      "longname": "gleichwertiger Wasserstand",
+      "unit": "cm",
+      "value": 142,
+      "validFrom": "2023-01-01"
+    },
+    {
+      "shortname": "TuGLW",
+      "longname": "verkehrsgesicherte Fahrrinnentiefe unter GlW (Tiefe unter GlW)",
+      "unit": "cm",
+      "value": 250,
+      "validFrom": "2000-02-01"
+    },
+    {
+      "shortname": "HHW",
+      "longname": "Höchster Hochwasserstand",
+      "unit": "cm",
+      "value": 1013,
+      "occurrences": [
+        "1993-12-23"
+      ]
+    },
+    {
+      "shortname": "NNW",
+      "longname": "Niedrigster Niedrigwasserstand",
+      "unit": "cm",
+      "value": 81,
+      "occurrences": [
+        "2018-10-22"
+      ]
+    },
+    {
+      "shortname": "MNW",
+      "longname": "Mittel der Niedrigwasserstände ",
+      "unit": "cm",
+      "value": 121,
+      "timespanStart": "2010-11-01",
+      "timespanEnd": "2020-10-31"
+    },
+    {
+      "shortname": "MW",
+      "longname": "Mittel der Tageswasserstände ",
+      "unit": "cm",
+      "value": 290,
+      "timespanStart": "2010-11-01",
+      "timespanEnd": "2020-10-31"
+    },
+    {
+      "shortname": "MHW",
+      "longname": "Mittel der Hochwasserstände ",
+      "unit": "cm",
+      "value": 680,
+      "timespanStart": "2010-11-01",
+      "timespanEnd": "2020-10-31"
+    }
+  ]
+}

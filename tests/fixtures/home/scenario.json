@@ -1,0 +1,7 @@
+{
+  "note": "A frozen cold boot of the start page: pegel-visual with no query string at all, so station=BONN and mode=station by default. Routing lives in router.mjs, the refresh runbook in the header of scripts/home-check.mjs.",
+  "clock": "2026-09-07T21:07:00.000Z",
+  "clockWhy": "seven minutes past the newest reading in measurements-p30d.json — fresh enough that historyViewModel raises no stale note, and the instant every time assertion in both layers is expressed against",
+  "station": "BONN",
+  "capturedAt": "2026-09-07T21:03:04.319Z"
+}

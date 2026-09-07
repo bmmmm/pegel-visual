@@ -1,0 +1,36 @@
+{
+  "OBERWINTER": {
+    "shortname": "W",
+    "longname": "WASSERSTAND ROHDATEN",
+    "unit": "cm",
+    "equidistance": 15,
+    "currentMeasurement": {
+      "timestamp": "2026-09-07T23:00:00+02:00",
+      "value": 16,
+      "stateMnwMhw": "low",
+      "stateNswHsw": "normal"
+    },
+    "gaugeZero": {
+      "unit": "m. ü. NHN",
+      "value": 47.222,
+      "validFrom": "2019-11-01"
+    }
+  },
+  "KÖLN": {
+    "shortname": "W",
+    "longname": "WASSERSTAND ROHDATEN",
+    "unit": "cm",
+    "equidistance": 15,
+    "currentMeasurement": {
+      "timestamp": "2026-09-07T23:00:00+02:00",
+      "value": 75,
+      "stateMnwMhw": "low",
+      "stateNswHsw": "normal"
+    },
+    "gaugeZero": {
+      "unit": "m. ü. NHN",
+      "value": 35.038,
+      "validFrom": "2019-11-01"
+    }
+  }
+}

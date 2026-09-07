@@ -1,0 +1,25 @@
+{
+  "latitude": 50.728,
+  "longitude": 7.105,
+  "generationtime_ms": 0.05435943603515625,
+  "utc_offset_seconds": 0,
+  "timezone": "GMT",
+  "timezone_abbreviation": "GMT",
+  "elevation": 55,
+  "current_units": {
+    "time": "iso8601",
+    "interval": "seconds",
+    "precipitation": "mm",
+    "snowfall": "cm",
+    "cloud_cover": "%",
+    "wind_speed_10m": "km/h"
+  },
+  "current": {
+    "time": "2026-09-07T21:00",
+    "interval": 900,
+    "precipitation": 0,
+    "snowfall": 0,
+    "cloud_cover": 100,
+    "wind_speed_10m": 12.2
+  }
+}

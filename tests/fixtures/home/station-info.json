@@ -1,0 +1,33 @@
+{
+  "uuid": "593647aa-9fea-43ec-a7d6-6476a76ae868",
+  "number": "2710080",
+  "shortname": "BONN",
+  "longname": "BONN",
+  "km": 654.8,
+  "agency": "STANDORT KÖLN",
+  "longitude": 7.108045,
+  "latitude": 50.736398,
+  "water": {
+    "shortname": "RHEIN",
+    "longname": "RHEIN"
+  },
+  "timeseries": [
+    {
+      "shortname": "Q",
+      "longname": "ABFLUSS_ROHDATEN",
+      "unit": "m³/s",
+      "equidistance": 15
+    },
+    {
+      "shortname": "W",
+      "longname": "WASSERSTAND ROHDATEN",
+      "unit": "cm",
+      "equidistance": 15,
+      "gaugeZero": {
+        "unit": "m. ü. NHN",
+        "value": 42.713,
+        "validFrom": "2019-11-01"
+      }
+    }
+  ]
+}
