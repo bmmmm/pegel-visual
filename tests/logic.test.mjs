@@ -59,16 +59,12 @@ test('parseCommand: flags, values, booleans', () => {
   assert.equal(parse('--river ELDE MÜRITZ WASSERSTRASSE').river, 'ELDE MÜRITZ WASSERSTRASSE', 'multi-word values run to the next flag');
   assert.equal(parse('--history 7D').history, '7d', 'history value is lowercased');
 
-  const combined = parse('--station KÖLN --history 7d --adsb 10.0.0.5:8080');
+  const combined = parse('--station KÖLN --history 7d');
   assert.equal(combined.station, 'KÖLN');
   assert.equal(combined.history, '7d');
-  assert.equal(combined.adsb, '10.0.0.5:8080');
 
-  assert.equal(parse('--adsb').adsb, '', 'flag given without value means "given empty" (clears)');
-  assert.equal(parse('--station X').adsb, undefined, 'absent flag stays undefined');
-  assert.equal(parse('--ais 10.0.0.5:8080/aiscatcher').ais, '10.0.0.5:8080/aiscatcher');
-  assert.equal(parse('--ais').ais, '', '--ais without value clears, like --adsb');
-  assert.equal(parse('--station X').ais, undefined);
+  assert.equal(parse('--station').station, '', 'flag given without value means "given empty"');
+  assert.equal(parse('--history 7d').station, undefined, 'absent flag stays undefined');
 
   const bools = parse('--export --clear --info --help');
   assert.equal(bools.export, true);
@@ -94,52 +90,6 @@ test('helpText: the man page lists every flag parseCommand recognises, and every
   assert.ok(ranges.length >= 8, 'sanity: HISTORY_PRESETS still covers both the API and archive ranges');
   for (const k of ranges) assert.ok(man.includes(k), `man page's --history line mentions ${k}`);
   assert.ok(app.run('helpText("--nope")').startsWith('unknown flag: --nope'));
-});
-
-test('adsbEndpoint / aisEndpoint: URL normalization', () => {
-  const app = loadApp();
-  assert.equal(app.run(`adsbEndpoint('10.0.0.5:8080')`), 'http://10.0.0.5:8080/data/aircraft.json');
-  assert.equal(app.run(`adsbEndpoint('https://r.example/data/aircraft.json')`), 'https://r.example/data/aircraft.json');
-  assert.equal(app.run(`adsbEndpoint('')`), '');
-  assert.equal(app.run(`aisEndpoint('10.0.0.5:8080/aiscatcher')`), 'http://10.0.0.5:8080/aiscatcher/ships.json');
-  assert.equal(app.run(`aisEndpoint('http://10.0.0.5:8080/aiscatcher/')`), 'http://10.0.0.5:8080/aiscatcher/ships.json');
-  assert.equal(app.run(`aisEndpoint('https://r.example/ships.json')`), 'https://r.example/ships.json');
-  assert.equal(app.run(`aisEndpoint('')`), '');
-});
-
-test('receiver polling only runs where the scene is drawn', async () => {
-  // Both loaders sit on their own interval (2.5 s and 5 s) and end in an
-  // unconditional scheduleRender(). Only the station scene draws their marks,
-  // so outside it a tick has to cost neither a request nor a repaint.
-  const poll = (view, payload) => {
-    const app = loadApp();
-    app.run(`mode = '${view}'; adsbRaw = '10.0.0.5:8080'; aisRaw = '10.0.0.5:8080'`);
-    return app.run(`(async () => {
-      let hits = 0;
-      getJson = async () => { hits++; return ${payload}; };
-      await loadAircraft();
-      await loadShips();
-      return { hits, adsbOk: state.adsbOk, aisOk: state.aisOk,
-        craft: state.aircraft.length, ships: state.ships.length };
-    })()`);
-  };
-
-  for (const view of ['total', 'rising', 'rivers', 'river']) {
-    const r = await poll(view, '{ aircraft: [], ships: [] }');
-    assert.equal(r.hits, 0, `${view} must not poll a receiver`);
-    assert.equal(r.adsbOk, null, `${view} must not claim a receiver status`);
-    assert.equal(r.aisOk, null, `${view} must not claim a receiver status`);
-  }
-
-  // the station plate still polls both, so the guard cannot be a silent kill
-  const st = await poll('station', `{
-    aircraft: [{ lat: 50.7, lon: 7.1, alt_baro: 3000 }],
-    ships: [{ lat: 50.7, lon: 7.1, last_signal: 5 }] }`);
-  assert.equal(st.hits, 2, 'the station scene polls both receivers');
-  assert.equal(st.adsbOk, true);
-  assert.equal(st.aisOk, true);
-  assert.equal(st.craft, 1);
-  assert.equal(st.ships, 1);
 });
 
 test('loadWeather skips the request outside the station plate', async () => {
@@ -1323,7 +1273,7 @@ test('deep link: only an ambiguous name gets the list — unknown, unique and fo
 test('recent chips: only a gauge that actually answered is remembered', async () => {
   const dead = loadApp({ search: '?station=MAGDEBURG', storage: WARM_STATIONS });
   assert.equal(dead.localStorage['pegel.recent'], undefined, 'a deep link that never loaded leaves no chip');
-  dead.run(`switchStation('XXXXNOPE', '')`);
+  dead.run(`switchStation('XXXXNOPE')`);
   assert.equal(dead.localStorage['pegel.recent'], undefined, 'nor does switching to a name that fails');
 
   const app = loadApp({ search: '?station=BONN', storage: WARM_STATIONS });
@@ -1386,9 +1336,9 @@ test('archive script: migrateStation names the malformed year file instead of a 
 
 // ---------- report issue ----------
 
-test('buildReportBody: covers everything the renderer branches on, redacts receiver URLs', () => {
+test('buildReportBody: covers everything the renderer branches on', () => {
   const now = Date.UTC(2026, 0, 15, 12);
-  const app = loadApp({ now, search: '?station=BONN&adsb=10.0.0.5:8080&ais=10.0.0.9:8080/aiscatcher' });
+  const app = loadApp({ now, search: '?station=BONN' });
   app.run(`state.info = { water: { shortname: 'RHEIN' }, km: 654.8 }`);
   app.run(`state.gauge = { currentMeasurement: { value: 250, timestamp: ${now}, stateMnwMhw: 'normal' } }`);
   app.run('state.wt = 12.3');
@@ -1416,26 +1366,49 @@ test('buildReportBody: covers everything the renderer branches on, redacts recei
   assert.match(body, /Q: 500 m³\/s/);
   assert.match(body, /trend: 10\.0 cm\/h/);
   assert.match(body, /state: normal/);
-  assert.match(body, /adsb configured: true/);
-  assert.match(body, /ais configured: true/);
   assert.match(body, /app commit: dev/, 'unreplaced __COMMIT__ placeholder falls back to dev');
   assert.match(body, /the river should be blue, not on fire/);
-  assert.ok(!body.includes('10.0.0.5'), 'adsb receiver URL never appears, only whether it is configured');
-  assert.ok(!body.includes('10.0.0.9'), 'ais receiver URL never appears, only whether it is configured');
 });
 
-test('buildReportBody: state.error and unconfigured receivers report honestly', () => {
+test('buildReportBody: state.error reports honestly', () => {
   const app = loadApp({ search: '?station=BONN' });
   app.run('state.error = \'station "BONN" failed: 500 /stations/BONN/W/measurements.json\'');
 
   const body = app.run(`buildReportBody('')`);
 
   assert.match(body, /error: station "BONN" failed: 500/);
-  assert.match(body, /adsb configured: false/);
-  assert.match(body, /ais configured: false/);
   assert.match(body, /W: n\/a/);
   assert.match(body, /trend: n\/a/);
   assert.match(body, /_\(no note provided\)_/);
+});
+
+test('an old ?adsb= bookmark is dropped, not quoted into a bug report', () => {
+  // The receiver overlay is gone, but the addresses it wrote are not: they sit in
+  // two localStorage keys and in every bookmark switchStation ever built. The
+  // report quotes the address bar, so a stale bookmark would carry a LAN address
+  // into a public issue — dropReceiverParams() runs at boot to stop that.
+  const app = loadApp({ search: '?station=BONN&adsb=10.0.0.5:8080&ais=10.0.0.9:8080/aiscatcher',
+    storage: { 'pegel.adsb': '10.0.0.5:8080', 'pegel.ais': '10.0.0.9:8080/aiscatcher' } });
+
+  assert.equal(app.localStorage['pegel.adsb'], undefined, 'the stored receiver address is deleted at boot');
+  assert.equal(app.localStorage['pegel.ais'], undefined);
+
+  // what it asked the browser to put in the address bar instead
+  const replaced = app.run(`(() => {
+    let seen = null;
+    history.replaceState = (a, b, url) => { seen = url; };
+    location.search = '?station=BONN&adsb=10.0.0.5:8080&ais=10.0.0.9:8080/aiscatcher';
+    return { url: dropReceiverParams(), seen };
+  })()`);
+  assert.equal(replaced.url, replaced.seen, 'the rewrite really goes through history.replaceState');
+  assert.match(replaced.url, /station=BONN/, 'everything else about the link survives');
+  assert.ok(!/adsb|ais|10\.0\.0/.test(replaced.url), `neither param survives: ${replaced.url}`);
+
+  // and with the address bar cleaned, the report body carries no receiver address
+  app.run(`location.search = '?station=BONN'`);
+  const body = app.run(`buildReportBody('')`);
+  assert.match(body, /- URL: [^\n]*\?station=BONN/, 'the report still quotes the URL it is about');
+  assert.ok(!body.includes('10.0.0.'), 'no home-network address anywhere in the report');
 });
 
 test('buildReportUrl: trims an oversized note to stay under the GitHub URL limit', () => {
@@ -2606,7 +2579,7 @@ test('back button: leaving the map redraws the station even if it never changed'
   const app = loadApp({ search: '?rivers' });
   const after = app.run(`(() => {
     const before = mode;
-    switchStation(station, '', false);
+    switchStation(station, false);
     return { before, after: mode, station };
   })()`);
   assert.equal(after.before, 'rivers');
@@ -3632,9 +3605,9 @@ const tableAt = (html, cls) => {
 };
 
 // Not marks: the drawings' own container classes (`hist` is the history
-// chart's), invisible hit targets, text labels, and the two boat states the key
-// spells out in words instead.
-const NOT_A_MARK = new Set(['scene', 'chart', 'hist', 'profile', 'precip', 'response', 'hit', 'craft-lbl', 'stuck', 'aground']);
+// chart's), invisible hit targets, and the two boat states the key spells out
+// in words instead.
+const NOT_A_MARK = new Set(['scene', 'chart', 'hist', 'profile', 'precip', 'response', 'hit', 'stuck', 'aground']);
 
 const assertNamed = (drawing, key, what) => {
   const missing = [...classesIn(drawing)].filter(c => !NOT_A_MARK.has(c) && !key.has(c));
@@ -4273,7 +4246,7 @@ test('switching to a mirrored gauge leaves no poll timer behind', async () => {
   const app = nrwApp();
   app.run(coldLists);
   await app.run('lanukIndex()');
-  app.run(`switchStation('MENDEN_1', '')`);
+  app.run(`switchStation('MENDEN_1')`);
   // the mirrored loader disarms the poll synchronously, so the switch's own
   // arming has to come first — checked right here, before any fetch settles
   assert.equal(app.run('refreshTimer'), null, 'the loader disarmed the poll and the switch did not re-arm it');
@@ -4405,7 +4378,7 @@ test('?station=MENDEN_1: the seam loads a full station plate off the mirror, wit
   const years = app.run('renderYears(yearsViewModel())');
   assert.ok(years.includes('LANUK NRW') || app.run('yearsViewModel()').source.includes('LANUK NRW'), 'the years foot names the source');
   // switching away resets every feed-owned slot
-  app.run(`switchStation('BONN', '')`);
+  app.run(`switchStation('BONN')`);
   assert.equal(app.run('state.feed'), null);
   assert.equal(app.run('state.lanuk'), null);
   assert.equal(app.run('state.lowIsMeanUntil'), null);

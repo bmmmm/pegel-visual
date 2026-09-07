@@ -154,26 +154,10 @@
     max-width: min(34ch, calc(100vw - 6em)); /* 34ch fits the longest name (30) plus caret room */
     padding-right: 0.6ch; /* room for the caret so the last letter never clips */
   }
-  #adsb-input, #ais-input { text-transform: none; }
   form .cmd + .cmd { margin-top: 0.7em; }
   form .cont { padding-left: 8ch; } /* lines up under --station, like a wrapped shell command */
   /* fixed-width flag so the station and river inputs start at the same column */
   form .flag { display: inline-block; min-width: 9ch; }
-  form .hint { color: var(--mid); }
-  /* the receiver flags: one folded line by default, so the prompt is the two
-     fields that navigate. Opened, each flag gets its own line — two URL inputs
-     side by side never fit a phone. */
-  #prompt-more { margin-top: 0.7em; }
-  #prompt-more > summary {
-    cursor: pointer;
-    color: var(--mid);
-    min-block-size: 1.8em;
-    align-content: center;
-  }
-  #prompt-more > summary:hover { color: var(--ink); }
-  #prompt-more[open] > summary { margin-bottom: 0.5em; }
-  .cmd-more { margin-top: 0.4em; }
-  .cmd-more input { width: 26ch; max-width: calc(100% - 10ch); }
   /* live typeahead: a custom dropdown (the native datalist can't fold umlauts,
      rank, or carry the km/water context) positioned under the active input */
   /* The prompt, the recent chips and the archive bar are one block of tools
@@ -827,9 +811,6 @@
   .gutter .cm { font-variant-numeric: tabular-nums; }
   .gutter .yr { color: var(--dim); }
   .gutter .now b, .gutter .now .cm { color: var(--water-line); }
-  .scene-cap .rcv { margin-left: 1.2ch; }
-  .scene-cap .rcv::before { content: '· '; color: var(--dim); }
-  .scene-cap .rcv.off { color: var(--dry-line); }
   .scene-cap {
     margin: 0.5em 0 0;
     font-size: 0.8em;
@@ -861,9 +842,7 @@
   .scene .snow circle { fill: var(--ink); opacity: 0.35; }
   .scene .boat path { fill: var(--paper); stroke: var(--ink); stroke-width: 1.4; stroke-linejoin: round; }
   .scene .boat .mast { fill: var(--paper); }
-  .scene .plane path { fill: none; stroke: var(--ink); stroke-width: 1.3; stroke-linejoin: round; }
-  .scene .craft-lbl { font-family: var(--font-data); font-size: 7px; fill: var(--mid); }
-  /* the cloud, boat and plane swatches are the drawing's own paths scaled down
+  /* the cloud and boat swatches are the drawing's own paths scaled down
      to 12 px; without this their hairlines scale with them and vanish */
   .sw.scene * { vector-effect: non-scaling-stroke; }
   /* ---- history chart ---- */
@@ -1461,19 +1440,6 @@
     </div>
     <div class="cmd cont"><span class="flag">--river</span> <input id="river-input" name="river" spellcheck="false" placeholder="whole river" autocomplete="off" role="combobox" aria-expanded="false" aria-controls="ac" aria-autocomplete="list" aria-label="river name">
     </div>
-    <details id="prompt-more" class="cmd cont">
-      <summary>--adsb --ais <span class="hint">· your own live receivers</span></summary>
-      <div class="cmd-more">
-        <span class="flag">--adsb</span>
-        <input id="adsb-input" name="adsb" spellcheck="false" placeholder="receiver url (optional)"
-          aria-label="ADS-B receiver URL">
-      </div>
-      <div class="cmd-more">
-        <span class="flag">--ais</span>
-        <input id="ais-input" name="ais" spellcheck="false" placeholder="receiver url (optional)"
-          aria-label="AIS receiver URL">
-      </div>
-    </details>
     <ul id="ac" role="listbox" hidden></ul>
     <button type="submit" hidden>go</button>
   </form>
@@ -1627,20 +1593,17 @@
     <dt>the prompt</dt>
     <dd>A tiny REPL. A bare name switches to that station (or river). Flags:
       <b>--station</b>, <b>--river</b>, <b>--rivers</b>, <b>--rising</b>,
-      <b>--total</b>, <b>--adsb</b>, <b>--ais</b>, <b>--history 24h…all</b>,
+      <b>--total</b>, <b>--history 24h…all</b>,
       <b>--view</b>, <b>--export</b>, <b>--clear</b>, <b>--info</b>,
       <b>--help</b>. Press <b>/</b> to open the finder from anywhere, <b>h</b>
       for the manual page without typing; <b>Esc</b> dismisses help.</dd>
     <dt>keyboard</dt>
     <dd id="keymap"></dd>
     <dt>extras</dt>
-    <dd>Aircraft overhead from your own ADS-B receiver (<b>--adsb URL</b>) and real
-      river traffic on the waterline from your own AIS receiver (<b>--ais URL</b>,
-      AIS-catcher) — both URLs stay in your browser. The tab title and favicon
-      carry the live level, dark mode follows your system, the layout reflows
-      for the screen it is on, and the page installs as an app from the browser
-      menu. Should a gauge ever fall silent, the water-drop
-      buddy says so.</dd>
+    <dd>The tab title and favicon carry the live level, dark mode follows your
+      system, the layout reflows for the screen it is on, and the page installs
+      as an app from the browser menu. Should a gauge ever fall silent, the
+      water-drop buddy says so.</dd>
   </dl>
 </dialog>
 <dialog id="reportbox" closedby="any" aria-labelledby="reportbox-title">
@@ -1749,6 +1712,27 @@ const narrowTools = matchMedia('(max-width: 640px)');
   sync();
   narrowTools.addEventListener('change', sync);
 }
+// The receiver overlay (--adsb/--ais) was removed on 2026-09-07, but a reader
+// who ever set one still carries their home-network address in two localStorage
+// keys and in every bookmark and history entry switchStation wrote it into.
+// Nothing reads either any more — but `report issue` quotes the address bar, so
+// an old bookmark would carry a LAN address into a public issue. Drop both here,
+// before anything reads the URL. Deletable once no such bookmark can plausibly
+// still be in use.
+function dropReceiverParams() {
+  localStorage.removeItem('pegel.adsb');
+  localStorage.removeItem('pegel.ais');
+  const q = new URLSearchParams(location.search);
+  if (!q.has('adsb') && !q.has('ais')) return null;
+  q.delete('adsb');
+  q.delete('ais');
+  const qs = q.toString();
+  const url = qs ? '?' + qs : location.pathname;
+  history.replaceState(null, '', url);
+  return url;
+}
+dropReceiverParams();
+
 let station = (new URLSearchParams(location.search).get('station') || 'BONN').toUpperCase();
 // five mutually exclusive views: the single-station terminal, a whole-river
 // longitudinal profile, the rivers map listing every water at once, the
@@ -2112,10 +2096,6 @@ const state = {
   neighbors: [],    // km-ascending [prev?, self, next?] with elevation data
   flowLowKm: null,  // true = this water flows towards its low km; null until known
   weather: null,    // current weather at the station (open-meteo), or null if unavailable
-  aircraft: [],     // live ADS-B positions from the user's own receiver
-  adsbOk: null,     // null = off, true/false = last fetch result
-  ships: [],        // live AIS positions from the user's own receiver
-  aisOk: null,      // null = off, true/false = last fetch result
   archive: [],      // locally accumulated [timestampMs, cm] for this station
   error: null,
   help: null,       // set to a man-page string while the --help screen is shown
@@ -3106,85 +3086,6 @@ clearBtn.addEventListener('click', () => {
   }
 });
 
-// ---------- ADS-B (optional, own receiver via --adsb) ----------
-
-const ADSB_REFRESH_MS = 2500;
-let adsbRaw = new URLSearchParams(location.search).get('adsb')
-  || localStorage.getItem('pegel.adsb') || '';
-
-function adsbEndpoint(raw) {
-  if (!raw) return '';
-  let u = /^https?:\/\//.test(raw) ? raw : 'http://' + raw;
-  if (!u.endsWith('.json')) u = u.replace(/\/+$/, '') + '/data/aircraft.json';
-  return u;
-}
-
-async function loadAircraft() {
-  const url = adsbEndpoint(adsbRaw);
-  // Only the station scene draws aircraft (`sceneCraft`, `sceneReceivers`), so
-  // polling a receiver every 2.5 s from ?total, ?rising or the map spent a
-  // request and a full repaint on a mark nothing renders — the render loop the
-  // display contract rules out. The interval keeps ticking, so walking back
-  // into a station picks the traffic up on the next tick.
-  if (!url || mode !== 'station') { state.aircraft = []; state.adsbOk = null; return; }
-  try {
-    const d = await getJson(url);
-    state.aircraft = (d.aircraft || []).filter(a => a.lat != null && a.lon != null);
-    state.adsbOk = true;
-  } catch {
-    state.aircraft = [];
-    state.adsbOk = false;
-  }
-  scheduleRender();
-}
-
-// ---------- AIS (optional, own receiver via --ais) ----------
-
-const AIS_REFRESH_MS = 5000;
-const AIS_MAX_AGE_S = 600; // ships silent for 10+ min are harbor memories, not traffic
-let aisRaw = new URLSearchParams(location.search).get('ais')
-  || localStorage.getItem('pegel.ais') || '';
-
-// AIS-catcher's built-in web server serves the ship list at <root>/ships.json;
-// adsb.im images proxy it under /aiscatcher, so that base URL works as-is
-function aisEndpoint(raw) {
-  if (!raw) return '';
-  let u = /^https?:\/\//.test(raw) ? raw : 'http://' + raw;
-  if (!u.endsWith('.json')) u = u.replace(/\/+$/, '') + '/ships.json';
-  return u;
-}
-
-async function loadShips() {
-  const url = aisEndpoint(aisRaw);
-  // station-scene only, same as loadAircraft above — and at 5 s this was the
-  // second unconditional repaint riding on every view
-  if (!url || mode !== 'station') { state.ships = []; state.aisOk = null; return; }
-  try {
-    const d = await getJson(url);
-    // lat/lon are null until a position report came in; last_signal is seconds ago
-    state.ships = (d.ships || []).filter(s =>
-      s.lat != null && s.lon != null && (s.last_signal == null || s.last_signal <= AIS_MAX_AGE_S));
-    state.aisOk = true;
-  } catch {
-    state.ships = [];
-    state.aisOk = false;
-  }
-  scheduleRender();
-}
-
-function setAis(raw) {
-  const next = (raw ?? '').trim();
-  aisInput.value = next;
-  if (next === aisRaw) return;
-  aisRaw = next;
-  if (aisRaw) localStorage.setItem('pegel.ais', aisRaw);
-  else localStorage.removeItem('pegel.ais');
-  state.ships = [];
-  state.aisOk = null;
-  loadShips();
-  scheduleRender();
-}
-
 // ---------- grid helpers ----------
 
 function esc(s) { return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
@@ -3339,8 +3240,6 @@ const T = {
   keyCloud: 'overcast — 60 % cloud cover or more',
   keyRain: 'rain falling right now',
   keySnow: 'snow falling right now',
-  keyShip: 'a vessel your AIS receiver can see, placed along the reach',
-  keyPlane: 'an aircraft your ADS-B receiver can see, at its real altitude',
   keyBoat: 'a stand-in boat, drawn whenever there is water enough to float it',
   keyBoatAground: 'the stand-in boat, aground on the bed in this drought',
   keyBoatStuck: 'the stand-in boat, iced in',
@@ -3875,24 +3774,7 @@ function sceneModel() {
     flags,
     moon: flags.night && !flags.overcastNight ? moonPhase() : null,
     caption: sceneCaption(flags),
-    craft: sceneCraft(surface),
-    receivers: sceneReceivers(),
   };
-}
-
-// only shown to people who configured a receiver: "offline" is the whole point
-// of the line, so it must not vanish with the old header
-function sceneReceivers() {
-  const out = [];
-  if (state.adsbOk !== null) {
-    out.push({ kind: 'adsb', ok: state.adsbOk,
-      text: state.adsbOk ? `${state.aircraft.length} ${plural(state.aircraft.length, 'aircraft', 'aircraft')} overhead` : 'ADS-B receiver offline' });
-  }
-  if (state.aisOk !== null) {
-    out.push({ kind: 'ais', ok: state.aisOk,
-      text: state.aisOk ? `${state.ships.length} ${plural(state.ships.length, 'ship')} on the water` : 'AIS receiver offline' });
-  }
-  return out;
 }
 
 // the scene, said in words — the charm becomes information, and the SVG's
@@ -3910,65 +3792,6 @@ function sceneCaption(f) {
   if (f.windy) parts.push('windy');
   if (state.wt != null) parts.push(`${state.wt.toFixed(1)} °C`);
   return parts.join(' · ');
-}
-
-// aircraft and ships projected onto the river axis between the outermost
-// neighbours — unchanged maths, now in fractions instead of columns
-function sceneCraft(surface) {
-  const n = state.neighbors;
-  const out = { aircraft: [], ships: [] };
-  if (n.length < 2) return out;
-  // PEGELONLINE omits lat/lon for 57 of its 786 gauges (measured 2026-09-02).
-  // Taking the axis from the outermost neighbours regardless meant one of those
-  // made every coordinate NaN, and NaN fails every comparison — so `frac < 0 ||
-  // frac > 1` waved every ship through to be drawn at x = NaN. Build the reach
-  // from the neighbours that actually have a position, and treat a non-finite
-  // projection as off the reach rather than as inside it.
-  const located = n.filter(p => Number.isFinite(p.lat) && Number.isFinite(p.lon));
-  if (located.length < 2) return out;
-  const lowKmDown = flowLowKm(n);
-  const L = lowKmDown ? located[located.length - 1] : located[0];
-  const R = lowKmDown ? located[0] : located[located.length - 1];
-  const kx = Math.cos((L.lat * Math.PI) / 180);
-  const ax = (R.lon - L.lon) * kx, ay = R.lat - L.lat;
-  const len2 = ax * ax + ay * ay;
-  if (!len2) return out;
-  const project = (lon, lat) => {
-    const px = (lon - L.lon) * kx, py = lat - L.lat;
-    return { frac: (px * ax + py * ay) / len2,
-      lateralKm: (Math.abs(px * ay - py * ax) / Math.sqrt(len2)) * 111 };
-  };
-  const heads = (course) => {
-    const tr = (course * Math.PI) / 180;
-    return Math.sin(tr) * ax + Math.cos(tr) * ay > 0;
-  };
-  if (state.adsbOk !== null) {
-    for (const a of state.aircraft) {
-      const { frac, lateralKm } = project(a.lon, a.lat);
-      if (!Number.isFinite(frac) || frac < 0 || frac > 1 || lateralKm > 50) continue;
-      const alt = a.alt_baro === 'ground' ? 0 : (a.alt_baro || 0);
-      out.aircraft.push({
-        x: frac, y: Math.max(0.04, (1 - Math.min(alt, 42000) / 42000) * (surface - 0.14)),
-        right: heads(a.track ?? 0),
-        label: ((a.flight || '').trim() || a.hex || '') +
-          ' ' + (alt >= 5000 ? 'FL' + Math.round(alt / 100) : alt + 'ft'),
-      });
-    }
-  }
-  if (state.aisOk !== null) {
-    for (const s of state.ships) {
-      const { frac, lateralKm } = project(s.lon, s.lat);
-      // much tighter than the aircraft cutoff: ships are ON the river
-      if (!Number.isFinite(frac) || frac < 0 || frac > 1 || lateralKm > 2) continue;
-      out.ships.push({
-        x: frac,
-        right: heads(s.cog ?? s.heading ?? 0),
-        label: [(s.shipname || '').trim() || String(s.mmsi || ''),
-          s.speed != null ? Math.round(s.speed) + 'kn' : ''].filter(Boolean).join(' '),
-      });
-    }
-  }
-  return out;
 }
 
 const SCENE_W = 320, SCENE_H = 190;
@@ -4061,18 +3884,8 @@ function renderScene(vm) {
     p.push(`<line class="mark ${m.kind}" x1="0" y1="${Y(m.frac)}" x2="${SCENE_W}" y2="${Y(m.frac)}"/>`);
   }
 
-  // the boat, and any real traffic that displaces it
-  const ships = s.craft.ships;
-  if (ships.length) {
-    for (const sh of ships) {
-      const x = 14 + sh.x * (SCENE_W - 28);
-      p.push(`<g class="boat"${attr('transform', `translate(${x.toFixed(1)} ${surfY.toFixed(1)})${sh.right ? '' : ' scale(-1 1)'}`)}>` +
-        '<path d="M-11 0 l3 5 h16 l3 -5 Z"/></g>');
-      if (sh.label) {
-        p.push(`<text class="craft-lbl" x="${x.toFixed(1)}" y="${(surfY - 7).toFixed(1)}" text-anchor="middle">${esc(sh.label)}</text>`);
-      }
-    }
-  } else if (surfY > 26) {
+  // the boat, whenever there is water enough to float it
+  if (surfY > 26) {
     const cls = 'boat' + (f.icy ? ' stuck' : '') + (f.drought ? ' aground' : '');
     // aground in a drought it sits on the bed, otherwise it rides the surface
     const bx = f.icy ? SCENE_W * 0.6 : SCENE_W * 0.34;
@@ -4081,13 +3894,6 @@ function renderScene(vm) {
       `<g transform="translate(${bx.toFixed(1)} ${by.toFixed(1)})">` +
       '<path d="M-11 0 l3 5 h16 l3 -5 Z"/><path class="mast" d="M0 0 V-11 l7 4 l-7 3"/></g></g>');
   }
-  for (const a of s.craft.aircraft) {
-    const x = 10 + a.x * (SCENE_W - 20), y = a.y * SCENE_H;
-    p.push(`<g class="plane"${attr('transform', `translate(${x.toFixed(1)} ${y.toFixed(1)})${a.right ? '' : ' scale(-1 1)'}`)}>` +
-      '<path d="M-5 0 h8 l3 -3 v6 l-3 -3 M-1 -3 v6"/></g>');
-    p.push(`<text class="craft-lbl" x="${(x + (a.right ? 9 : -9)).toFixed(1)}" y="${(y + 2.5).toFixed(1)}"${attr('text-anchor', a.right ? 'start' : 'end')}>${esc(a.label)}</text>`);
-  }
-
   return svgWrap(`0 0 ${SCENE_W} ${SCENE_H}`,
     `<title>${esc(station)} right now</title><desc>${esc(vm.summary)}</desc>` + p.join(''),
     ' class="scene" preserveAspectRatio="none" role="img"');
@@ -4137,7 +3943,7 @@ function renderSceneKey(vm) {
   const starry = f.night && !f.overcastNight;
   const kinds = new Set([...s.marks, ...s.above, ...s.below].map(m => m.kind));
   // the boat's own condition in renderScene, in scene units
-  const boat = s.craft.ships.length === 0 && s.surface * SCENE_H > 26;
+  const boat = s.surface * SCENE_H > 26;
   return plateKey([
     { sw: line('surface'), label: T.keyNow },
     kinds.has('mean') && { sw: line('mark mean'), label: T.keyMeans },
@@ -4170,13 +3976,9 @@ function renderSceneKey(vm) {
       '<line x1="7" y1="2" x2="5.5" y2="7"/><line x1="11" y1="1" x2="9.5" y2="6"/></g>'), label: T.keyRain },
     f.snow && { sw: sw('<g class="snow"><circle cx="3" cy="3" r="1.4"/><circle cx="8" cy="6" r="1.4"/>' +
       '<circle cx="5" cy="9.5" r="1.4"/></g>'), label: T.keySnow },
-    s.craft.ships.length && { sw: sw('<g class="boat"><path d="M-11 0 l3 5 h16 l3 -5 Z"/></g>',
-      '-13 -2 26 9'), label: T.keyShip },
     boat && { sw: sw('<g class="boat"><path d="M-11 0 l3 5 h16 l3 -5 Z"/>' +
       '<path class="mast" d="M0 0 V-11 l7 4 l-7 3"/></g>', '-13 -13 26 20'),
       label: f.drought ? T.keyBoatAground : f.icy ? T.keyBoatStuck : T.keyBoat },
-    s.craft.aircraft.length && { sw: sw('<g class="plane"><path d="M-5 0 h8 l3 -3 v6 l-3 -3 M-1 -3 v6"/></g>',
-      '-7 -5 15 10'), label: T.keyPlane },
     vm.operatorNote && { note: vm.operatorNote, warn: true },
   ]);
 }
@@ -4813,9 +4615,7 @@ function renderStation(vm) {
     '</header>';
   const scene = `<section class="p-block"><h2 class="p-h2">${esc(T.sceneTitle)}</h2>` +
     `<div class="scene-wrap"><div class="scene-plot">${renderScene(vm)}</div>${renderSceneGutter(vm)}</div>` +
-    `<p class="scene-cap">${esc(vm.scene.caption)}` +
-    vm.scene.receivers.map(r => `<span class="rcv ${r.ok ? 'on' : 'off'}">${esc(r.text)}</span>`).join('') +
-    '</p>' +
+    `<p class="scene-cap">${esc(vm.scene.caption)}</p>` +
     renderSceneKey(vm) + '</section>';
   const u = vm.history.empty ? null : vm.history.insight;
   const readout = u
@@ -7004,14 +6804,7 @@ function runGridCmd(c) {
 
 const stationInput = document.getElementById('station-input');
 const riverInput = document.getElementById('river-input');
-const adsbInput = document.getElementById('adsb-input');
-const aisInput = document.getElementById('ais-input');
 stationInput.value = station;
-adsbInput.value = adsbRaw;
-aisInput.value = aisRaw;
-// the receiver URLs are expert wiring — folded away unless this visitor uses
-// them, so the prompt reads as the two fields that actually navigate
-document.getElementById('prompt-more').open = !!(adsbRaw || aisRaw);
 
 // the river field always shows the water in view: the river itself in river mode,
 // otherwise the current station's water (filled once its info arrives)
@@ -7025,7 +6818,7 @@ const syncStationInput = () => { stationInput.value = mode === 'river' ? '' : st
 let refreshTimer = null;
 
 // switch station in-place: no full reload, just reset per-station state and refetch
-function switchStation(name, adsb, push = true) {
+function switchStation(name, push = true) {
   dismissHelp(); // a station switch always leaves the man page
   dismissSuggest();
   // any non-station mode must fall through even when the target station is unchanged,
@@ -7033,22 +6826,15 @@ function switchStation(name, adsb, push = true) {
   // on would leave the old view on screen
   const wasElsewhere = mode !== 'station';
   const next = resolveStation(name || station) || station;
-  const nextAdsb = (adsb ?? adsbRaw).trim();
-  if (!wasElsewhere && next === station && nextAdsb === adsbRaw) return;
-  const adsbChanged = nextAdsb !== adsbRaw;
+  if (!wasElsewhere && next === station) return;
 
   mode = 'station';
   if (viewMode === 'wave') viewMode = 'live'; // wave is river-only; years survives the switch
   station = next;
-  adsbRaw = nextAdsb;
-  if (adsbRaw) localStorage.setItem('pegel.adsb', adsbRaw);
-  else localStorage.removeItem('pegel.adsb');
 
   if (push) {
     const q = new URLSearchParams();
     q.set('station', station);
-    if (adsbRaw) q.set('adsb', adsbRaw);
-    if (aisRaw) q.set('ais', aisRaw);
     if (historyKey !== HISTORY_DEFAULT) q.set('history', historyKey);
     if (viewMode !== 'live') q.set('view', viewMode);
     history[push === 'replace' ? 'replaceState' : 'pushState'](null, '', '?' + q.toString());
@@ -7091,7 +6877,6 @@ function switchStation(name, adsb, push = true) {
   }
 
   stationInput.value = station;
-  adsbInput.value = adsbRaw;
   // reflect the station's water at once from the cached list; loadData confirms it
   const meta = stationMeta.get(station);
   if (meta && meta.w) riverInput.value = meta.w;
@@ -7101,7 +6886,6 @@ function switchStation(name, adsb, push = true) {
   // synchronously (no live feed, no poll), and that has to be the last word
   refreshTimer = setInterval(loadData, REFRESH_MS);
   loadData();
-  if (adsbChanged) loadAircraft();
 
   // the chip row is rebuilt now (the station just left becomes a chip), but the
   // station being entered only earns its own entry once loadData brings a reading
@@ -7330,25 +7114,23 @@ function dismissHelp() {
 
 // parses a typed command line into flag values. Flags are matched case-insensitively
 // (the station input is visually uppercased by CSS, and typed commands may come in
-// any case); --station/--adsb/--history each take the space-separated words up to the
+// any case); --station/--river/--history/--view each take the space-separated words up to the
 // next --flag. Returns undefined for a flag that wasn't present at all, so callers can
-// tell "not given" (undefined) apart from "given empty" (''), e.g. --adsb clearing.
+// tell "not given" (undefined) apart from "given empty" ('').
 function parseCommand(raw) {
   const tokens = (raw || '').trim().split(/\s+/).filter(Boolean);
-  const cmd = { station: undefined, adsb: undefined, ais: undefined, history: undefined, river: undefined, rivers: false, rising: false, total: false, view: undefined, help: false, export: false, clear: false, info: false, unknownFlag: null };
+  const cmd = { station: undefined, history: undefined, river: undefined, rivers: false, rising: false, total: false, rain: false, view: undefined, help: false, export: false, clear: false, info: false, unknownFlag: null };
   let i = 0;
   while (i < tokens.length) {
     const tok = tokens[i];
     if (!tok.startsWith('--')) { i++; continue; } // stray non-flag token: ignore
     const flag = tok.slice(2).toLowerCase();
     i++;
-    const takesValue = flag === 'station' || flag === 'adsb' || flag === 'ais' || flag === 'history' || flag === 'river' || flag === 'view';
+    const takesValue = flag === 'station' || flag === 'history' || flag === 'river' || flag === 'view';
     const words = [];
     if (takesValue) while (i < tokens.length && !tokens[i].startsWith('--')) { words.push(tokens[i]); i++; }
     const value = words.join(' ');
     if (flag === 'station') cmd.station = value;
-    else if (flag === 'adsb') cmd.adsb = value;
-    else if (flag === 'ais') cmd.ais = value;
     else if (flag === 'history') cmd.history = value.toLowerCase();
     else if (flag === 'river') cmd.river = value;
     else if (flag === 'rivers') cmd.rivers = true; // plural: the map, not one river
@@ -7376,7 +7158,7 @@ function helpText(unknownFlag) {
     '',
     'SYNOPSIS',
     '    > pegel [STATION] [--station NAME] [--river NAME] [--rivers] [--rising]',
-    '            [--total] [--rain] [--adsb URL] [--ais URL] [--history RANGE] [--view MODE]',
+    '            [--total] [--rain] [--history RANGE] [--view MODE]',
     '            [--export] [--clear] [--info] [--help]',
     '',
     'OPTIONS',
@@ -7390,8 +7172,6 @@ function helpText(unknownFlag) {
     '                      (the Σ/Δ chips switch to net daily change, ?total&diff)',
     '    --rain            rainfall per NRW basin, day by day, from the LANUK mirror',
     '                      (the 30D/60D/90D chips widen the window, ?rain&w=90)',
-    '    --adsb URL        set your local ADS-B receiver URL; no value clears it',
-    '    --ais URL         set your local AIS receiver URL (AIS-catcher); no value clears it',
     `    --history RANGE   set the history window: ${HISTORY_PRESETS.map(p => p.k).join(' ')} (default ${HISTORY_DEFAULT})`,
     '    --view MODE       live | years (station statistics) | wave (river heatmap) | list (the waters A-Z, with --rivers)',
     '    --export          download the whole local archive as JSON',
@@ -7424,13 +7204,12 @@ function runCommand(raw) {
     syncStationInput();
     return;
   }
-  if (cmd.ais !== undefined) setAis(cmd.ais);
   if (cmd.rising) switchRising();
   else if (cmd.rivers) switchRivers();
   else if (cmd.total) switchTotal();
   else if (cmd.rain) switchRain();
   else if (cmd.river !== undefined) switchRiver(cmd.river);
-  else if (cmd.station !== undefined || cmd.adsb !== undefined) switchStation(cmd.station, cmd.adsb);
+  else if (cmd.station !== undefined) switchStation(cmd.station);
   if (cmd.history !== undefined && HISTORY_PRESETS.some(p => p.k === cmd.history)) setHistory(cmd.history);
   if (cmd.view !== undefined && VIEW_KEYS.includes(cmd.view)) setView(cmd.view);
   if (cmd.export) document.getElementById('export-btn').click();
@@ -7510,7 +7289,6 @@ function applyPrompt() {
   acClose();
   const v = stationInput.value;
   if (v.includes('--')) return runCommand(v);
-  setAis(aisInput.value); // the ais field applies on every submit, like the adsb field
   dismissSuggest();
   // a plain name that is a known river (and not a station) opens the river profile
   if (knownStations.size && !knownStations.has(resolveStation(v))) {
@@ -7518,11 +7296,11 @@ function applyPrompt() {
     if (water) return switchRiver(water);
     const matches = findMatches(v);
     if (matches.length === 1) {
-      return matches[0].river ? switchRiver(matches[0].name) : switchStation(matches[0].name, adsbInput.value);
+      return matches[0].river ? switchRiver(matches[0].name) : switchStation(matches[0].name);
     }
     if (matches.length > 1) return showSuggest(v, matches);
   }
-  switchStation(v, adsbInput.value);
+  switchStation(v);
 }
 
 // A link is the app's share surface, so ?station=… must take the same resolution
@@ -7543,7 +7321,7 @@ function resolveDeepLink(live) {
     if (matches.length === 1 && !matches[0].river) target = matches[0].name.toUpperCase();
   }
   if (target) {
-    if (live) { switchStation(target, adsbInput.value, 'replace'); return false; }
+    if (live) { switchStation(target, 'replace'); return false; }
     station = target;
     applyStationChrome();
     stationInput.value = station;
@@ -7592,7 +7370,7 @@ const stationLabel = name => {
   const md = stationMeta.get(name);
   return md ? [md.w, md.km != null ? 'km ' + Math.round(md.km) : ''].filter(Boolean).join(' · ') : '';
 };
-const stationField = { input: stationInput, match: q => matchNames(q, knownStations, stationLabel), choose: n => switchStation(n, adsbInput.value) };
+const stationField = { input: stationInput, match: q => matchNames(q, knownStations, stationLabel), choose: n => switchStation(n) };
 const riverField = { input: riverInput, match: q => matchNames(q, knownWaters, () => 'whole river'), choose: n => switchRiver(n) };
 
 const ac = document.getElementById('ac');
@@ -7676,11 +7454,6 @@ ac.addEventListener('mousedown', e => {
 });
 for (const el of [stationInput, riverInput]) el.addEventListener('blur', () => setTimeout(acClose, 150));
 window.addEventListener('resize', acClose);
-// adsb/ais have no dropdown, but Enter still applies the whole prompt
-for (const el of [adsbInput, aisInput]) {
-  el.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); applyPrompt(); } });
-}
-
 document.getElementById('prompt').addEventListener('submit', e => {
   e.preventDefault();
   (document.activeElement === riverInput ? applyRiver : applyPrompt)();
@@ -7702,7 +7475,7 @@ function actOnGridTarget(st) {
   else if (st === 'rivers') switchRivers();
   else if (st === 'total') switchTotal();
   else if (st === 'rain') switchRain();
-  else switchStation(st, adsbInput.value);
+  else switchStation(st);
 }
 // Plate targets are real links/buttons: one delegated handler (app bar, crumbs,
 // finder rows and in-plate marks alike) dispatches them through the same
@@ -7756,7 +7529,7 @@ function stepNeighbour(dir) {
   const ordered = [...n].sort((a, b) => (lowKmDown ? 1 : -1) * (a.km - b.km));
   const i = ordered.findIndex(p => p.name === station);
   const next = ordered[i + dir];
-  if (next) switchStation(next.name, adsbInput.value);
+  if (next) switchStation(next.name);
 }
 
 function inField() {
@@ -7794,7 +7567,7 @@ document.addEventListener('keydown', e => {
   if (k === '0' && mode === 'station') { e.preventDefault(); setHistory('all'); return; }
   if (k === '[') { e.preventDefault(); stepNeighbour(-1); return; }
   if (k === ']') { e.preventDefault(); stepNeighbour(1); return; }
-  if (k === 'g') { e.preventDefault(); switchStation(station, adsbInput.value); return; }
+  if (k === 'g') { e.preventDefault(); switchStation(station); return; }
   if (k === 'm') { e.preventDefault(); switchRivers(); return; }
   if (k === 'r') { e.preventDefault(); switchRising(); return; }
   if (k === 't') { e.preventDefault(); switchTotal(); return; }
@@ -7813,10 +7586,7 @@ window.addEventListener('popstate', () => {
   else if (p.has('total')) { totalSyncFromUrl(p); switchTotal(false); }
   else if (p.has('rain')) { rainSyncFromUrl(p); switchRain(false); }
   else if (p.get('river')) switchRiver(p.get('river'), false);
-  // NOT `|| ''` — switchStation reads an empty string as the documented
-  // "clear my receiver" gesture, so stepping back onto any entry without
-  // ?adsb= used to delete a stored receiver URL for good
-  else switchStation(p.get('station') || 'BONN', p.get('adsb') ?? adsbInput.value, false);
+  else switchStation(p.get('station') || 'BONN', false);
   // restore the sub-view AFTER the mode is back, so its mode-guard sees the truth
   const v = (p.get('view') || 'live').toLowerCase();
   if (VIEW_KEYS.includes(v)) setView(v, false);
@@ -8004,7 +7774,7 @@ function lanukIndex() {
 stationInput.addEventListener('change', () => {
   if (stationInput.value.includes('--')) return; // half-typed command: let Enter/submit parse it
   const resolved = resolveStation(stationInput.value);
-  if (resolved !== station && knownStations.has(resolved)) switchStation(resolved, adsbInput.value);
+  if (resolved !== station && knownStations.has(resolved)) switchStation(resolved);
   else if (!knownStations.has(resolved) && resolveWater(stationInput.value)) switchRiver(resolveWater(stationInput.value));
   else if (knownStations.size) syncStationInput(); // invalid/abandoned/ASCII spelling: snap back
 });
@@ -8127,7 +7897,7 @@ function renderRecent() {
     b.textContent = n;
     const m = stationMeta.get(n);
     if (m && (m.w || m.km != null)) b.title = [m.w, m.km != null ? 'km ' + Math.round(m.km) : ''].filter(Boolean).join(' · ');
-    b.addEventListener('click', () => switchStation(n, adsbInput.value));
+    b.addEventListener('click', () => switchStation(n));
     nav.append(b);
   }
 }
@@ -8502,17 +8272,6 @@ function reportTitle() {
   return mode === 'river' ? `bug report: river ${state.river}` : `bug report: ${station}`;
 }
 
-// switchStation/switchRiver persist ?adsb=/?ais= straight into the URL, so the
-// page's own address can carry the user's home network receiver — strip those
-// two params before the URL is ever quoted in a report
-function sanitizedReportUrl() {
-  const q = new URLSearchParams(location.search);
-  q.delete('adsb');
-  q.delete('ais');
-  const qs = q.toString();
-  return location.origin + location.pathname + (qs ? '?' + qs : '');
-}
-
 // returns an ordered list of { name, required, text } sections; `required`
 // sections are never dropped by the GitHub-URL trimmer
 function buildReportSections(note) {
@@ -8522,7 +8281,7 @@ function buildReportSections(note) {
   const vh = document.documentElement.clientHeight || 0;
 
   const context = [
-    `- URL: ${sanitizedReportUrl()}`,
+    `- URL: ${location.origin + location.pathname + location.search}`,
     `- station: ${station}`,
     `- mode: ${mode}`,
   ];
@@ -8558,13 +8317,6 @@ function buildReportSections(note) {
     `- state: ${cur ? (cur.stateMnwMhw || 'unknown') : 'n/a'}`,
   ];
 
-  // configured means "a URL is set", regardless of live fetch result — never
-  // the URL itself, it's a home network address
-  const receivers = [
-    `- adsb configured: ${!!adsbRaw}`,
-    `- ais configured: ${!!aisRaw}`,
-  ];
-
   const app = [
     // startsWith, not a literal placeholder comparison: the pages stamp sed
     // replaces every matching line, which would turn that guard always-true
@@ -8579,7 +8331,6 @@ function buildReportSections(note) {
     { name: 'viewport', required: false, text: viewport.join('\n') },
     { name: 'diagnostics', required: false, text: diagnostics.join('\n') },
     { name: 'live values', required: false, text: live.join('\n') },
-    { name: 'receivers', required: false, text: receivers.join('\n') },
     { name: 'app', required: false, text: app.join('\n') },
     { name: 'reporter note', required: false, text: note && note.trim() ? note.trim() : '_(no note provided)_' },
   ];
@@ -8832,10 +8583,6 @@ if (mode === 'rivers') {
   loadData();
 }
 setInterval(loadWeather, WEATHER_REFRESH_MS);
-loadAircraft();
-setInterval(loadAircraft, ADSB_REFRESH_MS);
-loadShips();
-setInterval(loadShips, AIS_REFRESH_MS);
 // rAF instead of setInterval: the browser pauses it in hidden tabs for free.
 // Under prefers-reduced-motion the scene is static (t = 0) and only redraws
 // when data actually changed, instead of 8x per second.

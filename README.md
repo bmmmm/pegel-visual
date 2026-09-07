@@ -39,8 +39,7 @@ _      _      _      _      _      _      _      _
   comes from [open-meteo](https://open-meteo.com), refreshed every 15
   minutes; after sunset, computed for the station's real coordinates, the
   moon rises in its current phase and stars twinkle over the water — unless
-  it is overcast. Your own ADS-B and AIS receivers can put real aircraft and
-  ships into the picture (see below).
+  it is overcast.
 - **automatic dark mode** (`light-dark()`, follows your system); the tab
   title and favicon carry the live level — the buddy's waterline tracks
   MNW…MHW.
@@ -89,9 +88,8 @@ _      _      _      _      _      _      _      _
   view), `map`, `rising`, `totals`, `forecast gate`, `⌕ find` and `ⓘ`; a
   breadcrumb trail (`All waters ▸ RHEIN ▸ BONN`); a finder dialog
   with search, browse-by-water, recents and arrow-key navigation; a footer
-  with `info`, `report issue` (builds a bug report from the live state,
-  receiver URLs stripped, and hands it to GitHub or the clipboard), `share`,
-  `source` and Ko-fi. Every empty, loading or error state is drawn by the
+  with `info`, `report issue` (builds a bug report from the live state and
+  hands it to GitHub or the clipboard), `share`, `source` and Ko-fi. Every empty, loading or error state is drawn by the
   water-drop buddy, who says what is wrong.
 
 ## Any station
@@ -122,8 +120,6 @@ Flags are matched case-insensitively and combine, e.g. `--station KÖLN
 - `--rising` — the rising board (same as `rising` or `?rising`)
 - `--total` — the total overview (same as `totals` or `?total`)
 - `--rain` — rainfall per NRW basin (same as `rain` or `?rain`)
-- `--adsb URL` — set your ADS-B receiver URL; `--adsb` with no value clears it
-- `--ais URL` — set your AIS receiver URL; `--ais` with no value clears it
 - `--history RANGE` — the history window: `24h`, `3d`, `7d`, `15d`, `30d`,
   `1y`, `5y`, `10y`, `20y`, `all`
 - `--view MODE` — the sub-view: `years` (station statistics), `wave` (river
@@ -329,30 +325,6 @@ mouth. The bulk of the data comes from the hosted daily archive; the newest
 flight, and a river with more than 24 gauges is sampled evenly along its
 length (the foot says `N of M gauges sampled`). Every row is a click target
 into that station.
-
-## Aircraft overhead (optional, bring your own receiver)
-
-If you run an ADS-B receiver (tar1090 / readsb / adsb.im image), put its URL
-into the `--adsb` field of the prompt (e.g. `http://10.0.0.5:8080`). Live
-aircraft within 50 km of the river axis are projected onto it between the
-neighbour stations and drawn in the sky at their barometric altitude, with
-callsign and flight level; the scene caption counts them (`3 aircraft
-overhead`, or `ADS-B receiver offline`). The URL is stored in your browser's
-localStorage only — it never leaves your machine, and a bug report strips it.
-Note: the public HTTPS page cannot fetch a plain-http LAN receiver (mixed
-content); serve the page locally or put the receiver behind HTTPS.
-
-## Ships on the river (optional, bring your own receiver)
-
-If you run an [AIS-catcher](https://github.com/jvde-github/AIS-catcher)
-receiver, put its web server URL into the `--ais` field (e.g.
-`http://10.0.0.5:8080/aiscatcher` on an adsb.im image — the ship list is
-fetched from `<url>/ships.json` every 5 s). Real river traffic within ~2 km
-of the river axis is drawn right on the waterline: a direction-aware hull
-with ship name (or MMSI) and speed in knots, and the scene caption says
-`2 ships on the water`. While real ships are in view, the decorative boat
-politely yields the river. The URL stays in your browser's localStorage; the
-same mixed-content caveat as for ADS-B applies.
 
 ## Where the data comes from
 
