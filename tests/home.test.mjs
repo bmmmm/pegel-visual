@@ -255,17 +255,42 @@ test('the refresh poll asks for a delta, not a second full window', async () => 
 // ---------- the strings, budgeted here rather than in a browser ----------
 
 test('nothing above the drawing can grow enough to push it off the first screen', async () => {
-  const { app } = await home();
+  const { app, html } = await home();
   // A layout measured on one machine is not a measurement of the CI runner —
   // same Chrome, different fonts, and gate-check's "whole on the first screen"
-  // once went 819 px here and 884 px there. So the budget lives in a unit test,
-  // which runs the same everywhere, and the browser only asserts that the
-  // drawing starts on the first screen at all.
-  const vm = app.run('stationViewModel()');
-  assert.ok(app.run('screenSummary()').length <= 160, 'the summary line');
-  assert.ok(vm.scene.caption.length <= 120, `the scene caption: ${vm.scene.caption}`);
-  const chips = app.run('HISTORY_PRESETS.map(p => p.label).concat([T.yearsChip])');
-  for (const c of chips) assert.ok(c.length <= 8, `chip label ${c}`);
+  // once went 819 px here and 884 px there. So the budget lives here, where it
+  // runs the same everywhere, and the browser only asserts that the drawing
+  // starts on the first screen at all.
+  //
+  // It has to budget what is ACTUALLY above the drawing, which is the header and
+  // the section's h2 — and nothing else. The obvious candidates are decoys: the
+  // `.vh` summary is `position:absolute` at 1×1 px and occupies no height, and
+  // the scene caption and the range chips are rendered BELOW `.scene-wrap`.
+  // A budget on those three passes while a fourth fact row pushes the drawing
+  // down, which is the whole failure it is supposed to stand in for.
+  const head = html.slice(html.indexOf('<header class="p-head station-head">'), html.indexOf('</header>') + 9);
+  assert.ok(head.includes('hero-n'), 'the header is where this test thinks it is');
+  const headText = head.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+  assert.ok(headText.length <= 140, `the header above the drawing is ${headText.length} chars: ${headText}`);
+
+  // the facts wrap by row, so their COUNT is the height, not their text. Three
+  // on a live BONN (trend, state, flow); a stale reading adds a fourth.
+  const rows = (head.match(/<div><dt>/g) || []).length;
+  assert.ok(rows <= 4, `${rows} fact rows above the drawing`);
+  assert.ok(app.run('T.sceneTitle').length <= 28, 'the section heading');
+});
+
+test('the flow direction is fitted over the whole water, not the three neighbours', async () => {
+  const { app } = await home();
+  // neighbors-rhein.json is trimmed to 9 gauges, and this is the one thing that
+  // trim could quietly break: downstreamIsLowKm is fitted over every gauge zero
+  // on the water precisely BECAUSE three adjacent ones read the river as flowing
+  // uphill near a mouth. Without an assertion the trim would be free to shrink
+  // to the three picks and nothing would notice.
+  assert.equal(app.run('state.flowLowKm'), false, 'the Rhein runs towards its high km');
+  assert.deepEqual(app.run('state.neighbors.map(n => n.name)'), ['OBERWINTER', 'BONN', 'KÖLN']);
+  const withZero = fixtures.neighbours.filter(s => (s.timeseries || []).some(t => t.shortname === 'W' && t.gaugeZero));
+  assert.ok(withZero.length >= 6, `only ${withZero.length} gauge zeros survive the trim — the fit needs a river, not a neighbourhood`);
 });
 
 // ---------- the fixtures themselves ----------

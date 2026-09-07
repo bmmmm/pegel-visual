@@ -84,7 +84,8 @@ own script tree, needed when working on it and not before. Moved verbatim.
   the element is marked (`silentToggles`), not the moment. With a flag, a chip
   clicked while two panels were open wrote `#method` into the URL instead of
   the drawing it had just changed.
-- **Two gate-check habits.** Its `click()` helper `scrollIntoView`s the target
+- **Two gate-check habits.** The `click()` helper (in `scripts/lib/cdp.mjs` since
+  the browser checks were de-duplicated) `scrollIntoView`s the target
   first, so it can never measure whether the PAGE moved — dispatch the mouse
   events where the element already sits. And checks that use `replaceState` go
   LAST in the sequence: replaceState edits the current history entry, so

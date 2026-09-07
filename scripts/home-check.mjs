@@ -40,10 +40,13 @@
 // a script — see the project notes.)
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { sleep, serve, chrome, session, checker, helpers, killChildren } from './lib/cdp.mjs';
 import { CLOCK, scenario, fixtures, routeFor, EXPECTED } from '../tests/fixtures/home/router.mjs';
 
-const ROOT = resolve(new URL('..', import.meta.url).pathname);
+// fileURLToPath, not .pathname: a checkout under a path with a space arrives
+// percent-encoded and http.server would then serve a directory that is not this one
+const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const args = Object.fromEntries(process.argv.slice(2).map((a, i, all) => a.startsWith('--') ? [a.slice(2), all[i + 1] && !all[i + 1].startsWith('--') ? all[i + 1] : true] : []).filter(x => x.length));
 const shots = resolve(args.shots || join(ROOT, 'tmp-shots', 'home-check'));
 mkdirSync(shots, { recursive: true });
@@ -152,17 +155,27 @@ async function until(s, expr, want, tries = 40) {
 // The page paints itself or it does not. No renderNow(), and a predicate rather
 // than a sleep — with the last thing seen carried into the failure line, because
 // "the page never rendered" is unreadable without it.
+//
+// It reads the hero ELEMENT, not the screen's text. "88" appears in the profile
+// as KÖLN's km 688, so a text search finds the reading on a plate that never
+// printed one: blanking hero-n left this whole script green while it went on
+// reporting "hero 88". The house rule about anchoring at the element, one level
+// below where it usually bites.
 async function painted(s, want, tries = 60) {
-  let last = '';
+  let last = { txt: '', hero: null };
   for (let i = 0; i < tries; i++) {
-    last = await s.evaluate(`(document.getElementById('screen') || {}).innerText || ''`).catch(() => '');
+    last = await s.evaluate(`(() => {
+      const sc = document.getElementById('screen');
+      const h = sc && sc.querySelector('.hero .hero-n');
+      return { txt: sc ? sc.innerText : '', hero: h ? h.textContent.trim() : null };
+    })()`).catch(() => last);
     if (want(last)) return { ok: true, last };
     await sleep(250);
   }
   return { ok: false, last };
 }
 
-const isPlate = t => !/loading|one moment/i.test(t) && t.includes(LEVEL);
+const isPlate = v => v.hero === LEVEL;
 
 async function run(cdp, url, vp) {
   console.log(`\n== ${vp.name} (${vp.width}×${vp.height}${vp.mobile ? ', mobile, coarse pointer' : ''}${vp.dark ? ', dark' : ''})`);
@@ -175,26 +188,33 @@ async function run(cdp, url, vp) {
   //    with the data already in state — and no Node test can see the difference.
   const first = await painted(s, isPlate);
   check(first.ok, `${tag} the page paints itself, with no renderNow() from here`,
-    first.ok ? `hero ${LEVEL}` : `#screen still reads: ${JSON.stringify(first.last.slice(0, 120))}`);
+    first.ok ? `hero ${first.last.hero}` : `hero ${first.last.hero}, #screen reads ${JSON.stringify(first.last.txt.slice(0, 100))}`);
   if (!first.ok) { await s.close(); return; }
 
   // 2. the ledger, from both ends. The page paints as soon as the gauge is
   //    there, while the profile's fetches are still out, so wait for the set to
   //    close rather than reading it at the first frame — a ledger measured mid
   //    flight reports a page that never asked.
-  const done = [...new Set(EXPECTED)];
+  const done = [...new Set(EXPECTED)].sort();
   await until(s, '1', () => done.every(n => asked.includes(n)), 24);
   check(unexpected.length === 0, `${tag} every request a cold boot makes is one the fixtures describe`, unexpected.join(', '));
-  const missing = done.filter(n => !asked.includes(n));
-  check(missing.length === 0, `${tag} and every fixture was actually asked for`, `never requested: ${missing.join(', ')}`);
+  // set EQUALITY, like the Node side: "every expected one arrived" alone lets a
+  // new request that happens to match an existing route in unremarked
+  const seen = [...new Set(asked)].sort();
+  const same = seen.length === done.length && seen.every((n, i) => n === done[i]);
+  check(same, `${tag} and the set it asked for is exactly the set described`,
+    same ? '' : `missing ${done.filter(n => !seen.includes(n)).join(', ') || '—'}; extra ${seen.filter(n => !done.includes(n)).join(', ') || '—'}`);
   // The archive is same-origin, so this reads the LOCAL side of the ledger. It
   // was worth finding out the hard way: with the check written against the API
   // ledger it went green while the page happily fetched the archive, and only a
   // 404 from the bare worktree made the run fail at all — on a checkout that has
   // archive/ lying around, nothing would have complained.
   // the two hosted data trees — NOT `manifest`, which also names the PWA's
-  // manifest.webmanifest and made this fire on a perfectly good page
-  const arc = local.filter(p => /^\/(archive|nrw|nrw-hires)\//.test(p));
+  // manifest.webmanifest and made this fire on a perfectly good page. Matched
+  // anywhere in the path, not anchored: under --url the site can sit below a
+  // prefix (/pegel-visual/archive/…), and an anchored pattern would go quietly
+  // blind exactly there.
+  const arc = local.filter(p => /(^|\/)(archive|nrw|nrw-hires)\//.test(p));
   check(arc.length === 0, `${tag} the start page fetches no archive`, arc.slice(0, 3).join(', '));
 
   // 3. overflow, against the EMULATED width — window.innerWidth grows with the
@@ -205,12 +225,17 @@ async function run(cdp, url, vp) {
   // a wave a full scene width past its box on purpose — every animated mark
   // would report as sticking out, which is why className there is not even a
   // string. What overflows a layout is the layout's own boxes.
-  const wide = await s.evaluate('[...document.querySelectorAll("#screen *")].filter(e => !(e.ownerSVGElement || e.tagName === "svg") && e.checkVisibility() && !e.closest(".wave-wrap") && !e.closest(".tblwrap") && e.getBoundingClientRect().right > window.innerWidth + 1).map(e => e.tagName + "." + e.className).slice(0, 5)');
+  // …and against the emulated width HERE too. window.innerWidth is not a
+  // constant on a phone: measured with a 900 px box injected at 390×844, it grew
+  // to 925 and this selector returned [] — the check could not go red on the one
+  // viewport it exists for. The line above says so; this line used to ignore it.
+  const wide = await s.evaluate(`[...document.querySelectorAll("#screen *")].filter(e => !(e.ownerSVGElement || e.tagName === "svg") && e.checkVisibility() && !e.closest(".wave-wrap") && !e.closest(".tblwrap") && e.getBoundingClientRect().right > ${vp.width} + 1).map(e => e.tagName + "." + e.className).slice(0, 5)`);
   check(wide.length === 0, `${tag} nothing sticks out to the right`, wide.join(', '));
 
-  // 4. the drawing, and the key that has to name it. Anchored at .scene-plot
-  //    against .p-key .sw: a swatch reuses the drawing's classes AND its element,
-  //    so anchoring at svg.scene would compare the legend with itself.
+  // 4. the drawing exists and has a box, and no legend swatch is an empty one.
+  //    Anchored at .scene-plot rather than svg.scene because a swatch reuses the
+  //    drawing's classes AND its element — but note this is not the legend
+  //    COVERAGE check; that one is mechanical and lives in tests/logic.test.mjs.
   const plot = await rect('#screen .scene-plot svg');
   check(!!plot && plot.w > 0 && plot.h > 0, `${tag} the scene is drawn`, plot ? `${Math.round(plot.w)}×${Math.round(plot.h)}` : 'no .scene-plot svg');
   // no pixel budget here: a layout measured on a Mac is not a measurement of the
@@ -269,8 +294,18 @@ async function run(cdp, url, vp) {
     const after = await s.evaluate('history.length');
     check(after === before, `${tag} and it replaces rather than stacking a history entry`, `${before} → ${after}`);
 
-    // the shareability claim, exercised the only way that proves it: load the
-    // URL cold and see whether it comes back as the same view
+    // The shareability claim, exercised the only way that proves it: load the
+    // URL in a browser that has never seen this site.
+    //
+    // COLD MEANS COLD. setHistory also writes the range to localStorage, and the
+    // boot reads `?history=` OR that key (index.html, historyKey). Reloading
+    // without wiping storage therefore proves nothing about the URL: with the
+    // whole ?history= parse deleted from the boot, this still came up 24H,
+    // straight out of the local preference. Wipe first, and the check is about
+    // the link a reader pasted rather than about the browser they pasted it in.
+    await s.send('Storage.clearDataForOrigin', { origin: new URL(url).origin, storageTypes: 'all' });
+    await s.send('Page.navigate', { url: 'about:blank' });
+    await sleep(200);
     await s.send('Page.navigate', { url: url.replace(/\/$/, '/') + '?history=24h' });
     const shared = await painted(s, isPlate);
     const sharedLit = await until(s, LIT, v => v.includes('cmd:h:24h'));
@@ -295,13 +330,13 @@ async function run(cdp, url, vp) {
 async function runError(cdp, url) {
   console.log('\n== error (desktop, /stations/BONN.json → 500)');
   const { s } = await open(cdp, url, { name: 'error', width: 1240, height: 900, failInfo: true });
-  const got = await painted(s, t => /No reading/i.test(t));
-  check(got.ok, 'error: a failing station call raises the error plate', got.ok ? '' : JSON.stringify(got.last.slice(0, 120)));
+  const got = await painted(s, v => /No reading/i.test(v.txt));
+  check(got.ok, 'error: a failing station call raises the error plate', got.ok ? '' : JSON.stringify(got.last.txt.slice(0, 120)));
   if (got.ok) {
     const retry = await s.evaluate(`!!document.querySelector('#screen [data-nav="cmd:retry"]')`);
     check(retry, 'error: and it offers a way out');
-    check(!(await s.evaluate(`document.getElementById('screen').innerText.includes(${JSON.stringify(LEVEL)})`)),
-      'error: no stale reading is left standing under it');
+    // the hero ELEMENT, not a text search: "88" also occurs as KÖLN's km 688
+    check(got.last.hero === null, 'error: no stale reading is left standing under it', String(got.last.hero));
   }
   await s.close();
 }

@@ -25,18 +25,39 @@ export const freePort = () => new Promise((res, rej) => {
 });
 
 // every child this module spawns, so a caller can take them all down in one
-// `finally` — a leaked python3 holds the port, a leaked Chrome holds a profile
+// `finally` — a leaked python3 holds the port, a leaked Chrome holds a profile.
+// The profiles are removed here as well as on the child's `exit`: a script that
+// calls process.exit() right after this never reaches that event handler.
 export const children = [];
-export const killChildren = () => { for (const c of children) c.kill(); };
+const profiles = [];
+export const killChildren = () => {
+  for (const c of children) c.kill();
+  // Best effort, and never fatal: a Chrome that was killed a millisecond ago is
+  // still writing into its profile, so this races and ENOTEMPTYs. Letting that
+  // throw out of a caller's `finally` would replace the run's real exit code
+  // with a crash — a green check reported as a failure, over a temp directory
+  // the OS sweeps anyway.
+  for (const p of profiles) { try { rmSync(p, { recursive: true, force: true }); } catch { /* the OS gets it */ } }
+};
 
 // `url` short-circuits the whole thing: pointing a check at the deployed page
 // (GATE_BASE_URL, LANUK_BASE_URL, --url) is the same run against another origin.
+//
+// The server is polled, not slept at: a blind wait fails on a loaded runner as
+// "the page never painted", which is the reading that costs the most to chase.
 export async function serve({ root, path = '/', url = null, settle = 700 } = {}) {
   if (url) return url;
   const port = await freePort();
   children.push(spawn('python3', ['-m', 'http.server', String(port), '--directory', root, '--bind', '127.0.0.1'], { stdio: 'ignore' }));
-  await sleep(settle);
-  return `http://127.0.0.1:${port}${path}`;
+  const base = `http://127.0.0.1:${port}`;
+  const deadline = Date.now() + Math.max(settle, 5000);
+  for (;;) {
+    try { await fetch(base + '/', { method: 'HEAD' }); break; } catch {
+      if (Date.now() > deadline) throw new Error(`the local server never answered on ${base}`);
+      await sleep(100);
+    }
+  }
+  return base + path;
 }
 
 // CHROME=<binary> overrides the macOS path (CI passes google-chrome). A fresh
@@ -47,6 +68,7 @@ export async function chrome({ bin = process.env.CHROME || '/Applications/Google
   if (cdp) return cdp;
   const port = await freePort();
   const profile = mkdtempSync(join(tmpdir(), `${tag}-`));
+  profiles.push(profile);
   // CI runners: no user namespace for Chrome's own sandbox, and /dev/shm is tiny
   const p = spawn(bin, ['--headless=new', '--disable-gpu', '--no-first-run', '--no-default-browser-check',
     `--user-data-dir=${profile}`, `--remote-debugging-port=${port}`, '--remote-allow-origins=*',
@@ -73,6 +95,8 @@ export async function chrome({ bin = process.env.CHROME || '/Applications/Google
 //   on(method, fn) — CDP events carry no `id`, so without a dispatcher they
 //     land on the floor. Fetch.requestPaused is the one that needs this: an
 //     interception that is never answered hangs the page rather than failing it.
+//     ONE handler per method: a second on() for the same event replaces the
+//     first, which for Fetch.requestPaused means the page stops being answered.
 export async function session(cdp) {
   const t = await (await fetch(`${cdp}/json/new?about:blank`, { method: 'PUT' })).json();
   const ws = new WebSocket(t.webSocketDebuggerUrl);
