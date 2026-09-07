@@ -68,6 +68,16 @@ memory `browser-verify-cdp-recipe` points here as the source.
   A second trap: with browser zoom on, the extension's screenshot is a crop in
   device pixels, so image coordinates are `css * devicePixelRatio` — click by
   element `ref`, not by pixels read off the picture.
+- **In the browser, the key's swatches ARE the drawing — anchor at `.scene-plot`,
+  not at `svg.scene`.** A swatch reuses the drawing's classes *and* its element
+  (`keySw` emits `<svg class="sw scene">`), so `#screen svg.scene g.boat` counts
+  the boat twice and `#screen svg.scene *` sweeps the key's own marks into the
+  set of "classes drawn". A check built that way passes by construction: it
+  compares the legend against itself. Measured 2026-09-07 — one boat read as
+  two, and the "every mark is named" check was circular until both selectors
+  were anchored at `.scene-plot` (the drawing) against `.p-key .sw` (the key).
+  This is the CLAUDE.md anchor rule in its browser form; the rule was read that
+  session and still missed, because in the DOM the two live one node apart.
 - **A layout measured on this Mac is not a measurement of the CI runner.** The
   same subtitle wrapped to three lines more on the runner's fonts, and
   `gate-check`'s "the drawing is whole on the first screen" went from 819 px of
