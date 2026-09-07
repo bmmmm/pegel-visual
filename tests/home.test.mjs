@@ -13,7 +13,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { loadApp } from './extract.mjs';
-import { CLOCK, fixtures, routeFor, EXPECTED, scenario } from './fixtures/home/router.mjs';
+import { CLOCK, fixtures, routeFor, EXPECTED_BOOT, EXPECTED_PRELOAD, scenario } from './fixtures/home/router.mjs';
 
 // the page around the script: extract.mjs evaluates only the inline <script>,
 // so anything the static markup owns has to be read from the file itself
@@ -234,7 +234,10 @@ test('a cold start page asks for exactly its own data — and never the archive'
   // performance contract, and it regresses in silence — an extra fetch costs the
   // reader and changes no pixel, so only the ledger can see it.
   assert.deepEqual(unmatched, [], 'a cold boot requested something no fixture describes');
-  assert.deepEqual([...new Set(asked)].sort(), [...new Set(EXPECTED)].sort());
+  assert.deepEqual([...new Set(asked)].sort(), [...new Set(EXPECTED_BOOT)].sort());
+  // the finder's preload hangs off a setTimeout, and the harness stubs timers to
+  // no-ops — so it cannot appear here, and scripts/home-check.mjs owns that half
+  for (const n of EXPECTED_PRELOAD) assert.ok(!asked.includes(n), `${n} is the browser's to prove`);
 });
 
 test('the refresh poll asks for a delta, not a second full window', async () => {

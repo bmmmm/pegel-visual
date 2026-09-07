@@ -22,6 +22,37 @@ memory `browser-verify-cdp-recipe` points here as the source.
   (`Runtime.consoleAPICalled`, `Log.entryAdded`, `Runtime.exceptionThrown`) and
   every response code in the same run — that is how a request the app swallows
   in a `.catch` becomes visible at all.
+- **The apparatus is `scripts/lib/cdp.mjs`, not a fourth copy.** `serve`, `chrome`,
+  the CDP client, `check`, and `rect`/`settle`/`click` live there; `gate-check`,
+  `home-check`, `verify-precip` and `gate-rain-check` import them. `session()`
+  also gives you `on(method, fn)` — CDP events carry no `id`, so without it
+  `Fetch.requestPaused` lands on the floor and the page hangs waiting for an
+  interception nobody answered.
+- **Freezing a page's data: intercept, do not stub.** `scripts/home-check.mjs`
+  answers every PEGELONLINE and open-meteo request over `Fetch.enable` +
+  `fulfillRequest` from `tests/fixtures/home/`, which the Node test imports too —
+  one routing table, one clock. Real `Response` objects, so `getJson`'s `res.ok`
+  branch is exercised; `Access-Control-Allow-Origin` must be in the fulfilled
+  headers, which is how the cross-origin contract gets tested rather than
+  bypassed. An unmatched URL FAILS the run — never `continueRequest` to the real
+  network, or CI eventually goes green off live data, which is the state that
+  looks healthiest and proves least. Freeze the clock with
+  `Page.addScriptToEvaluateOnNewDocument` (the `DateStub` of `tests/extract.mjs`,
+  verbatim), never `Emulation.setVirtualTimePolicy` — that also drives rAF, and
+  rAF firing normally is the one thing a browser check is for. And
+  `Network.setBypassServiceWorker` before the first navigate, or load 1 is
+  uncontrolled and load 2 is service-worker controlled: two paths in one run.
+- **A ledger of cross-origin requests is half a ledger.** `archive/` is
+  SAME-origin. A check written against the API interception passed while the page
+  fetched the whole archive, and only a 404 out of a bare worktree made the run
+  fail at all — on a checkout with `archive/` lying around it would have been
+  silent. Record the local requests too. (And filter on `/archive/`, not on
+  `manifest`: the PWA's `manifest.webmanifest` is not a data tree.)
+- **A range chip replaces, it does not push.** `setHistory` calls
+  `history.replaceState`, so Back leaves the gauge rather than stepping through
+  every range tried. Do not write a check that expects Back to undo a range —
+  what the chip's `href` is FOR is sharing, and the way to prove that is to load
+  the URL it produced COLD and see the same view come back.
 - **One engine is not a check.** The 400 on `measurements.json` and the „history
   stops in January" report both came out of Firefox. Gecko over **WebDriver
   BiDi**: `firefox --headless --no-remote --profile <tmp> --remote-debugging-port

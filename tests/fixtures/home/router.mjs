@@ -20,6 +20,13 @@ export const fixtures = {
   neighbours: load('neighbors-rhein.json'),
   neighbourGauges: load('neighbor-gauges.json'),
   weather: load('weather.json'),
+  // the finder's datalist, preloaded 600 ms after first paint (index.html, the
+  // setTimeout below stationInput's focus listener). Trimmed from 786 entries to
+  // 82: fetchStationList dedupes by upper-cased name, sorts and stores, and no
+  // home check asserts on the finder — the slice drives the same code for a
+  // tenth of the bytes, and keeps one duplicate name so the dedupe still works.
+  stationList: load('stations-all.json'),
+  waterList: load('waters.json'),
 };
 
 // Every request a cold start page makes, and nothing else. Returning null is
@@ -41,7 +48,11 @@ export function routeFor(url) {
     return { name: isSeed ? 'measurements' : 'measurements-delta', body: isSeed ? fixtures.measurements : [] };
   }
   if (u.includes('/stations/BONN/W.json')) return { name: 'w', body: fixtures.w };
+  // order matters: the neighbour list is stations.json WITH a ?waters=, the
+  // finder's preload is the same path without one
   if (u.includes('/stations.json?waters=')) return { name: 'neighbours', body: fixtures.neighbours };
+  if (u.includes('/waters.json')) return { name: 'waterList', body: fixtures.waterList };
+  if (/\/stations\.json(\?|$)/.test(u)) return { name: 'stationList', body: fixtures.stationList };
 
   // the profile enriches BONN's two neighbours by name
   const nb = u.match(/\/stations\/([^/]+)\/W\.json/);
@@ -59,5 +70,17 @@ export function routeFor(url) {
 // not here. An `archive` entry is deliberately absent — on the start page the
 // 30-day preset is exactly the live API's reach, so loadRepoArchive never runs,
 // and that silence is a contract worth failing over.
-export const EXPECTED = ['info', 'w', 'measurements', 'q', 'neighbours', 'weather',
+//
+// Split because the two layers genuinely see different sets, and pretending
+// otherwise would mean one of them asserting something it cannot reach:
+//
+//   BOOT     — loadData's own fan-out. Both layers get these.
+//   PRELOAD  — the finder's datalist and water list, fired by a setTimeout 600 ms
+//              after first paint (index.html, just below stationInput's focus
+//              listener). The Node harness stubs setTimeout to a no-op, so they
+//              never happen there; only a real browser pays for them, which is
+//              also the only place the cost is real.
+export const EXPECTED_BOOT = ['info', 'w', 'measurements', 'q', 'neighbours', 'weather',
   ...Object.keys(fixtures.neighbourGauges).map(n => `neighbour:${n}`)];
+export const EXPECTED_PRELOAD = ['stationList', 'waterList'];
+export const EXPECTED = [...EXPECTED_BOOT, ...EXPECTED_PRELOAD];

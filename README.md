@@ -511,7 +511,7 @@ the statistics, the clause logic on synthetic results, and the licence guard
 
 | Workflow | When | What |
 |---|---|---|
-| `tests` | every push and PR to `main` | `node --test`; the pytest suite without model weights; `scripts/gate-check.mjs` driving the gate page in the runner's Chrome on a desktop and a phone viewport |
+| `tests` | every push and PR to `main` | `node --test`; the pytest suite without model weights; `scripts/gate-check.mjs` and `scripts/home-check.mjs` driving the gate page and the start page in the runner's Chrome on a desktop and a phone viewport |
 | `pages` | after a green `tests` run on `main` (`workflow_run`), or dispatched by a data job | copies the site without `scripts/`, `tests/`, `.github/`, `.claude/` and `CLAUDE.md`, stamps the commit into `index.html` and the deploy date into `sitemap.xml`, mounts `archive/` and `nrw/` from their branches, deploys to GitHub Pages |
 | `archive-update` | Mondays 04:23 UTC | WSV REST refresh; on the first Monday the ZIP heal of the running year and the gap sweep; RWS refresh; totals rebuild; consistency gate; push; deploy |
 | `snapshot-update` | daily 05:17 and 15:17 UTC | bulk capture of every gauge, totals append, gate without R6/R7, push, deploy — two slots because scheduler drift once pushed a run past midnight |

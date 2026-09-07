@@ -43,10 +43,17 @@ jobs:
       - run: uv sync --locked --no-group model
       - run: uv run --no-sync pytest -q
 
-  # the gate page's runtime — focus after a full re-render, open panels, back and
-  # forward, the cursor, overflow on a phone — has no DOM in node --test.
-  # scripts/gate-check.mjs drives the runner's Chrome over CDP on two viewports
-  # and fails on any FAIL line; the deploy waits for it like for the other two.
+  # What has no DOM in node --test: the gate page's runtime (focus after a full
+  # re-render, open panels, back and forward, the cursor, overflow on a phone),
+  # and the start page's — above all whether it repaints at all, since
+  # scheduleRender() rides on rAF and the Node harness stubs that to a no-op, so
+  # a loader that forgot it passes there and ships a page stuck on "loading…".
+  # Both drive the runner's Chrome over CDP and fail on any FAIL line; the deploy
+  # waits for this workflow like for the other two jobs.
+  #
+  # One job, two steps: Chrome is already installed here, and a second job would
+  # spend ~40 s on checkout and setup-node to save ~30 s of wall clock. Split
+  # them when the pair passes about four minutes.
   gate-page:
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -55,11 +62,17 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: 24
-      - run: node scripts/gate-check.mjs --shots gate-check-shots
+      - run: node scripts/gate-check.mjs --shots tmp-browser-shots/gate
+        env:
+          CHROME: google-chrome
+      # runs even when the gate check failed: two independent pages, and one red
+      # run should say everything it knows rather than stopping at the first
+      - if: ${{ !cancelled() }}
+        run: node scripts/home-check.mjs --shots tmp-browser-shots/home
         env:
           CHROME: google-chrome
       - if: failure()
         uses: actions/upload-artifact@v7
         with:
-          name: gate-check-shots
-          path: gate-check-shots
+          name: browser-check-shots
+          path: tmp-browser-shots
