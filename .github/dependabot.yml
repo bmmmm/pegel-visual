@@ -1,5 +1,17 @@
+# `cooldown` is spelled out in every block although 3 days is also the default
+# since 2026-07-14: it is the same 3 days the pnpm side of this house pins as
+# `minimumReleaseAge: 4320`, and a supply-chain policy that only holds while a
+# vendor default happens to agree with it is not a policy. It delays VERSION
+# updates only — "Security updates still open immediately, so critical fixes
+# are never delayed" (GitHub changelog) — so nothing here slows a CVE down.
 version: 2
 updates:
+  # Grouped, all update types: these arrive in a monthly herd (five at once in
+  # 2026-09) and are homogeneous — every one is an Action pin, judged the same
+  # way, adopted in one merge. A grouped PR is still a SINGLE head commit, so
+  # the adoption path (merge the PR's own commit, push both remotes, GitHub
+  # marks it merged) is unchanged. npm and uv below stay ungrouped on purpose:
+  # there a version number carries meaning worth its own decision.
   - package-ecosystem: github-actions
     directory: /
     schedule:
@@ -8,6 +20,12 @@ updates:
       prefix: chore(deps)
     labels:
       - dependencies
+    cooldown:
+      default-days: 3
+    groups:
+      actions:
+        patterns:
+          - "*"
 
   - package-ecosystem: npm
     directory: /
@@ -17,6 +35,8 @@ updates:
       prefix: chore(deps)
     labels:
       - dependencies
+    cooldown:
+      default-days: 3
 
   # the forecast gate (scripts/forecast, uv-managed). BOTH timesfm pins are
   # frozen: 2.0.2 runs the shipped 2.5 weights, 3.0.1 the non-commercial 3.0
@@ -42,5 +62,7 @@ updates:
       prefix: chore(deps)
     labels:
       - dependencies
+    cooldown:
+      default-days: 3
     ignore:
       - dependency-name: timesfm
