@@ -34,6 +34,12 @@ import {
 
 // Each variant is only ever a pair of options handed to the shipping
 // `precipMembers`. Adding one here cannot change what the others measure.
+// The self-test's own floors. Deliberately far below the mirror's 276 / 92, so
+// they catch "the tree fell apart" rather than police the source — but not zero,
+// which is what they were, and zero is a check that passes on nothing.
+export const MIN_SELF_TEST_GAUGES = 50;
+export const MIN_SELF_TEST_R = 20;
+
 export const VARIANTS = {
   identity: { localKm: null, knnFloor: 0 },
   knn3: { localKm: null, knnFloor: 3 },
@@ -138,20 +144,52 @@ function outsideEquivalentRadius(bench, run) {
 // same pairs — `precipNested` is the caveat this number stands behind.
 function nesting(bench, run) {
   const pairs = [];
+  const seen = new Set();
   for (const [no, g] of Object.entries(bench.nodes)) {
     const d = g.down == null ? null : String(g.down);
     if (!d || !run.has(no) || !run.has(d)) continue;
+    // One UNORDERED pair per neighbouring gauge. The down-graph carries a
+    // 2-cycle (Erkrath <-> Eigen), which offers the same pair from both ends
+    // and would count it twice under a name that says "neighbours".
+    const key = [no, d].sort().join('~');
+    if (seen.has(key)) continue;
+    seen.add(key);
     const a = run.get(no), b = run.get(d);
     if (!a.product || !b.product) continue;
     const A = new Set(a.set), B = new Set(b.set);
     let inter = 0;
     for (const x of A) if (B.has(x)) inter++;
-    pairs.push({ identical: A.size === B.size && inter === A.size, j: inter / (A.size + B.size - inter) });
+    pairs.push({ key, identical: A.size === B.size && inter === A.size, j: inter / (A.size + B.size - inter) });
   }
-  return { pairs: pairs.length, identical: pairs.filter(p => p.identical).length, jaccardMedian: median(pairs.map(p => p.j)) };
+  return {
+    pairs: pairs.length, identical: pairs.filter(p => p.identical).length,
+    jaccardMedian: median(pairs.map(p => p.j)),
+    byKey: new Map(pairs.map(p => [p.key, p])),
+  };
 }
 
-export function compare(bench, base, run) {
+// THE PAIRED nesting comparison, and it is the only one that supports a
+// sentence of the form "the nesting got better". The unpaired medians compare
+// 63 pairs against 181, and 119 of those 181 are gauges that had no plate at
+// all before — they can pull the median without a single old pair improving.
+function nestingPaired(baseNest, runNest) {
+  const both = [];
+  for (const [k, b] of baseNest.byKey) {
+    const r = runNest.byKey.get(k);
+    if (r) both.push({ base: b.j, run: r.j, wasIdentical: b.identical, isIdentical: r.identical });
+  }
+  if (!both.length) return null;
+  return {
+    pairs: both.length,
+    jBase: median(both.map(x => x.base)), jRun: median(both.map(x => x.run)),
+    better: both.filter(x => x.run < x.base - 1e-12).length,
+    worse: both.filter(x => x.run > x.base + 1e-12).length,
+    identicalBase: both.filter(x => x.wasIdentical).length,
+    identicalRun: both.filter(x => x.isIdentical).length,
+  };
+}
+
+export function compare(bench, base, run, baseNest = null) {
   const deltas = [], gained = [], lost = [];
   for (const [no, rec] of run) {
     const b = base.get(no);
@@ -163,12 +201,14 @@ export function compare(bench, base, run) {
   const better = ds.filter(d => d > 1e-12).length, worse = ds.filter(d => d < -1e-12).length;
   const n = better + worse;
   const sizes = [...run.values()].filter(r => r.product).map(r => r.n);
+  const nest = nesting(bench, run);
   return {
     compared: deltas.length, gained: gained.length, lost: lost.length, lostIds: lost,
     medianDelta: median(ds), meanDelta: ds.length ? ds.reduce((a, b) => a + b, 0) / ds.length : null,
     better, worse, z: n ? (better - n / 2) / Math.sqrt(n / 4) : null,
     withProduct: sizes.length, setMedian: median(sizes), setP90: p90(sizes),
-    radius: outsideEquivalentRadius(bench, run), nesting: nesting(bench, run),
+    radius: outsideEquivalentRadius(bench, run), nesting: nest,
+    nestingPaired: baseNest ? nestingPaired(baseNest, nest) : null,
     deltas,
   };
 }
@@ -188,6 +228,12 @@ function row(name, c) {
     `outside ${c.radius.pct}%`,
     `same-set ${c.nesting.identical}/${c.nesting.pairs}`,
     `J ${f(c.nesting.jaccardMedian, 3)}`,
+    // the only column that supports "the nesting got better": the same pairs,
+    // before and after
+    c.nestingPaired
+      ? `paired ${c.nestingPaired.pairs}: J ${f(c.nestingPaired.jBase, 3)}->${f(c.nestingPaired.jRun, 3)} ` +
+        `(${c.nestingPaired.better} better/${c.nestingPaired.worse} worse, same-set ${c.nestingPaired.identicalBase}->${c.nestingPaired.identicalRun})`
+      : '',
   ].join('  ');
 }
 
@@ -219,23 +265,36 @@ function main(argv) {
   // identity variant to `base` would be comparing it to itself.
   const ref = referenceRun(bench);
   const mismatched = [], setDiff = [];
+  let rCompared = 0;
   for (const [no, r] of ref) {
     const b = base.get(no);
     if (!b) { setDiff.push(`${no}: missing from the variant run`); continue; }
     if (b.set.join(',') !== r.set.join(',')) setDiff.push(`${no}: ${b.set.length} vs ${r.set.length} members`);
     if (r.rPeak == null && b.rPeak == null) continue;
+    rCompared++;
     if (r.rPeak == null || b.rPeak == null || Math.abs(r.rPeak - b.rPeak) > 1e-9) mismatched.push(`${no}: ${b.rPeak} vs ${r.rPeak}`);
   }
-  const identityClean = mismatched.length === 0 && setDiff.length === 0;
+  // A CHECK THAT CANNOT BE EMPTY. A tree whose `assign.recv` falls out empty —
+  // a shifted siteNo column, a moved coordinate box, a topology.json that
+  // parsed but held nothing — used to produce "0 gauges, 0 differences" and
+  // exit 0, with variant rows printed under it out of nothing at all.
+  const enough = ref.size >= MIN_SELF_TEST_GAUGES && rCompared >= MIN_SELF_TEST_R;
+  const identityClean = mismatched.length === 0 && setDiff.length === 0 && enough;
   console.log(`self-test: the identity variant against an independent reading of the old rule — ` +
-    `${ref.size} gauges, ${setDiff.length} with a different set, ${mismatched.length} with a different peak r` +
-    (identityClean ? '' : `: ${[...setDiff, ...mismatched].slice(0, 5).join('; ')}`));
+    `${ref.size} gauges (${rCompared} of them with a peak r on either side), ` +
+    `${setDiff.length} with a different set, ${mismatched.length} with a different peak r` +
+    (mismatched.length + setDiff.length ? `: ${[...setDiff, ...mismatched].slice(0, 5).join('; ')}` : ''));
+  if (!enough) {
+    console.log(`  !! too little to check: needs >= ${MIN_SELF_TEST_GAUGES} gauges and >= ${MIN_SELF_TEST_R} with a peak r — ` +
+      'a self-test that passes on an empty tree checks nothing');
+  }
   if (!identityClean) console.log('  !! the bench does not reproduce the rule it claims to — every number below is void');
 
-  const dump = { tree, generated: new Date().toISOString(), baseline: { products: baseProducts, withR: baseR }, selfTest: { ok: identityClean, gauges: ref.size }, variants: {} };
+  const dump = { tree, generated: new Date().toISOString(), baseline: { products: baseProducts, withR: baseR }, selfTest: { ok: identityClean, gauges: ref.size, withR: rCompared }, variants: {} };
+  const baseNest = nesting(bench, base);
   for (const name of want) {
     const run = name === 'identity' ? base : runVariant(bench, VARIANTS[name]);
-    const c = compare(bench, base, run);
+    const c = compare(bench, base, run, baseNest);
     console.log(row(name, c));
     dump.variants[name] = { opts: VARIANTS[name], ...c, deltas: c.deltas.map(x => ({ no: x.no, d: x.d, from: x.from, to: x.to })) };
   }

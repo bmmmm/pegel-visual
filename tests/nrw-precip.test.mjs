@@ -1,4 +1,4 @@
-// tests/nrw-precip.test.mjs — the areal-rain rule of scripts/build-nrw-precip.mjs,
+// tests/nrw-precip.test.mjs — the rain-field rule of scripts/build-nrw-precip.mjs,
 // each clause on a fixture built to sit exactly on its edge. The rule is
 // pre-registered (see the script's header), so these tests are the rule written
 // twice: once as code, once as the cases it must decide. Everything runs on
@@ -14,7 +14,7 @@ const {
   usableCoords, haversineKm, cmpNo, pearson, median, quantile,
   LAT_BOX, LON_BOX, MAX_ASSIGN_KM, MAX_ORPHAN_KM, MIN_COVERAGE_PCT,
   PLAUSIBLE_MAX_MM_DAY, MIN_SET_FOR_SERIES, MIN_RESPONSE_DAYS, MIN_EVENTS,
-  MAX_LOCAL_KM, KNN_FLOOR, MAX_KNN_KM, RULE, RULE_VERSION,
+  MAX_LOCAL_KM, MAX_KNN_KM,
   yearStartDay, dayToISO,
 } = await import('../scripts/build-nrw-precip.mjs');
 const { daysInYear } = await import('../scripts/fetch-wsv-archive.mjs');
@@ -147,7 +147,6 @@ test('a rain gauge upstream is in every downstream gauge set exactly once (nesti
 // hydrological member from a geometric one from a last-resort fill; a test suite
 // that only counted members would let the three blur into each other.
 
-const MEMBERS = { nodes: null, rain: null, assign: null, up: null };
 const membersOf = (nodes, rain, no, opts) => {
   const assign = assignRain(nodes, rain);
   return precipMembers(no, { nodes, rain, assign, up: buildUp(nodes), ...opts });
@@ -449,7 +448,16 @@ test('bench: the identity variant IS the pre-version-2 rule, to 1e-9, on three n
   // rain that actually drives the level, so rPeak is a number and not a null
   const mm = Array.from({ length: n }, (_, d) => (d % 11 === 0 ? 12 : d % 3));
   const mean = Array.from({ length: n }, (_, d) => 50 + (d > 0 && (d - 1) % 11 === 0 ? 20 : 0));
-  const rainOf = i => ({ basin: '1', ...northOf(BASE, i), years: { [Y]: { mm: mm.map(v => v + i) } } });
+  // EACH STATION GETS ITS OWN SERIES, not `mm + i`. Pearson r is invariant
+  // under an additive constant, so a set whose members differ only by an offset
+  // has the SAME peak r whatever its membership — the first cut of this test
+  // did that, and its two 1e-9 assertions could not fail: with the closure walk
+  // sabotaged the set went from 9 members to 3 and r stayed bit-identical. The
+  // per-station phase shift is what makes the mean depend on WHO is in the set.
+  const rainOf = i => ({
+    basin: '1', ...northOf(BASE, i),
+    years: { [Y]: { mm: Array.from({ length: n }, (_, d) => mm[(d + i * 3) % n] * (1 + (i % 5) / 4)) } },
+  });
   const tree = writeTree(join(tmp, 'nrw'), {
     gauges: {
       low: { ...BASE, basin: '1', km2: 300, down: null, years: { [Y]: { mean } } },
@@ -504,7 +512,11 @@ test('bench: a variant that adds members changes the sets it was asked to change
   const Y = 2025, n = daysInYear(Y);
   const mm = Array.from({ length: n }, (_, d) => (d % 11 === 0 ? 12 : d % 3));
   const mean = Array.from({ length: n }, (_, d) => 50 + (d > 0 && (d - 1) % 11 === 0 ? 20 : 0));
-  const rainOf = i => ({ basin: '1', ...northOf(BASE, i), years: { [Y]: { mm: mm.map(v => v + i) } } });
+  // per-station series, not `mm + i` — see the note in the test above
+  const rainOf = i => ({
+    basin: '1', ...northOf(BASE, i),
+    years: { [Y]: { mm: Array.from({ length: n }, (_, d) => mm[(d + i * 3) % n] * (1 + (i % 5) / 4)) } },
+  });
   // `far` has three of its own; `near` has none and sits 8 km from far's cluster
   const tree = writeTree(join(tmp, 'nrw'), {
     gauges: {

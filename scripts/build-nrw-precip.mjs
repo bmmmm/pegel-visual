@@ -1,7 +1,9 @@
 #!/usr/bin/env node
-// Bakes areal precipitation per LANUK NRW gauge out of the mirrored `nrw/` tree:
-// which rain gauges drain into which level gauge, the daily areal mean over that
-// set, and the measured rain -> level response. Deliberately a SEPARATE script
+// Bakes the RAIN FIELD AROUND each LANUK NRW gauge out of the mirrored `nrw/`
+// tree: which rain gauges are in reach of which level gauge, the daily mean over
+// that set, and the measured rain -> level response. NOT areal precipitation
+// over a catchment — no watershed is consulted anywhere here, the source ships
+// none; see the membership section below for what the set actually is. Deliberately a SEPARATE script
 // from the collector, not a step inside it: the product is a pure function of the
 // committed `nrw/` tree, so any checkout can recompute it byte-for-byte and
 // `--check` can prove the committed bytes are the ones the rule produces.
@@ -25,10 +27,11 @@
 // peaks at lag 1 and why the forecast covariate may only ever see rain day t-1 at
 // context position t (a leak assert lives in the forecast loaders, not here).
 //
-// AREAL MEAN = UNWEIGHTED MEAN over the reporting stations of the set. That is
-// Thiessen with equal polygon areas; the source ships no sub-catchment polygons, so
-// any weighting would be invented. `med`/`mx` ride along as diagnostics — the
-// covariate and the plate both use `mm`.
+// THE MEAN IS UNWEIGHTED over the reporting stations of the set. That is Thiessen
+// with equal polygon areas, and it is a MEASURED choice, not a shrug: weighting by
+// real `catchmentKm2` was tried on 2026-09-07 and moved the median peak-r by
+// 0.0000 (20 gauges better, 28 worse; weighted and unweighted correlate at 0.994).
+// `med`/`mx` ride along as diagnostics — the covariate and the plate both use `mm`.
 //
 // n[] IS THE NUMBER OF STATIONS BEHIND THE PRINTED VALUE, not the number that
 // reported. When the day misses the reporting threshold the day is a non-day:
@@ -37,8 +40,9 @@
 // behind). Keeping a "2 of 5 reported" count here would buy a diagnostic and cost
 // the invariant; the coverage detail is one level down in `nrw/rain/`.
 //
-// NESTING IS REAL AND INTENDED: rainSet(g) is the union over the whole upstream
-// closure of g, so rainSet(Schermbeck_1) ⊇ rainSet(Kesseler_3) ⊇ …. Two gauges on
+// NESTING IS REAL AND INTENDED: rainSet(g) covers the whole upstream closure of g
+// plus the ring around g, so rainSet(Schermbeck_1) ⊇ rainSet(Kesseler_3) ⊇ … for
+// the hydrological part, and neighbours share the ring between them. Two gauges on
 // one river do NOT have disjoint rain. Every legend that prints a set size says so,
 // and WP3's station rule picks one gauge per basin precisely to get disjoint sets.
 //
@@ -87,13 +91,16 @@ export const MIN_SET_FOR_SERIES = 3;
 //                 move an existing number — it only ever runs on sets that had
 //                 none. Coverage 93 -> 275 gauges.
 //
-// Why 15 km and not 25, when 25 measures BETTER (+0.0075 vs +0.0043): honesty.
-// At 25 km, 84.7 % of members sit outside the radius of a circle of their
-// gauge's own catchment area (74.1 % at 15 km, 69.6 % under the old rule), and
-// the median Jaccard of down-edge neighbours rises to 0.636 — two gauges on one
-// river would draw nearly the same picture. At 15 km it FALLS to 0.500 from the
-// old rule's 0.667. Anyone arriving later with "more is better" is looking at
-// the wrong column.
+// Why 15 km and not 25, when 25 measures BETTER (+0.0075 vs +0.0043): how far
+// outside the catchment the members already sit. At 25 km, 84.7 % of members
+// lie outside a circle of the gauge's own catchment area; at 15 km 74.5 %, and
+// under the old rule 69.6 %. A number that far outside the thing it is named
+// after has to be renamed before it is widened again, and 25 km buys another
+// ten points of that for +0.003 of r. (Nesting does NOT decide this: measured
+// on the same 63 neighbour pairs, 15 km moves the median Jaccard 0.667 -> 0.591
+// with 29 pairs better and 30 worse, and 25 km leaves it at 0.667 while driving
+// literally-identical sets lower still. The full table is in
+// .claude/domains/lanuk-nrw.md.)
 //
 // What this product therefore IS, and what it is not: it is the rain field
 // AROUND the gauge, not areal precipitation over its catchment. No watershed is
@@ -458,7 +465,7 @@ export function responseStats(rainMm, level, { from, to, id, nRain, unit }) {
   else if (best) { out.reason = `too few pairs at the peak lag (${best.n} < ${MIN_RESPONSE_DAYS})`; }
   else { out.reason = 'no rain/level pair in the window'; }
 
-  // Event response: how many cm does the level climb per 10 mm of areal rain?
+  // Event response: how many cm does the level climb per 10 mm of rain around it?
   // Bars above show Pearson r; this number is a slope. Two estimators, and the
   // legend has to say which is which.
   const rises = [];
@@ -618,7 +625,7 @@ export function build({ tree, out, check = false, generated }) {
       // the catchment: no watershed is consulted anywhere, because the source
       // publishes none. It is the rain field around the gauge, and the three
       // ways in are named so a reader can tell a measurement from a fallback.
-      // Measured on this mirror: 74.1 % of members sit outside the radius of a
+      // Measured on this mirror under the SHIPPING rule: 74.5 % of members sit outside the radius of a
       // circle of the gauge's own km². The km² beside this field is the gauge's
       // REAL catchment area — the two must not be read as one statement.
       method: `unweighted mean over the reporting rain gauges of this gauge's rain FIELD, which is: every gauge assigned to it or to any gauge upstream of it (via basin/orphan, the hydrological part), plus every rain gauge within ${MAX_LOCAL_KM} km of the gauge itself (via local), and where that yields fewer than ${MIN_SET_FOR_SERIES} the ${KNN_FLOOR} nearest instead (via knn). Thiessen with equal areas over that field — a rain field around the gauge, not areal precipitation over its catchment and not a catchment intersection`,

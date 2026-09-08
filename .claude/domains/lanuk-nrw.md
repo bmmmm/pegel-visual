@@ -149,20 +149,37 @@ It compares against `referenceRun`, the one function in the bench that does NOT
 go through `precipMembers`; the first cut compared the identity variant against
 ITSELF and would have printed "delta 0" whatever the machinery did):
 
-| variant | median Δ peak-r | better/worse | z | gauges with a product | set med/p90 | members outside the equivalent radius | identical neighbour sets |
+| variant | median Δ peak-r | better/worse | z | gauges with a product | set med/p90 | members outside the equivalent radius | identical neighbour sets (all pairs) |
 |---|---|---|---|---|---|---|---|
-| identity (v1) | — | — | — | 93 | 5 / 20 | 69.6 % | 11 of 63 pairs, J 0.667 |
-| knn3 alone | 0.0000 | 0/0 | — | 270 | 3 / 9 | 71.0 % | 24 of 178, J 0.500 |
-| km10 | 0.0000 | 43/22 | 2.60 | 200 | 5 / 15 | 66.1 % | 8 of 136 |
-| **km15 + knn3** | **+0.0043** | **61/26** | **3.75** | **275** | **8 / 15** | **74.5 %** | **8 of 182, J 0.500** |
-| km25 | +0.0075 | 59/33 | 2.71 | 272 | 18 / 28 | 84.7 % | 4 of 179, **J 0.636** |
+| identity (v1) | — | — | — | 93 | 5 / 20 | 69.6 % | 11 of 63, J 0.667 |
+| knn3 alone | 0.0000 | 0/0 | — | 270 | 3 / 9 | 71.0 % | 24 of 177, J 0.500 |
+| km10 | 0.0000 | 43/22 | 2.60 | 200 | 5 / 15 | 66.1 % | 8 of 136, J 0.500 |
+| **km15 + knn3** | **+0.0043** | **61/26** | **3.75** | **275** | **8 / 15** | **74.5 %** | **8 of 181, J 0.500** |
+| km25 | +0.0075 | 59/33 | 2.71 | 272 | 18 / 28 | 84.7 % | 4 of 178, J 0.635 |
 
-**Why 15 km and not the better-scoring 25.** Honesty, and the numbers are in the
-last two columns: at 25 km, 84.7 % of members sit outside a circle of the
-gauge's own catchment area and the median Jaccard of down-edge neighbours climbs
-to 0.636 — two gauges on one river would draw nearly the same picture. At 15 km
-it FALLS to 0.500 from the old rule's 0.667. Anyone arriving later with "more is
-better" is reading the Δr column and ignoring the two beside it.
+**Why 15 km and not the better-scoring 25.** The decisive column is the second
+from the right: at 25 km, **84.7 %** of members sit outside a circle of the
+gauge's own catchment area, against 74.5 % at 15 km and 69.6 % under the old
+rule. A number that far outside the thing it is named after has to be renamed
+before it is widened, and 25 km widens it by another ten points for +0.003 of r.
+
+**The nesting evidence is mixed, and the mixed version is the true one.** The
+last column above is UNPAIRED — identity has 63 pairs and km15+knn3 has 181,
+and 118 of those are gauges that had no plate at all before, so a falling median
+there proves nothing about the old pairs. Measured PAIRED, over the same 63:
+
+| variant | median J on the same 63 pairs | pairs better/worse | identical sets |
+|---|---|---|---|
+| km15 + knn3 | 0.667 → **0.591** | 29 / 30 | 11 → **3** |
+| km25 | 0.667 → 0.667 | 26 / 36 | 11 → **1** |
+
+So: pair by pair, widening the sets is a coin flip (29 better, 30 worse), and
+what robustly improves is the count of neighbours whose sets are *literally the
+same list* — 11 → 3. km25 drives that lower still (11 → 1) while its median J
+does not move at all, because its sets are large enough to differ in composition
+while overlapping almost completely. **The honest summary is that nesting does
+not decide between 15 and 25 km; the equivalent-radius number does.** Anyone
+arriving later with "more is better" is reading the Δr column and ignoring it.
 
 **Two numbers not to misquote.** The +0.0043 holds only for the **92 gauges that
 already had a number**; for the 182 that gained one there is no comparison and
@@ -191,6 +208,16 @@ HEAD — every counter is supposed to move on that run — and demands the versi
 is red; a bump whose numbers disagree with the entry is red. `MIN_PRECIP_SERIES`
 was re-based 80 → 260 in the same commit, because 80 against 275 could not go
 red on anything short of the mirror vanishing.
+
+**If that gate goes red on the first collector run after a rule change, read it
+before editing it.** The baseline applies on exactly one run — the first with
+the new version — with a slack of 2, and the source moves between the commit and
+that run. A legitimate drift of three stations reads exactly like a wrong rule.
+The fix is to re-measure and re-register, never to widen the slack: the whole
+clause exists because a rule change must not be able to move counters quietly.
+Note also that the baseline is only consulted when there IS a HEAD to differ
+from — a fresh branch or a fork has no rule change to check, and the floors in
+`checkPrecipShape` are what stand there instead.
 
 ### Three ideas that were measured and killed
 
@@ -267,14 +294,15 @@ export runs mid-afternoon and a rain day starts at 07:00, so the source's newest
 day is always half a day short and reads back as no data. Both the ?rain grid
 and every station plate hang on that one value — one picture, one estimator.
 
-**Nesting is real, and rule version 2 made it BETTER, not worse.** rainSet(g) is
-the union over the whole upstream closure plus the 15 km ring, so two gauges on
-one river share most of their rain — and now neighbours can share the stations
-between them as well. The fear was that widening the sets would make them
-interchangeable; measured, the opposite happened: identical down-edge-neighbour
-sets fell from 11 of 63 pairs to 8 of 182, and the median Jaccard from 0.667 to
-0.500. Every legend that prints a set size says so, and the forecast experiment
-picks one gauge per basin to get disjoint sets.
+**Nesting is real, and rule version 2 did not make it worse.** rainSet(g) is the
+union over the whole upstream closure plus the 15 km ring, so two gauges on one
+river share most of their rain — and now neighbours can share the stations
+between them as well. The fear was that widening the sets would make neighbours
+interchangeable. Measured on the same 63 pairs: the median Jaccard falls 0.667 →
+0.591, pair by pair it is 29 better / 30 worse, and the count of neighbours
+whose sets are *literally the same list* falls 11 → 3. So "not worse, and fewer
+duplicate plates" — not "better". Every legend that prints a set size says so,
+and the forecast experiment picks one gauge per basin to get disjoint sets.
 
 `--out` refuses any directory not named `precip`: `prune()` unlinks what it did
 not write, and pointed at the mirror it removed gauges/, rain/ and topology.json

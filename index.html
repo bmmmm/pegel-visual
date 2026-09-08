@@ -3181,7 +3181,7 @@ const T = {
   // learn the difference. No watershed is consulted anywhere in the pipeline:
   // the source publishes none. Since rule version 2 (2026-09-08) a set is the
   // gauge's hydrological rain plus every rain gauge within 15 km of the gauge
-  // itself, floored to the 3 nearest — measured on the mirror, 74 % of members
+  // itself, floored to the 3 nearest — measured on the mirror, 74.5 % of members
   // sit outside a circle of the gauge's own catchment area. "Areal rain over
   // the catchment" would be a claim this product cannot back, which is why the
   // word is gone from every string below.
@@ -3198,7 +3198,12 @@ const T = {
   precipFetchFailed: 'the rain field for this gauge did not load',
   precipGap: 'the gauge reported nothing here, so the level line stops',
   precipSameRow: 'both read off the drawn row, not off a wider window',
-  precipMean: 'unweighted mean over the reporting rain gauges in reach of this gauge — those draining to it or upstream of it, plus every one within 15 km. A rain field around the gauge, not areal rain over its catchment',
+  precipMean: 'unweighted mean over the reporting rain gauges in reach of this gauge',
+  precipReach: 'in reach = draining to this gauge or to one upstream of it, plus every rain gauge within 15 km of it',
+  // Printed ONLY where the knn floor fired, and it names the real distance,
+  // because those members are past the 15 km the line above promises.
+  precipFloor: 'nothing lay within 15 km, so the nearest gauges stand in — a fallback, not a measurement; furthest',
+  precipNotCatchment: 'a rain field around the gauge — not areal rain over its catchment, and no watershed was used to pick it',
   precipNoArea: 'catchment area unknown for this gauge',
   precipNested: 'a gauge downstream inherits every rain gauge above it, and neighbours share the ones between them — two gauges on one river do not have separate rain',
   precipTwoClocks: 'two clocks: a rain day runs 07:00 → 07:00 MEZ, a gauge day 00:00 → 24:00',
@@ -4354,7 +4359,30 @@ function precipViewModel() {
     seed: state.lowIsMeanUntil != null && cols.length > 0 && cols[0].from * 864e5 <= state.lowIsMeanUntil,
     n: p.n, km2: meta.km2 ?? null, nUpstream: meta.nUpstream || 0,
     align: meta.align || '', unit: gaugeUnit(),
+    // HOW each member got in, straight off the product's own `set[].via`/`km`.
+    // The builder writes those precisely so a fallback cannot pass for a
+    // measurement — and until 2026-09-08 the plate read neither, so the key
+    // promised "every gauge within 15 km" while the knn floor was quietly
+    // reaching to 29 km on 28 gauges. A field the display never reads is not a
+    // safeguard, it is a comment in a JSON file.
+    ...viaSummary(meta.set),
   };
+}
+
+// { nLocal, nHydro, nKnn, knnMaxKm } over a product's member list. Members
+// written before the rule carried `via` count as hydrological, which is what
+// they were.
+function viaSummary(set) {
+  const list = Array.isArray(set) ? set : [];
+  let nHydro = 0, nLocal = 0, nKnn = 0, knnMaxKm = null;
+  for (const s of list) {
+    if (s.via === 'local') nLocal++;
+    else if (s.via === 'knn') {
+      nKnn++;
+      if (typeof s.km === 'number' && (knnMaxKm == null || s.km > knnMaxKm)) knnMaxKm = s.km;
+    } else nHydro++;
+  }
+  return { nHydro, nLocal, nKnn, knnMaxKm };
 }
 
 function renderPrecip(p) {
@@ -4404,9 +4432,26 @@ function renderPrecip(p) {
     !p.level && { note: T.precipNoLevel },
     p.gaps > 0 && { note: `${p.gaps} ${plural(p.gaps, 'break')} — ${T.precipGap}` },
     { note: `Σ ${p.sumMm} mm · max ${p.maxCol} mm — ${T.precipSameRow}` },
+    // The breakdown only when it ADDS UP to the count beside it. `nRain` and
+    // `set` come from the same list in the product, but a mirror written by an
+    // older builder can carry one without the other, and "5 gauges (1 draining
+    // here, 0 within 15 km)" is a worse legend than no breakdown at all.
+    { note: `${T.precipMean}: ${p.n} ${plural(p.n, 'gauge')}` +
+      (p.nHydro + p.nLocal + p.nKnn === p.n
+        ? ` (${p.nHydro} draining here, ${p.nLocal} within 15 km${p.nKnn ? `, ${p.nKnn} standing in` : ''})`
+        : '') },
+    { note: T.precipReach },
+    // The floor's own line, only where it fired. It carries the real distance:
+    // the line above says 15 km and these members are not inside it.
+    p.nKnn > 0 && { note: `${T.precipFloor} ${p.knnMaxKm} km`, warn: true },
+    // The catchment area is the GAUGE's, and it is not what the mean was taken
+    // over. Kept on its own line so the two cannot be read as one sentence —
+    // "…not areal rain over its catchment: 8 gauges over 300 km²" was exactly
+    // the misreading the wording is there to prevent.
+    { note: T.precipNotCatchment },
     { note: p.km2 != null
-      ? `${T.precipMean}: ${p.n} ${plural(p.n, 'gauge')} over ${p.km2} km² (${p.nUpstream} ${plural(p.nUpstream, 'gauge')} upstream)`
-      : `${T.precipMean}: ${p.n} ${plural(p.n, 'gauge')} — ${T.precipNoArea}` },
+      ? `the gauge's own catchment is ${p.km2} km², which is NOT what the mean above covers (${p.nUpstream} ${plural(p.nUpstream, 'gauge')} upstream)`
+      : T.precipNoArea },
     { note: T.precipNested },
     { note: T.precipTwoClocks },
     p.align && { note: p.align },

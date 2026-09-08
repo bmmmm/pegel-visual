@@ -4598,8 +4598,42 @@ test('PRECIPITATION: the key names both clocks, both units and the nesting', asy
   assert.ok(!key.includes('<img src=x'), 'and never arrives as markup');
   assert.match(key, /two units and two scales/);
   assert.match(key, /inherits every rain gauge above it/, 'the nesting is stated where the set size is');
-  assert.match(key, /5 gauges over 2825 km²/, 'real numbers, from the product’s own meta');
+  assert.match(key, /5 gauges/, 'real numbers, from the product’s own meta');
+  // THE AREA AND THE DENIAL MAY NOT SHARE A SENTENCE. "…not areal rain over its
+  // catchment: 5 gauges over 2825 km²" reads as one statement and undoes the
+  // denial — which is the exact misreading the wording exists to prevent, and
+  // the shape this key had until 2026-09-08.
+  assert.match(key, /a rain field around the gauge — not areal rain over its catchment/);
+  assert.match(key, /the gauge's own catchment is 2825 km², which is NOT what the mean above covers/);
+  assert.doesNotMatch(key, /not areal rain over its catchment[:,]\s*\d/, 'the area is on its own line');
+  assert.doesNotMatch(key, /\d+ gauges over 2825 km²/, 'and the glued form is gone');
   assert.match(key, /right edge is the mirror’s newest rain day, not today: 2026-09-02/);
+});
+
+test('PRECIPITATION: the key never promises 15 km for a set the knn floor built', async () => {
+  // The floor reaches to MAX_KNN_KM = 45 (measured max 29.05 on the mirror), so
+  // on the 28 gauges it built, "plus every rain gauge within 15 km" is FALSE.
+  // The product carries `via` and `km` per member precisely so a fallback
+  // cannot pass for a measurement — and until 2026-09-08 the plate read
+  // neither, which put the claim on screen anyway.
+  const app = await precipApp();
+  const plain = app.run(`(() => { historyKey = '30d'; return renderPrecip(precipViewModel()); })()`);
+  assert.doesNotMatch(plain, /nothing lay within 15 km/, 'no floor, no floor line');
+
+  const floored = app.run(`(() => {
+    historyKey = '30d';
+    state.precip.meta.set = [
+      { no: 'a', via: 'knn', km: 17.75, at: state.precip.no },
+      { no: 'b', via: 'knn', km: 29.05, at: state.precip.no },
+      { no: 'c', via: 'knn', km: 12.1, at: state.precip.no },
+    ];
+    state.precip.n = 3;
+    return renderPrecip(precipViewModel());
+  })()`);
+  assert.match(floored, /nothing lay within 15 km, so the nearest gauges stand in — a fallback, not a measurement; furthest 29\.05 km/,
+    'it says the floor fired, and how far it actually reached');
+  assert.match(floored, /3 gauges \(0 draining here, 0 within 15 km, 3 standing in\)/,
+    'and the breakdown adds up to the count beside it');
 });
 
 test('PRECIPITATION: a gauge with too few rain gauges says why, and fetches nothing', async () => {

@@ -87,15 +87,28 @@ jobs:
         if: ${{ !cancelled() }}
         id: nrw
         run: |
-          if git ls-remote --exit-code --heads origin nrw >/dev/null; then
+          set -euo pipefail
+          # `ls-remote --exit-code` answers 2 for "no such ref" and 128 for a
+          # network or auth failure. Treating every non-zero the same would turn
+          # a flaky fetch into a silently skipped browser check on a green run —
+          # which is the "green by emptiness" the house rules forbid, and the
+          # very thing this step was added to stop.
+          set +e
+          git ls-remote --exit-code --heads origin nrw >/dev/null 2>&1
+          rc=$?
+          set -e
+          if [ "$rc" = 0 ]; then
             git fetch origin nrw --depth 1
             git worktree add /tmp/nrw-branch FETCH_HEAD
             cp -R /tmp/nrw-branch/nrw ./nrw
             node scripts/build-nrw-precip.mjs --tree nrw
             echo 'have=yes' >> "$GITHUB_OUTPUT"
-          else
+          elif [ "$rc" = 2 ]; then
             echo 'have=no' >> "$GITHUB_OUTPUT"
-            echo '::warning::no nrw branch on this remote — the PRECIPITATION/RESPONSE and ?rain plates were NOT verified in a browser on this run'
+            echo '::warning::no nrw branch on this remote (a fork, or before the first collector run) — the PRECIPITATION/RESPONSE and ?rain plates were NOT verified in a browser on this run'
+          else
+            echo "::error::git ls-remote failed with $rc — this is not \"the branch is absent\", and skipping the browser check on it would be a green run that checked nothing"
+            exit "$rc"
           fi
       - if: ${{ !cancelled() && steps.nrw.outputs.have == 'yes' }}
         run: node scripts/verify-precip.mjs --shots tmp-browser-shots/precip

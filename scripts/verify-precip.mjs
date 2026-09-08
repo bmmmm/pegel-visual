@@ -220,8 +220,19 @@ async function run(cdp, base, vp) {
         // precipitation section, not at #screen.
         const k = (m.precipPlate && m.precipPlate.key) || [];
         check(k.some(t => /thin set/.test(t)), `${pg.name}: the thin-set caveat is in the precipitation key`, k.join(' | ').slice(0, 300));
-        check(k.some(t => /rain field around the gauge/.test(t)),
+        check(k.some(t => /a rain field around the gauge — not areal rain over its catchment/.test(t)),
           `${pg.name}: the key names what the number IS — a field, not a catchment mean`, k.join(' | ').slice(0, 400));
+        // The floor reaches PAST the 15 km the key promises (measured max 29.05
+        // km on the mirror), so on a gauge it built, the key has to say so and
+        // name the real distance. Without this the plate states a rule that is
+        // false for exactly the 28 gauges that most need the caveat.
+        check(k.some(t => /nothing lay within 15 km, so the nearest gauges stand in/.test(t)) &&
+          k.some(t => /furthest \d/.test(t)),
+        `${pg.name}: the key admits the floor fired, and names how far it reached`, k.join(' | ').slice(0, 500));
+        // "…not areal rain over its catchment: 8 gauges over 300 km²" reads as
+        // one sentence and undoes the denial. The area belongs on its own line.
+        check(!k.some(t => /not areal rain over its catchment[:,]\s*\d/.test(t)),
+          `${pg.name}: the catchment area is not glued onto the sentence denying it`, k.join(' | ').slice(0, 500));
         check(!k.some(t => /areal rain per column|of the upstream catchment/.test(t)),
           `${pg.name}: and the retired wording is gone from it`, k.join(' | ').slice(0, 400));
       }

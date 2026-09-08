@@ -72,7 +72,7 @@
 //                     green); (c2) every member holds the bound its own `via`
 //                     allows — basin <= maxAssignKm, orphan <= maxOrphanKm,
 //                     local <= localKm, knn only in a set of exactly knnFloor
-//                     and never past MAX_KNN_KM — with all four bounds READ OUT
+//                     and never past the rule's own knnMaxKm — all four bounds READ OUT
 //                     OF index.json's own `rule` block, never restated here,
 //                     and a `via` the rule does not enable is a violation;
 //                     (c3) the HYDROLOGICAL origin is still a partition: a
@@ -146,7 +146,7 @@ import { execFileSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 import { checkChangeStatuses, dayNum } from './check-archive-consistency.mjs';
 import { daysInYear, PLAUSIBLE_MIN_CM, PLAUSIBLE_MAX_CM } from './fetch-wsv-archive.mjs';
-import { build as buildPrecip, PLAUSIBLE_MAX_MM_DAY, MAX_KNN_KM } from './build-nrw-precip.mjs';
+import { build as buildPrecip, PLAUSIBLE_MAX_MM_DAY } from './build-nrw-precip.mjs';
 import { mezParts } from './snapshot-wsv.mjs';
 
 const now = process.env.PEGEL_NOW ? new Date(process.env.PEGEL_NOW) : new Date();
@@ -697,10 +697,21 @@ export function checkPrecipShape(index, products, rainIds, topologyGauges, {
   // second copy of a threshold goes red on legitimate output the day the rule
   // moves, and silent the day it tightens.
   const R = (index.rule || {});
+  // Read out of the product, with NO fallback to the estimator's constant: a
+  // `??` here would let a rule block that stopped publishing its own bound sail
+  // past on the importer's value, which is the same "green because the field
+  // vanished" failure as (j) below.
   const bound = {
     basin: R.maxAssignKm, orphan: R.maxOrphanKm,
-    local: R.localKm ?? null, knn: R.knnFloor ? (R.knnMaxKm ?? MAX_KNN_KM) : null,
+    local: R.localKm ?? null, knn: R.knnFloor ? R.knnMaxKm : null,
   };
+  if (R.knnFloor && R.knnMaxKm == null) v.push('N8: index.json rule enables a knn floor but publishes no knnMaxKm — the one membership with no bound of its own would then have none here either');
+  // The builder writes `ruleVersion`; if it ever stops, clause (j) below reads
+  // 1 on both sides, decides nothing changed, and switches itself off for good.
+  // Nothing else would notice, so the field's PRESENCE is checked here.
+  if (!(typeof R.ruleVersion === 'number' && R.ruleVersion >= 1)) {
+    v.push(`N8: precip/index.json rule carries no ruleVersion — without it a rule change reads as no change and the pre-registered-counts clause can never fire (got ${JSON.stringify(R.ruleVersion)})`);
+  }
   const ownerOf = new Map();
   for (const [no, p] of products) {
     if (!p.meta) { v.push(`N8: precip/${no}/meta.json: missing`); continue; }
@@ -732,14 +743,23 @@ export function checkPrecipShape(index, products, rainIds, topologyGauges, {
       // big enough means the floor ran where it had no business running
       if (s.via === 'knn') {
         if (set.length !== R.knnFloor) v.push(`N8: precip/${no}/meta.json: the knn floor filled the set to ${set.length}, not to ${R.knnFloor}`);
-        if (hydro + set.filter(x => x.via === 'local').length >= R.minSetForSeries) {
-          v.push(`N8: precip/${no}/meta.json: the knn floor fired on a set that already had ${set.length - set.filter(x => x.via === 'knn').length} members`);
-        }
+        // Against knnFloor, NOT minSetForSeries: the builder fires the floor at
+        // `members.size < knnFloor` (build-nrw-precip.mjs), and while the two
+        // constants are both 3 today, reading the wrong one turns a legitimate
+        // product red the moment they diverge — measured on a probe with
+        // knnFloor 5 / minSetForSeries 3.
+        const withoutKnn = set.length - set.filter(x => x.via === 'knn').length;
+        if (!(R.knnFloor > 0)) v.push(`N8: precip/${no}/meta.json: a member arrived via "knn" but the rule publishes no knnFloor to have fired`);
+        else if (withoutKnn >= R.knnFloor) v.push(`N8: precip/${no}/meta.json: the knn floor fired on a set that already had ${withoutKnn} members`);
       }
       // (c3) the hydrological origin is STILL a partition: basin/orphan
       // membership carries the one node that owns the station, and that node
       // must be the same in every set the station appears in
       if (s.via === 'basin' || s.via === 'orphan') {
+        // A missing `at` used to make this clause blind: String(undefined) ===
+        // String(undefined), so two gauges both claiming a station with no `at`
+        // compared equal and the partition test returned nothing at all.
+        if (s.at == null) { v.push(`N8: precip/${no}/meta.json: rain station ${s.no} arrived via "${s.via}" but names no owning node`); continue; }
         const prev = ownerOf.get(String(s.no));
         if (prev == null) ownerOf.set(String(s.no), String(s.at));
         else if (prev !== String(s.at)) v.push(`N8: rain station ${s.no} is owned by both ${prev} and ${s.at}`);
@@ -801,9 +821,19 @@ export function checkPrecipDrift(index, head, {
   // version's pre-registered numbers instead. A bump with no entry is red, and
   // a bump whose numbers disagree with the entry is red — which is what keeps
   // "register the numbers" from meaning "write down whatever came out".
-  const ver = index.rule ? index.rule.ruleVersion ?? 1 : 1;
-  const headVer = head && head.rule ? head.rule.ruleVersion ?? 1 : ver;
-  const changed = headCounts != null && ver !== headVer;
+  // Read the SAME way on both sides. The first cut defaulted HEAD's version to
+  // the current one when HEAD carried no `rule` block at all, which made the
+  // two equal and switched this whole clause off — an index without a rule
+  // block is version 1, exactly as it is for the index in hand.
+  const verOf = ix => (ix && ix.rule ? ix.rule.ruleVersion ?? 1 : 1);
+  const ver = verOf(index);
+  const headVer = head ? verOf(head) : null;
+  // A pre-registered baseline describes THIS mirror under THIS rule, so it is
+  // only meaningful as "the run that moved the rule". Without a HEAD there is
+  // no move to check and no drift to measure — a fresh branch, a fork or a
+  // fixture tree must not be measured against the production mirror's counts.
+  // The floors in checkPrecipShape are what stand there instead.
+  const changed = headVer != null && ver !== headVer;
   if (changed) {
     const b = baselines[ver];
     if (!b) {

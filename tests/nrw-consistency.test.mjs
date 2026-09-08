@@ -763,7 +763,8 @@ const {
 // gate reads its per-member distance bounds out of it rather than keeping a
 // second copy, so an index without one has to be able to say so.
 const HEALTHY_RULE = {
-  ruleVersion: 2, maxAssignKm: 100, maxOrphanKm: 10, localKm: 15, knnFloor: 3, minSetForSeries: 3,
+  ruleVersion: 2, maxAssignKm: 100, maxOrphanKm: 10,
+  localKm: 15, knnFloor: 3, knnMaxKm: 45, minSetForSeries: 3,
 };
 const HEALTHY_INDEX = {
   schema: 1, rule: HEALTHY_RULE, counts: {
@@ -898,6 +899,66 @@ test('N8c2: a via the rule does not enable, and a via that is no way in at all',
     /r1 has via "sympathy", which is not a way into a set/);
   assert.match(shapeOf(HEALTHY_INDEX, [{ no: 'r1', at: 'g1', via: 'basin' }]),
     /r1 carries no distance — a guess must not look like a measurement/);
+});
+
+test('N8c2: the knn floor has a distance bound too, and it is the PRODUCT’s', () => {
+  // The bound with no test was the one finding of the 2026-09-08 review that
+  // could actually ship broken: no fixture ever put a knn member past 45 km, so
+  // neutralising the clause left the whole suite green.
+  const three = km => [
+    { no: 'r1', at: 'g1', via: 'knn', km }, { no: 'r2', at: 'g1', via: 'knn', km: 20 },
+    { no: 'r3', at: 'g1', via: 'knn', km: 21 },
+  ];
+  assert.doesNotMatch(shapeOf(HEALTHY_INDEX, three(45)), /over that via's bound/, '45 km is the bound and is inside it');
+  assert.match(shapeOf(HEALTHY_INDEX, three(45.01)),
+    /r1 is 45\.01 km away via "knn", over that via's bound of 45 km/);
+  // a rule that widens its own floor is not red for it — one copy of the number
+  const wide = { ...HEALTHY_INDEX, rule: { ...HEALTHY_RULE, knnMaxKm: 60 } };
+  assert.doesNotMatch(shapeOf(wide, three(50)), /over that via's bound/);
+  // and a rule that enables the floor without publishing its bound is red, not
+  // silently fixed up from the estimator's own constant
+  const noBound = { ...HEALTHY_INDEX, rule: { ...HEALTHY_RULE, knnMaxKm: undefined } };
+  assert.match(shapeOf(noBound, three(20)), /enables a knn floor but publishes no knnMaxKm/);
+});
+
+test('N8: an index that stops publishing ruleVersion is red — it would switch clause (j) off', () => {
+  // Nothing else can see this: with the field gone both sides read version 1,
+  // `changed` is false for ever, and a rule change is compared against a HEAD
+  // that the rule change just invalidated.
+  const gone = { ...HEALTHY_INDEX, rule: { ...HEALTHY_RULE, ruleVersion: undefined } };
+  assert.match(shapeOf(gone, [{ no: 'r1', at: 'g1', via: 'basin', km: 4 }]), /carries no ruleVersion/);
+  const text = { ...HEALTHY_INDEX, rule: { ...HEALTHY_RULE, ruleVersion: '2' } };
+  assert.match(shapeOf(text, [{ no: 'r1', at: 'g1', via: 'basin', km: 4 }]), /carries no ruleVersion.*"2"/s);
+});
+
+test('N8c3: a basin member with no owning node is red, not silently equal to every other one', () => {
+  // String(undefined) === String(undefined): before this clause, two gauges
+  // both claiming r1 with no `at` compared EQUAL and the partition test
+  // returned nothing at all.
+  const two = new Map([
+    ['g1', { meta: { set: [{ no: 'r1', via: 'basin', km: 4 }] }, shards: new Map() }],
+    ['g2', { meta: { set: [{ no: 'r1', via: 'basin', km: 5 }] }, shards: new Map() }],
+  ]);
+  const v = checkPrecipShape(HEALTHY_INDEX, two, RAIN_IDS3, { g1: {}, g2: {} }).join('\n');
+  assert.match(v, /rain station r1 arrived via "basin" but names no owning node/);
+});
+
+test('N8j: a counter that disappears from index.json is red, not skipped', () => {
+  const v1 = { ...HEALTHY_INDEX, rule: { ...HEALTHY_RULE, ruleVersion: 1 } };
+  const gone = { ...HEALTHY_INDEX, counts: { ...HEALTHY_INDEX.counts, withSeries: undefined } };
+  assert.match(checkPrecipDrift(gone, v1).join('\n'),
+    /rule version 2: index\.json has no numeric `withSeries` to compare against the pre-registered 275/);
+});
+
+test('N8j: HEAD and the run are read the same way — a HEAD with no rule block is version 1', () => {
+  // The first cut defaulted HEAD's version to the CURRENT one when HEAD carried
+  // no `rule` block, which made them equal and switched clause (j) off entirely.
+  const headNoRule = { schema: 1, counts: { ...HEALTHY_INDEX.counts, withSeries: 94 }, gauges: {} };
+  assert.match(checkPrecipDrift({ ...HEALTHY_INDEX, counts: { ...HEALTHY_INDEX.counts, withSeries: 200 } }, headNoRule).join('\n'),
+    /rule version 2: withSeries is 200, pre-registered 275/);
+  // …and with no HEAD at all there is no rule change to check and no drift to
+  // measure: a fresh branch or a fork is not measured against this mirror's counts
+  assert.deepEqual(checkPrecipDrift({ ...HEALTHY_INDEX, counts: { ...HEALTHY_INDEX.counts, withSeries: 3 } }, null), []);
 });
 
 test('N8c2: a local or knn member that names someone else as its node', () => {
