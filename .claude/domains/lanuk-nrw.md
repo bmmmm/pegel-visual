@@ -263,12 +263,21 @@ re-proposed as a fresh insight. **Do not reopen without new facts.**
   known `catchmentKm2`, then effect on the bench) were never run, and per the
   measurements above its expected effect on accuracy is near zero anyway: its
   value would be honesty, not precision.
-- **A lead found while running that gate, not yet examined:** the same portal
-  publishes `umwelt_klima/wasser/oberflaechengewaesser/**gebietsniederschlaege**`
-  — "Gebietsniederschläge NRW", the operator's OWN areal precipitation. If that
-  is what it sounds like, it is the real version of the number this repo
-  approximates, and the whole 15 km ring is a workaround for a product that
-  exists. Nobody has opened it; it carries the same licence question as GSK3C.
+- **"Gebietsniederschläge NRW" — opened 2026-09-08, and it is NOT the live
+  product it sounds like.** The same portal publishes
+  `umwelt_klima/wasser/oberflaechengewaesser/gebietsniederschlaege`, which for a
+  moment looked like the real version of the number this repo approximates. Its
+  own readme (a 122 kB `_meta.zip` next to the data, so this cost nothing to
+  settle) says otherwise: it covers **1980–2011**, it was published in 2017, and
+  it holds **annual and monthly sums plus 32-year means — no daily values and no
+  feed of any kind.** It is a climatology, not a source. The 15 km ring is not a
+  workaround for it.
+  What it DOES settle is what "done properly" would mean here, in the operator's
+  own words: **Kriging over all operators' station data, then area-weighted onto
+  the GSK3C catchments**, joined by `GEBKZ`. That needs exactly the polygons the
+  licence gate above blocks, plus an interpolation this repo does not have — so
+  the two findings close each other. Its package carries no licence statement
+  either, the same gap as GSK3C.
 - **A rain arm in the forecast gate — the correlation pre-test SURVIVES, just.**
   Rule v2's covariate against rule v1's, over the 93 gauges comparable under
   both: median r **0.9787** against a kill threshold of 0.98, min 0.7796, and
