@@ -38,14 +38,29 @@ const manifest = BASE_URL
 const overview = BASE_URL
   ? await (await fetch(BASE_URL + 'nrw/precip/overview.json')).json()
   : JSON.parse(readFileSync(join(ROOT, 'nrw', 'precip', 'overview.json'), 'utf8'));
+// The hourly response class. Read here so every assertion below compares the
+// plate against the PRODUCT rather than against a string this script also
+// knows — which is what keeps a fixture from going stale as the window rolls.
+const lag = BASE_URL
+  ? await (await fetch(BASE_URL + 'nrw/hourly/lag.json')).json()
+  : JSON.parse(readFileSync(join(ROOT, 'nrw', 'hourly', 'lag.json'), 'utf8'));
+const classHours = ([lo, hi]) => (hi == null ? `${lo}+ h` : `${lo}–${hi} h`);
 console.log(`nrw: export ${manifest.sourceExportAt}, precip ${manifest.counts.precip} gauges; overview ${overview.window.from}…${overview.window.to}, bins ${overview.bins.join('/')}`);
+console.log(`     hourly lag ${lag.window.from}…${lag.window.to}, ${lag.counts.published} published, classes ${lag.counts.byClass.join('/')} (${lag.rule.classes.map(classHours).join(', ')})`);
 
 const check = checker();
 
 const STATION_READY = 'state.gauge && state.gauge.currentMeasurement && state.archive.length > 100 && state.precip';
 const PAGES = [
-  { q: '?station=MENDEN_1', ready: STATION_READY, name: 'menden', kind: 'station' },
-  { q: '?station=MENDEN_1&history=1y', ready: STATION_READY, name: 'menden-1y', kind: 'station' },
+  { q: '?station=MENDEN_1', ready: STATION_READY, name: 'menden', kind: 'station', no: '2729100000100' },
+  { q: '?station=MENDEN_1&history=1y', ready: STATION_READY, name: 'menden-1y', kind: 'station', no: '2729100000100' },
+  // One gauge per response class, so all three are DRAWN at least once rather
+  // than only described in the key. The classes themselves are NOT pinned here:
+  // the check reads lag.gauges[no] and asserts the plate agrees with it, so a
+  // gauge that changes class as the window rolls stays a valid fixture. Pinning
+  // "MONSCHAU is class 0" would be a fixture that goes red on the weather.
+  { q: '?station=MONSCHAU', ready: STATION_READY, name: 'monschau', kind: 'station', no: '2821530000200' },
+  { q: '?station=HALTERN', ready: STATION_READY, name: 'haltern', kind: 'station', no: '2789100000100' },
   // The two states that are NOT "a normal gauge with a normal set", picked
   // fresh for rule version 2 — under version 1 ARLOFF stood here as the gauge
   // with no product, and version 2 gave it one (its 15 km ring holds nine).
@@ -116,6 +131,19 @@ const MEASURE = `(() => {
       sentence: (el('.resp-wrap') && el('.resp-wrap').parentElement.querySelector('.say') || {}).textContent || '',
     };
   }
+  // THE RESPONSE PLATE'S OWN TEXT, anchored at the section that holds the
+  // response chart — never at #screen and never at a bare .p-key, both of which
+  // sweep in the precipitation plate's key three blocks up. The class sentence
+  // gets its own class name (.rs-class) so it cannot be confused with the slope
+  // sentence, which is also a .say.
+  const respSection = [...document.querySelectorAll('#screen section.p-block')]
+    .find(s => s.querySelector('.chart.response') || /^RESPONSE/.test((s.querySelector('.p-h2') || {}).textContent || ''));
+  out.respPlate = respSection ? {
+    key: [...respSection.querySelectorAll('.p-key dd')].map(e => e.textContent),
+    cls: (respSection.querySelector('.rs-class') || {}).textContent || null,
+    clsIsDim: !!respSection.querySelector('.p-dim.rs-class'),
+    text: respSection.innerText,
+  } : null;
   const table = el('table.heat.rain');
   if (table) {
     const vm = rainViewModel();
@@ -200,9 +228,56 @@ async function run(cdp, base, vp) {
         check(!!r && r.peak === 1, `${pg.name}: exactly one peak marker`, r ? String(r.peak) : '-');
         check(!!r && r.minBarW >= 8, `${pg.name}: every response bar is at least 8 px wide`, r ? `min ${r.minBarW.toFixed(1)}` : '-');
         check(!!r && /per 10 mm of rain around the gauge/.test(r.sentence), `${pg.name}: the slope sentence names its unit`, r ? r.sentence : '-');
+
+        // ---- the third estimator: the hourly response class ----
+        const k = (m.respPlate && m.respPlate.key) || [];
+        const joined = k.join(' | ');
+        // The plate rule: a section that cannot name its own marks does not
+        // ship. There are three estimators on this plate now, and the key has
+        // to keep them apart in one line each.
+        check(/three estimators: the bars are Pearson r over DAYS.*the sentence is a slope.*the response time is a class measured on HOURLY data/.test(joined),
+          `${pg.name}: the key names all THREE estimators, not two`, joined.slice(0, 300));
+        // The class vocabulary, with the hour bounds taken from the FILE. A
+        // check that spelled "2–8 h" out itself would stay green after the rule
+        // moved and the plate went on printing the old span.
+        const vocab = lag.rule.classes.map(classHours);
+        check(vocab.every(v => joined.includes(v)),
+          `${pg.name}: the key names every class with the file's own hour bounds (${vocab.join(', ')})`, joined.slice(0, 400));
+        check(/measured on hourly data over a rolling window of \d+ days, ending \d{4}-\d{2}-\d{2}/.test(joined),
+          `${pg.name}: and says the class comes off a different resolution and window`, joined.slice(0, 400));
+
+        const want = lag.gauges[pg.no];
+        const cls = (m.respPlate && m.respPlate.cls) || '';
+        if (want != null) {
+          // The plate's class must be the PRODUCT's class for this gauge.
+          check(!m.respPlate.clsIsDim && cls.includes(classHours(lag.rule.classes[want])),
+            `${pg.name}: prints class ${want} = ${classHours(lag.rule.classes[want])}, as lag.json says`, cls || '(no class line)');
+          // …and not one of the other two, which a lookup off by one would give
+          const others = lag.rule.classes.filter((_, i) => i !== want).map(classHours);
+          check(!others.some(o => cls.includes(o)),
+            `${pg.name}: and names no OTHER class in the same sentence`, `${cls} vs ${others.join(', ')}`);
+          // the hour is deliberately not published; a raw lag on the plate would
+          // be false precision the window cannot carry
+          check(!/\bpeak(ing)? at \d+ h\b/.test(m.respPlate.text),
+            `${pg.name}: the raw peak hour is not printed`, m.respPlate.text.slice(0, 200));
+        } else {
+          check(m.respPlate.clsIsDim && /no response time for this gauge/.test(cls),
+            `${pg.name}: has no class in lag.json, and the plate says so`, cls || '(no class line)');
+          // the fleet split, with the file's own counts — so "no response time"
+          // is a place in a distribution rather than a shrug
+          const c = lag.counts;
+          check(joined.includes(`${c.weak} rain explains too little`) && joined.includes(`${c.notInHires} no hourly series`),
+            `${pg.name}: and names the fleet split with lag.json's own counts`, joined.slice(0, 400));
+        }
       }
       if (pg.noProduct) {
         check(!m.precip, `${pg.name}: no chart, because there is no product`);
+        // The fleet-wide lag file is fetched on the station path, so a gauge the
+        // manifest already said no to must not pull it either — the same "costs
+        // no request" property the precip shards have.
+        check(s.events.responses.filter(r => r.url.includes('/nrw/hourly/')).length === 0,
+          `${pg.name}: and no hourly lag file was fetched for it`,
+          s.events.responses.filter(r => r.url.includes('/nrw/hourly/')).map(r => r.url).join(', '));
         check(precipReqs.filter(r => !r.url.endsWith('overview.json')).length === 0,
           `${pg.name}: the manifest said no, so no /precip/ shard was fetched`, precipReqs.map(r => r.url).join(', '));
         // The COLLECTOR's own words, compared against the collector's own file —

@@ -94,14 +94,28 @@ jobs:
         # it produced. Never merged into the collector — a derived product that
         # a checkout cannot reproduce is not derived, it is remembered.
         run: node scripts/build-nrw-precip.mjs --tree nrw-branch/nrw
-      - name: Consistency gate (N1-N8)
+      - name: Bake the hourly response class
+        # AFTER the rain field and BEFORE the gate, and the order is not a
+        # preference: the hourly product takes its membership from the daily
+        # one's shipped RULE and its universe from manifest.precip[].series,
+        # which the step above writes. It reads BOTH branches and writes into
+        # `nrw` only — nrw-hires is never mounted by pages.yml, so a product
+        # left there would never reach a browser. --report puts the per-gauge
+        # diagnostics (r, h, n, wet, p) in the run log, which is kept 90 days;
+        # they are deliberately NOT in the file, where they would churn 21-76
+        # lines a day against a ceiling of ~10.
+        run: node scripts/build-nrw-hourly-lag.mjs --tree nrw-branch/nrw --hires nrw-hires-branch/nrw-hires --report
+      - name: Consistency gate (N1-N9)
         # content-level guard before anything is pushed: fleet completeness,
         # recency, window coverage, no regression against the branch HEAD,
         # shapes and plausibility, alert-stage integrity, bulk coverage
         # against the high-water mark — the silent failure where the ZIP loses
         # stations while every single series still looks healthy — and the
-        # areal-rain product's own shape, ownership and drift counters
-        run: node scripts/check-nrw-consistency.mjs --tree nrw-branch/nrw --git nrw-branch
+        # areal-rain product's own shape, ownership and drift counters, and the
+        # hourly response class. --hires is what lets N9(g) and N9(h) run at
+        # all; without it the gate prints a SKIPPED warning and marks its own
+        # green line partial, which is not what a deploy gate should ship.
+        run: node scripts/check-nrw-consistency.mjs --tree nrw-branch/nrw --git nrw-branch --hires nrw-hires-branch/nrw-hires
       - name: Commit and push nrw
         id: push
         run: |

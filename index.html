@@ -2194,6 +2194,13 @@ const precipRespCache = new Map();  // "<no>" -> Promise<response|null>
 const precipShard = (no, y) => cachedJson(precipShardCache, `${no}/${y}`, `${LANUK_BASE}precip/${no}/${y}.json`);
 const precipMeta = no => cachedJson(precipMetaCache, no, `${LANUK_BASE}precip/${no}/meta.json`);
 const precipResponse = no => cachedJson(precipRespCache, no, `${LANUK_BASE}precip/${no}/response.json`);
+// The hourly response class (scripts/build-nrw-hourly-lag.mjs): ONE file for the
+// whole fleet, so one request per session serves every station the reader
+// visits. Deliberately NOT hung off manifest.json — that would couple two
+// builders over a file N8(e) checks byte for byte, and cost every visitor 10 kB
+// whether or not they ever open a station.
+const hourlyLagCache = new Map();
+const hourlyLagIndex = () => cachedJson(hourlyLagCache, 'lag', `${LANUK_BASE}hourly/lag.json`);
 function cachedJson(cache, key, url) {
   if (!cache.has(key)) cache.set(key, getJson(url).catch(() => null));
   return cache.get(key);
@@ -2225,8 +2232,8 @@ async function loadPrecip(forStation, no, entry) {
     scheduleRender();
     return;
   }
-  const [meta, response, ...shards] = await Promise.all([
-    precipMeta(no), precipResponse(no), ...precipYears().map(y => precipShard(no, y)),
+  const [meta, response, lag, ...shards] = await Promise.all([
+    precipMeta(no), precipResponse(no), hourlyLagIndex(), ...precipYears().map(y => precipShard(no, y)),
   ]);
   if (station !== forStation || mode !== 'station') return; // switched away while fetching
   if (!meta) {
@@ -2237,7 +2244,7 @@ async function loadPrecip(forStation, no, entry) {
     precipYears().forEach((y, i) => { if (shards[i]) years[y] = shards[i]; });
     // nRain is the product's own count of the set; `set` is the same list, but
     // the count is what the legend prints and what the collector guarantees
-    state.precip = { no, meta, response, years, n: meta.nRain ?? (meta.set || []).length, reason: null };
+    state.precip = { no, meta, response, lag, years, n: meta.nRain ?? (meta.set || []).length, reason: null };
   }
   scheduleRender();
 }
@@ -3219,7 +3226,28 @@ const T = {
   respNeg: 'correlation below zero',
   respZero: 'no correlation',
   respPeak: 'the strongest lag',
-  respTwoEstimators: 'two estimators: the bars are Pearson r, the sentence is a slope',
+  // Three now, and the key HAS to keep them apart in one line each — a section
+  // that cannot name its own marks does not ship. The third one is not just a
+  // third number: it comes off a different resolution and a different window.
+  respThreeEstimators: 'three estimators: the bars are Pearson r over DAYS, the sentence is a slope per rain event, and the response time is a class measured on HOURLY data',
+  // The three classes. Indexed by the class id in nrw/hourly/lag.json; the hour
+  // ranges beside them on the plate are read out of that file's own rule block,
+  // never restated here, so a rule that moves cannot leave the words behind.
+  respClasses: ['within the hour', 'a few hours', 'the next day'],
+  respClassSay: 'the level answers the rain',
+  respClassKey: 'response time, three classes:',
+  respClassWindow: 'measured on hourly data over a rolling window of',
+  respClassNone: 'no response time for this gauge',
+  // Where a gauge has none, the plate says how the fleet splits rather than
+  // inventing a reason for this one: the product carries the class and nothing
+  // else per gauge, because an `r` or an `h` beside it churns the file with
+  // 21-76 lines a day against a ceiling of ~10.
+  respClassSplit: 'of the gauges with a rain field, this many have no response time —',
+  respClassWeak: 'rain explains too little',
+  respClassThin: 'too few hours of rain',
+  respClassNoHires: 'no hourly series',
+  respClassChance: 'peak not clear of chance',
+  respClassUnnamed: 'this build publishes classes this page has no words for',
   respWeak: 'weak at every lag — this gauge does not follow the rain around it',
   respThin: 'few days behind the peak: read it as an indication, not a measurement',
   respPeakAt: 'peaking at lag',
@@ -4467,20 +4495,51 @@ function renderPrecip(p) {
 // RESPONSE: what the rain did to the level, as the mirror's own record says.
 // Two estimators live here and the key has to keep them apart — the bars are a
 // correlation, the sentence is a slope.
+// The hourly response class, read out of the fleet-wide nrw/hourly/lag.json.
+// The file maps a gauge id onto a CLASS INDEX and onto nothing else, so every
+// word and every hour bound on the plate comes from `rule.classes` here rather
+// than from a second copy in the display layer.
+function hourlyClassView(lag, no) {
+  const classes = lag && lag.rule && Array.isArray(lag.rule.classes) ? lag.rule.classes : null;
+  // a shape check, not a presence check: a truncated file must not throw out of
+  // render(), which runs inside a rAF callback that swallows it
+  const usable = !!(classes && classes.length && lag.gauges && typeof lag.gauges === 'object'
+    && classes.every(c => Array.isArray(c) && Number.isInteger(c[0]) && (c[1] === null || Number.isInteger(c[1]))));
+  if (!usable) return { ok: false, cls: null, unnamed: false };
+  const raw = lag.gauges[String(no)];
+  const cls = Number.isInteger(raw) && raw >= 0 && raw < classes.length ? raw : null;
+  // A build that ships more classes than this page has words for prints NO
+  // class and says so, rather than an index the reader would read as a fourth.
+  const named = classes.length === T.respClasses.length;
+  return {
+    ok: true, classes, named,
+    cls: named ? cls : null,
+    unnamed: cls != null && !named,
+    hours: lag.window && Number.isFinite(lag.window.hours) ? lag.window.hours : null,
+    to: lag.window ? String(lag.window.to || '') : '',
+    counts: lag.counts || null,
+    note: typeof lag.note === 'string' ? lag.note : '',
+  };
+}
+
 function responseViewModel() {
   const p = state.precip;
   if (!p || p.reason) return null;
   const r = p.response;
+  // The hourly class is a SEPARATE estimator on a separate file: a gauge whose
+  // daily statistic cannot be computed may still have a response time, so it
+  // rides through the empty branches below instead of being lost with them.
+  const hourly = hourlyClassView(p.lag, p.no);
   // the SHAPE, not just the presence: a truncated artefact would otherwise
   // throw out of render(), which runs inside a rAF callback that swallows it
-  if (!r || !Array.isArray(r.lags) || !r.events) return { empty: true, reason: (r && r.reason) || T.respMissing };
+  if (!r || !Array.isArray(r.lags) || !r.events) return { empty: true, hourly, reason: (r && r.reason) || T.respMissing };
   const rise = typeof r.events.risePer10mm === 'number' ? r.events.risePer10mm : null;
   const rPeak = typeof r.rPeak === 'number' ? r.rPeak : null;
-  if (r.peakLag == null && rise == null) return { empty: true, reason: r.reason || T.respMissing };
+  if (r.peakLag == null && rise == null) return { empty: true, hourly, reason: r.reason || T.respMissing };
   const lags = r.lags.map(l => ({ ...l, r: l.r == null ? 0 : l.r }));
   const max = Math.max(0.2, ...lags.map(l => Math.abs(l.r)));
   return {
-    empty: false, lags, max, peakLag: r.peakLag, rPeak, nPeak: r.nPeak || 0,
+    empty: false, hourly, lags, max, peakLag: r.peakLag, rPeak, nPeak: r.nPeak || 0,
     rise, events: r.events.n || 0, threshold: r.events.thresholdMm,
     align: r.align || '', unit: (r.unit && r.unit.rise) || 'per 10 mm of rain around the gauge',
     // the collector tells "too few pairs at the peak lag" from "too few rain
@@ -4490,10 +4549,55 @@ function responseViewModel() {
   };
 }
 
+// "2–8 h" / "9+ h", built from the product's own class bounds. The numbers are
+// validated integers by the time they get here, so they cannot carry markup —
+// they still go through esc(), because the rule that every value is escaped is
+// worth more than the one exception it would earn here.
+function classHours(range) {
+  const [lo, hi] = range;
+  return hi == null ? `${lo}+ h` : `${lo}–${hi} h`;
+}
+// The class sentence and the key entries the class brings with it. Split out of
+// renderResponse because the class has to appear on a plate whose DAILY
+// statistic could not be computed, and that path returns early.
+function hourlyClassSay(h) {
+  if (!h || !h.ok) return '';
+  if (h.cls == null) {
+    return `<p class="p-dim rs-class">${esc(h.unnamed ? T.respClassUnnamed : T.respClassNone)}</p>`;
+  }
+  return `<p class="say rs-class">${esc(`${T.respClassSay}: ${T.respClasses[h.cls]} (${classHours(h.classes[h.cls])})`)}</p>`;
+}
+function hourlyClassKey(h) {
+  if (!h || !h.ok) return [];
+  const c = h.counts || {};
+  const split = [
+    [c.weak, T.respClassWeak], [c.noPeak, T.respClassThin],
+    [c.notInHires, T.respClassNoHires], [c.notSignificant, T.respClassChance],
+  ].filter(([n]) => Number.isFinite(n) && n > 0).map(([n, what]) => `${n} ${what}`);
+  return [
+    // the vocabulary, with the bounds read out of the file — a class the reader
+    // sees named has to say what span of hours it stands for
+    h.named && { note: `${T.respClassKey} ${h.classes.map((range, i) => `${T.respClasses[i]} (${classHours(range)})`).join(' · ')}` },
+    // …and where it comes from, which is NOT where the bars come from
+    h.hours && { note: `${T.respClassWindow} ${Math.round(h.hours / 24)} ${plural(Math.round(h.hours / 24), 'day')}${h.to ? `, ending ${h.to.slice(0, 10)}` : ''}` },
+    // the fleet split, so "no response time" is a place in a distribution
+    // rather than a shrug. Per-gauge reasons are deliberately not shipped:
+    // they carry their own numbers and would churn the file past its ceiling.
+    h.cls == null && split.length && { note: `${T.respClassSplit} ${split.join(', ')}` },
+    h.note && { note: h.note },
+  ];
+}
+
 function renderResponse(r) {
   if (!r) return '';
   const head = `<section class="p-block"><h2 class="p-h2">${esc(T.response)}</h2>`;
-  if (r.empty) return head + `<p class="p-dim">${esc(r.reason)}</p></section>`;
+  if (r.empty) {
+    // The daily statistic failed; the hourly class may still exist, and a plate
+    // that swallowed it would hide the one estimator that worked.
+    const say = hourlyClassSay(r.hourly);
+    const key = say ? plateKey(hourlyClassKey(r.hourly)) : '';
+    return head + `<p class="p-dim">${esc(r.reason)}</p>${say}${key}</section>`;
+  }
   const W = 320, H = 84, mid = H / 2, cw = W / r.lags.length;
   const parts = [`<line class="rs-zero" x1="0" y1="${mid}" x2="${W}" y2="${mid}"/>`];
   r.lags.forEach((l, i) => {
@@ -4527,13 +4631,14 @@ function renderResponse(r) {
     { sw: keySw('<rect class="rs-neg" x="3" y="2" width="6" height="8"/>'), label: T.respNeg },
     { sw: keySw('<line class="rs-zero" x1="0" y1="6" x2="12" y2="6"/>'), label: T.respZero },
     { sw: keySw('<rect class="rs-bar" x="3" y="4" width="6" height="6"/><line class="rs-peak" x1="3" y1="3.5" x2="9" y2="3.5"/>'), label: T.respPeak },
-    { note: T.respTwoEstimators },
+    { note: T.respThreeEstimators },
     r.align && { dd: esc(r.align) },
     r.rPeak != null && { note: `r = ${r.rPeak.toFixed(2)} over ${r.nPeak} ${plural(r.nPeak, 'day')}` },
     r.weak && { note: T.respWeak, warn: true },
     r.thin && { note: T.respThin, warn: true },
+    ...hourlyClassKey(r.hourly),
   ]);
-  return head + `<div class="resp-wrap">${chart}${axis}</div>${say}${key}</section>`;
+  return head + `<div class="resp-wrap">${chart}${axis}</div>${say}${hourlyClassSay(r.hourly)}${key}</section>`;
 }
 
 // ---------- neighbours ----------
