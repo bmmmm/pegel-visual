@@ -51,9 +51,11 @@ every rain drawing is the collector's own `lastRainDay`, never `window.rain.to`
 and never the clock; and the per-gauge product is **not areal rain over a
 catchment** — no watershed is consulted anywhere, it is the rain FIELD around
 the gauge (rule version 2, `scripts/probe-precip-rule.mjs` is the bench that
-chose it), and area weighting, per-station travel time and the hourly response
-lag were each **measured and killed** against a pre-registered criterion. Every
-figure behind these lives in the file.
+chose it); area weighting and per-station travel time were **measured and
+killed** against a pre-registered criterion; and the hourly response lag was
+killed on 2026-09-08 by a measurement that turned out to be **wrong** — the
+probe had run under the old rule — so that kill is **withdrawn** and the stage
+is open. Every figure behind these lives in the file.
 
 ## Forecast gate (`scripts/forecast/`, `gate/`)
 

@@ -219,7 +219,7 @@ Note also that the baseline is only consulted when there IS a HEAD to differ
 from — a fresh branch or a fork has no rule change to check, and the floors in
 `checkPrecipShape` are what stand there instead.
 
-### Three ideas that were measured and killed
+### Two ideas measured and killed, and one kill withdrawn
 
 Each had a pre-registered kill criterion, and each is recorded here so it is not
 re-proposed as a fresh insight. **Do not reopen without new facts.**
@@ -234,17 +234,45 @@ re-proposed as a fresh insight. **Do not reopen without new facts.**
   on their own — `gaugeDatum` exists on **24 of 310** gauges and there is no
   DEM; and `distToConflKm` is not a network coordinate (**43 of 51** sets hold
   an "upstream" station with a SMALLER value, Greven by −109 km).
-- **Hourly response lag per gauge — killed 2026-09-08 by its own stability
-  gate.** The signal is real and is the only genuinely new hydrology in the
-  repo: over the 66-day hires window, 76 of 85 estimable gauges give a lag,
-  median 2 h, p90 9 h, max 43 h, median peak r 0.351. But split the window in
-  half and re-estimate, and only **18 of 28 gauges agree within ±3 h = 64.3 %**
-  against a pre-registered floor of 2/3; |A−B| has a p90 of 10 h and a max of
-  18 h. A window that cannot reproduce its own number across its own halves may
-  not print one. (The churn gate PASSES — 3.7 rewrites/day at ±3 h against a
-  ceiling of 10 — but it was run with a fixed left edge, which is the
-  optimistic case, and it is moot while stability fails.) The bench is
-  `scripts/probe-hourly-lag.mjs`; re-run it when the window is longer.
+- **Hourly response lag per gauge — I KILLED THIS ON A BAD MEASUREMENT. The
+  kill is withdrawn; the stage is open and undecided.** Read this before
+  re-proposing or re-killing it.
+  On 2026-09-08 the stability gate read **64.3 %** against a floor of 2/3 and
+  the stage was declared dead. That number came from a run of
+  `scripts/probe-hourly-lag.mjs` made *before* `RULE` was flipped to version 2 —
+  the probe takes its membership from that constant, and its output did not name
+  it. So it measured the OLD thin sets: 85 gauges attempted, and the gate came
+  down to **28** gauges of which 18 agreed. Re-run against the shipped rule, on
+  the same data, as a control: the old rule still gives exactly 28 / 18 / 64.3 %,
+  and the shipped rule gives **81 gauges, 58 agreeing, 71.6 % — PASS.** The
+  difference is the rule, not the day. The probe now prints the rule it used.
+  Where the stage actually stands, all measured 2026-09-08 under rule version 2:
+
+  | gate | pre-registered | result |
+  |---|---|---|
+  | stability, halves within ±3 h | ≥ 2/3 | **71.6 %** (58 of 81), \|A−B\| median 1 h, p90 8 h — PASS |
+  | churn, rewrites per day at ±3 h | ≤ ~10 files | **10.4/day** of 206 gauges — FAIL |
+  | negative control | (not pre-registered — added now) | **PASS, decisively** |
+
+  **The churn ceiling is an absolute file count calibrated against a 76-gauge
+  product and is now being applied to 206.** As a RATE it did not move: 3.7/76 =
+  4.9 % then, 10.4/206 = 5.0 % now. That is an observation about the criterion's
+  units, not an argument about the result — re-registering a threshold after
+  seeing the number it failed is exactly what must not happen quietly, so the
+  criterion stands as written and the stage stays unbuilt until someone decides
+  otherwise on the record.
+  **The signal itself is real**, and that is now shown rather than assumed. The
+  new `--control` rotates the level series against the rain, leaving every
+  marginal intact and destroying only the alignment: median peak r falls from
+  **0.391 to 0.044–0.066** across three independent shifts, and the share of
+  gauges peaking at lag 0 falls from 40.1 % to 0.9–8.1 %. (This repo's own
+  reason for insisting: the forecast gate's R5 exists because R1 can insist on
+  noise, and the 2026-09-07 shuffled control beat the real rain.)
+  Two things any build must handle, both visible in the probe's own output now:
+  **40 % of gauges peak at lag 0** — real per the control, but a number carrying
+  little information — and **24 % have peak r < 0.25**, which should not print a
+  lag at all. Only 1 of 222 peaks at the 48 h search edge, so truncation is not
+  a problem.
 
 ### Two gates run for later stages, and what they said
 

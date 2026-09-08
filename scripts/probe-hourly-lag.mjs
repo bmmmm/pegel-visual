@@ -7,6 +7,15 @@
 //   node scripts/probe-hourly-lag.mjs --tree /tmp/nrwtree/nrw --hires /tmp/nrwhires/nrw-hires
 //   … --split      the stability gate: estimate each half of the window separately
 //   … --churn 14   the churn gate: replay the last N daily windows, count rewrites
+//   … --control    the negative control: rotate the level series against the rain
+//   … --variant '{"localKm":null,"knnFloor":0}'   measure under a different rule
+//
+// IT PRINTS THE RULE IT USED, and that line is not decoration. This probe takes
+// its membership from the shipping `RULE`, and on 2026-09-08 it was run BEFORE
+// that constant was flipped to version 2 — so it measured the old thin sets,
+// reached 28 gauges, and killed the stage at 64.3 % against a floor of 66.7 %.
+// Re-run against the shipped rule on the same data: 81 gauges, 71.6 %, PASS.
+// The verdict was an artefact of an input the output did not name.
 //
 // TWO GATES, both pre-registered, both able to kill the stage:
 //   STABILITY  the two halves of the rolling window must agree within +/-3 h on
@@ -152,15 +161,21 @@ export function loadBench(tree, hires) {
   return { nodes, rain, assign, up, rainOf, levelOf, from: lo, to: hi };
 }
 
-export function estimateAll(bench, { from, to, opts = RULE } = {}) {
+// `levelShift` rotates the level series against the rain by that many hours,
+// for the negative control. Zero is the real measurement.
+export function estimateAll(bench, { from, to, opts = RULE, levelShift = 0 } = {}) {
   const out = new Map();
+  const span = to - from + 1;
   for (const no of bench.assign.recv) {
     const set = precipMembers(no, { nodes: bench.nodes, rain: bench.rain, assign: bench.assign, up: bench.up, ...opts });
     if (set.length < MIN_SET_FOR_SERIES) continue;
     const series = set.map(s => bench.rainOf(s.no)).filter(m => m.size);
     if (series.length < MIN_SET_FOR_SERIES) continue;
-    const level = bench.levelOf(no);
+    let level = bench.levelOf(no);
     if (!level.size) continue;
+    if (levelShift) {
+      level = new Map([...level].map(([h, v]) => [from + (((h - from + levelShift) % span) + span) % span, v]));
+    }
     const areal = arealHourly(series, from, to);
     const st = lagStats(areal, level, from, to);
     out.set(no, { no, nSet: set.length, nHires: series.length, ...st });
@@ -182,6 +197,8 @@ function main(argv) {
   if (!Number.isFinite(bench.from)) throw new Error(`no hourly rain read under ${hires}/rain — wrong --hires path, or the shard shape changed`);
   const days = (bench.to - bench.from + 1) / 24;
   console.log(`hires window ${iso(bench.from)} … ${iso(bench.to)} = ${days.toFixed(1)} days`);
+  // The rule is an INPUT of every number below, so it is printed with them.
+  console.log(`membership rule: ${JSON.stringify(opts)}${variant ? ' (--variant)' : ' (the shipping RULE)'}`);
 
   const full = estimateAll(bench, { from: bench.from, to: bench.to, opts });
   const ok = [...full.values()].filter(x => x.h != null);
@@ -190,6 +207,14 @@ function main(argv) {
     const hs = ok.map(x => x.h).sort((a, b) => a - b);
     console.log(`  lag h: min ${hs[0]}, median ${median(hs)}, p90 ${hs[Math.ceil(0.9 * hs.length) - 1]}, max ${hs[hs.length - 1]}`);
     console.log(`  r at peak: median ${median(ok.map(x => x.r)).toFixed(3)}`);
+    // Two ways this estimator can print a number that is not one, both worth
+    // seeing next to the medians rather than in a follow-up investigation.
+    const edge = ok.filter(x => x.h >= MAX_LAG_H).length;
+    const zero = ok.filter(x => x.h === 0).length;
+    const weak = ok.filter(x => x.r < 0.25).length;
+    console.log(`  at the search edge (${MAX_LAG_H} h): ${edge} — a maximum at the edge is a truncation, not a peak`);
+    console.log(`  at lag 0: ${zero} (${(100 * zero / ok.length).toFixed(1)} %) — see --control before believing them`);
+    console.log(`  peak r below 0.25: ${weak} (${(100 * weak / ok.length).toFixed(1)} %) — a lag off a correlation that weak is not a measurement`);
   }
 
   if (args.includes('--split')) {
@@ -204,6 +229,39 @@ function main(argv) {
     const diffs = both.map(no => Math.abs(A.get(no).h - B.get(no).h)).sort((a, b) => a - b);
     if (diffs.length) console.log(`  |A-B| median ${median(diffs)} h, p90 ${diffs[Math.ceil(0.9 * diffs.length) - 1]} h, max ${diffs[diffs.length - 1]} h`);
     console.log(`  gate: ${frac >= STABILITY_MIN_FRAC ? 'PASS' : 'FAIL'} (needs >= ${(100 * STABILITY_MIN_FRAC).toFixed(0)} %)`);
+  }
+
+  if (args.includes('--control')) {
+    // THE NEGATIVE CONTROL. 40 % of the gauges put their response at lag 0, and
+    // the only way to tell a very fast catchment from an artefact is to destroy
+    // the timing and see whether the estimator still finds it. The level series
+    // is ROTATED against the rain, so every marginal — values, variance, wet
+    // hours, missingness — is untouched and only the alignment dies. Anything
+    // that survives that is not a response time.
+    //
+    // This repo already knows why: the forecast gate's R5 exists because R1 can
+    // insist on noise, and the 2026-09-07 run's shuffled control scored BETTER
+    // than the real rain. An estimator without one is a hypothesis.
+    const span = bench.to - bench.from + 1;
+    const rows = [];
+    for (const shift of [0, 601, 1009, 1511]) {
+      const est = estimateAll(bench, {
+        from: bench.from, to: bench.to, opts,
+        levelShift: shift === 0 ? 0 : shift,
+      });
+      const ok2 = [...est.values()].filter(x => x.h != null);
+      rows.push({ shift, n: ok2.length, zero: ok2.filter(x => x.h === 0).length, r: median(ok2.map(x => x.r)), h: median(ok2.map(x => x.h)) });
+    }
+    console.log(`CONTROL (level rotated against rain over a ${span} h window):`);
+    for (const r of rows) {
+      console.log(`  shift ${String(r.shift).padStart(4)} h: ${String(r.n).padStart(3)} with a lag, ` +
+        `${String(r.zero).padStart(3)} at lag 0 (${(100 * r.zero / (r.n || 1)).toFixed(1)} %), median r ${r.r.toFixed(3)}, median lag ${r.h} h` +
+        (r.shift === 0 ? '   <- the real thing' : ''));
+    }
+    const real = rows[0], fake = rows.slice(1);
+    const worst = Math.max(...fake.map(x => x.r));
+    console.log(`  gate: ${real.r > 2 * worst ? 'PASS' : 'FAIL'} — the real median r (${real.r.toFixed(3)}) ` +
+      `${real.r > 2 * worst ? 'is more than double' : 'does NOT clear double'} the best shuffled one (${worst.toFixed(3)})`);
   }
 
   const churnDays = Number(flag('--churn') || 0);
