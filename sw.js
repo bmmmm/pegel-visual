@@ -17,8 +17,11 @@
 // "no data" — the page has states for that and says so.
 
 const CACHE = 'pegel-shell-v1';
+// './' is deliberately absent: a navigation has already fetched it by the time
+// install runs, and it is the same file as './index.html' — listing both pulled
+// the 421 KB document down twice on every cold start (measured 2026-09-09).
+// The fetch handler caches whatever path the reader actually opened.
 const SHELL = [
-  './',
   './index.html',
   './manifest.webmanifest',
   './favicon.svg',
@@ -51,17 +54,25 @@ self.addEventListener('fetch', e => {
   if (url.pathname.includes('/archive/')) return;    // data, not shell
   if (url.pathname.includes('/nrw/')) return;        // LANUK data, same rule
 
+  // Every ?station=… is the same document — the page reads the query at runtime.
+  // Keyed on the full URL, each one COULD keep its own copy of the 421 KB file,
+  // and nothing here ever prunes within the cache. One run did produce an entry
+  // per query (2026-09-09); four later runs produced none, and the cause of the
+  // difference was never found — so this is a shape fix, not a cure for a
+  // symptom anyone can reproduce. Keying on the path makes the question moot.
+  const key = req.mode === 'navigate' ? new Request(url.origin + url.pathname) : req;
+
   e.respondWith(
     fetch(req)
       .then(res => {
         if (res && res.ok && res.type === 'basic') {
           const copy = res.clone();
-          caches.open(CACHE).then(c => c.put(req, copy)).catch(() => {});
+          caches.open(CACHE).then(c => c.put(key, copy)).catch(() => {});
         }
         return res;
       })
       // offline: the shell, or the page itself for a navigation to any ?query
-      .catch(() => caches.match(req).then(hit => hit || (req.mode === 'navigate'
+      .catch(() => caches.match(key).then(hit => hit || (req.mode === 'navigate'
         ? caches.match('./index.html')
         : undefined)))
   );

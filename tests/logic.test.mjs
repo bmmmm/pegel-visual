@@ -3857,9 +3857,19 @@ test('the PWA declares what an install prompt looks for, and the shell is honest
   const sw = readFileSync(new URL('sw.js', dir), 'utf8');
   // network-first is the whole design: a cache-first worker pins readers to
   // the build they installed, on a page whose readings move every five minutes
-  assert.ok(sw.indexOf('fetch(req)') < sw.indexOf('caches.match(req)'),
+  assert.ok(sw.indexOf('fetch(req)') < sw.indexOf('caches.match('),
     'the network is tried before the cache');
   assert.match(sw, /includes\('\/archive\/'\)\) return/, 'and readings are never cached as shell');
+  // Two ways this worker could spend the reader's quota on one 421 KB file.
+  // Listing './' beside './index.html' really did fetch the document twice per
+  // cold start — counted server-side, reproducible. Keying the cache on the
+  // full URL let every ?station=… keep its own copy in one run and in none of
+  // the four after it; that one is a shape rule, held here so the question
+  // cannot come back, not a fix for a measured symptom.
+  const shell = sw.slice(sw.indexOf('const SHELL'), sw.indexOf('];', sw.indexOf('const SHELL')));
+  assert.ok(!/^\s*'\.\/',/m.test(shell), "the shell does not list './' beside './index.html'");
+  assert.match(sw, /req\.mode === 'navigate' \? new Request\(url\.origin \+ url\.pathname\)/,
+    'and a navigation is cached under its path, not its query');
   assert.match(readFileSync(new URL('index.html', dir), 'utf8'),
     /navigator\.serviceWorker\.register\('sw\.js'\)/, 'the page registers it');
 });
