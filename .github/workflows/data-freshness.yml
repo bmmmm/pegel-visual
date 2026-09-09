@@ -23,6 +23,12 @@ on:
 
 permissions:
   issues: write
+
+# two overlapping runs (a dispatch during the schedule) would comment the same
+# finding twice on the tracking issue
+concurrency:
+  group: data-freshness
+  cancel-in-progress: false
   contents: read
 
 jobs:

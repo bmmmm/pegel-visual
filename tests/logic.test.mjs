@@ -1567,7 +1567,10 @@ test('renderYears: heatmap, monthly range and the year overlay all render', () =
   assert.ok(html.includes('MONTHLY HEAT'), 'section 1');
   assert.ok(html.includes('LONG-TERM MONTHLY RANGE'), 'section 2');
   assert.ok(html.includes('EVERY YEAR BY DAY OF YEAR'), 'section 3');
-  assert.ok(html.includes('class="ov-sel"'), 'the picked year is drawn bold in the overlay');
+  // at the overlay DRAWING: the key's own swatch carries the same class, so a
+  // page-wide grep would pass with the bold line gone
+  const overlay = svgAt(html, html.lastIndexOf('<svg', html.indexOf('class="chart overlay"')));
+  assert.match(overlay, /<polyline class="ov-sel" points="[\d.,]+ /, 'the picked year is drawn bold in the overlay');
 });
 
 
@@ -1883,7 +1886,7 @@ test('renderHistory: a flat series draws at half height, not as an empty chart',
   assert.ok(html.includes('77 cm'), 'the scale still names the level');
   // a flat window normalises to mid-box rather than collapsing every point to
   // zero fill, which used to read as "no data"
-  assert.ok(html.includes('class="h-fill"'), 'the water body is still drawn');
+  assert.match(histChart(html), /<polygon class="h-fill"/, 'the water body is still drawn');
   assert.ok(/48\.0|48 /.test(html), 'the surface sits at half of the 96-unit box');
 });
 
@@ -1966,7 +1969,7 @@ test('historyViewModel: the scale reports the window extremes, not a subsample',
   assert.equal(h.series.max, 987);
   assert.ok(html.includes('987 cm') && html.includes('12 cm'), 'and the scale prints them');
   assert.equal(h.banded, true, 'columns that merged more than one point carry a band');
-  assert.ok(html.includes('class="h-band"'), 'which is drawn as its own polygon');
+  assert.match(histChart(html), /<polygon class="h-band"/, 'which is drawn as its own polygon');
   assert.ok(html.includes('min–max inside one pixel column'), 'and named in the legend');
 });
 
@@ -1981,11 +1984,11 @@ test('historyViewModel: windows with fewer points than columns carry no band', (
       return { h, html: renderHistory(h) };
     })()`);
     assert.equal(h.banded, false, `${width}px: no band when every bucket holds one point`);
-    assert.ok(!html.includes('class="h-band"'), `${width}px: and none is drawn`);
+    assert.doesNotMatch(histChart(html), /class="h-band"/, `${width}px: and none is drawn`);
     assert.ok(!html.includes('min–max inside'), `${width}px: no band legend either`);
     assert.equal(h.series.min, 100, `${width}px: extremes are the window's`);
     assert.equal(h.series.max, 157);
-    assert.ok(html.includes('class="h-fill"'), `${width}px: the water body is still there`);
+    assert.match(histChart(html), /<polygon class="h-fill"/, `${width}px: the water body is still there`);
   }
 });
 
@@ -3595,6 +3598,9 @@ const svgAt = (html, from = 0) => {
   const a = html.indexOf('<svg', from);
   return a < 0 ? '' : html.slice(a, html.indexOf('</svg>', a));
 };
+// the history DRAWING: the section's first <svg> may be a chip swatch, so
+// start at the chart and step back to its own <svg>
+const histChart = html => svgAt(html, html.lastIndexOf('<svg', html.indexOf('class="chart hist"')));
 // svgAt's sibling for the plates whose drawing is a table, not an SVG: anchor
 // the assertion to the element it is about. A class-name grep over the whole
 // page would pass on the legend's own swatches and prove nothing.
@@ -3667,7 +3673,7 @@ test('the scene names every mark it draws, in every weather it draws', () => {
   const sun = seed(loadApp({ now: NOON }), 100,
     'state.weather = { cloud_cover: 5, precipitation: 0, snowfall: 0, wind_speed_10m: 4 };');
   assert.equal(sun.flags.night, false);
-  assert.ok(sun.html.includes('class="sun"'), 'the sun is on the drawing');
+  assert.match(svgAt(sun.html), /<g class="sun">/, 'the sun is on the drawing');
   assertNamed(svgAt(sun.html), keyClasses(sun.html), 'clear dry noon', true);
 
   // 3. a flood in the rain, blowing hard: clouds, rain, waves, a boat
@@ -3682,7 +3688,7 @@ test('the scene names every mark it draws, in every weather it draws', () => {
     'state.wt = 0.2; state.weather = { cloud_cover: 70, precipitation: 0, snowfall: 2, wind_speed_10m: 10 };');
   assert.equal(ice.flags.icy, true);
   assert.equal(ice.flags.snow, true);
-  assert.ok(ice.html.includes('class="floe"'), 'floes are on the drawing');
+  assert.match(svgAt(ice.html), /<rect class="floe"/, 'floes are on the drawing');
   assertNamed(svgAt(ice.html), keyClasses(ice.html), 'iced over, snowing', true);
 
   // and the key does not invent marks the drawing never made: no sun at night
@@ -3727,7 +3733,7 @@ test('the history plate names every mark it draws, in every window it draws', ()
   const histSvg = html => svgAt(html, html.lastIndexOf('<svg', html.indexOf('class="chart hist"')));
   const gate = (r, what) => {
     assert.equal(r.h.empty, false, `${what}: the fixture draws a chart`);
-    assert.ok(r.html.includes('class="h-fill"'), `${what}: the water body is drawn`);
+    assert.match(histSvg(r.html), /<polygon class="h-fill"/, `${what}: the water body is drawn`);
     assertNamed(histSvg(r.html), keyClasses(r.html), what, true);
   };
 
@@ -3756,7 +3762,7 @@ test('the history plate names every mark it draws, in every window it draws', ()
   const marked = render(daily(365, i => 250 + (i % 50)), '1y',
     `state.gauge = { currentMeasurement: { value: 260, timestamp: ${NOON} }, characteristicValues: [{ shortname: 'MW', value: 270 }] };`);
   assert.equal(marked.h.marks.length, 1, 'MW lies inside the window, so it is drawn');
-  assert.ok(marked.html.includes('class="href-line"'), 'as a rule on the chart');
+  assert.match(histSvg(marked.html), /<line class="href-line"/, 'as a rule on the chart');
   gate(marked, 'with a reference level');
 
   // and the gate can go red: the drawing's line comes before the key's swatch,
@@ -3826,6 +3832,9 @@ test('no dead command targets: every cmd: the dispatcher knows is emitted somewh
   const handled = new Set();
   for (const m of src.matchAll(/c === '([a-z]+)'/g)) handled.add(m[1]);
   for (const m of src.matchAll(/c\.startsWith\('([a-z]+):'\)/g)) handled.add(m[1] + ':');
+  // a dispatcher rewritten as a switch would leave this set empty and the
+  // test green over nothing — the sister test has the same floor
+  assert.ok(handled.size >= 10, `sanity: the regex still finds the dispatcher (${handled.size})`);
   const emitted = new Set();
   for (const m of src.matchAll(/'cmd:([a-z]+):?/g)) emitted.add(m[1]);
   for (const m of src.matchAll(/`cmd:([a-z]+):?/g)) emitted.add(m[1]);
@@ -5250,7 +5259,9 @@ test('PRECIPITATION: the level line is named as the midrange it is, and only whe
   await app.run('loadRepoArchive()');
   app.run(`state.archive = loadArchive('MENDEN_1')`);
   const html = app.run(`(() => { historyKey = '30d'; return renderPrecip(precipViewModel()); })()`);
-  assert.ok(html.includes('class="pr-level"'), 'with readings, the line and its swatch are both there');
+  const precipSvg = svgAt(html, html.lastIndexOf('<svg', html.indexOf('class="chart precip"')));
+  assert.match(precipSvg, /<polyline class="pr-level" points="[\d.,]+ /, 'with readings, the line is drawn');
+  assert.ok(keyClasses(html).has('pr-level'), 'and its swatch is in the key');
   assert.match(html, /midrange over the same columns — \(min\+max\)\/2, the same series HISTORY draws/,
     'the line is the archive’s two points a day averaged, and the key says which figure that is');
   assert.ok(!/daily mean over the same columns/.test(html), 'never "the daily mean", which is a third figure the shard also carries');

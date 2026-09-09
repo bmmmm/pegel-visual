@@ -585,12 +585,13 @@ test('every model in view is drawn, named in the key, and a model that cannot sh
     assert.ok(key.includes(`ln ln-${c.mark}`) && key.includes(c.label), `${c.label} is in the key`);
   }
   // the non-commercial line carries a glyph, not a colour, and the key says why
+  // unconditional: if the non-shippable arm ever left gate/models.json these
+  // three assertions would vanish silently behind an `if`
   const nc = MANIFEST.models.find(mo => mo.shippable === false);
-  if (nc) {
-    assert.ok(html.includes(`${nc.label} ${NC_GLYPH}`), 'the chip carries the mark');
-    assert.match(html, new RegExp(`${NC_GLYPH} — measured here, never shipped`), 'and the key spells it out');
-    assert.ok(html.includes('measured, never shipped'), 'the foot says it too');
-  }
+  assert.ok(nc, 'the manifest carries a non-shippable line');
+  assert.ok(html.includes(`${nc.label} ${NC_GLYPH}`), 'the chip carries the mark');
+  assert.match(html, new RegExp(`${NC_GLYPH} — measured here, never shipped`), 'and the key spells it out');
+  assert.ok(html.includes('measured, never shipped'), 'the foot says it too');
   // each model states its own verdict rather than sharing one word
   assert.equal(both.verdicts.length, DRAWN_KEYS.length);
   const vlist = (html.match(/<ul class="vmodels"[\s\S]*?<\/ul>/) || [''])[0];

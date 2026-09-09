@@ -504,6 +504,9 @@ reaches the real handlers.
 - `collect-hires.test.mjs` — the 15-minute collector and its wrapper
 - `gate-page.test.mjs` — the gate page's model and renderer against the
   committed reports, under the same legend gate as the app
+- `home.test.mjs` — the start page's cold boot over the frozen fixtures in
+  `tests/fixtures/home/`, the same routing table `scripts/home-check.mjs`
+  serves to a real browser
 
 `scripts/forecast/tests/` is a pytest suite for the gate: windows, baselines,
 the statistics, the clause logic on synthetic results, and the licence guard

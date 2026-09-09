@@ -11,6 +11,12 @@ on:
 permissions:
   contents: read
 
+# a push that supersedes another cancels its run: the browser checks cost
+# minutes, and a result for a commit main has already moved past is noise
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -69,6 +75,13 @@ jobs:
       # run should say everything it knows rather than stopping at the first
       - if: ${{ !cancelled() }}
         run: node scripts/home-check.mjs --shots tmp-browser-shots/home
+        env:
+          CHROME: google-chrome
+      # the gate page's rain panel, at both widths — until 2026-09-09 the only
+      # browser check no workflow ran; the reason written above verify-precip
+      # applied to it word for word. Its shots land in tmp-shots/ (gitignored).
+      - if: ${{ !cancelled() }}
+        run: node scripts/gate-rain-check.mjs
         env:
           CHROME: google-chrome
 

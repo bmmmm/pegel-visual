@@ -7649,7 +7649,7 @@ window.addEventListener('popstate', () => {
   setHistYear(/^\d{4}$/.test(hy || '') ? +hy : null, false);
 });
 
-// ---------- station suggestions (cached names, not the 255 KB full list) ----------
+// ---------- station suggestions (cached names, not the full list — 262 KB raw, 47 KB over the wire) ----------
 
 const STATIONS_CACHE = 'pegel.stations';
 const WATERS_CACHE = 'pegel.waters';

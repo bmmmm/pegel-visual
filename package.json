@@ -5,6 +5,9 @@
   "description": "Live water level survey plates for German rivers",
   "license": "GPL-3.0-only",
   "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
   "scripts": {
     "test": "node --test"
   }
