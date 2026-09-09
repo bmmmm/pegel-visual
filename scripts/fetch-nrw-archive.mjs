@@ -226,7 +226,7 @@
 //    "required_pull_request_reviews":null,"restrictions":null,
 //    "allow_force_pushes":false,"allow_deletions":false}
 //   JSON
-import { mkdirSync, writeFileSync, readFileSync, readdirSync, existsSync, unlinkSync } from 'node:fs';
+import { mkdirSync, writeFileSync, readFileSync, existsSync, unlinkSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -237,6 +237,8 @@ import {
 // imported here rather than restated: a station the map places must be a station
 // the rule can assign, and one definition cannot drift from the other.
 import { usableCoords } from './build-nrw-precip.mjs';
+import { parseArgs, pinnedNow, readJson, listDirs, listFiles, sleep, writeJson, writeText } from './lib/cli.mjs';
+export { writeJson };
 
 export const BASE = 'https://hochwasserportal.nrw/data';
 export const LICENSE = 'dl-de/zero-2.0';
@@ -255,7 +257,7 @@ export const RIVER_KM_RIVERS = new Set(['Rhein']);
 const MAX_DIST_KM = 2000;
 
 // PEGEL_NOW pins the clock (same convention as the other scripts)
-const now = process.env.PEGEL_NOW ? new Date(process.env.PEGEL_NOW) : new Date();
+const now = pinnedNow();
 
 export const PRODUCTS = {
   gauges: {
@@ -274,8 +276,6 @@ export const PRODUCTS = {
     boundaryHour: 0, dayBoundary: '00:00+01:00', unit: '°C', hiresStep: 3600,
   },
 };
-
-const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 // ---------- text tables ----------
 
@@ -773,28 +773,6 @@ function trimNulls(v) {
 }
 
 // ---------- files ----------
-
-const readJson = path => { try { return JSON.parse(readFileSync(path, 'utf8')); } catch { return null; } };
-
-// write only when the content changed: a data branch that is rewritten daily
-// with identical bytes still grows its history
-export function writeJson(path, obj) {
-  const text = JSON.stringify(obj);
-  if (existsSync(path) && readFileSync(path, 'utf8') === text) return false;
-  mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, text);
-  return true;
-}
-
-function writeText(path, text) {
-  if (existsSync(path) && readFileSync(path, 'utf8') === text) return false;
-  mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, text);
-  return true;
-}
-
-const listDirs = dir => { try { return readdirSync(dir, { withFileTypes: true }).filter(d => d.isDirectory()).map(d => d.name); } catch { return []; } };
-const listFiles = dir => { try { return readdirSync(dir); } catch { return []; } };
 
 // upsert year shards for one station; returns the number of files written
 export function upsertYears(dir, id, years, fields, sparse = 'acc') {
@@ -1456,12 +1434,7 @@ export function spanOfRows(rowLists) {
 // ---------- CLI ----------
 
 async function main() {
-  const args = process.argv.slice(2);
-  const opt = (name, fallback) => {
-    const i = args.indexOf('--' + name);
-    return i >= 0 && args[i + 1] && !args[i + 1].startsWith('--') ? args[i + 1] : fallback;
-  };
-  const has = name => args.includes('--' + name);
+  const { opt, has } = parseArgs();
   const out = opt('out', 'nrw');
   const outHires = opt('out-hires', null);
   const maxYears = Number(opt('max-years', 0));

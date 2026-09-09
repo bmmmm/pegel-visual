@@ -58,17 +58,14 @@
 import { mkdirSync, writeFileSync, readFileSync, readdirSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { parseArgs, pinnedNow, sleep } from './lib/cli.mjs';
 import { PLAUSIBLE_MIN_CM, PLAUSIBLE_MAX_CM, fetchRawRange } from './fetch-wsv-archive.mjs';
 
 const API = 'https://www.pegelonline.wsv.de/webservices/rest-api/v2';
 // PEGEL_NOW pins the clock for tests and local two-day rehearsals
-const now = process.env.PEGEL_NOW ? new Date(process.env.PEGEL_NOW) : new Date();
+const now = pinnedNow();
 
-const args = process.argv.slice(2);
-const opt = (name, fallback) => {
-  const i = args.indexOf('--' + name);
-  return i >= 0 && args[i + 1] && !args[i + 1].startsWith('--') ? args[i + 1] : fallback;
-};
+const { opt } = parseArgs();
 
 const OUT = opt('out', 'archive/snapshots');
 const ARCHIVE_DIR = opt('archive', join(OUT, '..')); // per-station daily min/max bundles
@@ -333,7 +330,6 @@ function pruneOldShards(dir, maxMonths, refDate) {
 
 // ---------- self-heal backfill (network side) ----------
 
-const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 async function mapPool(items, limit, fn) {
   const out = new Array(items.length);

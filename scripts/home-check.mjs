@@ -42,13 +42,14 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { sleep, serve, chrome, session, checker, helpers, killChildren } from './lib/cdp.mjs';
+import { parseArgs } from './lib/cli.mjs';
 import { CLOCK, scenario, fixtures, routeFor, EXPECTED } from '../tests/fixtures/home/router.mjs';
 
 // fileURLToPath, not .pathname: a checkout under a path with a space arrives
 // percent-encoded and http.server would then serve a directory that is not this one
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
-const args = Object.fromEntries(process.argv.slice(2).map((a, i, all) => a.startsWith('--') ? [a.slice(2), all[i + 1] && !all[i + 1].startsWith('--') ? all[i + 1] : true] : []).filter(x => x.length));
-const shots = resolve(args.shots || join(ROOT, 'tmp-shots', 'home-check'));
+const { opt } = parseArgs();
+const shots = resolve(opt('shots', join(ROOT, 'tmp-shots', 'home-check')));
 mkdirSync(shots, { recursive: true });
 const check = checker();
 
@@ -341,8 +342,8 @@ async function runError(cdp, url) {
   await s.close();
 }
 
-const url = await serve({ root: ROOT, path: '/', url: args.url === true ? null : args.url });
-const cdp = await chrome({ tag: 'home-check', cdp: args.cdp === true ? null : args.cdp });
+const url = await serve({ root: ROOT, path: '/', url: opt('url', null) });
+const cdp = await chrome({ tag: 'home-check', cdp: opt('cdp', null) });
 console.log(`page  ${url}\ncdp   ${cdp}\nclock ${scenario.clock} (newest reading ${NEWEST.timestamp})\nshots ${shots}`);
 try {
   for (const vp of [

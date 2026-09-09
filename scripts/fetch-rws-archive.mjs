@@ -80,9 +80,10 @@
 //   git add archive && git commit -m "Add Rijkswaterstaat archive for 10 Dutch gauges"
 //   git push origin archive        # (and the github mirror) — pushing here triggers no workflow
 //   gh workflow run pages.yml --ref main   # required — deploys the new data
-import { mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
+import { writeFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { parseArgs, pinnedNow, readJson, sleep } from './lib/cli.mjs';
 import { condense, writeStation, reportRunOutcome } from './fetch-wsv-archive.mjs';
 
 const RWS = 'https://ddapi20-waterwebservices.rijkswaterstaat.nl';
@@ -106,14 +107,9 @@ export const STATIONS = [
 ];
 const SOURCE = 'Rijkswaterstaat';
 
-const args = process.argv.slice(2);
-const opt = (name, fallback) => {
-  const i = args.indexOf('--' + name);
-  return i >= 0 && args[i + 1] && !args[i + 1].startsWith('--') ? args[i + 1] : fallback;
-};
-const has = name => args.includes('--' + name);
+const { opt, has } = parseArgs();
 
-const now = process.env.PEGEL_NOW ? new Date(process.env.PEGEL_NOW) : new Date();
+const now = pinnedNow();
 const CURRENT_YEAR = now.getUTCFullYear();
 const OUT = opt('out', 'archive');
 const FROM = Number(opt('from', 1989));
@@ -122,8 +118,6 @@ const CURRENT_ONLY = has('current');
 const THROTTLE_MS = Number(opt('throttle', 1200));
 const ONLY = (opt('station', '') || '').toLowerCase();
 
-const sleep = ms => new Promise(r => setTimeout(r, ms));
-const readJson = path => { try { return JSON.parse(readFileSync(path, 'utf8')); } catch { return null; } };
 
 // format `d` as a +01:00 wall-clock timestamp, matching the flat (non-DST)
 // UTC+1 convention the year boundaries below already use

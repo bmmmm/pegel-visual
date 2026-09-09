@@ -47,27 +47,22 @@
 //        --out archive-branch/archive/totals --fetch-units
 //   node scripts/build-river-totals.mjs --append --archive archive-branch/archive \
 //        --out archive-branch/archive/totals
-import { mkdirSync, writeFileSync, readFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { parseArgs, pinnedNow, readJson } from './lib/cli.mjs';
 import { daysInYear } from './fetch-wsv-archive.mjs';
 import { daysInMonth, mezParts, shardName } from './snapshot-wsv.mjs';
 
 const API = 'https://www.pegelonline.wsv.de/webservices/rest-api/v2';
 // PEGEL_NOW pins the clock for tests and deterministic rebuilds
-const now = process.env.PEGEL_NOW ? new Date(process.env.PEGEL_NOW) : new Date();
+const now = pinnedNow();
 
-const args = process.argv.slice(2);
-const opt = (name, fallback) => {
-  const i = args.indexOf('--' + name);
-  return i >= 0 && args[i + 1] && !args[i + 1].startsWith('--') ? args[i + 1] : fallback;
-};
-const has = name => args.includes('--' + name);
+const { opt, has } = parseArgs();
 
 const OUT = opt('out', 'archive/totals');
 const ARCHIVE_DIR = opt('archive', join(OUT, '..'));
 
-const readJson = path => { try { return JSON.parse(readFileSync(path, 'utf8')); } catch { return null; } };
 
 // anything that is not literally centimetres is excluded — m+NN / m+PNP are
 // absolute elevations, and an unknown unit could be either, so it fails closed

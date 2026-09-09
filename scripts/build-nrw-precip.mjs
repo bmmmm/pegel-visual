@@ -56,6 +56,7 @@ import { mkdirSync, writeFileSync, readFileSync, existsSync, readdirSync, unlink
 import { join, dirname } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { daysInYear } from './fetch-wsv-archive.mjs';
+import { parseArgs, pinnedNow, readJson, listDirs } from './lib/cli.mjs';
 
 export const SCHEMA = 1;
 
@@ -212,8 +213,6 @@ export const dayToISO = a => new Date(a * DAY_MS).toISOString().slice(0, 10);
 
 // ---------- reading the tree ----------
 
-const readJson = path => { try { return JSON.parse(readFileSync(path, 'utf8')); } catch { return null; } };
-const listDirs = dir => { try { return readdirSync(dir, { withFileTypes: true }).filter(d => d.isDirectory()).map(d => d.name).sort(); } catch { return []; } };
 const listFiles = dir => { try { return readdirSync(dir).sort(); } catch { return []; } };
 
 const yearsIn = dir => listFiles(dir).map(f => /^(\d{4})\.json$/.exec(f)).filter(Boolean).map(m => Number(m[1])).sort();
@@ -810,18 +809,11 @@ function writeSeries(o, rel, ser, minY, maxY, from, id) {
 // ---------- CLI ----------
 
 function main(argv) {
-  const args = argv.slice(2);
-  const flag = name => {
-    const i = args.indexOf(name);
-    if (i < 0) return null;
-    const v = args[i + 1];
-    if (!v || v.startsWith('--')) throw new Error(`${name} needs a value`);
-    return v;
-  };
-  const tree = flag('--tree') || 'nrw';
-  const out = flag('--out') || join(tree, 'precip');
-  const check = args.includes('--check');
-  const generated = (process.env.PEGEL_NOW ? new Date(process.env.PEGEL_NOW) : new Date()).toISOString().slice(0, 10);
+  const { flag, has } = parseArgs(argv.slice(2));
+  const tree = flag('tree') || 'nrw';
+  const out = flag('out') || join(tree, 'precip');
+  const check = has('check');
+  const generated = pinnedNow().toISOString().slice(0, 10);
 
   const r = build({ tree, out, check, generated });
   const c = r.counts;

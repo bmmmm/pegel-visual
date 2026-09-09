@@ -84,21 +84,17 @@ import { mkdirSync, writeFileSync, readFileSync, readdirSync, existsSync, unlink
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { inflateRawSync } from 'node:zlib';
+import { parseArgs, pinnedNow, readJson, sleep } from './lib/cli.mjs';
 
 const API = 'https://www.pegelonline.wsv.de/webservices/rest-api/v2';
 const PREPARE = 'https://www.pegelonline.wsv.de/gast/historische-zeitreihen/prepare-download';
 const THROTTLE_MS = 1500;
 // PEGEL_NOW pins the clock for tests (e.g. PEGEL_NOW=2027-01-03 to rehearse the
 // January year-freeze); production runs use the real clock
-const now = process.env.PEGEL_NOW ? new Date(process.env.PEGEL_NOW) : new Date();
+const now = pinnedNow();
 const CURRENT_YEAR = now.getUTCFullYear();
 
-const args = process.argv.slice(2);
-const opt = (name, fallback) => {
-  const i = args.indexOf('--' + name);
-  return i >= 0 && args[i + 1] && !args[i + 1].startsWith('--') ? args[i + 1] : fallback;
-};
-const has = name => args.includes('--' + name);
+const { opt, has } = parseArgs();
 
 const OUT = opt('out', 'archive');
 const FROM = Number(opt('from', 2000));
@@ -110,7 +106,6 @@ const ONLY_STATION = (opt('station', '') || '').toUpperCase();
 // keep the default sequential so the monthly CI refresh stays extra polite
 const PARALLEL = Math.max(1, Number(opt('parallel', 1)));
 
-const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 // ---------- zip (central directory + deflate-raw, same layout as in-page) ----------
 
@@ -467,7 +462,6 @@ export function currentRunPlan() {
   return { startYear: now.getUTCMonth() === 0 ? CURRENT_YEAR - 1 : CURRENT_YEAR };
 }
 
-const readJson = path => { try { return JSON.parse(readFileSync(path, 'utf8')); } catch { return null; } };
 
 // merge a condensed year (per-day min/max) into an existing {y,min,max}, keeping
 // the extreme per day so an overlapping refetch never drops a peak or a trough

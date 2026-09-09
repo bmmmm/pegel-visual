@@ -184,24 +184,19 @@
 // temperature, 130 gauges with Info_1). They are to be re-checked against the
 // first real collector output — see the "calibrated against" note at the
 // bottom of this header once that run exists.
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { existsSync, readdirSync } from 'node:fs';
 import { join, relative, resolve, sep } from 'node:path';
-import { execFileSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
+import { parseArgs, pinnedNow, readJson, listChanges, readHead } from './lib/cli.mjs';
 import { checkChangeStatuses, dayNum } from './check-archive-consistency.mjs';
 import { daysInYear, PLAUSIBLE_MIN_CM, PLAUSIBLE_MAX_CM } from './fetch-wsv-archive.mjs';
 import { build as buildPrecip, PLAUSIBLE_MAX_MM_DAY } from './build-nrw-precip.mjs';
 import { buildHourlyLag, inputsDigest } from './build-nrw-hourly-lag.mjs';
 import { mezParts } from './snapshot-wsv.mjs';
 
-const now = process.env.PEGEL_NOW ? new Date(process.env.PEGEL_NOW) : new Date();
+const now = pinnedNow();
 
-const args = process.argv.slice(2);
-const opt = (name, fallback) => {
-  const i = args.indexOf('--' + name);
-  return i >= 0 && args[i + 1] && !args[i + 1].startsWith('--') ? args[i + 1] : fallback;
-};
-const has = name => args.includes('--' + name);
+const { opt, has } = parseArgs();
 // --skip N3[,N…]: for a caller that cannot act on a rule's finding
 const SKIP = new Set(opt('skip', '').split(',').map(s => s.trim().toUpperCase()).filter(Boolean));
 
@@ -766,7 +761,6 @@ export function checkCoverageMarks(tree, head = null, {
 
 // ---------- tree loader ----------
 
-const readJson = path => { try { return JSON.parse(readFileSync(path, 'utf8')); } catch { return null; } };
 export const isYearShard = name => /^\d{4}\.json$/.test(name);
 
 // registry.json is "raw-near": a row array, or an object keyed by station_no,
@@ -1246,38 +1240,7 @@ export function measure(fleet, manifest, nowDate) {
   };
 }
 
-// ---------- CLI loader: working tree + `git show HEAD:` as the baseline ----------
-
-function git(gitDir, gitArgs) {
-  return execFileSync('git', ['-C', gitDir, ...gitArgs], { encoding: 'utf8', maxBuffer: 256 * 1024 * 1024 });
-}
-
-// changed = diff vs HEAD plus untracked files; a repo without a commit yet
-// has no baseline at all, so everything in it is new
-function listChanges(gitDir, prefix) {
-  const changes = [];
-  let diff = '';
-  try { diff = git(gitDir, ['diff', '--name-status', 'HEAD', '--', prefix]); }
-  catch { console.log('note: no HEAD to compare against — every file counts as new'); }
-  for (const line of diff.split('\n')) {
-    if (!line) continue;
-    const parts = line.split('\t');
-    changes.push({ status: parts[0][0], path: parts[parts.length - 1] });
-  }
-  for (const line of git(gitDir, ['ls-files', '--others', '--exclude-standard', '--', prefix]).split('\n')) {
-    if (line) changes.push({ status: 'A', path: line });
-  }
-  return changes;
-}
-
-// a file that is new in this run has no HEAD version — git says so on stderr,
-// and that is not a finding, so its stderr stays out of the log
-function readHead(gitDir, path) {
-  try {
-    return JSON.parse(execFileSync('git', ['-C', gitDir, 'show', `HEAD:${path}`],
-      { encoding: 'utf8', maxBuffer: 256 * 1024 * 1024, stdio: ['ignore', 'pipe', 'ignore'] }));
-  } catch { return null; }
-}
+// ---------- CLI loader: working tree + `git show HEAD:` as the baseline (lib/cli.mjs) ----------
 
 async function main() {
   const treeDir = resolve(opt('tree', 'nrw-branch/nrw'));

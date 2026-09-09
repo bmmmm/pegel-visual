@@ -31,6 +31,7 @@ import {
   readRainSeries, readLevelSeries, closure, haversineKm, usableCoords, median, cmpNo,
   MIN_SET_FOR_SERIES,
 } from './build-nrw-precip.mjs';
+import { parseArgs } from './lib/cli.mjs';
 
 // Each variant is only ever a pair of options handed to the shipping
 // `precipMembers`. Adding one here cannot change what the others measure.
@@ -238,18 +239,11 @@ function row(name, c) {
 }
 
 function main(argv) {
-  const args = argv.slice(2);
-  const flag = name => {
-    const i = args.indexOf(name);
-    if (i < 0) return null;
-    const v = args[i + 1];
-    if (!v || v.startsWith('--')) throw new Error(`${name} needs a value`);
-    return v;
-  };
-  const tree = flag('--tree') || 'nrw';
-  const jsonOut = flag('--json');
-  const all = args.includes('--all');
-  const want = all ? Object.keys(VARIANTS) : [flag('--variant') || 'identity'];
+  const { flag, has } = parseArgs(argv.slice(2));
+  const tree = flag('tree') || 'nrw';
+  const jsonOut = flag('json');
+  const all = has('all');
+  const want = all ? Object.keys(VARIANTS) : [flag('variant') || 'identity'];
   for (const v of want) if (!VARIANTS[v]) throw new Error(`unknown variant ${v}; have ${Object.keys(VARIANTS).join(', ')}`);
 
   const bench = loadBench(tree);

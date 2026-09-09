@@ -23,10 +23,11 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { sleep, serve, chrome, session, checker, helpers, killChildren } from './lib/cdp.mjs';
+import { parseArgs } from './lib/cli.mjs';
 
 const ROOT = resolve(new URL('..', import.meta.url).pathname);
-const args = Object.fromEntries(process.argv.slice(2).map((a, i, all) => a.startsWith('--') ? [a.slice(2), all[i + 1] && !all[i + 1].startsWith('--') ? all[i + 1] : true] : []).filter(x => x.length));
-const shots = resolve(args.shots || join(ROOT, 'tmp-forecast', 'gate-check'));
+const { opt } = parseArgs();
+const shots = resolve(opt('shots', join(ROOT, 'tmp-forecast', 'gate-check')));
 mkdirSync(shots, { recursive: true });
 
 const check = checker();
@@ -409,8 +410,8 @@ async function palette(cdp, url) {
   }
 }
 
-const url = await serve({ root: ROOT, path: '/gate/', url: args.url === true ? null : args.url, settle: 600 });
-const cdp = await chrome({ tag: 'gate-check', cdp: args.cdp === true ? null : args.cdp });
+const url = await serve({ root: ROOT, path: '/gate/', url: opt('url', null), settle: 600 });
+const cdp = await chrome({ tag: 'gate-check', cdp: opt('cdp', null) });
 console.log(`page ${url}\ncdp  ${cdp}\nshots ${shots}`);
 try {
   for (const vp of [{ name: 'desktop', width: 1240, height: 900, mobile: false }, { name: 'phone', width: 390, height: 844, mobile: true }]) {

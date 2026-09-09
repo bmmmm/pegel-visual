@@ -19,12 +19,13 @@ import { mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { sleep, serve, chrome, session, checker, killChildren } from './lib/cdp.mjs';
+import { parseArgs } from './lib/cli.mjs';
 
 // the checkout this file lives in — a worktree runs its own copy, and a
 // hardcoded path would send every worktree's run at the main checkout
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
-const args = Object.fromEntries(process.argv.slice(2).map((a, i, all) => a.startsWith('--') ? [a.slice(2), all[i + 1] && !all[i + 1].startsWith('--') ? all[i + 1] : true] : []).filter(x => x.length));
-const SHOTS = resolve(args.shots || join(ROOT, 'tmp-shots'));  // gitignored: pictures are evidence, not source
+const { opt } = parseArgs();
+const SHOTS = resolve(opt('shots', join(ROOT, 'tmp-shots')));  // gitignored: pictures are evidence, not source
 mkdirSync(SHOTS, { recursive: true });
 const BASE_URL = process.env.LANUK_BASE_URL || null;
 // A missing tree has to say WHAT is missing, and it must be RED rather than a

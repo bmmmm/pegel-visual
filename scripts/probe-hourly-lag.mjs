@@ -42,6 +42,7 @@ import {
   loadBench, estimateAll, publish, classOf, rotationShifts, dailyGauges,
   MAX_LAG_H, MIN_PEAK_R, CLASSES, ROTATIONS, FDR_Q,
 } from './build-nrw-hourly-lag.mjs';
+import { parseArgs } from './lib/cli.mjs';
 
 const HOUR_MS = 36e5;
 export const STABILITY_TOL_H = 3;
@@ -64,11 +65,10 @@ const classMap = est => {
 };
 
 function main(argv) {
-  const args = argv.slice(2);
-  const flag = n => { const i = args.indexOf(n); if (i < 0) return null; const v = args[i + 1]; if (!v || v.startsWith('--')) throw new Error(`${n} needs a value`); return v; };
-  const tree = flag('--tree') || 'nrw';
-  const hires = flag('--hires') || 'nrw-hires';
-  const variant = flag('--variant');
+  const { flag } = parseArgs(argv.slice(2));
+  const tree = flag('tree') || 'nrw';
+  const hires = flag('hires') || 'nrw-hires';
+  const variant = flag('variant');
   const opts = variant ? JSON.parse(variant) : RULE;
 
   const bench = loadBench(tree, hires);

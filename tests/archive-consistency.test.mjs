@@ -353,7 +353,7 @@ function runChecker(repo, env = {}, extra = []) {
   }
 }
 
-function seedRepo({ runningFirstDay = 0 } = {}) {
+function seedRepo({ runningFirstDay = 0, commit = true } = {}) {
   const repo = mkdtempSync(join(tmpdir(), 'pegel-consistency-'));
   const arch = join(repo, 'archive');
   mkdirSync(join(arch, 'snapshots'), { recursive: true });
@@ -391,10 +391,23 @@ function seedRepo({ runningFirstDay = 0 } = {}) {
     JSON.stringify({ generated: NOW, units: { u0: 'cm' }, excluded: [] }));
   writeFileSync(join(arch, 'totals', '2026.json'), JSON.stringify({ y: 2026, generated: NOW, rivers: {} }));
   gitIn(repo, 'init', '-q');
-  gitIn(repo, 'add', '-A');
-  gitIn(repo, 'commit', '-q', '-m', 'seed');
+  if (commit) {
+    gitIn(repo, 'add', '-A');
+    gitIn(repo, 'commit', '-q', '-m', 'seed');
+  }
   return repo;
 }
+
+// A freshly initialised data repo has no HEAD to diff against. The checker
+// used to die on git's `bad revision 'HEAD'` before reading a single rule —
+// a crash, where the answer is that every file is new (lib/cli.mjs listChanges).
+test('CLI: a repo without a commit yet is a finding-free run, not a crash', () => {
+  const repo = seedRepo({ commit: false });
+  const { code, stdout } = runChecker(repo);
+  assert.equal(code, 0, stdout);
+  assert.match(stdout, /note: no HEAD to compare against/);
+  assert.doesNotMatch(stdout, /bad revision/);
+});
 
 test('CLI: an untouched healthy checkout is green', () => {
   const repo = seedRepo();

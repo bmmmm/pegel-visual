@@ -48,20 +48,15 @@
 // PEGEL_NOW pins the clock (same convention as the other scripts) — required
 // for green runs against a checkout whose last CI run is hours in the past.
 // Violations print as ::error:: lines and the process exits 1.
-import { readFileSync } from 'node:fs';
 import { basename, join, relative, resolve, sep } from 'node:path';
-import { execFileSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
+import { parseArgs, pinnedNow, readJson, listChanges, readHead } from './lib/cli.mjs';
 import { daysInYear } from './fetch-wsv-archive.mjs';
 import { daysInMonth, mezParts, shardName } from './snapshot-wsv.mjs';
 
-const now = process.env.PEGEL_NOW ? new Date(process.env.PEGEL_NOW) : new Date();
+const now = pinnedNow();
 
-const args = process.argv.slice(2);
-const opt = (name, fallback) => {
-  const i = args.indexOf('--' + name);
-  return i >= 0 && args[i + 1] && !args[i + 1].startsWith('--') ? args[i + 1] : fallback;
-};
+const { opt } = parseArgs();
 // --skip R6[,R…]: for a caller that cannot act on a rule's finding (see R6)
 const SKIP = new Set(opt('skip', '').split(',').map(s => s.trim().toUpperCase()).filter(Boolean));
 
@@ -374,31 +369,6 @@ export function checkOverviewShape(overview, minRivers = 80) {
 
 // ---------- CLI loader: working tree + `git show HEAD:` as the baseline ----------
 
-const readJson = path => { try { return JSON.parse(readFileSync(path, 'utf8')); } catch { return null; } };
-
-function git(gitDir, gitArgs) {
-  return execFileSync('git', ['-C', gitDir, ...gitArgs],
-    { encoding: 'utf8', maxBuffer: 256 * 1024 * 1024 });
-}
-
-// changed = diff vs HEAD plus untracked files (a brand-new month shard or
-// station dir is invisible to `git diff HEAD`)
-function listChanges(gitDir, prefix) {
-  const changes = [];
-  for (const line of git(gitDir, ['diff', '--name-status', 'HEAD', '--', prefix]).split('\n')) {
-    if (!line) continue;
-    const parts = line.split('\t');
-    changes.push({ status: parts[0][0], path: parts[parts.length - 1] });
-  }
-  for (const line of git(gitDir, ['ls-files', '--others', '--exclude-standard', '--', prefix]).split('\n')) {
-    if (line) changes.push({ status: 'A', path: line });
-  }
-  return changes;
-}
-
-function readHead(gitDir, path) {
-  try { return JSON.parse(git(gitDir, ['show', `HEAD:${path}`])); } catch { return null; }
-}
 
 async function main() {
   const treeDir = resolve(opt('tree', 'archive-branch/archive'));

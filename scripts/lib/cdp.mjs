@@ -16,7 +16,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServer } from 'node:net';
 
-export const sleep = ms => new Promise(r => setTimeout(r, ms));
+export { sleep } from './cli.mjs';
 
 export const freePort = () => new Promise((res, rej) => {
   const s = createServer();

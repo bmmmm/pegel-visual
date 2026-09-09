@@ -66,6 +66,7 @@ import { createHash } from 'node:crypto';
 import { mkdirSync, writeFileSync, readFileSync, existsSync, readdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { parseArgs, pinnedNow, readJson, listDirs } from './lib/cli.mjs';
 import {
   readTree, assignRain, buildUp, precipMembers, pearson, cmpNo,
   MIN_SET_FOR_SERIES, RULE, RULE_VERSION, PLAUSIBLE_MAX_MM_DAY,
@@ -162,8 +163,6 @@ export const STABILITY_OF = 224;
 
 // ---------- the hourly axis ----------
 
-const readJson = p => { try { return JSON.parse(readFileSync(p, 'utf8')); } catch { return null; } };
-const listDirs = d => { try { return readdirSync(d, { withFileTypes: true }).filter(e => e.isDirectory()).map(e => e.name).sort(); } catch { return []; } };
 
 // Every hires shard is { start, step, v[] } over a contiguous grid. Fold each
 // onto one absolute hourly axis: a sub-hour series (Wupperverband samples every
@@ -602,13 +601,12 @@ export function buildHourlyLag({ tree, hires, out, check = false, generated, ben
 // ---------- CLI ----------
 
 function main(argv) {
-  const args = argv.slice(2);
-  const flag = n => { const i = args.indexOf(n); if (i < 0) return null; const v = args[i + 1]; if (!v || v.startsWith('--')) throw new Error(`${n} needs a value`); return v; };
-  const tree = flag('--tree') || 'nrw';
-  const hires = flag('--hires') || 'nrw-hires';
-  const out = flag('--out') || join(tree, 'hourly');
-  const check = args.includes('--check');
-  const generated = (process.env.PEGEL_NOW ? new Date(process.env.PEGEL_NOW) : new Date()).toISOString().slice(0, 10);
+  const { flag, has } = parseArgs(argv.slice(2));
+  const tree = flag('tree') || 'nrw';
+  const hires = flag('hires') || 'nrw-hires';
+  const out = flag('out') || join(tree, 'hourly');
+  const check = has('check');
+  const generated = pinnedNow().toISOString().slice(0, 10);
 
   const t0 = Date.now();
   const r = buildHourlyLag({ tree, hires, out, check, generated });
