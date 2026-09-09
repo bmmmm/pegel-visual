@@ -486,3 +486,52 @@ def test_the_control_arm_is_far_from_the_window_it_replaces():
     # and it degrades rather than looping for ever on a run too short for the distance
     short = np.arange(3)[:, None] * np.ones((1, 2))
     assert backtest._deranged(short, 8).shape == short.shape
+
+
+# ---------- the control arm gets the same checks the plain arm got ----------
+
+def test_a_control_that_is_an_arm_already_in_the_comparison_is_void():
+    """`--against` earned four checks on 2026-09-07; `--control` had none, so
+    `--control <the plain run>` scored the plain arm against itself: control_ss
+    0.0, gap 0.273, R1-R5 all PASS, RAIN HELPS (measured 2026-09-09)."""
+    header = _header(protocol={"blocks": {"h1-3": [1, 3], "h4-7": [4, 7], "h8-14": [8, 14]}}, stations=FULL)
+    d = _data()
+    plain = ({**header, "arm": "plain", "model_key": "3p0"}, d)
+    rep = gate.nrw_report(header, d, dict(gate.THRESHOLDS), plain, plain)
+    assert rep["verdict"] == "VOID"
+    assert any("--control" in r and "control" in r for r in rep["void"]), rep["void"]
+    assert rep["rain_verdict"] is None
+    # …and the rain arm itself is no control either
+    rep2 = gate.nrw_report(header, d, dict(gate.THRESHOLDS), plain, (header, d))
+    assert rep2["verdict"] == "VOID", rep2["void"]
+
+
+def test_a_control_that_is_not_the_registered_control_arm_is_void():
+    header = _header(protocol={"blocks": {"h1-3": [1, 3]}}, stations=FULL)
+    d = _data()
+    plain = ({**header, "arm": "plain", "model_key": "3p0"}, d)
+    # a fourth run under a non-control key — a plain 2.5 line, say
+    stray = (_header(arm="plain", model_key="2p5"), d)
+    v = gate.nrw_void(header, d, TH, plain, stray)
+    assert any("--control" in r and "registered" in r for r in v), v
+    # different rain bytes, or a different grid, void it exactly like --against
+    ctl = _header(arm="shuffled", model_key="3p0-rain-shuffled")   # gitleaks:allow
+    assert any("precip bytes" in r for r in gate.nrw_void(header, d, TH, plain, ({**ctl, "precip_sha256": "x"}, d)))
+    assert any("TEST origins" in r for r in gate.nrw_void(header, d, TH, plain, (ctl, _data(origins=(10, 20, 40)))))
+    # and the honest control passes every one of them
+    assert gate.nrw_void(header, d, TH, plain, (ctl, d)) == []
+
+
+def test_a_p_of_exactly_zero_is_the_strongest_evidence_not_the_weakest():
+    """`(p or 1.0)` turned p = 0.0 into 1.0. It is reachable: the DM variance
+    is clamped at 1e-12 and erfc underflows (measured z = 1.4e7, p = 0.0), so
+    R1 failed exactly when the rain arm won most clearly."""
+    control = _pool(0.1, vs_other=0.0)
+    cl = gate.nrw_clauses(_pool(0.2, vs_other=0.08, dm_p=0.0), _stations(0.08), control, TH)
+    assert cl["R1"]["pass"] is True, cl["R1"]
+    # …and on the HARMS side, where the same expression decided the verdict
+    bad = _pool(-0.2, vs_other=-0.2, dm_p=0.0)
+    assert gate.rain_verdict(gate.nrw_clauses(bad, _stations(-0.2), control, TH), bad, _stations(-0.2), TH) == "RAIN HARMS"
+    # a MISSING p still counts as no evidence
+    cl3 = gate.nrw_clauses(_pool(0.2, vs_other=0.08, dm_p=None), _stations(0.08), control, TH)
+    assert cl3["R1"]["pass"] is False

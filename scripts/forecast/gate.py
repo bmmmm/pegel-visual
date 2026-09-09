@@ -558,6 +558,16 @@ def nrw_pooled(data: dict, blocks: dict, th: dict, other: dict | None = None) ->
     return out
 
 
+def _dm_p(dm: dict | None) -> float:
+    """The DM p-value, or 1.0 when the test was not run. NOT `(p or 1.0)`:
+    that turned p = 0.0 — the strongest evidence there is, and reachable,
+    because the variance is clamped at 1e-12 and erfc underflows (measured
+    z = 1.4e7) — into the weakest, so R1 failed exactly when the rain arm
+    won most clearly (measured 2026-09-09)."""
+    p = (dm or {}).get("p")
+    return 1.0 if p is None else float(p)
+
+
 def nrw_clauses(pool: dict, per_station: dict, control: dict | None, th: dict) -> dict:
     """R1-R5: does the rain help? Every clause is a pre-registered comparison of
     the rain arm against the PLAIN arm on the same windows."""
@@ -566,7 +576,7 @@ def nrw_clauses(pool: dict, per_station: dict, control: dict | None, th: dict) -
     b47 = pool["blocks"].get("h4-7", {})
     ss13 = b13.get("ss_vs_other", float("nan"))
     dm = b13.get("dm_vs_other") or {}
-    cl["R1"] = {"pass": bool(ss13 >= th["R1_ss_h1_3_min"] and (dm.get("p") or 1.0) < th["R1_dm_p_max"]),
+    cl["R1"] = {"pass": bool(ss13 >= th["R1_ss_h1_3_min"] and _dm_p(dm) < th["R1_dm_p_max"]),
                 "detail": {"ss_h1_3": ss13, "dm_p": dm.get("p"), "min": th["R1_ss_h1_3_min"], "p_max": th["R1_dm_p_max"]}}
     ss47 = b47.get("ss_vs_other", float("nan"))
     cl["R2"] = {"pass": bool(ss47 >= th["R2_ss_h4_7_min"]), "detail": {"ss_h4_7": ss47, "min": th["R2_ss_h4_7_min"]}}
@@ -612,21 +622,25 @@ def rain_verdict(cl: dict, pool: dict, per_station: dict, th: dict) -> str:
     know as one that helps."""
     b13 = pool["blocks"].get("h1-3", {})
     ss13 = b13.get("ss_vs_other", float("nan"))
-    dm_p = (b13.get("dm_vs_other") or {}).get("p")
+    dm_p = _dm_p(b13.get("dm_vs_other"))
     hurt = sum(1 for v in per_station.values() for b in v["blocks"].values()
                if not math.isnan(b.get("ss_vs_other", float("nan"))) and b["ss_vs_other"] < th["R4_station_ss_floor"])
     if all(c["pass"] for c in cl.values()):
         return "RAIN HELPS"
-    if (not math.isnan(ss13) and ss13 <= -th["R1_ss_h1_3_min"] and (dm_p or 1.0) < th["R1_dm_p_max"]) or hurt >= 2:
+    if (not math.isnan(ss13) and ss13 <= -th["R1_ss_h1_3_min"] and dm_p < th["R1_dm_p_max"]) or hurt >= 2:
         return "RAIN HARMS"
     return "NO EFFECT"
 
 
-def nrw_void(header: dict, data: dict, th: dict, against: dict | None) -> list[str]:
+def nrw_void(header: dict, data: dict, th: dict, against: dict | None, control: dict | None = None) -> list[str]:
     """Everything that makes this run not a comparison. `--against` is not
     optional for a rain arm: without the plain arm on the same windows there is
     nothing to compare, and a report that scored the rain arm alone would read
-    like a result."""
+    like a result. `--control` gets the same four checks: it earned none when
+    `--against` earned its own, and `--control <the plain run>` then scored the
+    plain arm against itself — control_ss 0.0, gap 0.273, R1-R5 PASS, RAIN
+    HELPS (measured 2026-09-09). R5 is the falsification test the NO-EFFECT
+    verdict rests on; an arm cannot falsify itself."""
     expected = {**tfm.expected_config(header), "max_horizon": header["forecast_config"].get("max_horizon")}
     reasons = []
     key = header.get("model_key")
@@ -689,6 +703,22 @@ def nrw_void(header: dict, data: dict, th: dict, against: dict | None) -> list[s
             if not np.array_equal(data[u]["origins"][data[u]["is_test"].astype(bool)],
                                   ad[u]["origins"][ad[u]["is_test"].astype(bool)]):
                 reasons.append(f"{st.nrw_name_of(u)}: the two arms do not share their TEST origins")
+    if control is not None:
+        ch, cd = control
+        ckey = ch.get("model_key")
+        if not tfm.MODELS.get(ckey, {}).get("control"):
+            reasons.append(f"--control names `{ckey}`, which is not a registered control arm")
+        if ckey == header.get("model_key") or (against is not None and ckey == against[0].get("model_key")):
+            reasons.append("--control names an arm already in the comparison: an arm cannot be its own control")
+        if ch.get("precip_sha256") != header.get("precip_sha256"):
+            reasons.append("the control arm read different precip bytes")
+        for u in data:
+            if u not in cd:
+                reasons.append(f"{st.nrw_name_of(u)} missing from the --control run")
+                continue
+            if not np.array_equal(data[u]["origins"][data[u]["is_test"].astype(bool)],
+                                  cd[u]["origins"][cd[u]["is_test"].astype(bool)]):
+                reasons.append(f"{st.nrw_name_of(u)}: the control arm does not share the TEST origins")
     return reasons
 
 
@@ -699,7 +729,7 @@ def nrw_report(header: dict, data: dict, th: dict, against=None, control=None) -
     # VOID (measured: "operands could not be broadcast together (47,3) (48,3)",
     # which is exactly what a re-run one day later produces, because the mirror
     # rolls). A void run is reported, not crashed on.
-    void_first = nrw_void(header, data, th, against)
+    void_first = nrw_void(header, data, th, against, control)
     if void_first:
         return {"verdict": "VOID", "control": bool(tfm.MODELS.get(header.get("model_key"), {}).get("control")),
                 "rain_verdict": None, "provisional_reasons": [], "void": void_first,
