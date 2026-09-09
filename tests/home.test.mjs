@@ -221,7 +221,10 @@ test('the screen reader gets the same reading the hero shows', async () => {
   const summary = app.run('screenSummary()');
   assert.match(summary, /BONN/);
   assert.match(summary, /88/);
-  assert.equal(app.el('screen').getAttribute('aria-label'), summary);
+  // a status line OUTSIDE the plate, not an aria-label on a role-less div
+  // (ARIA 1.2 forbids naming a generic; and a name is not an announcement)
+  assert.equal(app.el('screen-status').textContent, summary);
+  assert.equal(app.el('screen').getAttribute('aria-label'), null, 'the div carries no name of its own');
   assert.ok(html.includes(`<p class="vh">${summary}</p>`), 'the visually-hidden line is that summary');
 });
 

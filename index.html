@@ -1433,6 +1433,11 @@
   </header>
   <nav id="crumbs" aria-label="you are here"></nav>
   <div id="screen">loading…</div>
+  <!-- the plate's one-line summary for assistive tech: a status line OUTSIDE
+       the plate, announced when it changes. It used to be an aria-label on
+       this div, which ARIA 1.2 forbids on a generic — and a name is not an
+       announcement: after a chip the reader heard nothing (audit 2026-09-09) -->
+  <p class="vh" id="screen-status" role="status"></p>
   <details id="tools-fold" open>
     <summary>&gt; pegel <span class="hint">· the prompt, your recent gauges and your archive</span></summary>
   <form id="prompt" autocomplete="off">
@@ -1696,6 +1701,7 @@ const MONTH_NAME = ['January', 'February', 'March', 'April', 'May', 'June',
   'July', 'August', 'September', 'October', 'November', 'December'];
 
 const screen = document.getElementById('screen');
+const screenStatus = document.getElementById('screen-status');
 const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)');
 
 // The tools block folds on a phone and stays open on a wide screen. CSS alone
@@ -2050,10 +2056,12 @@ function screenSummary() {
 // while --help is shown, the screen holds a man page instead of the live grid,
 // so the aria-label must say so rather than describe water levels that aren't there
 function setScreenAria() {
-  screen.setAttribute('aria-label',
-    state.help ? 'command help' :
+  const text = state.help ? 'command help' :
     state.suggest ? `${state.suggest.matches.length} station suggestions for ${state.suggest.q}` :
-    screenSummary());
+    screenSummary();
+  // written only on change: a live region re-announces every write, and the
+  // five-minute poll calls this whether or not anything moved
+  if (screenStatus.textContent !== text) screenStatus.textContent = text;
   // the crumb trail needs the station's water, which arrives with the same
   // data updates that refresh the aria summary — piggyback (it memoizes)
   renderCrumbs();
@@ -2115,8 +2123,23 @@ const archiveSource = () => state.archiveSource || 'WSV';
 
 // ---------- data ----------
 
-async function getJson(url) {
-  const res = await fetch(url);
+// A request that never answers — a tunnel, a captive portal — left the
+// loading plate standing for good: measured 25 s of "one moment" with no retry
+// chip on it, and ?rain / ?total poll nothing that would try again. With a
+// deadline the fetch rejects like any other failure and the loader's own catch
+// raises the error plate, which does offer a retry.
+const FETCH_TIMEOUT_MS = 20000;
+// the deadline, joined with a caller's own abort where the platform can join
+// signals; where it cannot, the caller's signal wins — it is the one that
+// carries a decision, the deadline is a safety net
+function fetchSignal(signal) {
+  const t = typeof AbortSignal.timeout === 'function' ? AbortSignal.timeout(FETCH_TIMEOUT_MS) : null;
+  if (signal && t && typeof AbortSignal.any === 'function') return AbortSignal.any([signal, t]);
+  return signal || t || undefined;
+}
+async function getJson(url, signal) {
+  const s = fetchSignal(signal);
+  const res = await fetch(url, s ? { signal: s } : undefined);
   if (!res.ok) {
     const e = new Error(res.status + ' ' + url.replace(API, ''));
     e.status = res.status; // lets callers tell "not there" from "network died"
@@ -2417,7 +2440,20 @@ async function loadLanukStation() {
   applyLiveChrome();
 }
 
-async function loadData() {
+// The newest run supersedes the one in flight. The station !== forStation
+// guards below catch a SWITCH, not a second run for the same gauge: a tab
+// coming to the foreground during the five-minute poll doubled every endpoint,
+// and the run that ARRIVED last won, not the one started last. Now the older
+// run's requests are aborted and, should one still land, its results are
+// dropped — the last one started is the one whose answer stands.
+let dataRun = null; // the AbortController of the run in flight
+function loadData() {
+  if (dataRun) dataRun.abort();
+  const ctl = new AbortController();
+  dataRun = ctl;
+  return loadDataNow(ctl.signal).finally(() => { if (dataRun === ctl) dataRun = null; });
+}
+async function loadDataNow(signal) {
   const forStation = station; // guard against a mid-flight station switch
   // a gauge of the second source goes to its own loader the moment the merged
   // index knows the name — every switch after boot, and every warm session.
@@ -2443,15 +2479,15 @@ async function loadData() {
     const inWindow = lastTs && age >= 0 && age < (API_MAX_DAYS - 1) * 864e5;
     const start = inWindow ? new Date(lastTs + 1000).toISOString() : `P${API_MAX_DAYS}D`;
     const [info, gauge, delta] = await Promise.all([
-      state.info || getJson(`${API}/stations/${enc}.json?includeTimeseries=true`),
+      state.info || getJson(`${API}/stations/${enc}.json?includeTimeseries=true`, signal),
       // 48 of the 786 stations carry no W series at all, so this 404s by design —
       // swallowed here so the message below can name the real reason from info.
       // Only the 404: a network failure must not be reported as "no water level"
-      getJson(`${API}/stations/${enc}/W.json?includeCurrentMeasurement=true&includeCharacteristicValues=true`)
+      getJson(`${API}/stations/${enc}/W.json?includeCurrentMeasurement=true&includeCharacteristicValues=true`, signal)
         .catch(e => { if (e.status === 404) return null; throw e; }),
-      getJson(`${API}/stations/${enc}/W/measurements.json?start=${encodeURIComponent(start)}`).catch(() => []),
+      getJson(`${API}/stations/${enc}/W/measurements.json?start=${encodeURIComponent(start)}`, signal).catch(() => []),
     ]);
-    if (station !== forStation || mode !== 'station') return; // switched away while fetching — discard
+    if (signal.aborted || station !== forStation || mode !== 'station') return; // superseded or switched away — discard
     if (!gauge) {
       state.error = noWaterLevelError(info);
       scheduleRender();
@@ -2461,10 +2497,10 @@ async function loadData() {
     // would 404 in the console on every fresh load of a WT/Q-less station
     const series = (info.timeseries || []).map(ts => ts.shortname);
     const [wt, q] = await Promise.all([
-      series.includes('WT') ? getJson(`${API}/stations/${enc}/WT.json?includeCurrentMeasurement=true`).catch(() => null) : null,
-      series.includes('Q') ? getJson(`${API}/stations/${enc}/Q.json?includeCurrentMeasurement=true`).catch(() => null) : null,
+      series.includes('WT') ? getJson(`${API}/stations/${enc}/WT.json?includeCurrentMeasurement=true`, signal).catch(() => null) : null,
+      series.includes('Q') ? getJson(`${API}/stations/${enc}/Q.json?includeCurrentMeasurement=true`, signal).catch(() => null) : null,
     ]);
-    if (station !== forStation || mode !== 'station') return; // switched away while fetching — discard
+    if (signal.aborted || station !== forStation || mode !== 'station') return; // superseded or switched away — discard
     state.info = info;
     if (mode === 'station' && info.water && info.water.shortname) riverInput.value = info.water.shortname;
     state.gauge = gauge;
@@ -2490,7 +2526,7 @@ async function loadData() {
       if (!wd || wd > API_MAX_DAYS || viewMode === 'years') loadRepoArchive();
     }
   } catch (e) {
-    if (station !== forStation || mode !== 'station') return; // stale error from a station we left
+    if (signal.aborted || station !== forStation || mode !== 'station') return; // a superseded run, or a station we left
     if (e.status === 404) {
       // the live API does not know the name. The merged index may — a gauge
       // of the second source (its index is same-origin and one fetch, but a
@@ -8463,15 +8499,34 @@ reportCopyBtn.addEventListener('click', async () => {
 // when the grid repainted eight times a second; it still saves a full parse
 // whenever a refresh brings back a reading that has not moved.
 let lastScreen = null;
+// the CSS attribute-selector form of a string: only the quote and the
+// backslash need escaping inside "…"
+const cssStr = v => `"${String(v).replace(/["\\]/g, '\\$&')}"`;
 function setScreenHtml(html) {
   if (html === lastScreen) return;
+  // The innerHTML swap destroys the reader's focus and every scroll position
+  // inside the plate — and it runs not only on a chip, but on its own whenever
+  // a reading moved. A keyboard reader landed on <body> after every chip and
+  // needed eleven Tabs back (measured 2026-09-09). Note the target, swap, find
+  // it again: chips and links carry a nav id, everything else focusable an id.
+  const active = document.activeElement;
+  const inside = active && active !== document.body && typeof screen.contains === 'function' && screen.contains(active);
+  const again = !inside ? null
+    : active.dataset && active.dataset.nav ? `[data-nav=${cssStr(active.dataset.nav)}]`
+    : active.id ? `#${active.id}` : null;
+  const waveBefore = screen.querySelector('.wave-wrap');
+  const waveLeft = waveBefore ? waveBefore.scrollLeft : null;
   lastScreen = html;
   screen.innerHTML = html;
   // The wave grid is wider than a phone and its newest days are on the right,
-  // which is the end nobody scrolls to. Start it there: "what is the river
-  // doing now" is the question, and the past is one swipe back.
-  const wave = screen.querySelector && screen.querySelector('.wave-wrap');
-  if (wave && wave.scrollWidth > wave.clientWidth) wave.scrollLeft = wave.scrollWidth;
+  // which is the end nobody scrolls to. Start it there — the FIRST time: a
+  // grid the reader has scrolled stays where they left it across a repaint.
+  const wave = screen.querySelector('.wave-wrap');
+  if (wave && wave.scrollWidth > wave.clientWidth) wave.scrollLeft = waveLeft == null ? wave.scrollWidth : waveLeft;
+  if (again) {
+    const el = screen.querySelector(again);
+    if (el && el.focus) el.focus({ preventScroll: true });
+  }
 }
 function render() {
   if (state.help) { setScreenHtml(`<pre class="manpage">${esc(state.help)}</pre>`); return; }

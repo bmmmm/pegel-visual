@@ -1772,6 +1772,108 @@ test('plate controls: the range chips ride the history block, as real links', ()
   assert.equal(live.run(`typeof renderHistoryBar`), 'undefined', 'the standalone chip bar is gone');
 });
 
+// ---------- four audit findings of 2026-09-09 on the screen swap and the loaders ----------
+
+test('the screen swap hands focus back to the same target, and keeps the wave where it was', () => {
+  // innerHTML replacement dropped the reader on <body> — eleven Tabs back after
+  // every chip, and every five minutes on its own when a reading moved
+  const app = loadApp();
+  const out = app.run(`(() => {
+    const calls = []; let focused = null;
+    const chip = { dataset: { nav: 'cmd:years' }, id: '', focus: o => { focused = o; } };
+    document.activeElement = chip;
+    screen.contains = el => el === chip;
+    const wave = { scrollLeft: 120, scrollWidth: 900, clientWidth: 300 };
+    screen.querySelector = sel => { calls.push(sel); return sel === '.wave-wrap' ? wave : sel.includes('cmd:years') ? chip : null; };
+    setScreenHtml('<p>first</p>');
+    const left1 = wave.scrollLeft;
+    return { calls, focused, left1 };
+  })()`);
+  assert.ok(out.calls.includes('[data-nav="cmd:years"]'), `looks the target up by its nav id: ${out.calls}`);
+  assert.deepEqual(out.focused, { preventScroll: true }, 'and focuses it without scrolling the page');
+  assert.equal(out.left1, 120, 'a wave grid already scrolled stays where the reader left it');
+  // a grid appearing for the first time still starts at its newest day
+  const fresh = app.run(`(() => {
+    document.activeElement = { id: '', dataset: {} };
+    const wave = { scrollLeft: 0, scrollWidth: 900, clientWidth: 300 };
+    let first = true;
+    screen.querySelector = sel => sel === '.wave-wrap' ? (first ? (first = false, null) : wave) : null;
+    setScreenHtml('<p>second</p>');
+    return wave.scrollLeft;
+  })()`);
+  assert.equal(fresh, 900, 'first appearance: scrolled to the right edge');
+});
+
+test('the status line outside the plate says what the plate says, once per change', () => {
+  const app = loadApp({ search: '?station=BONN' });
+  const out = app.run(`(() => {
+    let writes = 0, val = '';
+    Object.defineProperty(screenStatus, 'textContent', { get: () => val, set: v => { writes++; val = v; } });
+    state.help = 'MAN';
+    setScreenAria();
+    const a = val, w1 = writes;
+    setScreenAria();          // unchanged summary: no rewrite, so no re-announcement
+    const b = writes;
+    state.help = null;
+    setScreenAria();
+    return { a, w1, b, c: val, name: screen.getAttribute('aria-label') };
+  })()`);
+  assert.equal(out.a, 'command help');
+  assert.equal(out.w1, 1);
+  assert.equal(out.b, 1, 'the same text is not written again');
+  assert.equal(out.c, app.run('screenSummary()'), 'and it follows the plate');
+  assert.equal(out.name, null, '#screen no longer names itself');
+});
+
+test('getJson gives every request a deadline, so a silent network reaches the error plate', async () => {
+  // measured: a withheld response left "one moment" standing 25 s later, with
+  // no retry chip and no refresh timer to try again in ?rain and ?total
+  const app = loadApp();
+  const opts = await app.run(`(() => {
+    let seen = null;
+    fetch = (url, o) => { seen = o; return Promise.resolve({ ok: true, json: () => ({}) }); };
+    return getJson('x.json').then(() => seen);
+  })()`);
+  assert.ok(opts && opts.signal && typeof opts.signal.aborted === 'boolean', 'an AbortSignal rides on the fetch');
+  assert.equal(app.run('FETCH_TIMEOUT_MS >= 10000 && FETCH_TIMEOUT_MS <= 60000'), true, 'a deadline in the tens of seconds');
+});
+
+test('a second loadData for the same station supersedes the first: the newest run wins', async () => {
+  // the station !== forStation guards catch a SWITCH, not a second run for the
+  // same gauge: a visibilitychange during the 5-min poll doubled every endpoint,
+  // and the last to ARRIVE won, not the last started
+  const app = loadApp({ search: '?station=BONN', now: NOON });
+  const out = await app.run(`(() => {
+    const signals = [];
+    let n = 0;
+    // run 1 answers SLOWLY with value 1, run 2 quickly with value 2
+    getJson = (url, signal) => {
+      signals.push(signal);
+      const run = Math.ceil(signals.length / 3);
+      const v = run === 1 ? 1 : 2;
+      const wait = run === 1 ? 20 : 0;
+      return new Promise((res, rej) => {
+        globalThis.setTimeout(() => {   // the real timer: the app-scope one is a stub that never fires
+          if (url.endsWith('/stations/BONN.json?includeTimeseries=true')) res({ shortname: 'BONN', water: { shortname: 'RHEIN' }, timeseries: [{ shortname: 'W' }] });
+          else if (url.includes('/W.json')) res({ unit: 'cm', currentMeasurement: { value: v, timestamp: ${NOON} }, characteristicValues: [] });
+          else res([]);
+        }, wait);
+      });
+    };
+    const p1 = loadData();
+    const p2 = loadData();
+    return Promise.all([p1, p2]).then(() => ({
+      value: state.gauge && state.gauge.currentMeasurement.value,
+      firstAborted: signals[0].aborted, secondAborted: signals[3].aborted, requests: signals.length,
+    }));
+  })()`);
+  // six for the two runs; whatever follows (neighbours) belongs to the winner
+  assert.ok(out.requests >= 6, `both runs asked — the first was already on the wire (${out.requests})`);
+  assert.equal(out.firstAborted, true, 'but the first run was aborted by the second');
+  assert.equal(out.secondAborted, false);
+  assert.equal(out.value, 2, 'and the value on the plate is the newest run’s, though it arrived first');
+});
+
 test('setScreenHtml: the screen only swaps when the content changed', () => {
   const app = loadApp();
   const stable = app.run(`(() => {
@@ -3881,8 +3983,8 @@ test('the wave grid keeps its name column when it scrolls to the newest day', ()
     'the row labels are sticky in the wave AND the rain grid');
   assert.match(page, /@container plate \(max-width: 34rem\)[^}]*--wave-name: 5rem/s,
     'and the name column narrows on a phone');
-  assert.match(page, /wave\.scrollLeft = wave\.scrollWidth/,
-    'and the grid opens on its newest day');
+  assert.match(page, /wave\.scrollLeft = waveLeft == null \? wave\.scrollWidth : waveLeft/,
+    'and the grid opens on its newest day — the first time; a scrolled grid stays put');
 });
 
 test('the PWA declares what an install prompt looks for, and the shell is honest', () => {
