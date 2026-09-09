@@ -1838,48 +1838,30 @@ function totalScope(ov) {
   return `${MONTH_ABBR[totalMonth]} ${totalYear}` + (totalDay != null ? ` · ${totalDay}` : '');
 }
 
-function applyStationChrome() {
-  if (mode !== 'station') return; // river/rivers chrome owns the title and link there
-  document.title = 'PEGEL://' + station;
-  stationLink.textContent = '?station=' + station + viewSuffix();
+// The tab title, the permalink's text and its label, per mode. Six copies of
+// the same four lines used to carry these; only the three expressions differ.
+const MODE_CHROME = {
+  station: { title: () => 'PEGEL://' + station, link: () => '?station=' + station + viewSuffix(), label: 'station link:' },
+  river: { title: () => 'PEGEL://' + waterLabel(state.river), link: () => '?river=' + state.river + viewSuffix(), label: 'river link:' },
+  rivers: { title: () => 'PEGEL://RIVERS' + (viewMode === 'list' ? ' · A-Z' : ''), link: () => '?rivers' + viewSuffix(), label: 'rivers link:' },
+  rising: { title: () => 'PEGEL://RISING' + (risingDays > 1 ? ' · 7D' : ''), link: risingQuery, label: 'rising link:' },
+  total: { title: () => 'PEGEL://TOTAL · ' + totalScope(), link: totalQuery, label: 'total link:' },
+  rain: { title: () => 'PEGEL://RAIN · ' + rainDays + 'D', link: rainQuery, label: 'rain link:' },
+};
+function applyChrome(m) {
+  const c = MODE_CHROME[m];
+  document.title = c.title();
+  stationLink.textContent = c.link();
   stationLink.href = currentModeQuery();
-  permaLabel.textContent = 'station link:';
+  permaLabel.textContent = c.label;
 }
-
-function applyRiverChrome() {
-  document.title = 'PEGEL://' + waterLabel(state.river);
-  stationLink.textContent = '?river=' + state.river + viewSuffix();
-  stationLink.href = currentModeQuery();
-  permaLabel.textContent = 'river link:';
-}
-
-function applyRiversChrome() {
-  document.title = 'PEGEL://RIVERS' + (viewMode === 'list' ? ' · A-Z' : '');
-  stationLink.textContent = '?rivers' + viewSuffix();
-  stationLink.href = currentModeQuery();
-  permaLabel.textContent = 'rivers link:';
-}
-
-function applyRisingChrome() {
-  document.title = 'PEGEL://RISING' + (risingDays > 1 ? ' · 7D' : '');
-  stationLink.textContent = risingQuery();
-  stationLink.href = currentModeQuery();
-  permaLabel.textContent = 'rising link:';
-}
-
-function applyTotalChrome() {
-  document.title = 'PEGEL://TOTAL · ' + totalScope();
-  stationLink.textContent = totalQuery();
-  stationLink.href = currentModeQuery();
-  permaLabel.textContent = 'total link:';
-}
-
-function applyRainChrome() {
-  document.title = 'PEGEL://RAIN · ' + rainDays + 'D';
-  stationLink.textContent = rainQuery();
-  stationLink.href = currentModeQuery();
-  permaLabel.textContent = 'rain link:';
-}
+// river/rivers chrome owns the title and link there — the one guarded entry
+function applyStationChrome() { if (mode === 'station') applyChrome('station'); }
+function applyRiverChrome() { applyChrome('river'); }
+function applyRiversChrome() { applyChrome('rivers'); }
+function applyRisingChrome() { applyChrome('rising'); }
+function applyTotalChrome() { applyChrome('total'); }
+function applyRainChrome() { applyChrome('rain'); }
 
 // river and rivers mode hide the per-station chrome (archive bar, recent chips);
 // the prompt form stays so users can jump back to a station. Every control that
@@ -6944,13 +6926,8 @@ function setView(v, push = true) {
   else applyStationChrome();
   if (v === 'years') ensureHistoryCoverage(null); // pull the multi-year WSV archive
   if (v === 'wave') loadWave();
-  scheduleRender();
   setScreenAria();
-  if (document.startViewTransition && !reduceMotion.matches) {
-    const vt = document.startViewTransition(renderNow);
-    vt.ready.catch(() => {});
-    vt.finished.catch(() => {});
-  }
+  crossFade();
 }
 
 // controls shared by the in-plate targets (nav "cmd:…") and the bar chips
@@ -7046,17 +7023,9 @@ function switchStation(name, push = true) {
   histCache = null;
   applyStationChrome();
   applyModeChrome(); // restore the station chrome if we came from river mode
-  scheduleRender();
   updateLocalBar();
   setScreenAria();
-  // cross-fade the grid from the old station to the connecting screen; a
-  // transition aborted by the browser (hidden/unfocused tab) is fine — the
-  // render itself still ran, so just swallow the rejections
-  if (document.startViewTransition && !reduceMotion.matches) {
-    const vt = document.startViewTransition(renderNow);
-    vt.ready.catch(() => {});
-    vt.finished.catch(() => {});
-  }
+  crossFade(); // from the old station to the connecting screen
 
   stationInput.value = station;
   // reflect the station's water at once from the cached list; loadData confirms it
@@ -7099,13 +7068,8 @@ function switchRiver(name, push = true) {
   if (push) history[push === 'replace' ? 'replaceState' : 'pushState'](null, '', '?river=' + encodeURIComponent(next) + viewSuffix());
   applyRiverChrome();
   applyModeChrome();
-  scheduleRender();
   setScreenAria();
-  if (document.startViewTransition && !reduceMotion.matches) {
-    const vt = document.startViewTransition(renderNow);
-    vt.ready.catch(() => {});
-    vt.finished.catch(() => {});
-  }
+  crossFade();
 
   riverInput.value = next;
   stationInput.value = ''; // no station is selected in river mode
@@ -7117,108 +7081,62 @@ function switchRiver(name, push = true) {
 // enter the rivers map. Unlike the other two modes this needs no live readings and
 // so no refresh timer — it is drawn entirely from the cached station list, which
 // carries its own weekly TTL.
-function switchRivers(push = true) {
+// The four global modes — every plate that is not a station or a river —
+// enter the same way: leave the per-station state behind, write the URL,
+// dress the chrome, cross-fade, clear the prompts, stop the poll, then load.
+// Twenty-one lines of that stood in four copies; only what is in this table
+// ever differed. `again` marks the modes whose URL carries plate state (zoom,
+// window) that a popstate can move while the mode stays the same.
+const GLOBAL_MODES = {
+  rivers: { chrome: applyRiversChrome, query: () => '?rivers',
+            enter: () => loadStationList() }, // no-op when the cache is warm; fills the map when it isn't
+  rising: { chrome: applyRisingChrome, query: risingQuery,
+            reset: () => { state.rising = null; }, // re-entering refetches — the board is a point-in-time diff
+            // the daily baseline itself doesn't move, but the live half of the diff (and
+            // the "vs snapshot X.Xh ago" header) does — same 5-min cadence as every other mode
+            enter: () => { loadRising(); refreshTimer = setInterval(loadRising, REFRESH_MS); } },
+  total: { chrome: applyTotalChrome, query: totalQuery, again: true,
+           enter: loadTotal }, // no refresh interval: the aggregate moves once a day at most
+  rain: { chrome: applyRainChrome, query: rainQuery, again: true,
+          enter: loadRain }, // no refresh interval: a daily export has nothing to poll for
+};
+
+function switchGlobalMode(name, push = true) {
+  const m = GLOBAL_MODES[name];
   dismissHelp();
   dismissSuggest();
-  if (mode === 'rivers') return;
-
-  mode = 'rivers';
-  viewMode = 'live';
-  state.feed = null; // the plate left behind may have been a mirrored one; this one has no feed
-  state.river = null;
-  state.riverStations = null;
-  state.gauge = null;
-  state.error = null;
-  waveData = null;
-
-  if (push) history[push === 'replace' ? 'replaceState' : 'pushState'](null, '', '?rivers');
-  applyRiversChrome();
-  applyModeChrome();
-  scheduleRender();
-  setScreenAria();
-  if (document.startViewTransition && !reduceMotion.matches) {
-    const vt = document.startViewTransition(renderNow);
-    vt.ready.catch(() => {});
-    vt.finished.catch(() => {});
-  }
-
-  stationInput.value = '';
-  riverInput.value = '';
-  clearInterval(refreshTimer);
-  loadStationList(); // no-op when the cache is warm; fills the map when it isn't
-}
-
-function switchRising(push = true) {
-  dismissHelp();
-  dismissSuggest();
-  if (mode === 'rising') return;
-
-  mode = 'rising';
-  viewMode = 'live';
-  state.feed = null; // no feed of its own; never inherit a mirrored plate's
-  state.river = null;
-  state.riverStations = null;
-  state.gauge = null;
-  state.error = null;
-  state.rising = null; // re-entering refetches — the board is a point-in-time diff
-  waveData = null;
-
-  if (push) history[push === 'replace' ? 'replaceState' : 'pushState'](null, '', risingQuery());
-  applyRisingChrome();
-  applyModeChrome();
-  scheduleRender();
-  setScreenAria();
-  if (document.startViewTransition && !reduceMotion.matches) {
-    const vt = document.startViewTransition(renderNow);
-    vt.ready.catch(() => {});
-    vt.finished.catch(() => {});
-  }
-
-  stationInput.value = '';
-  riverInput.value = '';
-  clearInterval(refreshTimer);
-  // the daily baseline itself doesn't move, but the live half of the diff (and
-  // the "vs snapshot X.Xh ago" header) does — same 5-min cadence as every other mode
-  loadRising();
-  refreshTimer = setInterval(loadRising, REFRESH_MS);
-}
-
-function switchTotal(push = true) {
-  dismissHelp();
-  dismissSuggest();
-  if (mode === 'total') { // already here: only the zoom state may have moved (popstate)
-    applyTotalChrome();
-    scheduleRender();
-    setScreenAria();
+  if (mode === name) {
+    if (m.again) { m.chrome(); scheduleRender(); setScreenAria(); } // only the plate state moved (popstate)
     return;
   }
 
-  mode = 'total';
+  mode = name;
   viewMode = 'live';
   state.feed = null; // no feed of its own; never inherit a mirrored plate's
   state.river = null;
   state.riverStations = null;
   state.gauge = null;
   state.error = null;
+  if (m.reset) m.reset();
   waveData = null;
 
-  if (push) history[push === 'replace' ? 'replaceState' : 'pushState'](null, '', totalQuery());
-  applyTotalChrome();
+  if (push) history[push === 'replace' ? 'replaceState' : 'pushState'](null, '', m.query());
+  m.chrome();
   applyModeChrome();
-  scheduleRender();
   setScreenAria();
-  if (document.startViewTransition && !reduceMotion.matches) {
-    const vt = document.startViewTransition(renderNow);
-    vt.ready.catch(() => {});
-    vt.finished.catch(() => {});
-  }
+  crossFade();
 
   stationInput.value = '';
   riverInput.value = '';
   clearInterval(refreshTimer);
-  // no refresh interval: the aggregate moves once a day at most
-  loadTotal();
+  m.enter();
 }
+
+// named entry points: actOnGridTarget, resolveDeepLink and popstate call these
+function switchRivers(push = true) { switchGlobalMode('rivers', push); }
+function switchRising(push = true) { switchGlobalMode('rising', push); }
+function switchTotal(push = true) { switchGlobalMode('total', push); }
+function switchRain(push = true) { switchGlobalMode('rain', push); }
 
 // ---------- ?rain: the mirror's basin-by-day rainfall ----------
 
@@ -7248,43 +7166,6 @@ function rainSetDays(n) {
   applyRainChrome();
   scheduleRender();
   setScreenAria();
-}
-
-function switchRain(push = true) {
-  dismissHelp();
-  dismissSuggest();
-  if (mode === 'rain') { // already here: only the window may have moved (popstate)
-    applyRainChrome();
-    scheduleRender();
-    setScreenAria();
-    return;
-  }
-
-  mode = 'rain';
-  viewMode = 'live';
-  state.feed = null; // no feed of its own; never inherit a mirrored plate's
-  state.river = null;
-  state.riverStations = null;
-  state.gauge = null;
-  state.error = null;
-  waveData = null;
-
-  if (push) history[push === 'replace' ? 'replaceState' : 'pushState'](null, '', rainQuery());
-  applyRainChrome();
-  applyModeChrome();
-  scheduleRender();
-  setScreenAria();
-  if (document.startViewTransition && !reduceMotion.matches) {
-    const vt = document.startViewTransition(renderNow);
-    vt.ready.catch(() => {});
-    vt.finished.catch(() => {});
-  }
-
-  stationInput.value = '';
-  riverInput.value = '';
-  clearInterval(refreshTimer);
-  // no refresh interval: a daily export has nothing to poll for
-  loadRain();
 }
 
 function dismissHelp() {
@@ -8695,15 +8576,31 @@ function setScreenError(msg) {
   setSourceLine(pendingSource());
 }
 
-function renderNow() { render(); }
-
 // Coalesce every "the data moved" signal into one render on the next frame:
 // a burst of loaders landing together costs one repaint, not one each.
 let renderQueued = false;
 function scheduleRender() {
   if (renderQueued) return;
   renderQueued = true;
-  requestAnimationFrame(() => { renderQueued = false; render(); });
+  // a renderNow() in between (a cross-fade) has already drained the queue
+  requestAnimationFrame(() => { if (renderQueued) renderNow(); });
+}
+function renderNow() { renderQueued = false; render(); }
+
+// A mode or view switch cross-fades the plate. This is the ONE render of that
+// switch: every caller used to scheduleRender() and then hand renderNow to the
+// transition as well, so the plate was built twice — the second time without
+// a DOM write (measured 2026-09-09) — and the frame render swapped the DOM
+// before the transition could capture its "old" snapshot. Draining the queue
+// first makes the render inside the transition the only one. A transition
+// aborted by the browser (hidden/unfocused tab) is fine — the update callback
+// still runs, so the render did too; the rejections are swallowed.
+function crossFade() {
+  if (!document.startViewTransition || reduceMotion.matches) return scheduleRender();
+  renderQueued = false;
+  const vt = document.startViewTransition(renderNow);
+  vt.ready.catch(() => {});
+  vt.finished.catch(() => {});
 }
 
 // resolve the URL's station against the hydrated name cache before the first fetch

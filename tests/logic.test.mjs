@@ -2453,6 +2453,37 @@ test('currentModeQuery: the share link follows whatever mode is actually on scre
   assert.equal(app.run('currentModeQuery()'), '?rising', 'and into ?rising');
 });
 
+test('a mode switch under a view transition renders once, inside the transition', () => {
+  // every switch* and setView called scheduleRender() AND
+  // startViewTransition(renderNow): two full renders, the second without a
+  // DOM write (measured 2026-09-09) — and the frame render swapped the DOM
+  // before the transition captured its "old" snapshot
+  const app = loadApp({ search: '?station=BONN' });
+  app.run(`
+    globalThis.__renders = 0; globalThis.__inVt = 0;
+    const realRender = render;
+    render = () => { globalThis.__renders++; realRender(); };
+    document.startViewTransition = cb => {
+      globalThis.__inVt++; cb();
+      return { ready: Promise.resolve(), finished: Promise.resolve() };
+    };
+    renderQueued = false;
+  `);
+  app.run('switchTotal()');
+  assert.equal(app.run('globalThis.__inVt'), 1, 'the switch cross-fades');
+  assert.equal(app.run('globalThis.__renders'), 1, 'and renders exactly once, inside it');
+  assert.equal(app.run('renderQueued'), false, 'with no second render left queued on the frame');
+  app.run('globalThis.__renders = 0; globalThis.__inVt = 0');
+  app.run(`setView('years')`);   // wrong mode for the view: a no-op, nothing renders
+  app.run('switchRising()');
+  assert.equal(app.run('globalThis.__inVt'), 1);
+  assert.equal(app.run('globalThis.__renders'), 1, 'the same holds for every global mode');
+  // without a transition available the render still happens — on the frame
+  app.run('delete document.startViewTransition; globalThis.__renders = 0');
+  app.run('switchRivers()');
+  assert.equal(app.run('renderQueued'), true, 'no transition: one render queued, as before');
+});
+
 test('applyModeChrome: marks the active nav item, footer label matches the mode', () => {
   const rivers = loadApp({ search: '?rivers' });
   assert.equal(rivers.el('rivers-btn').className, 'on', 'the active item gets .on');
