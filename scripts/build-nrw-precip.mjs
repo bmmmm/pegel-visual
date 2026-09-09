@@ -57,7 +57,7 @@ import { mkdirSync, writeFileSync, readFileSync, existsSync, readdirSync, unlink
 import { join, dirname } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { daysInYear } from './fetch-wsv-archive.mjs';
-import { parseArgs, pinnedNow, readJson, listDirs } from './lib/cli.mjs';
+import { parseArgs, pinnedNow, readJson, listDirs, listFiles } from './lib/cli.mjs';
 
 export const SCHEMA = 1;
 
@@ -221,8 +221,6 @@ export const yearStartDay = y => Date.UTC(y, 0, 1) / DAY_MS;
 export const dayToISO = a => new Date(a * DAY_MS).toISOString().slice(0, 10);
 
 // ---------- reading the tree ----------
-
-const listFiles = dir => { try { return readdirSync(dir).sort(); } catch { return []; } };
 
 const yearsIn = dir => listFiles(dir).map(f => /^(\d{4})\.json$/.exec(f)).filter(Boolean).map(m => Number(m[1])).sort();
 

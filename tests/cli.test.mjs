@@ -10,7 +10,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { parseArgs, listDirs, listChanges, readHead, readJson, git } from '../scripts/lib/cli.mjs';
+import { parseArgs, listDirs, listFiles, listChanges, readHead, readJson, git } from '../scripts/lib/cli.mjs';
 
 const SCRIPTS = fileURLToPath(new URL('../scripts/', import.meta.url));
 
@@ -41,12 +41,16 @@ test('parseArgs: a value never starts with --, so `--out --check` reads --out as
   assert.equal(parseArgs(['--a', '1', '--a', '2']).opt('a', null), '1');
 });
 
-test('listDirs is sorted whatever order the filesystem hands back', () => {
+// (APFS already hands names back sorted, so this goes red only on a
+// hash-ordered filesystem — ext4 on the CI runner is one)
+test('listDirs and listFiles are sorted whatever order the filesystem hands back', () => {
   const dir = tmp('cli-dirs-');
   for (const n of ['b', '10', 'a', '2']) mkdirSync(join(dir, n));
-  writeFileSync(join(dir, 'file'), '');
+  for (const n of ['2024.json', 'x', '2019.json']) writeFileSync(join(dir, n), '');
   assert.deepEqual(listDirs(dir), ['10', '2', 'a', 'b']);
   assert.deepEqual(listDirs(join(dir, 'missing')), []);
+  assert.deepEqual(listFiles(dir), ['10', '2', '2019.json', '2024.json', 'a', 'b', 'x']);
+  assert.deepEqual(listFiles(join(dir, 'missing')), []);
 });
 
 test('readJson: null for a missing and for a malformed file', () => {

@@ -54,7 +54,9 @@ export const readJson = path => { try { return JSON.parse(readFileSync(path, 'ut
 // runner's filesystem. Its next run rewrites the manifest once (sorted), then
 // it is stable.
 export const listDirs = dir => { try { return readdirSync(dir, { withFileTypes: true }).filter(d => d.isDirectory()).map(d => d.name).sort(); } catch { return []; } };
-export const listFiles = dir => { try { return readdirSync(dir); } catch { return []; } };
+// sorted too, for the same reason: build-nrw-precip's yearsIn reads it, and
+// the collector's manifest counts must not depend on readdir order either
+export const listFiles = dir => { try { return readdirSync(dir).sort(); } catch { return []; } };
 
 // write only when the content changed: a data branch that is rewritten daily
 // with identical bytes still grows its history. Returns whether it wrote.
