@@ -70,9 +70,16 @@ export const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 // ---------- git probes of the consistency checkers ----------
 
+// LC_ALL=C pins git's messages to English, because UNBORN_HEAD below matches
+// their text. Measured 2026-09-10 under LC_ALL=de_DE.UTF-8: `diff HEAD -- x`
+// says "Schwerwiegend: bad revision 'HEAD'" (head translated, body not, so the
+// regex still matches today), `diff HEAD` says "mehrdeutiges Argument 'HEAD'"
+// (fully translated). The pin keeps the regex true whichever form git picks.
+// maxBuffer 256 MB: the first diff of a large nrw-hires tree can exceed the
+// default 1 MB, and that ENOBUFS must crash — see listChanges.
 export function git(gitDir, gitArgs, stdio) {
   return execFileSync('git', ['-C', gitDir, ...gitArgs],
-    { encoding: 'utf8', maxBuffer: 256 * 1024 * 1024, ...(stdio ? { stdio } : {}) });
+    { encoding: 'utf8', maxBuffer: 256 * 1024 * 1024, env: { ...process.env, LC_ALL: 'C' }, ...(stdio ? { stdio } : {}) });
 }
 
 // changed = diff vs HEAD plus untracked files (a brand-new month shard or
@@ -80,7 +87,9 @@ export function git(gitDir, gitArgs, stdio) {
 // has no baseline at all, so everything in it is new. ONLY that case is
 // swallowed: any other git failure (no such directory, a corrupt HEAD) must
 // stay a crash, or a checker comparing against HEAD would read "nothing
-// changed" off a broken repo and pass it.
+// changed" off a broken repo and pass it. That includes ENOBUFS from a diff
+// larger than maxBuffer: an earlier version swallowed it as "no HEAD" and
+// reported a huge first run as nothing changed — do not widen the regex.
 const UNBORN_HEAD = /bad revision 'HEAD'|unknown revision|ambiguous argument 'HEAD'/;
 export function listChanges(gitDir, prefix) {
   const changes = [];

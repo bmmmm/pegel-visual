@@ -10,7 +10,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { parseArgs, listDirs, listChanges, readHead, readJson } from '../scripts/lib/cli.mjs';
+import { parseArgs, listDirs, listChanges, readHead, readJson, git } from '../scripts/lib/cli.mjs';
 
 const SCRIPTS = fileURLToPath(new URL('../scripts/', import.meta.url));
 
@@ -75,6 +75,18 @@ test('listChanges: an unborn HEAD is "everything is new"; any other git failure 
   try { unborn = listChanges(repo, 'data'); } finally { console.log = log; }
   assert.deepEqual(unborn, [{ status: 'A', path: 'data/a.json' }]);
   assert.match(logged.join('\n'), /no HEAD to compare against/);
+  // a German runner: git() pins LC_ALL=C, so the failure git reports starts
+  // with "fatal:" and not "Schwerwiegend:" — the regex above reads English.
+  // (Today only the head of this message is translated, so listChanges would
+  // survive without the pin; the pin is asserted on git() itself.)
+  const env = { LC_ALL: process.env.LC_ALL, LANGUAGE: process.env.LANGUAGE };
+  process.env.LC_ALL = 'de_DE.UTF-8'; process.env.LANGUAGE = 'de';
+  try {
+    assert.throws(() => git(repo, ['diff', '--name-status', 'HEAD', '--', 'data'], ['ignore', 'pipe', 'pipe']),
+      e => /^fatal: bad revision 'HEAD'/m.test(String(e.stderr)), 'git() reports in English under a German locale');
+  } finally {
+    for (const [k, v] of Object.entries(env)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
+  }
   assert.equal(readHead(repo, 'data/a.json'), null, 'no HEAD version yet');
   gitIn(repo, 'add', '-A');
   gitIn(repo, 'commit', '-q', '-m', 'seed');
