@@ -94,7 +94,7 @@ const THROTTLE_MS = 1500;
 const now = pinnedNow();
 const CURRENT_YEAR = now.getUTCFullYear();
 
-const { opt, has } = parseArgs();
+const { opt, has, args } = parseArgs();
 
 const OUT = opt('out', 'archive');
 const FROM = Number(opt('from', 2000));

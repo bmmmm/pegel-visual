@@ -29,8 +29,16 @@ const check = checker();
 // a local report ahead of a deploy would otherwise expect bars the page
 // does not draw yet.
 const RAIN_REPORT = 'gate/nrw-mid/report-3p0-rain.json';
+async function deployedReport(base) {
+  const url = new URL(RAIN_REPORT, base);
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`${url}: HTTP ${res.status} — the rain report is not deployed there`);
+  return res.json();
+}
+// Node's fetch ignores the sandbox proxy, so against GATE_BASE_URL this needs
+// the same bypass the browser already needed.
 const rainReport = process.env.GATE_BASE_URL
-  ? await (await fetch(new URL(RAIN_REPORT, process.env.GATE_BASE_URL))).json()
+  ? await deployedReport(process.env.GATE_BASE_URL)
   : JSON.parse(readFileSync(join(ROOT, RAIN_REPORT), 'utf8'));
 const expectFills = NRW_BLOCKS.filter(b => rainReport.pooled.blocks[b])
   .map(b => (rainReport.pooled.blocks[b].ss_vs_other < 0 ? '-45deg' : '45deg'));

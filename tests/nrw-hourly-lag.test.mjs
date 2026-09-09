@@ -662,7 +662,7 @@ test('CLI: --report on the fixture trees runs to the end and prints the diagnost
   const stdout = execFileSync(process.execPath, [
     new URL('../scripts/build-nrw-hourly-lag.mjs', import.meta.url).pathname,
     '--tree', FIX.tree, '--hires', FIX.hires, '--out', out, '--report',
-  ], { encoding: 'utf8', env: { ...process.env, PEGEL_NOW: '2026-07-31T12:00:00Z' } });
+  ], { encoding: 'utf8' });
   assert.match(stdout, /^hourly lag: window /m);
   assert.match(stdout, /^no\tclass\th\tr\tn\twet\tp\tsig\tstate$/m, 'the --report table header');
   assert.match(stdout, /^100\t0\t/m, 'gauge 100 is class 0 in the table');
