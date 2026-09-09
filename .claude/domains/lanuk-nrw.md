@@ -219,6 +219,153 @@ Note also that the baseline is only consulted when there IS a HEAD to differ
 from — a fresh branch or a fork has no rule change to check, and the floors in
 `checkPrecipShape` are what stand there instead.
 
+## The hourly response class (`scripts/build-nrw-hourly-lag.mjs`, `nrw/hourly/lag.json`, gate rule N9)
+
+**Shipped 2026-09-08.** The one piece of hydrology the daily product cannot see:
+how long after rain over its rain field a gauge itself moves. On a DAY axis the
+travel time is invisible — 0 of 42 gauges show the far part of their set
+responding later than the near part. On an hourly axis it is there.
+
+**The product is a CLASS, never an hour, and that is the churn criterion
+talking.** Replayed over 14 daily steps at a fixed window length, the number of
+published values that move per day:
+
+| what the file would carry | churn/day | ceiling ~10 |
+|---|---|---|
+| the raw peak lag in hours | **14.6** | ✗ |
+| the same within ±3 h | **10.1** | ✗ |
+| **three class labels** | **8.5** (median 5, max 29) | ✓ |
+
+Three classes — `[0,1]`, `[2,8]`, `[9,null]` hours — because six churn at 9.1
+with 67.9 % class stability (on the 2/3 floor) and two say almost nothing at
+82.1 %. The hour is withheld for a second reason as well: the two halves of the
+window disagree by 8 h at the p90, so an hour is false precision.
+
+**Everything else stays out of the file for the same reason.** Measured: `r` at
+two decimals churns **75.6** lines a day, at one decimal **21.6**, the raw hour
+**14.6**. So `gauges` maps an id onto a class and onto nothing at all besides.
+The diagnostics (`r`, `h`, `n`, `wet`, `p`) go to stdout under `--report`, into
+the CI log, which is kept 90 days; the branch is kept forever. And the file is
+the one product here written **unminified** — its diffability IS the acceptance
+criterion, and 4 kB on one line has no diff granularity. Measured over one day
+of rolling: **2 gauge lines move**, 20 lines of diff in all, the other 18 being
+the run's own header.
+
+**The winner's curse is corrected, and the first correction was wrong.** The
+estimator takes a maximum over 49 lags. A permutation test with **12** rotations
+cannot carry that: the smallest attainable p is 1/13 = 0.077, so over ~222 gauges
+~17 false positives are expected under the global null — a *weaker* filter than
+the r cut beside it. Done properly — **99 deterministic, evenly spread rotations
+plus Benjamini–Hochberg at q = 0.05 over m = every gauge TESTED** (224 on the
+2026-09-09 mirror) — 162 of the 168 gauges over r 0.25 survive. Two traps, both hit: a rotation by the window LENGTH is the
+identity (it reported 1.8 % significant instead of 87.8 %), so the shifts need a
+guard band, which is set at 168 h — a week, because weather autocorrelates on
+the synoptic scale and a 50 h rotation still lines the same front up with the
+same flood. And the set must be **deterministic**: a `Math.random()` there kills
+the `--check` purity claim silently and looks green for weeks.
+
+**Correction to the plan that specified this: the permutation filter does NOT
+lower the churn.** Re-measured 2026-09-09 with the guard band applied, both ways
+over the same 14 steps: **8.2/day with the filter, 8.2/day without** — 115
+rewrites either way, differently distributed, not fewer. The plan predicted 7.1
+against 8.1. The filter is justified by the multiple-comparison correction
+alone, and it costs ~26 s a day.
+
+**Who gets a class.** Of 275 gauges with a daily rain field: **162 published**
+(101 / 49 / 12 across the three classes), 24 not in `nrw-hires` at all, 27 with
+too few wet hours, 56 with a peak r under 0.25, 6 not clear of chance.
+**62 % land in class 0** — real per the control, but a three-class product where
+two thirds of readers see one class is close to a one-class product, which is
+what the wording has to carry rather than the decision to ship.
+
+**The gates, all pre-registered, all measured under rule version 2:**
+
+| gate | criterion | result |
+|---|---|---|
+| stability, halves within ±3 h | ≥ 2/3 | **76.3 %** (29 of 38) — PASS |
+| class agreement across the halves | — | **75.0 %** (21 of 28) |
+| churn of the published value | ≤ ~10/day | **8.2/day** — PASS |
+| negative control (level rotated) | — | median r **0.401 → 0.056–0.057**, lag-0 share 40.2 % → 1.3–3.6 % — PASS |
+
+Every number in that table was re-measured on 2026-09-09 against the **shipped**
+window (1512 h) and with the rotation guard band actually applied — the figures
+that stood here before came off a 1597 h window and a `rotationShifts()` that
+took a `guard` argument and ignored it, so its null contained near-identity
+rotations. Do not compare a future run against anything older than this note.
+
+Stability is measured on the **17 %** of gauges estimable in both halves (38 of
+the 224 with a peak) — a gauge estimable in both is a well-covered gauge, so
+76.3 % describes the best sixth of the fleet, and the bounded window made that
+denominator smaller, not larger. That sentence belongs beside the number
+wherever it is quoted, and it rides in the file's own `note` onto the plate.
+
+**The 15 km footprint carries hourly too — re-measured here, not carried over.**
+The hypothesis was that convective cells are far smaller at an hourly
+resolution, so a tighter ring should transmit better; that predicts monotone
+improvement as the ring shrinks, and it does not happen:
+
+The six rows below come from ONE run on the 1597 h window and the pre-guard
+rotation set, and they are left exactly as measured: a ring comparison is only
+worth anything if every row saw the same conditions, so replacing the shipped
+row with today's figures would make the table unreadable rather than truer. Read
+them against each other, never as the shipped counts — those are the table
+above. The guard band applies to every row alike, so the ordering is unaffected;
+what is not re-measured is the absolute level of each cell.
+
+| ring | attempted | with peak | published | median r | class stability |
+|---|---|---|---|---|---|
+| hydrology only | 85 | 76 | 48 | 0.350 | 75.0 % (12/16) |
+| 5 km | 229 | 182 | 126 | 0.376 | 73.5 % (25/34) |
+| 10 km | 246 | 203 | 144 | 0.378 | 73.3 % (33/45) |
+| **15 km (shipped)** | 251 | 222 | **162** | **0.391** | **75.0 % (42/56)** |
+| 25 km | 252 | 247 | 186 | 0.381 | 73.2 % (52/71) |
+| 40 km | 252 | 252 | 178 | 0.350 | 72.8 % (59/81) |
+
+5 and 10 km publish 36 and 18 gauges FEWER at no better stability, and 15 km has
+the best median r and the best class stability of all six. **Hypothesis not
+supported.** 25 km publishes 24 more and is still not on the table, for a reason
+that had to stand before the test and not after it: **membership must be the
+shipped `RULE`**, because the PRECIPITATION block directly above this one on the
+plate draws exactly that 15 km field. Two definitions of "this gauge's rain" in
+two neighbouring blocks of one plate is what `T.precipNotCatchment` and
+`T.precipNested` exist to prevent.
+
+**Three reasons it is its own script and its own file**, not a key inside
+`nrw/precip/<no>/response.json`, each fatal on its own: `Out.prune()` unlinks
+every file under `nrw/precip/` it did not write, so N8(e) would go red; N8(e)
+proves the precip bytes are a pure function of the committed `nrw` tree, and a
+second input tree makes that claim false; and `pages.yml` mounts `nrw` and never
+`nrw-hires`, so the product must land inside `nrw/`. The estimator lives in the
+BUILDER and `scripts/probe-hourly-lag.mjs` imports it — the direction
+`probe-precip-rule.mjs` already runs in, and the other way round the probe would
+be de facto deployed while its own header said "NOT in CI, NOT deployed".
+
+**`inputs.sha256` is a digest, not a commit SHA**, and that is not a nicety: the
+gate runs BEFORE both pushes, `nrw` can land while the `nrw-hires` push fails,
+and at build time no hires SHA exists at all. It hashes `rel \0 byteLength \0
+bytes` over `nrw-hires/{rain,gauges}/**/*.json` sorted by path — `temp/` and
+`raw/` are not inputs and must not churn it.
+
+**N9's floors are calibrated on the regime the gate ALLOWS, and the obvious
+numbers were wrong in three of five cases.** Measured over 21 distinct windows
+(six lengths from 40 to 66.5 days ending at the newest hour, plus a 15-step
+daily replay): `published` runs **119 to 201**, and it does NOT fall as the
+window shortens — the short windows sit on the recent wetter fortnight and
+publish MORE (201 at 40 days against 162 at 66.5). So the floor cannot be
+derived from the window length: **100**, under everything measured. The plan's
+120 goes red on the 119 window. Class drift: the 14 replay steps run 1, 6, 8,
+29, 16, 2, 20, 2, 1, 4, 18, 4, 2, 6 — mean 8.5, **maximum 29** — so the
+single-run ceiling is **50**, not the plan's 40 (which was 1.7× a maximum of 23;
+50 is 1.7× the 29 actually measured). The largest one-step FALL in published
+gauges is **5**, so that cap stays at 20. And `LAG_RULE_BASELINE_SLACK` is
+**30**, not the daily product's 2: `published` is a statistic over a rolling
+window, not a membership count, and one day of roll moved it by as much as 26.
+
+**Pre-registered now, in the file itself:** re-run `--split` across the season
+in **2027-02**; below 2/3 class agreement the product is withdrawn. The window
+is 63 days of high summer, and in February the estimator sees frontal rain, snow
+(no response at any lag) and melt (a response with no rain).
+
 ### Two ideas measured and killed, and one kill withdrawn
 
 Each had a pre-registered kill criterion, and each is recorded here so it is not
@@ -234,45 +381,35 @@ re-proposed as a fresh insight. **Do not reopen without new facts.**
   on their own — `gaugeDatum` exists on **24 of 310** gauges and there is no
   DEM; and `distToConflKm` is not a network coordinate (**43 of 51** sets hold
   an "upstream" station with a SMALLER value, Greven by −109 km).
-- **Hourly response lag per gauge — I KILLED THIS ON A BAD MEASUREMENT. The
-  kill is withdrawn; the stage is open and undecided.** Read this before
-  re-proposing or re-killing it.
-  On 2026-09-08 the stability gate read **64.3 %** against a floor of 2/3 and
-  the stage was declared dead. That number came from a run of
-  `scripts/probe-hourly-lag.mjs` made *before* `RULE` was flipped to version 2 —
-  the probe takes its membership from that constant, and its output did not name
-  it. So it measured the OLD thin sets: 85 gauges attempted, and the gate came
-  down to **28** gauges of which 18 agreed. Re-run against the shipped rule, on
-  the same data, as a control: the old rule still gives exactly 28 / 18 / 64.3 %,
-  and the shipped rule gives **81 gauges, 58 agreeing, 71.6 % — PASS.** The
-  difference is the rule, not the day. The probe now prints the rule it used.
-  Where the stage actually stands, all measured 2026-09-08 under rule version 2:
-
-  | gate | pre-registered | result |
-  |---|---|---|
-  | stability, halves within ±3 h | ≥ 2/3 | **71.6 %** (58 of 81), \|A−B\| median 1 h, p90 8 h — PASS |
-  | churn, rewrites per day at ±3 h | ≤ ~10 files | **10.4/day** of 206 gauges — FAIL |
-  | negative control | (not pre-registered — added now) | **PASS, decisively** |
-
-  **The churn ceiling is an absolute file count calibrated against a 76-gauge
-  product and is now being applied to 206.** As a RATE it did not move: 3.7/76 =
-  4.9 % then, 10.4/206 = 5.0 % now. That is an observation about the criterion's
-  units, not an argument about the result — re-registering a threshold after
-  seeing the number it failed is exactly what must not happen quietly, so the
-  criterion stands as written and the stage stays unbuilt until someone decides
-  otherwise on the record.
-  **The signal itself is real**, and that is now shown rather than assumed. The
-  new `--control` rotates the level series against the rain, leaving every
-  marginal intact and destroying only the alignment: median peak r falls from
-  **0.391 to 0.044–0.066** across three independent shifts, and the share of
-  gauges peaking at lag 0 falls from 40.1 % to 0.9–8.1 %. (This repo's own
-  reason for insisting: the forecast gate's R5 exists because R1 can insist on
-  noise, and the 2026-09-07 shuffled control beat the real rain.)
-  Two things any build must handle, both visible in the probe's own output now:
-  **40 % of gauges peak at lag 0** — real per the control, but a number carrying
-  little information — and **24 % have peak r < 0.25**, which should not print a
-  lag at all. Only 1 of 222 peaks at the 48 h search edge, so truncation is not
-  a problem.
+- **Hourly response lag per gauge — killed on a bad measurement, the kill
+  withdrawn, then BUILT AND SHIPPED (2026-09-08).** The product has its own
+  section above; what belongs here is why the kill was wrong, because the same
+  mistake is available to anyone re-running the bench.
+  The stability gate read **64.3 %** against a floor of 2/3 and the stage was
+  declared dead. That number came from a run of `scripts/probe-hourly-lag.mjs`
+  made *before* `RULE` was flipped to version 2 — the probe takes its membership
+  from that constant, and its output did not name it. So it measured the OLD
+  thin sets: 85 gauges attempted, and the gate came down to **28** gauges of
+  which 18 agreed. Re-run against the shipped rule, on the same data, as a
+  control: the old rule still gives exactly 28 / 18 / 64.3 %, and the shipped
+  rule gives **81 gauges, 58 agreeing, 71.6 % — PASS.** The difference was the
+  rule, not the day. **The probe now prints the rule it used**, on every run,
+  above every number — that line is the whole fix.
+  *Every figure in this bullet is the 2026-09-08 run on the 1597 h window and is
+  kept as the record of that day; the shipped numbers are the gate table above,
+  and they are not the same.*
+  The churn gate failed too, at **10.4/day**, and it was right to: it was
+  measuring the raw hour. The ceiling was NOT re-registered after seeing the
+  number it failed — the product was changed to come under it, by publishing a
+  three-class label instead of an hour (8.5/day). The observation that the
+  ceiling is an absolute file count calibrated against a 76-gauge product and
+  applied to 206 stands as an observation about the criterion's units; as a rate
+  it had not moved (4.9 % then, 5.0 % then-now), and it was not used as an
+  argument.
+  Two facts any later reader needs: **40 % of gauges peak at lag 0** — real per
+  the control, but a number carrying little information — and **24 % have peak
+  r < 0.25**, which is why the r cut exists. Only 1 of 222 peaks at the 48 h
+  search edge, so truncation is not a problem.
 
 ### Two gates run for later stages, and what they said
 
@@ -351,8 +488,12 @@ Daily GitHub Actions (`nrw-update.yml`, 17:41 UTC, own concurrency group) →
 `scripts/fetch-nrw-archive.mjs` → two GitHub-only orphan branches: **`nrw`**
 (daily level, ~3.4 MB/year, mounted by `pages.yml` under `/nrw/`) and
 **`nrw-hires`** (15-minute / hourly, ~75 MB/year, **never mounted**; also
-holds the raw seed under `nrw-hires/raw/2026-09-04/`). Gate
-`scripts/check-nrw-consistency.mjs` (N1–N7) runs before the push;
+holds the raw seed under `nrw-hires/raw/2026-09-04/`). Then two derived
+products, in this order and only this order: `build-nrw-precip.mjs` (the rain
+field, from `nrw` alone) and `build-nrw-hourly-lag.mjs` (the response class,
+from BOTH branches, taking its membership and its universe from the first).
+Gate `scripts/check-nrw-consistency.mjs` (N1–N9, `--hires` or N9 runs partial)
+runs before the push;
 `data-freshness.yml` watches the `nrw` commit age (30 h). Never mixed into
 `archive/`: rolling 2-year window instead of closed years since 2000, a
 different rain day boundary, and a derived minimum would put R6 at risk for

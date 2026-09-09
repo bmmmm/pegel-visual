@@ -36,12 +36,14 @@ because they are the ones you break without knowing you are in that domain:
   at **both** edges: the newest point against the clock, not only the oldest
   against the window.
 
-## LANUK NRW (`scripts/fetch-nrw-archive.mjs`, `build-nrw-precip.mjs`, `nrw-update.yml`, branches `nrw`/`nrw-hires`)
+## LANUK NRW (`scripts/fetch-nrw-archive.mjs`, `build-nrw-precip.mjs`, `build-nrw-hourly-lag.mjs`, `nrw-update.yml`, branches `nrw`/`nrw-hires`)
 
 Its own file: **`.claude/domains/lanuk-nrw.md`** — read it before touching the
-collector, the **rain-field product** (`nrw/precip/`, its N1–**N8** gate, the
-`?rain` mode, the station PRECIPITATION/RESPONSE blocks), the data branches or
-the LANUK seam in `index.html`. Five things to carry without opening it: the source has **no CORS and no live feed** (a daily export, ~24 h
+collector, the **rain-field product** (`nrw/precip/`, its **N8** gate, the
+`?rain` mode, the station PRECIPITATION/RESPONSE blocks), the **hourly response
+class** (`nrw/hourly/lag.json`, gate **N9**, built 2026-09-08), the data
+branches or the LANUK seam in `index.html`. Six things to carry without opening
+it: the source has **no CORS and no live feed** (a daily export, ~24 h
 old, mirrored into two GitHub-only orphan branches); its window **rolls**, so a
 missed day is gone for good and the merge policy is the inverse of the WSV
 extreme-union; **WeatherNext** was evaluated on 2026-09-04 and rejected on four
@@ -52,10 +54,13 @@ and never the clock; and the per-gauge product is **not areal rain over a
 catchment** — no watershed is consulted anywhere, it is the rain FIELD around
 the gauge (rule version 2, `scripts/probe-precip-rule.mjs` is the bench that
 chose it); area weighting and per-station travel time were **measured and
-killed** against a pre-registered criterion; and the hourly response lag was
-killed on 2026-09-08 by a measurement that turned out to be **wrong** — the
-probe had run under the old rule — so that kill is **withdrawn** and the stage
-is open. Every figure behind these lives in the file.
+killed** against a pre-registered criterion; and the hourly response class
+ships a **class, never an hour** — the raw hour churns at 14.6 rewrites a day
+against a pre-registered ceiling of 10, so an `r` or an `h` added to
+`lag.json` "for traceability" breaks the criterion the product was shaped
+around, and its membership must stay the daily rule's, because the block above
+it on the plate draws exactly that field. Every figure behind these lives in
+the file.
 
 ## Forecast gate (`scripts/forecast/`, `gate/`)
 

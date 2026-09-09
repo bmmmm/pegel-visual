@@ -120,6 +120,49 @@
 //                     nearest gauge of any basin, just past the 15 km ring.
 //                     So the gate watches that list rather than asserting the
 //                     wish.
+//   N9 hourly lag    the derived `hourly/lag.json` of build-nrw-hourly-lag.mjs:
+//                     ONE file mapping a gauge id onto a response CLASS.
+//                     (a) it exists, is schema 1, and carries `window`, `rule`,
+//                     `counts`, `gauges` plus BOTH versions — the presence of
+//                     `lagRuleVersion`/`ruleVersion` is checked because without
+//                     them clause (f) reads the same value on both sides and
+//                     switches itself off, which is the mistake N8's own first
+//                     cut made; (b) FRESHNESS — `window.to` is at most 48 h
+//                     behind PEGEL_NOW and never in the future, `window.hours`
+//                     >= 960 and equals the span the two stamps actually
+//                     describe. This is the clause that makes a run which
+//                     mirrors `nrw` without rebuilding the lag go red, and it
+//                     needs no second tree to do it; (c) VOCABULARY — every
+//                     value in `gauges` is a class id of `rule.classes` (never
+//                     an hour, a null or free text), every key is a gauge in
+//                     topology.json AND carries `manifest.precip[no].series`,
+//                     and `counts.byClass` survives a recount; (d) FLOORS —
+//                     published >= 100, the counts nest (published <= withPeak
+//                     <= attempted <= daily), and no single class holds more
+//                     than 90 % of the published gauges, because a three-class
+//                     product collapsed onto one is not a product; (e) DRIFT
+//                     against HEAD — at most 50 gauges change class, at most 20
+//                     lose one, and the published count may not fall by more
+//                     than 20; (f) a RULE CHANGE does not ride in on that
+//                     allowance: when either version differs from HEAD's the
+//                     gate demands LAG_RULE_BASELINES instead, keyed on BOTH
+//                     versions because a membership bump moves these counts too;
+//                     (g) the INPUT DIGEST over the hires tree matches the one
+//                     the file was built with; (h) the committed bytes ARE what
+//                     the rule produces, proven by re-running the builder in
+//                     --check mode with the committed `generated` passed back in.
+//                     (g) and (h) are the only two clauses that need the second
+//                     data branch: without `--hires` they print a SKIPPED
+//                     warning and the green summary line says "N9 partial", so a
+//                     partial run can never be mistaken for a complete one.
+//                     `hourly/` is deliberately NOT in N4's precip exception —
+//                     the rain field may shrink, this product is one file that
+//                     always exists, so a deletion is a regression and gets a
+//                     second guard N9 knows nothing about.
+//                     Measured 2026-09-08 on the bounded 63-day window: 275
+//                     gauges with a rain field, 24 not in nrw-hires, 251
+//                     attempted, 224 with a peak, 56 under r 0.25, 6 not clear
+//                     of chance, 162 published as 101/49/12.
 //
 // Deliberate limits, as in the sibling gate: N4 compares against the branch's
 // own HEAD, so a base poisoned by a force-push looks clean to it — branch
@@ -128,7 +171,8 @@
 // has nothing to compare; N1-N3 and N5-N7 still measure the tree.
 //
 //   PEGEL_NOW=2026-09-04T12:00:00Z node scripts/check-nrw-consistency.mjs \
-//       --tree nrw-branch/nrw --git nrw-branch [--skip N3,N6] [--allow-prune]
+//       --tree nrw-branch/nrw --git nrw-branch \
+//       [--hires nrw-hires-branch/nrw-hires] [--skip N3,N6] [--allow-prune]
 //
 // PEGEL_NOW pins the clock (N2 and N3 measure against today, MEZ) — required
 // for a reproducible run against an older tree. Violations print as ::error::
@@ -147,6 +191,7 @@ import { pathToFileURL } from 'node:url';
 import { checkChangeStatuses, dayNum } from './check-archive-consistency.mjs';
 import { daysInYear, PLAUSIBLE_MIN_CM, PLAUSIBLE_MAX_CM } from './fetch-wsv-archive.mjs';
 import { build as buildPrecip, PLAUSIBLE_MAX_MM_DAY } from './build-nrw-precip.mjs';
+import { buildHourlyLag, inputsDigest } from './build-nrw-hourly-lag.mjs';
 import { mezParts } from './snapshot-wsv.mjs';
 
 const now = process.env.PEGEL_NOW ? new Date(process.env.PEGEL_NOW) : new Date();
@@ -225,6 +270,64 @@ export const RULE_BASELINES = {
 // registers the numbers and the run that first ships them. Two, the same
 // allowance the HEAD drift comparison gives.
 export const RULE_BASELINE_SLACK = 2;
+
+// N9 hourly response — every one of these is calibrated on a measurement made
+// on 2026-09-08 against the real mirror, and the obvious number would have been
+// wrong in three of the five cases.
+//
+// PUBLISHED FLOOR. Measured over 21 distinct windows (six lengths from 40 to
+// 66.5 days ending at the newest hour, plus a 15-step daily replay at a fixed
+// 52.5-day window): 119 to 201. It does NOT fall with the window getting
+// shorter — the short windows sit on the recent, wetter fortnight and publish
+// MORE (201 at 40 days against 162 at 66.5) — so the floor cannot be derived
+// from the window length and has to sit under the whole measured range. 120,
+// the number this looked like it should be, goes red on the 119 window.
+export const MIN_HOURLY_PUBLISHED = 100;      // 62 % of today's 162, under every window measured
+// FRESHNESS. The hires export is ~24 h old by construction; 48 h leaves room
+// for one late run and no more. This is the clause that makes a run which
+// mirrors `nrw` without rebuilding the lag go red WITHOUT the hires tree.
+export const MAX_HOURLY_WINDOW_LAG_H = 48;
+// 40 days. Measured: the product still publishes 201 gauges at that length, so
+// the floor is not cutting into a working regime — it is there to catch a
+// collector that delivered a stump.
+export const MIN_HOURLY_WINDOW_HOURS = 960;
+// …and a CEILING, which the first cut of this clause did not have. The builder
+// cuts the window to the source's own 63 rolling days; the MIRROR grows without
+// limit, so "the builder stopped bounding the window" is a real failure mode and
+// it moves this number UP, where a floor cannot see it. Two days of slack over
+// the builder's own 1512 h, for a run that reads a shard stamped slightly wide.
+export const MAX_HOURLY_WINDOW_HOURS = 63 * 24 + 48;
+// Measured largest class share 63.0 % (at the longest window); 57-60 % at the
+// others. A three-class product in which nine of ten readers see one class is a
+// one-class product wearing a legend.
+export const MAX_HOURLY_CLASS_SHARE = 0.9;
+// CLASS DRIFT. Measured over 14 daily replay steps: 1, 6, 8, 29, 16, 2, 20, 2,
+// 1, 4, 18, 4, 2, 6 — mean 8.5, median 5, MAXIMUM 29. The pre-registered churn
+// criterion judges the mean; a single-run gate is a different statistic with a
+// far wider spread, and a ceiling on the observed maximum goes red on a normal
+// day. 50 is 1.7x the measured maximum and still 31 % of the whole product, so
+// a builder bug or a smuggled rule change — which move hundreds — cannot pass.
+export const MAX_HOURLY_CLASS_DRIFT = 50;
+// Measured largest fall in published gauges over one day step: 5 (the steps run
+// -1, -5, +1, +26, +13, +2, +18, +2, -1, +4, -3, +3, -1, +4). Four times that.
+export const MAX_HOURLY_PUBLISHED_DROP = 20;
+// Pre-registered counts per LAG rule version, the same construction as
+// RULE_BASELINES above and for the same reason. Measured 2026-09-08 on the
+// `nrw` f3277984 / `nrw-hires` d2ba38b6 mirrors.
+// Keyed on BOTH versions joined, not on the lag version alone: the hourly
+// product's counts move when the daily MEMBERSHIP rule moves too (that is the
+// whole reason it imports it), so an entry registered under "1" would be
+// consulted after a membership bump and compared against numbers measured for a
+// different set of rain fields.
+export const LAG_RULE_BASELINES = {
+  '1.2': { daily: 275, attempted: 251, withPeak: 224, published: 162 },
+};
+// Thirty, not the two RULE_BASELINE_SLACK gives the daily product, and the
+// difference is measured rather than generous: `published` is a STATISTIC over
+// a rolling window, not a membership count, and one day of roll moved it by as
+// much as 26 in the replay. A slack of two would make this clause born red on
+// the first legitimate run and it would be skipped forever after.
+export const LAG_RULE_BASELINE_SLACK = 30;
 
 // series keys per product; the sparse per-day object rides alongside
 export const PRODUCTS = {
@@ -902,6 +1005,198 @@ export function readPrecip(precipDir) {
   return out;
 }
 
+// ---------- N9 hourly response class ----------
+
+// The product is ONE file, nrw/hourly/lag.json, written by
+// scripts/build-nrw-hourly-lag.mjs out of BOTH data branches. The clauses are
+// cut so that (a)-(f) need only the `nrw` tree and (g)-(h) need `--hires`: a
+// caller without the second branch still gets everything except the two rules
+// that literally cannot be evaluated without it, and it is told so out loud.
+export function checkHourlyShape(lag, {
+  topologyGauges = null, precip = null, nowDate = null,
+  minPublished = MIN_HOURLY_PUBLISHED, maxWindowLagH = MAX_HOURLY_WINDOW_LAG_H,
+  minWindowHours = MIN_HOURLY_WINDOW_HOURS, maxWindowHours = MAX_HOURLY_WINDOW_HOURS,
+  maxClassShare = MAX_HOURLY_CLASS_SHARE,
+} = {}) {
+  // (a) presence and schema
+  if (!lag || lag.schema !== 1) return ['N9: hourly/lag.json missing, unparseable or not schema 1'];
+  const v = [];
+  for (const k of ['window', 'rule', 'counts', 'gauges']) {
+    if (!lag[k] || typeof lag[k] !== 'object') v.push(`N9: hourly/lag.json carries no \`${k}\` block`);
+  }
+  // Both versions, PRESENCE checked, for the reason N8 learned the hard way: if
+  // the builder ever stops writing one, clause (f) reads the same value on both
+  // sides, decides nothing changed, and switches itself off for good.
+  for (const k of ['ruleVersion', 'lagRuleVersion']) {
+    if (!(typeof lag[k] === 'number' && lag[k] >= 1)) v.push(`N9: hourly/lag.json carries no numeric \`${k}\` — without it a rule change reads as no change (got ${JSON.stringify(lag[k])})`);
+  }
+  if (v.length) return v;
+
+  const w = lag.window, R = lag.rule, c = lag.counts, g = lag.gauges;
+
+  // (b) FRESHNESS — the clause that makes a skipped build red without needing
+  // the hires tree at all. A run that mirrors `nrw` but never rebuilds the lag
+  // leaves yesterday's window standing, and every other clause here would still
+  // be perfectly happy with it.
+  const to = Date.parse(String(w.to)), from = Date.parse(String(w.from));
+  if (!Number.isFinite(to) || !Number.isFinite(from)) {
+    v.push(`N9: hourly window is not a readable pair of timestamps (${JSON.stringify(w.from)} … ${JSON.stringify(w.to)})`);
+  } else {
+    if (nowDate) {
+      const lagH = (nowDate.getTime() - to) / 36e5;
+      if (!(lagH <= maxWindowLagH)) v.push(`N9: the hourly window ends ${lagH.toFixed(1)} h before now (${w.to}), ceiling is ${maxWindowLagH} h — the lag was not rebuilt on this run`);
+      // A window that ends in the future is not fresh, it is broken — and a
+      // one-sided "not too old" test passes it with room to spare. One hour of
+      // slack for the clock, no more.
+      if (lagH < -1) v.push(`N9: the hourly window ends ${(-lagH).toFixed(1)} h in the FUTURE (${w.to}) — that is a corrupt file, not a fresh one`);
+    }
+    // `hours` is what (d) and the plate both read, so it may not be a number
+    // the file merely asserts about itself
+    const spanned = (to - from) / 36e5 + 1;
+    if (w.hours !== spanned) v.push(`N9: hourly window says ${w.hours} hours but spans ${spanned} (${w.from} … ${w.to})`);
+  }
+  if (!(w.hours >= minWindowHours)) v.push(`N9: the hourly window is ${w.hours} h, floor is ${minWindowHours} (${(minWindowHours / 24).toFixed(0)} days)`);
+  // A CEILING as well as a floor, because the mirror only grows. The source
+  // offers 63 rolling days and the builder cuts to them; a window that ran past
+  // that means the builder stopped bounding it, and every constant here — and
+  // every caveat on the plate — was calibrated on the shorter one. A floor alone
+  // cannot see that: the number it watches would be moving the OTHER way.
+  if (!(w.hours <= maxWindowHours)) {
+    v.push(`N9: the hourly window is ${w.hours} h (${(w.hours / 24).toFixed(1)} days), ceiling is ${maxWindowHours} — `
+      + 'the mirror grows and the source does not, so a window past this is history the source no longer offers');
+  }
+
+  // The RULE itself, and not only its shape. The plate binds its three words to
+  // the class INDEX positionally, so a `classes` list that is reordered,
+  // overlapping or gapped makes the plate print a true class id under the wrong
+  // words — "within the hour (9+ h)" — with every other clause here green.
+  const classes = Array.isArray(R.classes) ? R.classes : null;
+  if (!classes || !classes.length || !classes.every(x => Array.isArray(x) && x.length === 2 && Number.isInteger(x[0]) && (x[1] === null || Number.isInteger(x[1])))) {
+    v.push(`N9: rule.classes is not a list of [lo, hi] pairs (${JSON.stringify(R.classes)})`);
+    return v;
+  }
+  if (classes[0][0] !== 0) v.push(`N9: rule.classes starts at ${classes[0][0]} h, so a lag of 0 falls through it`);
+  if (classes[classes.length - 1][1] !== null) v.push('N9: the last of rule.classes is bounded, so a lag past it has no class at all');
+  for (let i = 0; i < classes.length; i++) {
+    const [lo, hi] = classes[i];
+    if (hi != null && hi < lo) v.push(`N9: rule.classes[${i}] is empty (${lo}..${hi})`);
+    if (i && classes[i - 1][1] !== lo - 1) {
+      v.push(`N9: rule.classes[${i - 1}] ends at ${classes[i - 1][1]} and [${i}] starts at ${lo} — the classes must be ascending, adjacent and non-overlapping, because the plate binds its words to the INDEX`);
+    }
+  }
+  // The filters have to be able to filter. A run with 0 rotations marks every
+  // gauge significant and reports notSignificant 0, which reads exactly like a
+  // filter that found nothing to drop.
+  if (!(typeof R.minR === 'number' && R.minR > 0 && R.minR <= 1)) v.push(`N9: rule.minR is ${JSON.stringify(R.minR)}, which is not a correlation cut in (0, 1]`);
+  if (!(Number.isInteger(R.rotations) && R.rotations >= 1)) v.push(`N9: rule.rotations is ${JSON.stringify(R.rotations)} — a permutation filter that ran no rotations calls everything significant`);
+  if (!(typeof R.fdrQ === 'number' && R.fdrQ > 0 && R.fdrQ < 1)) v.push(`N9: rule.fdrQ is ${JSON.stringify(R.fdrQ)}, which is not a false-discovery rate in (0, 1)`);
+
+  // The run's own provenance. Without these the file can claim anything about
+  // where it came from and (g) has nothing to compare against — and (g) is
+  // exactly the clause that does not run without --hires.
+  if (!/^[0-9a-f]{64}$/.test(String((lag.inputs || {}).sha256))) v.push(`N9: inputs.sha256 is not a sha256 digest (${JSON.stringify((lag.inputs || {}).sha256)})`);
+  if (!(Number.isInteger((lag.inputs || {}).files) && lag.inputs.files > 0)) v.push(`N9: inputs.files is ${JSON.stringify((lag.inputs || {}).files)} — a digest over no files is not a digest`);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(lag.generated))) v.push(`N9: generated is ${JSON.stringify(lag.generated)}, not a date`);
+  const byClass = classes.map(() => 0);
+  let bad = 0;
+  for (const [no, cls] of Object.entries(g)) {
+    if (!(Number.isInteger(cls) && cls >= 0 && cls < classes.length)) {
+      if (bad++ < 3) v.push(`N9: hourly/lag.json: gauge ${no} carries ${JSON.stringify(cls)}, which is not a class id of rule.classes`);
+      continue;
+    }
+    byClass[cls]++;
+    if (topologyGauges && !topologyGauges[no]) v.push(`N9: hourly/lag.json: ${no} is not a gauge in topology.json`);
+    // The hourly class sits UNDER the daily rain field on the plate; a class for
+    // a gauge with no field would be a response to rain the reader cannot see.
+    if (precip && !(precip[no] && precip[no].series === true)) v.push(`N9: hourly/lag.json: ${no} has an hourly class but no daily rain field`);
+  }
+  if (bad > 3) v.push(`N9: … and ${bad - 3} more gauges carry something that is not a class id`);
+  if (!Array.isArray(c.byClass) || c.byClass.length !== classes.length || c.byClass.some((n, i) => n !== byClass[i])) {
+    v.push(`N9: counts.byClass is ${JSON.stringify(c.byClass)}, a recount of \`gauges\` gives ${JSON.stringify(byClass)}`);
+  }
+
+  // (d) FLOORS, exact counts — an empty or collapsed product cannot pass
+  const published = Object.keys(g).length;
+  if (c.published !== published) v.push(`N9: counts.published is ${c.published}, \`gauges\` holds ${published}`);
+  if (!(published >= minPublished)) v.push(`N9: only ${published} gauges carry a response class, floor is ${minPublished}`);
+  if (!(c.published <= c.withPeak && c.withPeak <= c.attempted && c.attempted <= c.daily)) {
+    v.push(`N9: the counts do not nest: published ${c.published} <= withPeak ${c.withPeak} <= attempted ${c.attempted} <= daily ${c.daily}`);
+  }
+  // THE ACCOUNTING IDENTITY. Nesting alone leaves every drop-out counter free:
+  // `weak` could read 99999 and nothing here would notice — and the plate prints
+  // those four numbers to the reader as the fleet split. Each gauge leaves the
+  // pipeline exactly once, so the three balances below must close exactly.
+  const balances = [
+    ['daily', c.daily, ['notInHires', 'noDailySet', 'attempted']],
+    ['attempted', c.attempted, ['noPeak', 'withPeak']],
+    ['withPeak', c.withPeak, ['weak', 'notSignificant', 'unclassed', 'published']],
+  ];
+  for (const [name, total, parts] of balances) {
+    const nums = parts.map(k => c[k]);
+    if (!nums.every(n => Number.isInteger(n) && n >= 0)) {
+      v.push(`N9: counts.${parts.filter(k => !(Number.isInteger(c[k]) && c[k] >= 0)).join('/')} is not a count (${JSON.stringify(nums)})`);
+      continue;
+    }
+    const sum = nums.reduce((a, n) => a + n, 0);
+    if (sum !== total) v.push(`N9: counts do not balance: ${parts.join(' + ')} = ${sum}, but ${name} is ${total} — every gauge leaves the pipeline exactly once`);
+  }
+  // A three-class product in which everyone is in one class is a one-class
+  // product wearing a legend.
+  const biggest = Math.max(...byClass);
+  if (published && biggest > maxClassShare * published) {
+    v.push(`N9: one class holds ${biggest} of ${published} published gauges (${(100 * biggest / published).toFixed(1)} %), ceiling is ${(100 * maxClassShare).toFixed(0)} % — a product collapsed onto one class is not a product`);
+  }
+  return v;
+}
+
+// (e) drift against HEAD, and (f) the rule-change clause. Copied in FORM from
+// N8's own (j), including the lesson that made N8's first cut useless: read the
+// version the SAME way on both sides, or a HEAD without the field defaults to
+// the current one, the two compare equal, and the clause switches itself off.
+export function checkHourlyDrift(lag, head, {
+  maxClassDrift = MAX_HOURLY_CLASS_DRIFT, maxPublishedDrop = MAX_HOURLY_PUBLISHED_DROP,
+  baselines = LAG_RULE_BASELINES, slack = LAG_RULE_BASELINE_SLACK,
+} = {}) {
+  const v = [];
+  if (!lag || !lag.gauges || !lag.counts) return v;
+  const verOf = ix => (ix ? [ix.lagRuleVersion ?? 1, ix.ruleVersion ?? 1].join('.') : null);
+  const ver = verOf(lag), headVer = head ? verOf(head) : null;
+  const changed = headVer != null && ver !== headVer;
+
+  // (f) A RULE CHANGE MAY NOT RIDE IN ON ITS OWN DRIFT ALLOWANCE. On the run
+  // that moves the rule every counter below is SUPPOSED to move, so the HEAD
+  // comparison says nothing and pre-registered numbers stand in its place.
+  if (changed) {
+    const b = baselines[ver];
+    if (!b) {
+      v.push(`N9: lag rule ${headVer} -> ${ver} with no pre-registered counts — add an entry to LAG_RULE_BASELINES in the same commit that moves the rule`);
+    } else {
+      for (const [k, want] of Object.entries(b)) {
+        const got = lag.counts[k];
+        if (typeof got !== 'number') v.push(`N9: lag rule ${ver}: counts has no numeric \`${k}\` to compare against the pre-registered ${want}`);
+        else if (Math.abs(got - want) > slack) v.push(`N9: lag rule ${ver}: ${k} is ${got}, pre-registered ${want} (slack ${slack}) — the rule change does not produce what was registered for it`);
+      }
+    }
+    return v;
+  }
+  if (!head || !head.gauges) return v;
+
+  // (e) DRIFT. The unit is the gauge whose PUBLISHED VALUE moved — a class that
+  // changed, one that appeared, one that vanished — because that is exactly one
+  // line of the diff each, and the diff is this product's acceptance criterion.
+  const ids = new Set([...Object.keys(lag.gauges), ...Object.keys(head.gauges)]);
+  let moved = 0, gone = 0;
+  for (const no of ids) {
+    if (lag.gauges[no] !== head.gauges[no]) moved++;
+    if (!(no in lag.gauges) && (no in head.gauges)) gone++;
+  }
+  if (moved > maxClassDrift) v.push(`N9: ${moved} gauges changed response class against HEAD, ceiling is ${maxClassDrift}`);
+  if (gone > maxPublishedDrop) v.push(`N9: ${gone} gauges lost their response class against HEAD, ceiling is ${maxPublishedDrop}`);
+  const drop = Object.keys(head.gauges).length - Object.keys(lag.gauges).length;
+  if (drop > maxPublishedDrop) v.push(`N9: published gauges ${Object.keys(head.gauges).length} -> ${Object.keys(lag.gauges).length}, a fall of ${drop} over the ceiling of ${maxPublishedDrop}`);
+  return v;
+}
+
 export function registrySize(doc) {
   if (Array.isArray(doc)) return doc.length;
   if (!doc || typeof doc !== 'object') return 0;
@@ -988,6 +1283,10 @@ async function main() {
   const treeDir = resolve(opt('tree', 'nrw-branch/nrw'));
   const gitDir = resolve(opt('git', join(treeDir, '..')));
   const prefix = relative(gitDir, treeDir).split(sep).join('/');
+  // optional: N9(g) and N9(h) are the only two clauses that need it, and they
+  // say so out loud when it is absent rather than passing quietly
+  const hiresOpt = opt('hires', null);
+  const hiresDir = hiresOpt ? resolve(hiresOpt) : null;
   const allowPrune = has('allow-prune');
   const on = r => !SKIP.has(r);
   const violations = [];
@@ -1072,6 +1371,53 @@ async function main() {
     }
   }
 
+  // N9 — the hourly response class, nrw/hourly/lag.json. (a)-(f) read the `nrw`
+  // tree only; (g) and (h) need the hires tree and are SKIPPED, loudly, without
+  // it. A green run without --hires must not be mistakable for a complete one.
+  let n9Partial = false;
+  if (on('N9')) {
+    const lagPath = join(treeDir, 'hourly', 'lag.json');
+    const lag = readJson(lagPath);
+    if (!existsSync(lagPath)) {
+      violations.push('N9: hourly/lag.json missing — run scripts/build-nrw-hourly-lag.mjs before the gate');
+    } else {
+      violations.push(...checkHourlyShape(lag, {
+        topologyGauges: topology && topology.gauges, precip: manifest && manifest.precip, nowDate: now,
+      }));
+      violations.push(...checkHourlyDrift(lag, readHead(gitDir, `${prefix}/hourly/lag.json`)));
+      if (!hiresDir) {
+        n9Partial = true;
+        console.log('::warning::N9(g) input digest and N9(h) recomputation SKIPPED — no --hires <dir> was given, '
+          + 'so the two clauses that need the nrw-hires tree could not run. Pass --hires, or --skip N9 to mean it.');
+      } else if (!existsSync(hiresDir)) {
+        violations.push(`N9: --hires ${hiresDir} does not exist`);
+      } else {
+        // (g) the digest of the bytes the run actually read
+        try {
+          const d = inputsDigest(hiresDir);
+          if (!lag.inputs || lag.inputs.sha256 !== d.sha256) {
+            violations.push(`N9: hourly/lag.json was built over different hires bytes than the tree holds `
+              + `(file ${(lag.inputs || {}).sha256 || 'none'} over ${(lag.inputs || {}).files} files, tree ${d.sha256} over ${d.files})`);
+          }
+        } catch (e) {
+          violations.push(`N9: could not digest the hires tree: ${e.message}`);
+        }
+        // (h) the committed bytes ARE what the rule produces. `generated` is
+        // passed through from the committed file for the reason N8(e) already
+        // knows: without it the date alone turns this red every single day.
+        try {
+          const r = buildHourlyLag({
+            tree: treeDir, hires: hiresDir, out: join(treeDir, 'hourly'), check: true,
+            generated: lag.generated || isoOfNum(todayNum(now)),
+          });
+          for (const d of r.out.diffs) violations.push(`N9: hourly lag is not what the rule produces — ${d}`);
+        } catch (e) {
+          violations.push(`N9: could not recompute the hourly lag: ${e.message}`);
+        }
+      }
+    }
+  }
+
   for (const n of notes) console.log(`note: ${n}`);
   if (violations.length) {
     for (const v of violations.slice(0, 40)) console.log(`::error::${v}`);
@@ -1079,7 +1425,7 @@ async function main() {
     process.exit(1);
   }
   const s = measure(fleet, manifest, now);
-  console.log(`nrw consistency ok: ${changes.length} changed files, registry ${s.registry}, `
+  console.log(`nrw consistency ok${n9Partial ? ' (N9 partial: no --hires)' : ''}: ${changes.length} changed files, registry ${s.registry}, `
     + `gauges ${s.gauges} with data (bulk ${s.bulk}, station ${s.station}, noSeries ${s.noSeries} of ${s.gaugeRegistry} registered), `
     + `rain ${s.rain}, temp ${s.temp}, fleet edge ${s.edge} (${s.lag} d behind today), `
     + `window median ${s.windowMedian} d, full alert triples ${s.fullTriples}`);

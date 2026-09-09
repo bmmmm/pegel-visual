@@ -4030,6 +4030,28 @@ const NRW_RESPONSE = {
   events: { thresholdMm: 10, n: 58, risePer10mm: 13.4 },
   unit: { r: 'pearson', rise: 'cm per 10 mm of rain around the gauge' },
 };
+// The fleet-wide hourly response class (nrw/hourly/lag.json). MENDEN_1 is in it
+// at class 1; the second id is there so `gauges` is not a one-entry object that
+// every lookup would find by accident.
+const NRW_LAG = {
+  schema: 1, generated: '2026-09-08', ruleVersion: 2, lagRuleVersion: 1,
+  rule: {
+    classes: [[0, 1], [2, 8], [9, null]], minR: 0.25, rotations: 99, fdrQ: 0.05,
+    rotationGuardH: 168, maxLagH: 48, minPairFrac: 0.3, minRainHourFrac: 0.05, rainHourMm: 0.1,
+  },
+  window: { from: '2026-07-03T15:00Z', to: '2026-09-08T03:00Z', hours: 1597 },
+  inputs: { sha256: 'f'.repeat(64), files: 1674 },
+  counts: {
+    daily: 275, notInHires: 24, noDailySet: 0, attempted: 251, withPeak: 224,
+    // 27 of the 29 that reached no peak did so for want of wet hours; the other
+    // two stand for the three OTHER codes `noPeak` aggregates, which the plate
+    // must not print as "too few hours of rain"
+    noPeak: 29, noPeakWhy: { wetHours: 27, pairs: 1, noPositiveLag: 1, noPair: 0 },
+    weak: 56, notSignificant: 6, unclassed: 0, published: 162, byClass: [101, 49, 12],
+  },
+  note: 'a class describes this rolling window, not the gauge.',
+  gauges: { 2729100000100: 1, 2821530000200: 0 },
+};
 // 16 basins in the real file; three is enough to carry every case the plate has
 // to draw: a linked basin, a thin one, and one with no gauged river at all.
 const NRW_RAIN_OVERVIEW = (() => {
@@ -4071,6 +4093,7 @@ const nrwStub = `
     m = /^nrw\\/precip\\/(\\d+)\\/(\\d{4})\\.json$/.exec(url);
     if (m && m[1] === '2729100000100') return (${nrwPrecipShard.toString()})(m[1], +m[2]);
     if (url === 'nrw/precip/overview.json') return ${JSON.stringify(NRW_RAIN_OVERVIEW)};
+    if (url === 'nrw/hourly/lag.json') return ${JSON.stringify(NRW_LAG)};
     const e = new Error('404 ' + url); e.status = 404; throw e;
   };
   lanukManifestP = null; // the boot's attempt ran against the offline stub — start over`;
@@ -4618,6 +4641,138 @@ test('PRECIPITATION: a gauge with too few rain gauges says why, and fetches noth
   assert.equal(app.run('renderResponse(responseViewModel())'), '', 'and no RESPONSE block either');
 });
 
+// ---------- RESPONSE: the hourly response class (nrw/hourly/lag.json) ----------
+// The third estimator on this plate, and the one that comes off a different
+// file, a different branch and a different resolution. Every assertion is
+// anchored at the RESPONSE section — a bare `html.includes` would pass on the
+// precipitation plate's own key three blocks up.
+
+const respSection = html => {
+  const i = html.indexOf('RESPONSE · rain → level');
+  assert.ok(i > 0, 'the response plate has to be on the page at all');
+  return html.slice(i);
+};
+
+test('RESPONSE: the class is printed with the hour bounds the FILE defines, not with words this page keeps', async () => {
+  const app = await precipApp();
+  const html = respSection(app.run('renderResponse(responseViewModel())'));
+  // MENDEN_1 is class 1 in the fixture, and rule.classes says class 1 is 2-8 h
+  assert.match(html, /class="say rs-class">the level answers the rain: a few hours \(2–8 h\)</);
+  // the key names all three classes, each with its own span
+  assert.match(html, /response time, three classes: within the hour \(0–1 h\) · a few hours \(2–8 h\) · the next day \(9\+ h\)/);
+  // …and says where it came from, which is not where the bars came from
+  assert.match(html, /measured on hourly data over a rolling window of 67 days, ending 2026-09-08/);
+});
+
+test('RESPONSE: move the class bounds in the file and the plate moves with them', async () => {
+  // The bounds are READ, never restated. If this page kept its own copy, the
+  // sentence below would still say "2–8 h" after the rule moved.
+  const app = await precipApp();
+  const html = app.run(`(() => {
+    state.precip.lag = { ...state.precip.lag, rule: { ...state.precip.lag.rule, classes: [[0, 3], [4, 11], [12, null]] } };
+    return renderResponse(responseViewModel());
+  })()`);
+  const s = respSection(html);
+  assert.match(s, /the level answers the rain: a few hours \(4–11 h\)/);
+  assert.match(s, /within the hour \(0–3 h\) · a few hours \(4–11 h\) · the next day \(12\+ h\)/);
+});
+
+test('RESPONSE: a gauge with no class says so, and names how the fleet splits instead of inventing a reason', async () => {
+  const app = await precipApp();
+  const s = respSection(app.run(`(() => {
+    state.precip.lag = { ...state.precip.lag, gauges: {} };
+    return renderResponse(responseViewModel());
+  })()`));
+  assert.match(s, /class="p-dim rs-class">no response time for this gauge</);
+  assert.doesNotMatch(s, /the level answers the rain/);
+  // The counts come out of the file, so they cannot drift from the product —
+  // and `noPeak` is SPLIT by its own reason rather than labelled with one of
+  // them. Printing all 29 as "too few hours of rain" states a cause the product
+  // did not measure: it is true by accident whenever the other three codes are
+  // zero, and false about real gauges the first window in which they are not.
+  assert.match(s, /of the gauges with a rain field, this many have no response time — 56 rain explains too little, 27 too few hours of rain, 2 no peak to read, 24 no hourly series, 6 peak not clear of chance/);
+});
+
+test('RESPONSE: with no reason split in the file the plate falls back to the total, and never invents the remainder', async () => {
+  const app = await precipApp();
+  const s = respSection(app.run(`(() => {
+    const c = { ...state.precip.lag.counts }; delete c.noPeakWhy;
+    state.precip.lag = { ...state.precip.lag, counts: c, gauges: {} };
+    return renderResponse(responseViewModel());
+  })()`));
+  assert.match(s, /29 too few hours of rain/, 'the whole total, under the only label there is');
+  assert.doesNotMatch(s, /no peak to read/, 'and no remainder conjured out of a missing field');
+});
+
+test('RESPONSE: a build with more classes than this page has words for prints NO class', async () => {
+  // The failure this prevents is a fourth class rendering as "undefined" — or,
+  // worse, as one of the three words, which would be a plausible wrong answer.
+  const app = await precipApp();
+  const s = respSection(app.run(`(() => {
+    state.precip.lag = { ...state.precip.lag,
+      rule: { ...state.precip.lag.rule, classes: [[0, 1], [2, 4], [5, 8], [9, null]] },
+      gauges: { ...state.precip.lag.gauges, 2729100000100: 3 } };
+    return renderResponse(responseViewModel());
+  })()`));
+  assert.match(s, /this build publishes classes this page has no words for/);
+  assert.doesNotMatch(s, /the level answers the rain/);
+  assert.doesNotMatch(s, /response time, three classes/);
+});
+
+test('RESPONSE: a value that is not a class id prints no class, whatever it looks like', async () => {
+  // N9(c) makes this red in CI, but a stale CDN copy or a half-finished deploy
+  // reaches the browser without passing the gate — and 7 here is the worst case
+  // of all: it is a plausible LAG IN HOURS, and an unchecked index would print
+  // it as a fourth class or as "undefined".
+  const app = await precipApp();
+  for (const bad of ['7', '-1', '1.5', '"fast"', 'null', 'true']) {
+    const s = respSection(app.run(`(() => {
+      state.precip.lag = { ...state.precip.lag, gauges: { ...state.precip.lag.gauges, 2729100000100: ${bad} } };
+      return renderResponse(responseViewModel());
+    })()`));
+    assert.match(s, /no response time for this gauge/, `${bad}: says it has none`);
+    assert.doesNotMatch(s, /the level answers the rain/, `${bad}: and prints no class`);
+    assert.doesNotMatch(s, /undefined/, `${bad}: and never the word "undefined"`);
+  }
+});
+
+test('RESPONSE: a truncated or missing lag file costs the class and nothing else', async () => {
+  const app = await precipApp();
+  for (const broken of ['null', '{}', '{ rule: { classes: "three" }, gauges: {} }', '{ rule: { classes: [[0]] }, gauges: {} }']) {
+    const s = respSection(app.run(`(() => {
+      state.precip.lag = ${broken};
+      return renderResponse(responseViewModel());
+    })()`));
+    assert.doesNotMatch(s, /rs-class/, `${broken}: no class line at all`);
+    assert.doesNotMatch(s, /response time, three classes/, `${broken}: and no vocabulary for one`);
+    // the two estimators that do not depend on it are untouched
+    assert.match(s, /per 10 mm of rain around the gauge/, `${broken}: the slope survives`);
+    assert.match(s, /class="chart response"/, `${broken}: and so do the bars`);
+  }
+});
+
+test('RESPONSE: the class survives a plate whose DAILY statistic could not be computed', async () => {
+  // The two estimators fail independently. A gauge with too few rain events has
+  // no slope and no peak — and may still have a response time, which is exactly
+  // the case where the new estimator earns its place.
+  const app = await precipApp();
+  const s = respSection(app.run(`(() => {
+    state.precip.response = { ...state.precip.response, lags: [], peakLag: null, rPeak: null,
+      events: { thresholdMm: 10, n: 2, risePer10mm: null }, reason: 'too few rain events (2 < 10)' };
+    return renderResponse(responseViewModel());
+  })()`));
+  assert.match(s, /too few rain events \(2 &lt; 10\)/, 'the daily estimator says why it failed');
+  assert.match(s, /the level answers the rain: a few hours \(2–8 h\)/, 'and the hourly one still answers');
+  assert.match(s, /response time, three classes/, 'with its own key, since the plate has no other');
+});
+
+test('RESPONSE: the fleet file is fetched once for the whole session, not once per station', async () => {
+  const app = await precipApp();
+  await app.run(`loadPrecip(station, '2729100000100', (lanukPrecipIndex || {})['2729100000100'])`);
+  const urls = nrwUrls(app).filter(u => u === 'nrw/hourly/lag.json');
+  assert.equal(urls.length, 1, `one request, got ${urls.length}`);
+});
+
 test('PRECIPITATION: a WSV station shows nothing and asks the mirror for nothing', async () => {
   const app = nrwApp({ search: '?station=BONN' });
   await app.run('lanukIndex()');
@@ -4641,7 +4796,7 @@ test('RESPONSE: the peak is marked, and the sentence names the other estimator',
   assert.match(svg, /class="rs-neg"/, 'lag 4-6 are negative in the fixture and draw as the other kind');
   assert.equal((svg.match(/class="rs-bar"|class="rs-neg"/g) || []).length, 8, 'one bar per lag, 0 through 7');
   assert.match(html, /\+13\.4 cm per 10 mm of rain around the gauge, peaking at lag 1 \(58 events ≥ 10 mm\)/);
-  assert.match(html, /two estimators: the bars are Pearson r, the sentence is a slope/);
+  assert.match(html, /three estimators: the bars are Pearson r over DAYS, the sentence is a slope per rain event, and the response time is a class measured on HOURLY data/);
   assert.match(html, /r = 0\.59 over 700 days/);
   assertNamed(svg, keyClasses(html), 'the response plate');
 });

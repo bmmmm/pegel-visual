@@ -6,7 +6,7 @@
 // red on exactly the defect it was written for.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { cpSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
@@ -575,6 +575,47 @@ function writeTree(root) {
   // N8 reads a product the collector does not write: the fixture has to build it
   // the same way CI does, between the collector and the gate.
   buildPrecip({ tree: nrw, out: join(nrw, 'precip'), generated: NOW.slice(0, 10) });
+  writeHourlyLag(nrw);
+}
+
+// N9's sibling of the above. The CLI runs WITHOUT --hires here — this fixture
+// carries no nrw-hires tree — so clauses (a)-(f) are what these tests exercise;
+// (g) and (h) are the two that need the second branch, and they are proven
+// against the real mirror, not against a fixture. The ids come out of the
+// fixture's OWN precip manifest, so N9(c)'s two reference checks have something
+// real to resolve instead of a list this helper made up.
+export function hourlyLagFor(nrw, { to = new Date(Date.parse(NOW) - 9 * 36e5), n = 120, over = {} } = {}) {
+  const manifest = JSON.parse(readFileSync(join(nrw, 'manifest.json'), 'utf8'));
+  const ids = Object.keys(manifest.precip || {}).filter(no => manifest.precip[no].series === true).sort().slice(0, n);
+  assert.equal(ids.length, n, 'the fixture must carry enough gauges with a rain field to clear the N9 floor');
+  const gauges = Object.fromEntries(ids.map((no, i) => [no, i < n * 0.5 ? 0 : i < n * 0.85 ? 1 : 2]));
+  const byClass = [0, 0, 0];
+  for (const c of Object.values(gauges)) byClass[c]++;
+  const hourIso = d => d.toISOString().slice(0, 13) + ':00Z';
+  const hours = 63 * 24;
+  const daily = Object.keys(manifest.precip || {}).length;
+  // the counts have to BALANCE, or N9(d)'s accounting identity is red on the
+  // fixture every other CLI test depends on
+  const notInHires = 24, attempted = daily - notInHires, noPeak = 20;
+  const withPeak = attempted - noPeak, notSignificant = 6;
+  return {
+    schema: 1, generated: NOW.slice(0, 10), ruleVersion: 2, lagRuleVersion: 1,
+    rule: { classes: [[0, 1], [2, 8], [9, null]], minR: 0.25, rotations: 99, fdrQ: 0.05 },
+    window: { from: hourIso(new Date(to.getTime() - (hours - 1) * 36e5)), to: hourIso(to), hours },
+    inputs: { sha256: 'f'.repeat(64), files: 1674 },
+    counts: {
+      daily, notInHires, noDailySet: 0, attempted, withPeak, noPeak,
+      weak: withPeak - notSignificant - n, notSignificant, unclassed: 0, published: n,
+      noPeakWhy: { wetHours: noPeak, pairs: 0, noPositiveLag: 0, noPair: 0 },
+      byClass,
+    },
+    gauges,
+    ...over,
+  };
+}
+function writeHourlyLag(nrw, opts = {}) {
+  mkdirSync(join(nrw, 'hourly'), { recursive: true });
+  writeFileSync(join(nrw, 'hourly', 'lag.json'), JSON.stringify(hourlyLagFor(nrw, opts), null, 1) + '\n');
 }
 
 const SEED = mkdtempSync(join(tmpdir(), 'pegel-nrw-seed-'));
@@ -608,7 +649,11 @@ test('CLI: an untouched healthy checkout is green and prints the fleet numbers',
   assert.equal(code, 0, stdout);
   // 728, not 729: the trailing 730 days end today (09-04) and begin 2024-09-05,
   // one day after the source window opens
-  assert.match(stdout, /nrw consistency ok: 0 changed files, registry 617, gauges 300 with data \(bulk 254, station 48, noSeries 8 of 310 registered\), rain 313, temp 108, fleet edge 2026-09-02 \(2 d behind today\), window median 728 d, full alert triples 130/);
+  // "(N9 partial: no --hires)" is part of the contract, not noise: this fixture
+  // carries no nrw-hires tree, and a green run that skipped two clauses must not
+  // be mistakable for a complete one.
+  assert.match(stdout, /nrw consistency ok \(N9 partial: no --hires\): 0 changed files, registry 617, gauges 300 with data \(bulk 254, station 48, noSeries 8 of 310 registered\), rain 313, temp 108, fleet edge 2026-09-02 \(2 d behind today\), window median 728 d, full alert triples 130/);
+  assert.match(stdout, /::warning::N9\(g\) input digest and N9\(h\) recomputation SKIPPED/);
 });
 
 test('CLI: the very first run — HEAD holds the skeleton, every data file is new — is green', () => {
@@ -616,7 +661,7 @@ test('CLI: the very first run — HEAD holds the skeleton, every data file is ne
   gitIn(repo, 'reset', '-q', '--soft', FIRST_RUN.trim()); // data staged as A against the skeleton
   const { code, stdout } = runChecker(repo);
   assert.equal(code, 0, stdout);
-  assert.match(stdout, /nrw consistency ok: \d+ changed files/);
+  assert.match(stdout, /nrw consistency ok(?: \(N9 partial: no --hires\))?: \d+ changed files/);
   assert.doesNotMatch(stdout, /N4/);
 });
 
@@ -1155,6 +1200,94 @@ test('CLI: --skip N8 silences it, and the rest of the gate still runs', () => {
   assert.match(stdout, /nrw consistency ok/);
 });
 
+test('CLI: a stale hourly lag is red even though nothing else in the tree moved', () => {
+  // THE CLAUSE THIS PRODUCT MOST NEEDS: a CI run that mirrors `nrw` but never
+  // rebuilds the lag leaves yesterday's window standing, and every other rule
+  // here — shape, references, counts, drift — is perfectly happy with it.
+  const repo = cloneSeed();
+  const stale = new Date(Date.parse(NOW) - 72 * 36e5);
+  writeFileSync(join(repo, 'nrw', 'hourly', 'lag.json'),
+    JSON.stringify(hourlyLagFor(join(repo, 'nrw'), { to: stale }), null, 1) + '\n');
+  const { code, stdout } = runChecker(repo);
+  assert.equal(code, 1, stdout);
+  assert.match(stdout, /::error::N9: the hourly window ends 72\.0 h before now .* the lag was not rebuilt on this run/);
+});
+
+test('CLI: deleting the hourly lag is red TWICE — N9 misses it, and N4 refuses the deletion', () => {
+  // `hourly/` is deliberately NOT in N4's precip exception. The daily rain field
+  // may shrink (a gauge that loses its rain gauges loses its files); this
+  // product is one file that always exists, so a deletion is a regression and
+  // gets a second, independent guard.
+  const repo = cloneSeed();
+  rmSync(join(repo, 'nrw', 'hourly'), { recursive: true });
+  const { code, stdout } = runChecker(repo);
+  assert.equal(code, 1, stdout);
+  assert.match(stdout, /::error::N9: hourly\/lag\.json missing — run scripts\/build-nrw-hourly-lag\.mjs/);
+  assert.match(stdout, /::error::N4: .*hourly\/lag\.json/, 'N4 must see the deletion too');
+});
+
+test('CLI: --skip N9 silences it, and the rest of the gate still runs', () => {
+  const repo = cloneSeed();
+  rmSync(join(repo, 'nrw', 'hourly'), { recursive: true });
+  const { code, stdout } = runChecker(repo, ['--skip', 'N9', '--allow-prune']);
+  assert.equal(code, 0, stdout);
+  assert.match(stdout, /nrw consistency ok/);
+  assert.doesNotMatch(stdout, /N9 partial/, 'a rule that was skipped outright is not a partial run');
+});
+
+test('CLI: a nonexistent --hires is red, not a quiet skip', () => {
+  const repo = cloneSeed();
+  const { code, stdout } = runChecker(repo, ['--hires', join(repo, 'no-such-tree')]);
+  assert.equal(code, 1, stdout);
+  assert.match(stdout, /::error::N9: --hires .* does not exist/);
+  assert.doesNotMatch(stdout, /SKIPPED/, 'a wrong path must not read as "no path given"');
+});
+
+// The CLI half of N9(g) and N9(h). Their CONTENT is proven against the real
+// mirror (see this file's N9 header) — but that proves nothing about their
+// DISPATCH, and a clause nothing dispatches is a clause that is not there. The
+// same hole was measured on N8 once and closed with the pair of tests above.
+// Measured here before this test existed: deleting the (g) digest block, or the
+// (h) recompute block, or both, left all 105 tests in this file green.
+//
+// A minimal hires tree is enough, and deliberately so: the fixture's lag.json is
+// SYNTHETIC (hourlyLagFor, not the builder), so the digest cannot match and the
+// rebuild cannot agree — which is precisely what makes both clauses speak.
+test('CLI: N9(g) and N9(h) are dispatched — a --hires tree the product was not built over is red', () => {
+  const repo = cloneSeed();
+  const hires = join(repo, 'nrw-hires');
+  // Shards for the fixture's OWN stations, and enough of them that the builder
+  // RUNS instead of throwing. That distinction is the test: with a tree the
+  // builder cannot read, the catch block below reports "could not recompute"
+  // and a dead diffs loop passes unnoticed — measured, which is why the last
+  // assertion here forbids that wording. The window must also clear the
+  // rotation guard band (2*168 + 99 + 1 h), or publish() refuses outright.
+  const month = '2026-08', start = '2026-08-01T00:00:00+01:00', N = 24 * 30;
+  const shard = (id, v) => JSON.stringify({ id, month, step: 3600, start, v });
+  for (const id of readdirSync(join(repo, 'nrw', 'rain')).slice(0, 20)) {
+    mkdirSync(join(hires, 'rain', id), { recursive: true });
+    writeFileSync(join(hires, 'rain', id, `${month}.json`),
+      shard(id, Array.from({ length: N }, (_, i) => (i % 7 === 0 ? 0.5 : 0))));
+  }
+  const precip = readManifest(repo).precip || {};
+  for (const no of Object.keys(precip).filter(k => precip[k].series === true).slice(0, 5)) {
+    mkdirSync(join(hires, 'gauges', no), { recursive: true });
+    writeFileSync(join(hires, 'gauges', no, `${month}.json`),
+      shard(no, Array.from({ length: N }, (_, i) => 100 + (i % 13))));
+  }
+  const { code, stdout } = runChecker(repo, ['--hires', hires]);
+  assert.equal(code, 1, stdout);
+  // (g): the digest of the bytes actually read cannot match a synthetic file
+  assert.match(stdout, /::error::N9: hourly\/lag\.json was built over different hires bytes than the tree holds/);
+  // (h): the rebuild must REPORT ITS DIFFS, not merely fail to start
+  assert.match(stdout, /::error::N9: hourly lag is not what the rule produces/);
+  assert.doesNotMatch(stdout, /could not recompute the hourly lag/,
+    'the builder has to actually run here, or (h) is pinned by its catch block instead of by its diffs');
+  // and with a tree given, neither clause may report itself as skipped
+  assert.doesNotMatch(stdout, /N9 partial/);
+  assert.doesNotMatch(stdout, /N9\(g\) input digest and N9\(h\) recomputation SKIPPED/);
+});
+
 test('CLI: N8 counters are red when the product shrinks below its floor', () => {
   const repo = cloneSeed();
   const p = join(repo, 'nrw', 'precip', 'index.json');
@@ -1194,4 +1327,213 @@ test('the collector places every station inside the box, and no station outside 
   assert.equal(again.gauges.g1.la, undefined, 'a Gauss-Krueger pair places nothing');
   assert.equal(again.gauges.g1.dc, 12.5, 'but the distance to the mouth still rides along');
   assert.equal(again.gauges.g1.km, undefined, 'and never as `km`, which the app reads as river km from the source');
+});
+
+// ---------- N9: the hourly response class ----------
+// One file, nrw/hourly/lag.json, and every clause below is shown red on exactly
+// the defect it exists for. (a)-(f) need only the `nrw` tree; (g) and (h) need
+// the hires tree and are exercised against the real mirror, not here.
+
+const {
+  checkHourlyShape, checkHourlyDrift,
+  MIN_HOURLY_PUBLISHED, MIN_HOURLY_WINDOW_HOURS, MAX_HOURLY_WINDOW_HOURS, MAX_HOURLY_WINDOW_LAG_H,
+  MAX_HOURLY_CLASS_DRIFT, MAX_HOURLY_PUBLISHED_DROP, MAX_HOURLY_CLASS_SHARE,
+} = await import('../scripts/check-nrw-consistency.mjs');
+
+// 120 gauges — over the published floor, and split 60/40/20 so no class is
+// anywhere near the 90 % collapse ceiling.
+const LAG_IDS = Array.from({ length: 120 }, (_, i) => `h${i}`);
+const lagGauges = () => Object.fromEntries(LAG_IDS.map((no, i) => [no, i < 60 ? 0 : i < 100 ? 1 : 2]));
+const LAG_TOPO = Object.fromEntries(LAG_IDS.map(no => [no, {}]));
+const LAG_PRECIP = Object.fromEntries(LAG_IDS.map(no => [no, { series: true }]));
+
+// The window ends 9 h before the pinned clock and spans the builder's own 63
+// days, inside both the floor and the ceiling; derived rather than typed, so the
+// span and the two stamps can never disagree by a typo.
+const LAG_HOURS = 63 * 24;
+const LAG_TO = new Date(nowDate.getTime() - 9 * 36e5);
+const hourIso = d => d.toISOString().slice(0, 13) + ':00Z';
+const LAG_WINDOW = { from: hourIso(new Date(LAG_TO.getTime() - (LAG_HOURS - 1) * 36e5)), to: hourIso(LAG_TO), hours: LAG_HOURS };
+
+const healthyLag = (over = {}) => ({
+  schema: 1, generated: '2026-09-04', ruleVersion: 2, lagRuleVersion: 1,
+  rule: { classes: [[0, 1], [2, 8], [9, null]], minR: 0.25, rotations: 99, fdrQ: 0.05 },
+  window: { ...LAG_WINDOW },
+  inputs: { sha256: 'f'.repeat(64), files: 1674 },
+  // The counts BALANCE: 251 = 24 + 0 + 227, 227 = 29 + 198, 198 = 54 + 6 + 0 +
+  // 138 … which is not 120, so the fixture uses its own consistent set rather
+  // than the mirror's. A fixture that could not satisfy the accounting identity
+  // would make every test below pass or fail for the wrong reason.
+  counts: {
+    daily: 200, notInHires: 24, noDailySet: 0, attempted: 176, withPeak: 160,
+    noPeak: 16, weak: 34, notSignificant: 6, unclassed: 0, published: 120,
+    noPeakWhy: { wetHours: 16, pairs: 0, noPositiveLag: 0, noPair: 0 },
+    byClass: [60, 40, 20],
+  },
+  gauges: lagGauges(),
+  ...over,
+});
+const shapeLag = (over = {}, opts = {}) => checkHourlyShape(healthyLag(over), {
+  topologyGauges: LAG_TOPO, precip: LAG_PRECIP, nowDate, ...opts,
+}).join('\n');
+
+test('N9: the healthy product is green, and the fixture really is at the floor it claims', () => {
+  assert.deepEqual(checkHourlyShape(healthyLag(), { topologyGauges: LAG_TOPO, precip: LAG_PRECIP, nowDate }), []);
+  assert.deepEqual(checkHourlyDrift(healthyLag(), healthyLag()), []);
+  // a fixture that sat under the floor would make every test below pass for the
+  // wrong reason
+  assert.ok(120 >= MIN_HOURLY_PUBLISHED, 'the fixture must clear the published floor');
+  assert.ok(60 <= MAX_HOURLY_CLASS_SHARE * 120, 'and sit under the class-share ceiling');
+});
+
+test('N9a: a missing, unparseable or unversioned file', () => {
+  assert.match(checkHourlyShape(null).join('\n'), /missing, unparseable or not schema 1/);
+  assert.match(checkHourlyShape({ schema: 2 }).join('\n'), /not schema 1/);
+  assert.match(shapeLag({ gauges: undefined }), /carries no `gauges` block/);
+  assert.match(shapeLag({ window: undefined }), /carries no `window` block/);
+  // THE TRAP N8 WALKED INTO: a builder that stops writing the version makes the
+  // rule-change clause read the same value on both sides forever after
+  assert.match(shapeLag({ lagRuleVersion: undefined }), /carries no numeric `lagRuleVersion`/);
+  assert.match(shapeLag({ ruleVersion: undefined }), /carries no numeric `ruleVersion`/);
+});
+
+test('N9b: a window that was not rebuilt, one from the future, and one too short', () => {
+  const old = hourIso(new Date(nowDate.getTime() - (MAX_HOURLY_WINDOW_LAG_H + 2) * 36e5));
+  assert.match(shapeLag({ window: { ...LAG_WINDOW, to: old } }), /the lag was not rebuilt on this run/);
+  // and the run one hour inside the ceiling is NOT red, or the clause is just a
+  // slow-moving trip-wire
+  const fresh = hourIso(new Date(nowDate.getTime() - (MAX_HOURLY_WINDOW_LAG_H - 1) * 36e5));
+  assert.doesNotMatch(shapeLag({ window: { ...LAG_WINDOW, to: fresh } }), /was not rebuilt/);
+  const future = hourIso(new Date(nowDate.getTime() + 5 * 36e5));
+  assert.match(shapeLag({ window: { ...LAG_WINDOW, to: future } }), /ends 5\.0 h in the FUTURE/);
+  const short = { from: LAG_WINDOW.from, to: LAG_WINDOW.to, hours: MIN_HOURLY_WINDOW_HOURS - 1 };
+  assert.match(shapeLag({ window: short }), /the hourly window is 959 h, floor is 960/);
+  // `hours` may not be a number the file merely asserts about itself
+  assert.match(shapeLag({ window: { ...LAG_WINDOW, hours: 1200 } }), new RegExp(`says 1200 hours but spans ${LAG_HOURS}`));
+  assert.match(shapeLag({ window: { from: 'never', to: 'never', hours: 1597 } }), /not a readable pair of timestamps/);
+});
+
+test('N9c: an hour where a class id belongs, and the two reference checks', () => {
+  // the whole reason the file ships a class and not an hour — a 7 here would
+  // print as a fourth, non-existent class on the plate
+  assert.match(shapeLag({ gauges: { ...lagGauges(), h0: 7 } }), /h0 carries 7, which is not a class id/);
+  assert.match(shapeLag({ gauges: { ...lagGauges(), h0: null } }), /h0 carries null/);
+  assert.match(shapeLag({ gauges: { ...lagGauges(), h0: 'fast' } }), /h0 carries "fast"/);
+  assert.match(shapeLag({ gauges: { ...lagGauges(), h0: 1.5 } }), /h0 carries 1\.5/);
+  assert.match(shapeLag({ gauges: { ...lagGauges(), ghost: 0 } }), /ghost is not a gauge in topology\.json/);
+  // a class for a gauge with no rain field would be a response to rain the
+  // reader cannot see anywhere on the plate
+  assert.match(shapeLag({}, { precip: { ...LAG_PRECIP, h0: { series: false } } }), /h0 has an hourly class but no daily rain field/);
+  assert.match(shapeLag({ counts: { ...healthyLag().counts, byClass: [60, 40, 21] } }),
+    /counts\.byClass is \[60,40,21\], a recount of `gauges` gives \[60,40,20\]/);
+  assert.match(shapeLag({ rule: { classes: 'three' } }), /rule\.classes is not a list of \[lo, hi\] pairs/);
+});
+
+test('N9c: the RULE itself, not only its shape — reordered classes make the plate lie', () => {
+  // The plate binds its three words to the class INDEX positionally, so a
+  // `classes` list that is reordered, gapped or overlapping makes it print a
+  // real class id under the wrong words ("within the hour (9+ h)") with every
+  // other clause green.
+  const rule = classes => ({ rule: { ...healthyLag().rule, classes } });
+  assert.match(shapeLag(rule([[9, null], [2, 8], [0, 1]])), /must be ascending, adjacent and non-overlapping/);
+  assert.match(shapeLag(rule([[0, 1], [0, 1], [2, null]])), /must be ascending, adjacent and non-overlapping/);
+  assert.match(shapeLag(rule([[0, 1], [4, 8], [9, null]])), /ends at 1 and \[1\] starts at 4/, 'a gap swallows lags 2 and 3');
+  assert.match(shapeLag(rule([[2, 8], [9, null]])), /starts at 2 h, so a lag of 0 falls through it/);
+  assert.match(shapeLag(rule([[0, 1], [2, 8], [9, 48]])), /the last of rule.classes is bounded/);
+  assert.match(shapeLag(rule([[0, 1], [2, 8], [9, 8]])), /rule.classes\[2\] is empty/);
+  // and the filters have to be able to filter
+  const R = over => ({ rule: { ...healthyLag().rule, ...over } });
+  assert.match(shapeLag(R({ rotations: 0 })), /a permutation filter that ran no rotations calls everything significant/);
+  assert.match(shapeLag(R({ minR: 0 })), /rule.minR is 0, which is not a correlation cut/);
+  assert.match(shapeLag(R({ fdrQ: 1 })), /rule.fdrQ is 1, which is not a false-discovery rate/);
+});
+
+test('N9: the run\'s own provenance is checked, because (g) does not run without --hires', () => {
+  assert.match(shapeLag({ inputs: { sha256: 'nope', files: 10 } }), /inputs.sha256 is not a sha256 digest/);
+  assert.match(shapeLag({ inputs: undefined }), /inputs.sha256 is not a sha256 digest/);
+  assert.match(shapeLag({ inputs: { sha256: 'f'.repeat(64), files: 0 } }), /a digest over no files is not a digest/);
+  assert.match(shapeLag({ generated: 'banana' }), /generated is "banana", not a date/);
+});
+
+test('N9d: the counts BALANCE — a drop-out counter cannot be invented', () => {
+  // Nesting alone leaves every drop-out counter free, and the plate prints four
+  // of them to the reader as the fleet split. Measured against the real file
+  // before this clause existed: weak = 99999 was green.
+  const c = healthyLag().counts;
+  const sum = (...ks) => ks.reduce((a, k) => a + c[k], 0);
+  assert.match(shapeLag({ counts: { ...c, weak: 99999 } }),
+    new RegExp(`weak \\+ notSignificant \\+ unclassed \\+ published = ${99999 + sum('notSignificant', 'unclassed', 'published')}, but withPeak is ${c.withPeak}`));
+  assert.match(shapeLag({ counts: { ...c, notInHires: 0 } }),
+    new RegExp(`notInHires \\+ noDailySet \\+ attempted = ${sum('noDailySet', 'attempted')}, but daily is ${c.daily}`));
+  assert.match(shapeLag({ counts: { ...c, noPeak: 0 } }),
+    new RegExp(`noPeak \\+ withPeak = ${c.withPeak}, but attempted is ${c.attempted}`));
+  assert.match(shapeLag({ counts: { ...c, weak: -1, notSignificant: 41 } }), /counts.weak is not a count/);
+  assert.match(shapeLag({ counts: { ...c, unclassed: undefined } }), /counts.unclassed is not a count/);
+});
+
+test('N9b: a window past the source\'s own length is red, which a floor cannot see', () => {
+  // The mirror only grows and the source does not. A builder that stopped
+  // bounding the window moves this number UP; the floor watches it going down.
+  const long = { ...LAG_WINDOW, hours: MAX_HOURLY_WINDOW_HOURS + 1 };
+  const v = shapeLag({ window: { from: hourIso(new Date(LAG_TO.getTime() - MAX_HOURLY_WINDOW_HOURS * 36e5)), to: LAG_WINDOW.to, hours: MAX_HOURLY_WINDOW_HOURS + 1 } });
+  assert.match(v, /ceiling is 1560/);
+  assert.match(v, /the mirror grows and the source does not/);
+  assert.doesNotMatch(shapeLag({}), /ceiling is/, 'and the healthy window is well inside it');
+  assert.ok(long.hours > MIN_HOURLY_WINDOW_HOURS, 'the case really is above the floor, so only the ceiling can catch it');
+});
+
+test('N9d: the floors, the nesting and the one-class collapse', () => {
+  const few = Object.fromEntries(LAG_IDS.slice(0, MIN_HOURLY_PUBLISHED - 1).map((no, i) => [no, i < 50 ? 0 : 1]));
+  const v = shapeLag({ gauges: few, counts: { ...healthyLag().counts, published: 99, byClass: [50, 49, 0] } });
+  assert.match(v, new RegExp(`only 99 gauges carry a response class, floor is ${MIN_HOURLY_PUBLISHED}`));
+  assert.match(shapeLag({ counts: { ...healthyLag().counts, published: 119 } }), /counts\.published is 119, `gauges` holds 120/);
+  assert.match(shapeLag({ counts: { ...healthyLag().counts, withPeak: 100 } }), /the counts do not nest/);
+  assert.match(shapeLag({ counts: { ...healthyLag().counts, attempted: 300 } }), /the counts do not nest/);
+  // a three-class product where nine of ten readers see one class
+  const collapsed = Object.fromEntries(LAG_IDS.map((no, i) => [no, i < 115 ? 0 : 1]));
+  assert.match(shapeLag({ gauges: collapsed, counts: { ...healthyLag().counts, byClass: [115, 5, 0] } }),
+    /one class holds 115 of 120 published gauges \(95\.8 %\)/);
+});
+
+test('N9e: drift against HEAD — reclassified, withdrawn, and the count falling', () => {
+  const head = healthyLag();
+  const moveN = n => healthyLag({
+    gauges: Object.fromEntries(Object.entries(lagGauges()).map(([no, c], i) => [no, i < n ? (c + 1) % 3 : c])),
+  });
+  assert.deepEqual(checkHourlyDrift(moveN(MAX_HOURLY_CLASS_DRIFT), head), [], 'exactly at the ceiling is inside it');
+  assert.match(checkHourlyDrift(moveN(MAX_HOURLY_CLASS_DRIFT + 1), head).join('\n'),
+    new RegExp(`${MAX_HOURLY_CLASS_DRIFT + 1} gauges changed response class against HEAD`));
+  // withdrawn gauges are counted twice over, as a class change and as a loss —
+  // a product that quietly stops publishing is the failure this catches
+  const dropN = n => healthyLag({ gauges: Object.fromEntries(Object.entries(lagGauges()).slice(n)) });
+  assert.deepEqual(checkHourlyDrift(dropN(MAX_HOURLY_PUBLISHED_DROP), head), []);
+  const bad = checkHourlyDrift(dropN(MAX_HOURLY_PUBLISHED_DROP + 1), head).join('\n');
+  assert.match(bad, new RegExp(`${MAX_HOURLY_PUBLISHED_DROP + 1} gauges lost their response class`));
+  assert.match(bad, /a fall of 21 over the ceiling/);
+  // and with no HEAD at all — a fresh branch — there is nothing to drift from
+  assert.deepEqual(checkHourlyDrift(dropN(60), null), []);
+});
+
+test('N9f: a rule change may not ride in on its own drift allowance', () => {
+  const head = healthyLag();
+  const bumped = healthyLag({ lagRuleVersion: 2, gauges: {}, counts: { ...head.counts, published: 0 } });
+  assert.match(checkHourlyDrift(bumped, head, { baselines: {} }).join('\n'),
+    /lag rule 1\.2 -> 2\.2 with no pre-registered counts/);
+  // an entry that disagrees with the run is red — that is what keeps "register
+  // the numbers" from meaning "write down whatever came out"
+  assert.match(checkHourlyDrift(bumped, head, { baselines: { '2.2': { published: 150 } }, slack: 30 }).join('\n'),
+    /published is 0, pre-registered 150/);
+  assert.deepEqual(checkHourlyDrift(bumped, head, { baselines: { '2.2': { published: 25 } }, slack: 30 }), []);
+  // A MEMBERSHIP bump moves these counts too, so it must ask for its own entry
+  // rather than being answered by the lag version's
+  const membership = healthyLag({ ruleVersion: 3 });
+  assert.match(checkHourlyDrift(membership, head, { baselines: { '1.2': { published: 120 } } }).join('\n'),
+    /lag rule 1\.2 -> 1\.3 with no pre-registered counts/);
+  // THE TRAP N8's FIRST CUT FELL INTO: read the version the same way on both
+  // sides. A HEAD with no version field is version 1, exactly as the file in
+  // hand would be — not "whatever the current one is", which compares equal and
+  // switches the clause off for good.
+  const headNoVer = { ...healthyLag(), lagRuleVersion: undefined, ruleVersion: undefined };
+  assert.match(checkHourlyDrift(healthyLag({ lagRuleVersion: 4 }), headNoVer, { baselines: {} }).join('\n'),
+    /lag rule 1\.1 -> 4\.2 with no pre-registered counts/);
 });
