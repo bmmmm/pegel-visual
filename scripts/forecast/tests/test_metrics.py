@@ -89,13 +89,14 @@ def test_deciles_have_one_source():
     assert baselines.DECILES is metrics.DECILES
     assert tfm.DECILE_LEVELS == [float(q) for q in metrics.DECILES]
     # the value comparison above cannot tell a derived list from a retyped one;
-    # the source can: no decile list may be spelled outside metrics.py — not as
-    # a literal, not as linspace(0.1, 0.9, 9), not as arange(0.1, 1.0, 0.1)
+    # the source can, for the spellings one would actually type: a literal
+    # list, linspace(0.1, 0.9, 9), arange(0.1, 1.0, 0.1). A heuristic, not a
+    # proof — `[i / 10 for i in range(1, 10)]` or `num=9` still slip through.
     import inspect
     import re
     retyped = re.compile(
-        r"\[\s*0\.1\s*,\s*0\.2\b"
-        r"|linspace\(\s*0?\.1\s*,\s*0?\.9\s*,\s*9\s*\)"
+        r"\[\s*0\.10?\s*,\s*0\.20?\b"
+        r"|linspace\(\s*0?\.1\s*,\s*0?\.9\s*,\s*(num\s*=\s*)?9\s*\)"
         r"|arange\(\s*0?\.1\s*,\s*1(\.0*)?\s*,\s*0?\.1\s*\)"
     )
     for mod in (tfm, baselines):

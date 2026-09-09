@@ -733,19 +733,20 @@ test('haversine reproduces a known distance on the rule’s own sphere', () => {
 });
 
 // The null-control bench (scripts/probe-response-null.mjs) is not in CI, so
-// this is what keeps its verdict from drifting: on 20 seeded trials the
+// this is what keeps its verdict from drifting: on 50 seeded trials the
 // shipped estimator clears the sign criterion and the pre-2026-09-10 "max of
-// four lags" fails it (measured 2026-09-10: 50.0 % vs 100 % positive; at 5 or
-// 10 trials even `shipped` reads 60 %, so 20 is the smallest honest count).
-// And a variant that never prints cannot pass by emptiness — that branch had
-// no input on the real bench, where every variant prints.
-test('probe-response-null: shipped passes and max fails on 20 trials; an empty variant is EMPTY, not PASS', async () => {
+// four lags" fails it (measured 2026-09-10: 44 % vs 100 % positive; at 20
+// trials shipped sits at 50 %, one flipped trial from the 55 % limit, and 50
+// trials still take milliseconds). And a variant that prints NOTHING cannot
+// pass by emptiness — only that: pct divides by trials on purpose (the
+// permutation null passes at 3/200), so a rarely-printing variant still can.
+test('probe-response-null: shipped passes and max fails on 50 trials; an empty variant is EMPTY, not PASS', async () => {
   const bench = await import('../scripts/probe-response-null.mjs');
-  const shipped = bench.runVariant('shipped', 20);
-  const max = bench.runVariant('max', 20);
-  assert.equal(shipped.printed, 20);
-  assert.ok(shipped.pass, bench.line(shipped));
-  assert.ok(!max.pass && max.printed === 20, bench.line(max));
+  const shipped = bench.runVariant('shipped', 50);
+  const max = bench.runVariant('max', 50);
+  assert.equal(shipped.printed, 50);
+  assert.ok(shipped.pass && shipped.pct <= 48, bench.line(shipped));
+  assert.ok(!max.pass && max.printed === 50, bench.line(max));
   assert.ok(max.pct > shipped.pct, 'the retired estimator is the more optimistic one');
   bench.VARIANTS.silent = () => null;
   try {

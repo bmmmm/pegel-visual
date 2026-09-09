@@ -32,6 +32,15 @@ test('parseArgs: opt falls back, has is a switch, flag throws on a missing value
   assert.throws(() => p.flag('tree'), /--tree needs a value/);
 });
 
+test('parseArgs: --out=x is --out x, for opt, has and flag alike', () => {
+  const p = parseArgs(['--out=a=b', '--max-months=6', '--current=1', '--tree=']);
+  assert.equal(p.opt('out', 'd'), 'a=b', 'split on the first = only');
+  assert.equal(p.flag('max-months'), '6');
+  assert.equal(p.has('current'), true);
+  assert.equal(p.opt('tree', 'd'), 'd', 'an empty value counts as absent, as a bare --tree does');
+  assert.deepEqual(p.args, ['--out', 'a=b', '--max-months', '6', '--current', '1', '--tree', '']);
+});
+
 test('parseArgs: a value never starts with --, so `--out --check` reads --out as absent', () => {
   const p = parseArgs(['--out', '--check']);
   assert.equal(p.opt('out', null), null);
@@ -82,12 +91,20 @@ test('listChanges: an unborn HEAD is "everything is new"; any other git failure 
   // a German runner: git() pins LC_ALL=C, so the failure git reports starts
   // with "fatal:" and not "Schwerwiegend:" — the regex above reads English.
   // (Today only the head of this message is translated, so listChanges would
-  // survive without the pin; the pin is asserted on git() itself.)
+  // survive without the pin; the pin is asserted on git() itself.) A runner
+  // whose git does not translate at all (no de_DE locale generated, as on a
+  // stock ubuntu image) cannot see the pin either way — measured first, so
+  // the assertion is skipped there instead of passing vacuously.
   const env = { LC_ALL: process.env.LC_ALL, LANGUAGE: process.env.LANGUAGE };
   process.env.LC_ALL = 'de_DE.UTF-8'; process.env.LANGUAGE = 'de';
   try {
-    assert.throws(() => git(repo, ['diff', '--name-status', 'HEAD', '--', 'data'], ['ignore', 'pipe', 'pipe']),
-      e => /^fatal: bad revision 'HEAD'/m.test(String(e.stderr)), 'git() reports in English under a German locale');
+    const raw = spawnSync('git', ['-C', repo, 'diff', '--name-status', 'HEAD', '--', 'data'], { encoding: 'utf8' });
+    if (/Schwerwiegend/.test(raw.stderr)) {
+      assert.throws(() => git(repo, ['diff', '--name-status', 'HEAD', '--', 'data'], ['ignore', 'pipe', 'pipe']),
+        e => /^fatal: bad revision 'HEAD'/m.test(String(e.stderr)), 'git() reports in English under a German locale');
+    } else {
+      console.error('note: git does not speak German on this runner — the LC_ALL pin is not observable here');
+    }
   } finally {
     for (const [k, v] of Object.entries(env)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
   }

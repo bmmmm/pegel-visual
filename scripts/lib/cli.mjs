@@ -21,8 +21,15 @@ import { execFileSync } from 'node:child_process';
 //                        builders and probes, where a `--tree` without a path
 //                        must not silently mean the default tree
 // A value never starts with `--`, so `--out --check` reads `--out` as absent.
+// `--out=x` is `--out x`: before 2026-09-10 the `=` form passed every
+// unknown-flag sweep (they compare the key) and then fell silently onto the
+// default — `--heal-source=zip` healed via REST, `--current=1` ran a full
+// backfill (reviewer, measured).
 export function parseArgs(argv = process.argv.slice(2)) {
-  const args = argv.slice();
+  const args = argv.flatMap(a => {
+    const m = /^--([^=]+)=(.*)$/s.exec(a);
+    return m ? ['--' + m[1], m[2]] : [a];
+  });
   const valueAt = i => (i >= 0 && args[i + 1] && !args[i + 1].startsWith('--') ? args[i + 1] : undefined);
   return {
     args,
