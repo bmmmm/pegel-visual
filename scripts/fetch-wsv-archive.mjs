@@ -53,7 +53,8 @@
 //   git checkout --orphan seed && git add -A && git commit -m "Seed archive"
 //   git branch -M seed archive
 //   # deploy order: main FIRST — the client degrades gracefully on older data
-//   # (a closed.json 404 is swallowed, current.json still renders).
+//   # (a closed.json 404 is swallowed, current.json still renders), while an
+//   # older client on a reseeded tree would 404 on every file the reseed moved.
 //   # a push to the data branch can NOT trigger pages.yml (the orphan branch
 //   # carries no workflow files — verified 2026-07-17: the force-push produced
 //   # no run), so the dispatch below is what actually deploys the new data.
@@ -698,6 +699,21 @@ export function healRunningYearFromZip(dir, name, y, zy) {
 if (import.meta.url === pathToFileURL(process.argv[1] || '').href) await main();
 
 async function main() {
+  // An unknown flag used to be swallowed in silence, which was harmless while
+  // every flag this file documented still existed. --migrate does not any more
+  // (the reformat it did is long finished), and the old copy-pasteable command
+  // still sits in shell histories: swallowed, it falls through to the BACKFILL
+  // path and reports success, so an operator in an incident believes a
+  // migration ran. Checked HERE, not at module scope — eight scripts import
+  // this file and carry their own flags in process.argv.
+  const KNOWN = new Set(['out', 'from', 'to', 'current', 'running', 'station', 'parallel']);
+  for (const a of args) {
+    if (!a.startsWith('--')) continue;
+    if (!KNOWN.has(a.slice(2).split('=')[0])) {
+      console.error(`unknown flag ${a} — known are ${[...KNOWN].map(k => '--' + k).join(', ')}`);
+      process.exit(2);
+    }
+  }
   // --current fetches REST, --running fetches ZIP; together the REST window
   // would be written with the ZIP's authority and writeStation skipped
   if (CURRENT_ONLY && RUNNING) throw new Error('--current and --running are separate passes; run them one after the other');

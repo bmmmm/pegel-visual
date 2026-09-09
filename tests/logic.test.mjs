@@ -3413,7 +3413,7 @@ test('harness guard: index.html holds exactly one bare script block', async () =
   assert.equal(html.split('</script').length, 2, 'exactly one closing script tag');
 });
 
-test('navHref: the data-st grammar maps to honest hrefs', () => {
+test('navHref: the click-target grammar maps to honest hrefs', () => {
   const app = loadApp();
   assert.equal(app.run(`navHref('BONN')`), '?station=BONN');
   assert.equal(app.run(`navHref('river:ELDE MÜRITZ WASSERSTRASSE')`),
@@ -3586,16 +3586,24 @@ const KEY_CHROME = new Set(['p-key', 'lg', 'lgn', 'lgp', 'lg-bar', 'sw', 'swr', 
 // Checking one direction only let a mark fall out of the drawing while the key
 // kept promising it — measured 2026-09-09: dropping the history band from the
 // chart and leaving its swatch in the key kept the whole suite green (238/0).
-// It is opt-in because some keys legitimately spell out a VOCABULARY rather
-// than an inventory: ?river=ERFT names k-low and k-high so the reader knows the
-// glyphs, on a day when no gauge stands low or high. Pass `both` wherever the
-// key entry hangs on the same condition as the drawing — there, a named mark
-// that is not drawn is a bug.
+// It is opt-in for two reasons. A key may spell out a VOCABULARY rather than an
+// inventory: ?river=ERFT names k-low and k-high so the reader knows the glyphs,
+// on a day when no gauge stands low or high — the reverse check would call that
+// a bug and it is not. And keyClasses() reads EVERY <dl class="p-key"> on the
+// page while svgAt() returns one drawing, so on a plate carrying several (the
+// LANUK station plate draws scene, rain and response) it hands the scene the
+// rain chart's marks and calls them undrawn — measured 2026-09-09. Pass `both`
+// only where the key on the page belongs to the one drawing being checked.
 const assertNamed = (drawing, key, what, both = false) => {
   const drawn = classesIn(drawing);
   const missing = [...drawn].filter(c => !NOT_A_MARK.has(c) && !key.has(c));
   assert.deepEqual(missing, [], `${what}: every mark drawn is named in the key`);
   if (!both) return;
+  // KEY_CHROME excuses a class from the reverse check, so a mark wearing one of
+  // those names would slip through it. No drawing uses one today — assert that,
+  // and the allowlist can never quietly start covering a real mark.
+  const disguised = [...drawn].filter(c => KEY_CHROME.has(c));
+  assert.deepEqual(disguised, [], `${what}: a drawn mark wears a key-chrome class name`);
   const unkept = [...key].filter(c => !KEY_CHROME.has(c) && !drawn.has(c));
   assert.deepEqual(unkept, [], `${what}: every mark the key names is really drawn`);
 };
