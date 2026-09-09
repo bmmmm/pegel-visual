@@ -80,6 +80,8 @@ jobs:
       # the gate page's rain panel, at both widths — until 2026-09-09 the only
       # browser check no workflow ran; the reason written above verify-precip
       # applied to it word for word. Its shots land in tmp-shots/ (gitignored).
+      # The bars' signs are read off gate/nrw-mid/report-3p0-rain.json, so a gate
+      # run that turns a block positive changes the expectation, not the verdict.
       - if: ${{ !cancelled() }}
         run: node scripts/gate-rain-check.mjs
         env:

@@ -6,7 +6,7 @@
 // One look at the gate page's `rain` panel in a real browser, at both
 // widths: opened, measured, screenshot. The suite asserts its markup; this says
 // whether a reader can read it. Needs the sandbox bypass (loopback).
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { sleep, serve, chrome, session, checker, killChildren } from './lib/cdp.mjs';
@@ -17,6 +17,17 @@ const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const SHOTS = join(ROOT, 'tmp-shots');  // gitignored: pictures are evidence, not source
 mkdirSync(SHOTS, { recursive: true });
 const check = checker();
+
+// The bars are the arm-vs-arm skill per block, and their SIGN is data: until
+// 2026-09-09 this check demanded every bar negative because every bar WAS,
+// and the next gate run with a positive block would have turned CI red for
+// a data reason. The expectation is read off the report the page draws —
+// pooled.blocks, in order; the control arm's own numbers live in
+// report-3p0-rain-shuffled.json and are not drawn as bars.
+const RAIN_REPORT = join(ROOT, 'gate', 'nrw-mid', 'report-3p0-rain.json');
+const expectFills = Object.values(JSON.parse(readFileSync(RAIN_REPORT, 'utf8')).pooled.blocks)
+  .map(b => (b.ss_vs_other < 0 ? '-45deg' : '45deg'));
+if (!expectFills.length) throw new Error(`${RAIN_REPORT}: no pooled blocks to expect bars for`);
 
 // GATE_BASE_URL=https://bmmmm.github.io/pegel-visual/ checks the deployed page
 const base = await serve({ root: ROOT, url: process.env.GATE_BASE_URL || null });
@@ -67,10 +78,10 @@ for (const vp of [{ n: 'desktop', w: 1280, h: 900 }, { n: 'phone', w: 390, h: 84
   check(/negative control/.test(m.controlNote), `${vp.n}: the control arm is named as one`, m.controlNote);
   check(!m.chipRow.some(c => /shuffled/i.test(c)), `${vp.n}: and it has no chip`, m.chipRow.join(' | '));
   check(/NO EFFECT|RAIN HELPS|RAIN HARMS/.test(m.title), `${vp.n}: the title carries the rain verdict`, m.title);
-  // every bar in this run is negative, so every one must be painted as such —
-  // and the key's two swatches must not be the same picture twice
-  check(new Set(m.barFills).size === 1 && /-45deg/.test(m.barFills[0]),
-    `${vp.n}: a negative bar is painted as one`, m.barFills[0]);
+  // every bar is painted with the sign the report gives it — and the key's
+  // two swatches must not be the same picture twice
+  check(m.barFills.length === expectFills.length && m.barFills.every((f, i) => f.includes(`(${expectFills[i]}`)),
+    `${vp.n}: each bar is painted with its own sign (${expectFills.join(' ')})`, m.barFills.map(f => (f.match(/-?45deg/) || ['?'])[0]).join(' '));
   check(m.keyFills.length === 2 && m.keyFills[0] !== m.keyFills[1],
     `${vp.n}: the key's two marks are two pictures`, m.keyFills.join(' | '));
   await ev(`document.querySelector('details.panel#rain').open = true`);

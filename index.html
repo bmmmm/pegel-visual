@@ -2129,16 +2129,21 @@ const archiveSource = () => state.archiveSource || 'WSV';
 // deadline the fetch rejects like any other failure and the loader's own catch
 // raises the error plate, which does offer a retry.
 const FETCH_TIMEOUT_MS = 20000;
+// The fleet-sized reads — the 786-station list, the same list with every
+// gauge's timeseries and current value, the archive manifest — get a longer
+// one: 47 KB gzip in 20 s is a 19 kbit/s floor, and a slow link is not a
+// silent one. Everything else stays at 20 s.
+const FETCH_TIMEOUT_LONG_MS = 60000;
 // the deadline, joined with a caller's own abort where the platform can join
 // signals; where it cannot, the caller's signal wins — it is the one that
 // carries a decision, the deadline is a safety net
-function fetchSignal(signal) {
-  const t = typeof AbortSignal.timeout === 'function' ? AbortSignal.timeout(FETCH_TIMEOUT_MS) : null;
+function fetchSignal(signal, timeout = FETCH_TIMEOUT_MS) {
+  const t = typeof AbortSignal.timeout === 'function' ? AbortSignal.timeout(timeout) : null;
   if (signal && t && typeof AbortSignal.any === 'function') return AbortSignal.any([signal, t]);
   return signal || t || undefined;
 }
-async function getJson(url, signal) {
-  const s = fetchSignal(signal);
+async function getJson(url, signal, { timeout = FETCH_TIMEOUT_MS } = {}) {
+  const s = fetchSignal(signal, timeout);
   const res = await fetch(url, s ? { signal: s } : undefined);
   if (!res.ok) {
     const e = new Error(res.status + ' ' + url.replace(API, ''));
@@ -5326,7 +5331,7 @@ function renderYearsHeat(vm) {
       `<td class="${heatCellClass(c, vm.mode)}">` +
       navOpen(`cmd:hm:${r.y}:${c.m}`, '', attr('aria-label', c.label) + attr('title', c.label)) +
       navClose(`cmd:hm:${r.y}:${c.m}`) + '</td>').join('') +
-    `<td class="ymean">${r.mean == null ? '' : r.mean}</td></tr>`).join('');
+    `<td class="ymean">${esc(r.mean == null ? '' : fmtLevel(r.mean))}</td></tr>`).join('');
   return `<table class="heat"><caption class="vh">${esc(T.yearsHeatCap)}</caption>` +
     // the two label columns are sized on <col>, not on their cells — see .heat
     `<colgroup><col class="c-year"><col span="12"><col class="c-mean"></colgroup>` +
@@ -6232,7 +6237,7 @@ async function loadRisingSnapshot(nowTs, lookbackDays = 1) {
 async function loadRising() {
   const want = risingDays; // the lookback in flight — a flip mid-fetch discards this one
   try {
-    const raw = await getJson(`${API}/stations.json?includeTimeseries=true&includeCurrentMeasurement=true&includeCharacteristicValues=true`);
+    const raw = await getJson(`${API}/stations.json?includeTimeseries=true&includeCurrentMeasurement=true&includeCharacteristicValues=true`, undefined, { timeout: FETCH_TIMEOUT_LONG_MS });
     if (mode !== 'rising' || risingDays !== want) return; // switched away mid-fetch
     const nowTs = Date.now();
     const snapshot = await loadRisingSnapshot(nowTs, want);
@@ -7896,7 +7901,7 @@ async function fetchStationList() {
   if (usable) { fillDatalist(cached.list); riversCache = null; scheduleRender(); }
   if (usable && Date.now() - cached.t < STATIONS_TTL) return; // fresh
   try {
-    const all = await getJson(`${API}/stations.json`);
+    const all = await getJson(`${API}/stations.json`, undefined, { timeout: FETCH_TIMEOUT_LONG_MS });
     const byName = new Map();
     const num = v => typeof v === 'number' && Number.isFinite(v) ? v : null;
     for (const s of all) {
@@ -8136,7 +8141,7 @@ async function loadRepoManifest() {
   // old guard compared the value, which stayed undefined across the await, so
   // three callers in one tick fetched the 737-station index three times
   if (repoManifest === undefined) {
-    repoManifest = getJson('archive/manifest.json').then(m => m.stations || null).catch(() => null);
+    repoManifest = getJson('archive/manifest.json', undefined, { timeout: FETCH_TIMEOUT_LONG_MS }).then(m => m.stations || null).catch(() => null);
   }
   const stations = await repoManifest;
   const lanuk = lanukManifestP ? await lanukManifestP : null;

@@ -1836,6 +1836,25 @@ test('getJson gives every request a deadline, so a silent network reaches the er
   })()`);
   assert.ok(opts && opts.signal && typeof opts.signal.aborted === 'boolean', 'an AbortSignal rides on the fetch');
   assert.equal(app.run('FETCH_TIMEOUT_MS >= 10000 && FETCH_TIMEOUT_MS <= 60000'), true, 'a deadline in the tens of seconds');
+  // the three fleet-sized reads carry the longer budget, and the budget is
+  // what reaches AbortSignal.timeout — measured at the call, not at the constant
+  const ms = await app.run(`(() => {
+    const seen = [];
+    const orig = AbortSignal.timeout;
+    AbortSignal.timeout = ms => { seen.push(ms); return orig.call(AbortSignal, ms); };
+    fetch = () => Promise.resolve({ ok: true, json: () => ({}) });
+    return getJson('x.json').then(() => getJson('y.json', undefined, { timeout: FETCH_TIMEOUT_LONG_MS }))
+      .then(() => { AbortSignal.timeout = orig; return seen; });
+  })()`);
+  assert.deepEqual(ms, [app.run('FETCH_TIMEOUT_MS'), app.run('FETCH_TIMEOUT_LONG_MS')]);
+  assert.equal(app.run('FETCH_TIMEOUT_LONG_MS > FETCH_TIMEOUT_MS && FETCH_TIMEOUT_LONG_MS <= 120000'), true);
+  // anchored to the call sites: the list, the list with timeseries, the manifest
+  const src = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
+  for (const url of ['${API}/stations.json?includeTimeseries=true&includeCurrentMeasurement=true&includeCharacteristicValues=true', '${API}/stations.json', 'archive/manifest.json']) {
+    const at = src.indexOf(`getJson(\`${url}\``) >= 0 ? src.indexOf(`getJson(\`${url}\``) : src.indexOf(`getJson('${url}'`);
+    assert.ok(at >= 0, `call site for ${url}`);
+    assert.match(src.slice(at, at + 220), /FETCH_TIMEOUT_LONG_MS/, `${url} reads with the long budget`);
+  }
 });
 
 test('a second loadData for the same station supersedes the first: the newest run wins', async () => {
