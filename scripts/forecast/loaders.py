@@ -168,7 +168,6 @@ def windows(x_filled: np.ndarray, run_len: np.ndarray, origins: np.ndarray,
     for o in origins:
         c_idx = np.arange(o - context + 1, o + 1)
         t_idx = np.arange(o + 1, o + horizon + 1)
-        assert c_idx.max() == o, "context reaches past the origin"
         if (run_len[c_idx] < 0).any() or (run_len[t_idx] < 0).any():
             continue
         keep.append(o)

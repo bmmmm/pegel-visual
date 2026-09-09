@@ -79,3 +79,13 @@ def test_bootstrap_ci_brackets_the_mean_of_iid_data():
 def test_stouffer():
     assert metrics.stouffer([2.0, 2.0, 2.0, 2.0]) == 4.0
     assert math.isnan(metrics.stouffer([float("nan")]))
+
+
+def test_deciles_have_one_source():
+    # tfm.py and baselines.py once carried their own copies of the nine levels;
+    # a copy that drifts scores one thing and predicts another
+    import baselines
+    import tfm
+    assert baselines.DECILES is metrics.DECILES
+    assert tfm.DECILE_LEVELS == [float(q) for q in metrics.DECILES]
+    assert list(metrics.DECILES) == [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]

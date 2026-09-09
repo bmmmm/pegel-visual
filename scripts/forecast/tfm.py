@@ -30,9 +30,12 @@ from pathlib import Path
 
 import numpy as np
 
+import metrics
+
 PERMISSIVE = frozenset({"Apache-2.0", "MIT", "BSD-3-Clause"})
-# what metrics.py scores: nine deciles, the median in the middle
-DECILE_LEVELS = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
+# what metrics.py scores: nine deciles, the median in the middle — ONE source,
+# imported; a second copy here drifted silently until test_metrics pinned it
+DECILE_LEVELS = [float(q) for q in metrics.DECILES]
 
 # ---------- the two pre-registered ForecastConfigs ----------
 #

@@ -248,7 +248,6 @@ def _nrw_covariate(rain: np.ndarray, origins: np.ndarray, context: int) -> np.nd
     out = np.full((len(origins), context), np.nan)
     for i, o in enumerate(origins):
         idx = np.arange(o - context, o)
-        assert idx.max() == o - 1, "the covariate reaches the origin's own rain day"
         if idx.min() < 0:
             continue
         out[i] = rain[idx]

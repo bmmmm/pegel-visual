@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import numpy as np
 
+import metrics
+
 # 366-slot calendar: cumulative days before each month in a LEAP year, so that a
 # calendar day maps to the same slot in every year and Feb 29 owns slot 59.
 _LEAP_CUM = np.array([0, 31, 60, 91, 121, 152, 182, 213, 244, 274, 305, 335])
@@ -117,7 +119,7 @@ def upstream_ols(x_target_o: np.ndarray, x_up_o: np.ndarray, clim: np.ndarray,
 
 # ---------- probabilistic baseline: blend + its own TRAIN residual deciles ----------
 
-DECILES = np.array([0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9])
+DECILES = metrics.DECILES  # the levels metrics.py scores, not a copy of them
 
 
 def residual_deciles(resid: np.ndarray, mask: np.ndarray) -> np.ndarray:
