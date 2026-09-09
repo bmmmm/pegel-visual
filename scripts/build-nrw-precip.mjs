@@ -12,6 +12,7 @@
 //   nrw/precip/<no>/meta.json      the rain set behind one gauge (who, how far, why)
 //   nrw/precip/<no>/<YYYY>.json    { id, y, mm[], n[], med[], mx[] }, daysInYear long
 //   nrw/precip/<no>/response.json  lag correlation rain -> level change, always written
+//                                  (its event rise: scripts/probe-response-null.mjs is the null bench)
 //   nrw/precip/basins/<b>/…        the same two files per basin (overview rows)
 //   nrw/precip/overview.json       the last 90 rain days per basin, for the ?rain plate
 //
@@ -128,6 +129,14 @@ export const RULE_VERSION = 2;
 // bench all read the same numbers rather than three copies of them.
 export const RULE = { localKm: MAX_LOCAL_KM, knnFloor: KNN_FLOOR };
 export const MIN_RESPONSE_DAYS = 120;
+// The day the event rise is read at, ONE for every gauge, registered here and
+// never chosen from the data (audit A3, decided 2026-09-10). The estimator it
+// replaced took the largest rise over lags 0..3 and was positive on 200 of 200
+// trials of pure noise; reading at the gauge's own peakLag measured 76 %,
+// because that lag is itself a maximum of eight. A fixed lag of 1 measures
+// 43 % — scripts/probe-response-null.mjs is the bench and must PASS after
+// any change here.
+export const EVENT_LAG_DAYS = 1;
 export const EVENT_MM = 10;
 export const MIN_EVENTS = 10;
 export const OVERVIEW_DAYS = 90;
@@ -432,17 +441,19 @@ export function arealSeries(set, from, to) {
 // ---------- 1.4 response ----------
 
 // rain: areal mm[] over [from, to]; level: Float64Array of observed daily means.
-// `eventLag` selects the event-rise estimator: 'max' (the shipped one until
-// the A3 decision — the largest daily rise over lags 0..3 after each event)
-// 'peak' (the rise at the gauge's own peakLag alone) or a number (the rise
-// at that fixed lag, the same for every gauge). The bench
-// scripts/probe-response-null.mjs measures them against pure noise.
-export function responseStats(rainMm, level, { from, to, id, nRain, unit, eventLag = 'max' }) {
+// `eventLag` selects the event-rise estimator: a number (the rise at that
+// fixed lag, the same for every gauge — EVENT_LAG_DAYS ships), 'peak' (the
+// rise at the gauge's own peakLag) or 'max' (the largest rise over lags 0..3,
+// the estimator shipped before 2026-09-10). The last two exist for the bench
+// scripts/probe-response-null.mjs, which measures all of them against noise.
+export function responseStats(rainMm, level, { from, to, id, nRain, unit, eventLag = EVENT_LAG_DAYS }) {
   const out = {
     schema: SCHEMA, id, window: { from: dayToISO(from), to: dayToISO(to), days: to - from + 1 },
     nRain, minCoveragePct: MIN_COVERAGE_PCT, align: ALIGN_NOTE,
     lags: [], peakLag: null, rPeak: null, nPeak: 0,
-    events: { thresholdMm: EVENT_MM, n: 0, risePer10mm: null },
+    // lagDays names the day the rise is read at; null for the two selected
+    // estimators, which is how a reader tells a pre-2026-09-10 file apart
+    events: { thresholdMm: EVENT_MM, n: 0, risePer10mm: null, lagDays: typeof eventLag === 'number' ? eventLag : null },
     // "rain around the gauge", not "areal rain": the set is a rain FIELD, and
     // the slope sentence is the one place on the plate that names its own input
     unit: { r: 'pearson', rise: `${unit} per 10 mm of rain around the gauge` },
@@ -469,8 +480,8 @@ export function responseStats(rainMm, level, { from, to, id, nRain, unit, eventL
   else { out.reason = 'no rain/level pair in the window'; }
 
   // Event response: how many cm does the level climb per 10 mm of rain around it?
-  // Bars above show Pearson r; this number is a slope. Two estimators, and the
-  // legend has to say which is which.
+  // Bars above show Pearson r; this number is a slope, read `eventLag` days
+  // after each event day — never the best of several days.
   const rises = [];
   for (let d = 0; d < len; d++) {
     if (rainMm[d] == null || rainMm[d] < EVENT_MM) continue;

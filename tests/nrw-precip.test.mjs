@@ -13,7 +13,7 @@ const {
   build, assignRain, buildUp, closure, precipMembers, arealDay, arealSeries, responseStats,
   usableCoords, haversineKm, cmpNo, pearson, median, quantile,
   LAT_BOX, LON_BOX, MAX_ASSIGN_KM, MAX_ORPHAN_KM, MIN_COVERAGE_PCT,
-  PLAUSIBLE_MAX_MM_DAY, MIN_SET_FOR_SERIES, MIN_RESPONSE_DAYS, MIN_EVENTS,
+  PLAUSIBLE_MAX_MM_DAY, MIN_SET_FOR_SERIES, MIN_RESPONSE_DAYS, MIN_EVENTS, EVENT_LAG_DAYS,
   MAX_LOCAL_KM, MAX_KNN_KM,
   yearStartDay, dayToISO,
 } = await import('../scripts/build-nrw-precip.mjs');
@@ -402,7 +402,27 @@ test('response: 9 events is null, 10 is a number', () => {
   assert.equal(typeof mk(MIN_EVENTS).events.risePer10mm, 'number');
 });
 
-test('response: eventLag selects the estimator — max is the shipped one, peak and a fixed lag read one delta', () => {
+test('response: on noise the shipped estimator is not systematically positive (A3, decided 2026-09-10)', () => {
+  // white rain against a random walk that never reads it, 20 seeds; the old
+  // max-over-four-lags estimator was positive on 20 of 20 (200 of 200 on the
+  // bench), so the bound is a binomial one, not a wish: P(>14 of 20 | p=0.5) ≈ 2 %
+  let positive = 0;
+  for (let s = 0; s < 20; s++) {
+    let seed = 777 + s;
+    const rnd = () => { seed = (1664525 * seed + 1013904223) >>> 0; return seed / 2 ** 32; };
+    const N = 500;
+    const rain = Array.from({ length: N }, () => Math.round(rnd() * 20));
+    const level = new Float64Array(N);
+    level[0] = 100;
+    for (let i = 1; i < N; i++) level[i] = level[i - 1] + (rnd() - 0.5) * 2;
+    const r = responseStats(rain, level, { from: 0, to: N - 1, id: 'x', nRain: 5, unit: 'cm' });
+    assert.equal(r.events.lagDays, EVENT_LAG_DAYS, 'the file names the lag the rise was read at');
+    if (r.events.risePer10mm > 0) positive++;
+  }
+  assert.ok(positive <= 14, `${positive} of 20 noise trials print a positive rise`);
+});
+
+test('response: eventLag selects the estimator — the fixed lag ships, max and peak stay measurable', () => {
   // the linear system of the test above: delta[i] = 0.8 * rain[i-1], peak at lag 1
   const N = 500;
   let seed = 12345;
@@ -412,7 +432,9 @@ test('response: eventLag selects the estimator — max is the shipped one, peak 
   level[0] = 100;
   for (let i = 1; i < N; i++) level[i] = level[i - 1] + 0.8 * rain[i - 1];
   const at = eventLag => responseStats(rain, level, { from: 0, to: N - 1, id: 'x', nRain: 5, unit: 'cm', eventLag });
-  assert.deepEqual(at(undefined), at('max'), 'the default is the shipped estimator');
+  assert.deepEqual(at(undefined), at(EVENT_LAG_DAYS), 'the default is the fixed pre-registered lag');
+  assert.equal(at(undefined).events.lagDays, 1);
+  assert.equal(at('max').events.lagDays, null, 'a selected maximum names no lag');
   assert.equal(at('peak').events.risePer10mm, 8, 'at the peak lag the linear slope is exact');
   assert.equal(at(1).events.risePer10mm, 8, 'a fixed lag of 1 reads the same slope');
   // a fixed lag that misses the response reads the next day's rain, not this one's

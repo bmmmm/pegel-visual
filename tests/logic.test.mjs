@@ -5421,6 +5421,21 @@ test('RESPONSE: a truncated artefact is a stated reason, not a page that hangs',
   assert.match(html, /\+4 per 10 mm of rain around the gauge/, 'an artefact without a unit falls back to the bare one');
 });
 
+test('RESPONSE: the sentence names the fixed lag the rise was read at, or the peak lag for an older file', async () => {
+  const app = await precipApp();
+  const withLag = app.run(`(() => {
+    state.precip.response = { ...state.precip.response, peakLag: 3, events: { thresholdMm: 10, n: 30, risePer10mm: 2.5, lagDays: 1 } };
+    return renderResponse(responseViewModel());
+  })()`);
+  assert.match(withLag, /\+2\.5 cm per 10 mm of rain around the gauge, read 1 day after the rain \(30 events/);
+  assert.ok(!/at lag 3 \(/.test(withLag), 'the rise is not attributed to the peak lag');
+  const older = app.run(`(() => {
+    state.precip.response = { ...state.precip.response, peakLag: 3, events: { thresholdMm: 10, n: 30, risePer10mm: 2.5 } };
+    return renderResponse(responseViewModel());
+  })()`);
+  assert.match(older, /\+2\.5 cm per 10 mm of rain around the gauge, .*3 \(30 events/, 'a pre-2026-09-10 file keeps its own sentence');
+});
+
 test('RESPONSE: a falling catchment prints a minus, not "+-"', async () => {
   const app = await precipApp();
   const html = app.run(`(() => {

@@ -3250,6 +3250,9 @@ const T = {
   respNeg: 'correlation below zero',
   respZero: 'no correlation',
   respPeak: 'the strongest lag',
+  // the rise is read a fixed number of days after each rain day, the same for
+  // every gauge — never at the strongest lag, which is itself a maximum
+  respRiseAfter: 'read {d} after the rain',
   // Three now, and the key HAS to keep them apart in one line each — a section
   // that cannot name its own marks does not ship. The third one is not just a
   // third number: it comes off a different resolution and a different window.
@@ -4577,6 +4580,9 @@ function responseViewModel() {
   return {
     empty: false, hourly, lags, max, peakLag: r.peakLag, rPeak, nPeak: r.nPeak || 0,
     rise, events: r.events.n || 0, threshold: r.events.thresholdMm,
+    // present since 2026-09-10; a file without it was written by the selected
+    // maximum, and the sentence says the peak lag as it did then
+    lagDays: typeof r.events.lagDays === 'number' ? r.events.lagDays : null,
     align: r.align || '', unit: (r.unit && r.unit.rise) || 'per 10 mm of rain around the gauge',
     // the collector tells "too few pairs at the peak lag" from "too few rain
     // events"; flattening both into one sentence throws away which it was
@@ -4666,10 +4672,15 @@ function renderResponse(r) {
     attr('aria-label', `${T.response}: correlation per lag 0 to 7 days, peak at lag ${r.peakLag}`));
   const axis = `<div class="rs-axis">` +
     r.lags.map(l => `<span>${l.lag}</span>`).join('') + '</div>';
-  // the sign is read, not assumed: the rise is a median of per-event maxima and
-  // is not sign-constrained, so a falling catchment would have read "+-1.2 cm"
-  const say = r.rise != null && r.peakLag != null
-    ? `<p class="say">${esc(`${r.rise >= 0 ? '+' : ''}${r.rise} ${r.unit}, ${T.respPeakAt} ${r.peakLag} (${r.events} ${plural(r.events, 'event')} ≥ ${r.threshold} mm)`)}</p>`
+  // the sign is read, not assumed: the rise is a median over events of the
+  // level change a fixed number of days after each rain day, so a falling
+  // catchment prints a minus. (Until 2026-09-10 it was a median of per-event
+  // MAXIMA over four days, which is positive on pure noise — audit A3.)
+  const when = r.lagDays != null
+    ? T.respRiseAfter.replace('{d}', `${r.lagDays} ${plural(r.lagDays, 'day')}`)
+    : `${T.respPeakAt} ${r.peakLag}`;
+  const say = r.rise != null && (r.lagDays != null || r.peakLag != null)
+    ? `<p class="say">${esc(`${r.rise >= 0 ? '+' : ''}${r.rise} ${r.unit}, ${when} (${r.events} ${plural(r.events, 'event')} ≥ ${r.threshold} mm)`)}</p>`
     : `<p class="p-dim">${esc(r.reason || T.respNoSlope)}</p>`;
   const key = plateKey([
     { sw: keySw('<rect class="rs-bar" x="3" y="2" width="6" height="8"/>'), label: T.respPos },

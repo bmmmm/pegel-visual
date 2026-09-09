@@ -4,9 +4,9 @@
 // number that is printed on every plate can be shown to say something about
 // the gauge and not about its own construction.
 //
-//   node scripts/probe-response-null.mjs                 # the shipped estimator
+//   node scripts/probe-response-null.mjs                 # the shipped estimator (EVENT_LAG_DAYS)
+//   node scripts/probe-response-null.mjs --variant max   # the estimator shipped before 2026-09-10
 //   node scripts/probe-response-null.mjs --variant peak  # rise at the gauge's own peakLag
-//   node scripts/probe-response-null.mjs --variant lag1  # rise at a fixed lag of one day
 //   node scripts/probe-response-null.mjs --variant null  # printed only above its own permutation null
 //   node scripts/probe-response-null.mjs --all
 //
@@ -27,12 +27,14 @@
 // catchment's. Exit 1 when the shipped estimator fails; the variants only
 // report.
 //
-// First run (audit finding A3): the shipped 'max' estimator, a maximum over
-// four lag candidates, had to FAIL here — a maximum of four zero-mean draws
-// is positive most of the time — and the fix was chosen from the table this
-// bench prints, not argued.
+// First run 2026-09-09 (audit finding A3): the then-shipped 'max' estimator,
+// a maximum over four lag candidates, FAILED 200 of 200 — a maximum of four
+// zero-mean draws is positive most of the time. 'peak' measured 76 %, the
+// fixed lag 43 %, the permutation null printed 3 of 200. Decided 2026-09-10:
+// the fixed lag ships (EVENT_LAG_DAYS); 'max' and 'peak' stay here as the
+// reference the decision was measured against.
 import { pathToFileURL } from 'node:url';
-import { responseStats } from './build-nrw-precip.mjs';
+import { responseStats, EVENT_LAG_DAYS } from './build-nrw-precip.mjs';
 import { parseArgs } from './lib/cli.mjs';
 
 export const TRIALS = 200;
@@ -56,7 +58,7 @@ export function trialInput(seed, n = N_DAYS) {
 }
 
 const stats = (rain, level, eventLag) =>
-  responseStats(rain, level, { from: 0, to: rain.length - 1, id: 'null', nRain: 5, unit: 'cm', eventLag });
+  responseStats(rain, level, { from: 0, to: rain.length - 1, id: 'null', nRain: 5, unit: 'cm', ...(eventLag === undefined ? {} : { eventLag }) });
 
 function shuffled(xs, rnd) {
   const a = xs.slice();
@@ -66,12 +68,14 @@ function shuffled(xs, rnd) {
 
 // one number per trial, or null when the variant declines to print one
 export const VARIANTS = {
-  // the shipped estimator: the largest rise over lags 0..3 after each event
+  // what ships: the rise at EVENT_LAG_DAYS, read through the default
+  shipped: ({ rain, level }) => stats(rain, level, undefined).events.risePer10mm,
+  // the estimator shipped before 2026-09-10: the largest rise over lags 0..3
   max: ({ rain, level }) => stats(rain, level, 'max').events.risePer10mm,
   // the rise at the gauge's own peakLag alone — one lag per gauge, but that
   // lag is itself the maximum of eight correlations
   peak: ({ rain, level }) => stats(rain, level, 'peak').events.risePer10mm,
-  // the rise at lag 1 for every gauge — a lag registered here, never chosen
+  // a fixed lag of 1 spelled out, so the table shows the number the default is
   lag1: ({ rain, level }) => stats(rain, level, 1).events.risePer10mm,
   // the shipped number, printed only when it clears the 95th percentile of
   // the same estimator on NULL_PERMUTATIONS shuffles of the rain
@@ -113,13 +117,13 @@ export const line = r => `${r.name.padEnd(5)} null-control: ${r.trials} trials �
 
 function main(argv) {
   const { flag, has } = parseArgs(argv.slice(2));
-  const want = has('all') ? Object.keys(VARIANTS) : [flag('variant') || 'max'];
+  const want = has('all') ? Object.keys(VARIANTS) : [flag('variant') || 'shipped'];
   let shippedFailed = false;
   for (const name of want) {
     if (!VARIANTS[name]) throw new Error(`unknown variant ${name}; one of ${Object.keys(VARIANTS).join(', ')}`);
     const r = runVariant(name);
     console.log(line(r));
-    if (name === 'max' && !r.pass) shippedFailed = true;
+    if (name === 'shipped' && !r.pass) shippedFailed = true;
   }
   return shippedFailed ? 1 : 0;
 }

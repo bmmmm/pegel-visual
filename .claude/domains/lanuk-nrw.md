@@ -219,8 +219,9 @@ Note also that the baseline is only consulted when there IS a HEAD to differ
 from — a fresh branch or a fork has no rule change to check, and the floors in
 `checkPrecipShape` are what stand there instead.
 
-**`risePer10mm` is sign-biased, measured 2026-09-09 (audit A3), decision
-pending.** The event rise the RESPONSE block prints is the largest daily rise
+**`risePer10mm` was sign-biased, measured 2026-09-09 (audit A3); since
+2026-09-10 it is read at ONE pre-registered lag.** The event rise the RESPONSE
+block printed until then was the largest daily rise
 over lags 0..3 after each ≥ 10 mm day, then the median over events. A maximum
 of four zero-mean draws is positive most of the time: on 200 seeded trials of
 white rain against a random-walk level that never reads the rain, the shipped
@@ -232,9 +233,15 @@ only — measures **76 %**, because `peakLag` is itself the maximum of eight
 correlations; a lag fixed at 1 d for every gauge measures 43 %, and printing
 only above the 95th percentile of 100 rain permutations prints 3 of 200. The
 `index.html` comment calling the number "not sign-constrained" is false as
-long as the estimator is the shipped one. Which of these ships, or whether the
-number goes, is a product decision; `responseStats` carries an `eventLag`
-option so the choice is one argument, and the bench must PASS after it.
+long as the estimator was that one. **Decision 2026-09-10 (the human's, with
+this table): the fixed lag ships** — `EVENT_LAG_DAYS = 1` in
+`build-nrw-precip.mjs`, the same day for every gauge, never chosen from the
+data (the same shape as the hourly product's "a class, never an hour").
+`response.json` names it as `events.lagDays`; a file without that field was
+written by the old maximum and the plate keeps its old sentence for it.
+`RULE_VERSION` did NOT move: it versions the MEMBERSHIP with N8's
+baselines, and the sets are untouched. The bench PASSes at 43 % and keeps
+`max` and `peak` as the reference the decision was measured against.
 
 ## The hourly response class (`scripts/build-nrw-hourly-lag.mjs`, `nrw/hourly/lag.json`, gate rule N9)
 
