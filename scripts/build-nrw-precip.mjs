@@ -432,7 +432,12 @@ export function arealSeries(set, from, to) {
 // ---------- 1.4 response ----------
 
 // rain: areal mm[] over [from, to]; level: Float64Array of observed daily means.
-export function responseStats(rainMm, level, { from, to, id, nRain, unit }) {
+// `eventLag` selects the event-rise estimator: 'max' (the shipped one until
+// the A3 decision — the largest daily rise over lags 0..3 after each event)
+// 'peak' (the rise at the gauge's own peakLag alone) or a number (the rise
+// at that fixed lag, the same for every gauge). The bench
+// scripts/probe-response-null.mjs measures them against pure noise.
+export function responseStats(rainMm, level, { from, to, id, nRain, unit, eventLag = 'max' }) {
   const out = {
     schema: SCHEMA, id, window: { from: dayToISO(from), to: dayToISO(to), days: to - from + 1 },
     nRain, minCoveragePct: MIN_COVERAGE_PCT, align: ALIGN_NOTE,
@@ -470,9 +475,16 @@ export function responseStats(rainMm, level, { from, to, id, nRain, unit }) {
   for (let d = 0; d < len; d++) {
     if (rainMm[d] == null || rainMm[d] < EVENT_MM) continue;
     let rise = null;
-    for (let lag = 0; lag <= 3; lag++) {
-      const dv = delta(d + lag);
-      if (dv != null && (rise === null || dv > rise)) rise = dv;
+    if (eventLag === 'peak') {
+      if (out.peakLag == null) break;
+      rise = delta(d + out.peakLag);
+    } else if (typeof eventLag === 'number') {
+      rise = delta(d + eventLag);
+    } else {
+      for (let lag = 0; lag <= 3; lag++) {
+        const dv = delta(d + lag);
+        if (dv != null && (rise === null || dv > rise)) rise = dv;
+      }
     }
     if (rise == null) continue;
     rises.push(rise / (rainMm[d] / 10));
