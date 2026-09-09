@@ -3616,6 +3616,15 @@ function elevOf(w, cur) {
 // into those terms — never the other way round, so a printed number always
 // carries the gauge's own unit.
 const toCm = (v, unit = gaugeUnit()) => (v == null ? null : isCmUnit(unit) ? v : v * 100);
+// The smallest step a gauge reports in: a whole centimetre, or a hundredth of
+// a metre. Every floor below that once said "at least 1" meant one STEP — a
+// σ floor, a pixel span, a heat-ramp span — and written as the bare 1 it
+// clamped a metre gauge's whole 0.4 m year into a single bin, drew its
+// highest reading half way up a 1 m axis, and made |z| ≥ 1 unreachable.
+const unitStep = (unit = gaugeUnit()) => (isCmUnit(unit) ? 1 : 0.01);
+// the numeric twin of fmtLevel, for values that stay numbers until drawn
+const roundLevel = (v, unit = gaugeUnit()) =>
+  v == null ? null : isCmUnit(unit) ? Math.round(v) : Math.round(v * 100) / 100;
 
 // ---------- history range (adjustable sparkline window) ----------
 
@@ -4208,7 +4217,7 @@ function renderHistory(h) {
   }
   const { lo, hi, min, max } = h.series;
   const n = lo.length;
-  const span = Math.max(max - min, 1);
+  const span = Math.max(max - min, unitStep());
   const X = i => (n > 1 ? (i / (n - 1)) * HIST_W : 0);
   const Y = v => max === min ? HIST_H / 2 : (1 - (v - min) / span) * HIST_H;
   // Contiguous runs of columns that carry a reading. A column the gauge was
@@ -5037,7 +5046,8 @@ function cellMean(arr, d0, d1) {
 // a viewed past year stays in its own reference — no per-year leave-one-out,
 // which would skew more than help across the few years typically available),
 // and robust absolute-scale bounds (2nd..98th percentile resists WSV outliers)
-function buildHistStats(pts, nowMs) {
+function buildHistStats(pts, nowMs, unit = gaugeUnit()) {
+  const step = unitStep(unit);
   const daily = dailyMeans(pts);
   const curYear = new Date(nowMs).getUTCFullYear();
   const byYear = new Map();
@@ -5064,12 +5074,13 @@ function buildHistStats(pts, nowMs) {
     const s = [...vals].sort((a, b) => a - b);
     const mu = mean(vals);
     const sd = Math.sqrt(mean(vals.map(v => (v - mu) ** 2)));
-    // sd floor of 1 cm keeps z-scores sane on rock-steady impounded gauges
-    return { min: s[0], max: s[s.length - 1], med: quantile(s, 0.5), mean: mu, sd: Math.max(sd, 1) };
+    // sd floor of one step (1 cm, or 0.01 m) keeps z-scores sane on
+    // rock-steady impounded gauges
+    return { min: s[0], max: s[s.length - 1], med: quantile(s, 0.5), mean: mu, sd: Math.max(sd, step) };
   });
   const allSorted = daily.map(p => p.v).sort((a, b) => a - b);
   let lo = quantile(allSorted, 0.02), hi = quantile(allSorted, 0.98);
-  if (lo != null && hi - lo < 4) { lo = allSorted[0]; hi = allSorted[allSorted.length - 1]; }
+  if (lo != null && hi - lo < 4 * step) { lo = allSorted[0]; hi = allSorted[allSorted.length - 1]; }
   return {
     daily, byYear, years, curYear, clim, lo, hi, allSorted,
     allMin: allSorted.length ? allSorted[0] : null,
@@ -5130,7 +5141,7 @@ const HIST_MIN_DAYS = 45; // below this the sections are noise — show a note i
 // those cover, and the current month's climatological mean with the σ-distance to
 // it. null whenever the archive is too thin to say anything honest — same
 // threshold the years view uses before it draws its sections.
-function unusualStats(st, cm, monthIdx) {
+function unusualStats(st, cm, monthIdx, unit = gaugeUnit()) {
   if (!st || !Number.isFinite(cm)) return null;
   const sorted = st.allSorted || [];
   if (sorted.length < HIST_MIN_DAYS) return null;
@@ -5140,15 +5151,18 @@ function unusualStats(st, cm, monthIdx) {
   while (a < b) { const m = (a + b) >> 1; if (sorted[m] <= cm) a = m + 1; else b = m; }
   const c = st.clim[monthIdx];
   return {
-    cm: Math.round(cm),
+    cm: roundLevel(cm, unit),
+    unit,
     pct: Math.round((a / sorted.length) * 100),
     years: st.years.length,
     // the first archived year, so the plate can say "since 1999" instead of
     // asking the reader to subtract 26 from this year themselves
     fromYear: st.years.length ? st.years[0] : null,
     month: monthIdx,
-    // no completed year covering this month yet → no climatology to compare against
-    climMean: c ? Math.round(c.mean) : null,
+    // no completed year covering this month yet → no climatology to compare
+    // against. Unrounded: the insight sentence subtracts it from the reading,
+    // and a mean rounded to "56" turned a 0.14 m anomaly into 0.54.
+    climMean: c ? c.mean : null,
     z: c ? (cm - c.mean) / c.sd : null,
   };
 }
@@ -5161,11 +5175,13 @@ const ordinal = n => n + (n % 100 >= 11 && n % 100 <= 13 ? 'th' : ['th', 'st', '
 function unusualText(u, compact) {
   if (!u) return '';
   const rank = `${ordinal(u.pct)} pct of ${u.years}y`;
-  if (u.climMean == null) return compact ? rank : `${u.cm} cm · ${rank}`;
+  const lvl = levelWithUnit(u.cm, u.unit);
+  if (u.climMean == null) return compact ? rank : `${lvl} · ${rank}`;
   const sig = `${u.z >= 0 ? '+' : ''}${u.z.toFixed(1)}σ`;
+  const mean = fmtLevel(u.climMean, u.unit);
   return compact
-    ? `${rank} · ${MONTH_ABBR[u.month]} ⌀${u.climMean} ${sig}`
-    : `${u.cm} cm · ${rank} · ${MONTH_ABBR[u.month]} mean ${u.climMean} (${sig})`;
+    ? `${rank} · ${MONTH_ABBR[u.month]} ⌀${mean} ${sig}`
+    : `${lvl} · ${rank} · ${MONTH_ABBR[u.month]} mean ${mean} (${sig})`;
 }
 
 // the live reading judged against this station's own archive, or null when there
@@ -5183,8 +5199,8 @@ function unusualNow() {
 // construction. Direction in anomaly mode adds a hatch as its second channel,
 // so meaning never rides on hue alone once the glyphs are gone.
 const HEAT_BINS = 4;
-function heatBinAbs(v, lo, hi) {
-  const f = (v - lo) / Math.max(hi - lo, 1);
+function heatBinAbs(v, lo, hi, step = 1) {
+  const f = (v - lo) / Math.max(hi - lo, step);
   return Math.max(0, Math.min(HEAT_BINS - 1, Math.floor(f * HEAT_BINS)));
 }
 function heatBinAnom(z) {
@@ -5223,18 +5239,18 @@ function yearsViewModel() {
       const z = c ? (v - c.mean) / c.sd : null;
       const heat = histMode === 'anom'
         ? (z == null ? { bin: -1, dir: 0 } : heatBinAnom(z))
-        : { bin: heatBinAbs(v, st.lo, st.hi), dir: 0 };
+        : { bin: heatBinAbs(v, st.lo, st.hi, unitStep()), dir: 0 };
       cells.push({
-        m, v: Math.round(v), z, bin: heat.bin, dir: heat.dir,
+        m, v: roundLevel(v), z, bin: heat.bin, dir: heat.dir,
         label: `${MONTH_NAME[m]} ${y}: ${levelWithUnit(v)}` +
           (z != null ? `, ${Math.abs(z).toFixed(1)} sigma ${z >= 0 ? 'above' : 'below'} the long-term ${MONTH_NAME[m]} mean` : ''),
       });
     }
     const vals = (arr || []).filter(v => v != null);
-    return { y, sel: y === selYear, cells, mean: vals.length ? Math.round(mean(vals)) : null };
+    return { y, sel: y === selYear, cells, mean: vals.length ? roundLevel(mean(vals)) : null };
   });
   vm.readout = yearsReadout(st);
-  vm.clim = st.clim.map((c, m) => c ? { m, min: Math.round(c.min), max: Math.round(c.max), med: Math.round(c.med) } : null);
+  vm.clim = st.clim.map((c, m) => c ? { m, min: roundLevel(c.min), max: roundLevel(c.max), med: roundLevel(c.med) } : null);
   // the day-of-year overlay: every year as a faint cloud, the picked one bold
   vm.overlay = {
     min: st.allMin, max: st.allMax,
@@ -5246,7 +5262,7 @@ function yearsViewModel() {
   vm.curYear = st.curYear;
   vm.curMonthly = Array.from({ length: 12 }, (_, m) =>
     curArr ? cellMean(curArr, monthDoy(st.curYear, m), monthDoy(st.curYear, m + 1)) : null)
-    .map(v => v == null ? null : Math.round(v));
+    .map(v => v == null ? null : roundLevel(v));
   return vm;
 }
 
@@ -5265,10 +5281,10 @@ function yearsReadout(st) {
   const z = c ? (mu - c.mean) / c.sd : null;
   return {
     empty: false, y, m,
-    mean: Math.round(mu), min: Math.round(mn), max: Math.round(mx),
-    climMean: c ? Math.round(c.mean) : null, z,
-    say: `${MONTH_NAME[m]} ${y} averaged ${Math.round(mu)} cm, ranging ${Math.round(mn)}–${Math.round(mx)} cm.` +
-      (z != null ? ` That is ${Math.abs(z).toFixed(1)} σ ${z >= 0 ? 'above' : 'below'} the long-term ${MONTH_NAME[m]} mean of ${Math.round(c.mean)} cm.` : ''),
+    mean: roundLevel(mu), min: roundLevel(mn), max: roundLevel(mx),
+    climMean: c ? roundLevel(c.mean) : null, z,
+    say: `${MONTH_NAME[m]} ${y} averaged ${levelWithUnit(mu)}, ranging ${fmtLevel(mn)}–${levelWithUnit(mx)}.` +
+      (z != null ? ` That is ${Math.abs(z).toFixed(1)} σ ${z >= 0 ? 'above' : 'below'} the long-term ${MONTH_NAME[m]} mean of ${levelWithUnit(c.mean)}.` : ''),
   };
 }
 
@@ -5611,7 +5627,7 @@ function waveViewModel(w) {
       // each row is scaled to its own gauge anyway, so a metre gauge only needs
       // its readout to say what it is
       cells: vals.map((v, i) => Number.isFinite(v)
-        ? { bin: hi > lo ? heatBinAbs(v, lo, hi) : 1, v: Math.round(v),
+        ? { bin: hi > lo ? heatBinAbs(v, lo, hi, unitStep(row.unit)) : 1, v: roundLevel(v, row.unit),
             label: `${row.name}, ${isoDay(dayAt(i))}: ${levelWithUnit(v, row.unit)}` }
         : { bin: -1, v: null, label: `${row.name}, ${isoDay(dayAt(i))}: no reading` }),
     };

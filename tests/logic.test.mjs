@@ -3911,6 +3911,77 @@ test('a metre gauge is printed in metres, everywhere it is printed', () => {
   assert.equal(/level [\d.]+ cm/.test(out.aria), false, `no level in cm: ${out.aria}`);
 });
 
+// The test above never reached the archive-fed blocks: two archive points stay
+// under HIST_MIN_DAYS, so the readout, the terse line and the years plate were
+// never rendered — and all of them still said "57 cm · … JUL mean 56". With a
+// three-year archive in metres, every printed level must carry the metres,
+// and every "at least 1" floor (sd, pixel span, heat span) must mean one
+// hundredth, not one whole metre.
+test('a metre gauge stays in metres once the archive is deep enough to judge it', () => {
+  const app = loadApp({ now: JULY, search: '?station=WALTROP' });
+  const out = app.run(`(() => {
+    state.info = { water: { shortname: 'DHK' }, km: 2.144, latitude: 51.64, longitude: 7.38 };
+    state.gauge = {
+      unit: 'm+NN',
+      currentMeasurement: { value: 56.54, timestamp: ${JULY}, stateMnwMhw: 'unknown' },
+      characteristicValues: [],
+    };
+    const pts = [];
+    for (let y = 2024; y <= 2026; y++) {
+      const end = y === 2026 ? ${JULY} : Date.UTC(y + 1, 0, 1);
+      for (let ts = Date.UTC(y, 0, 1); ts < end; ts += 864e5) {
+        const doy = Math.floor((ts - Date.UTC(y, 0, 1)) / 864e5);
+        // a canal reach: 56.20 … 56.60 m+NN over the year, a 0.4 m range
+        const v = 56.4 + 0.2 * Math.cos(2 * Math.PI * doy / 365);
+        pts.push([ts + 6 * 36e5, v - 0.01], [ts + 18 * 36e5, v + 0.01]);
+      }
+    }
+    state.archive = pts; histCache = null;
+    state.neighbors = [];
+    historyKey = 'all';
+    const st = histStats();
+    const u = unusualNow();
+    const vm = stationViewModel();
+    const html = renderStation(vm);
+    histFocus = { y: 2025, m: 6 };
+    const yvm = yearsViewModel();
+    const yhtml = renderYears(yvm);
+    return { u, terse: unusualText(u, false), compact: unusualText(u, true), say: insightSentence(u, 56.54),
+      html, yhtml, sd: st.clim[6].sd, lo: st.lo, hi: st.hi, readout: yvm.readout,
+      bins: new Set(yvm.rows.flatMap(r => r.cells.map(c => c.bin)).filter(b => b >= 0)).size,
+      minMax: { min: vm.history.series.min, max: vm.history.series.max } };
+  })()`);
+
+  assert.ok(out.u, 'three archived years are enough to judge against');
+  assert.equal(out.u.cm, 56.54, 'the level keeps its hundredths, it is not rounded to a whole metre');
+  assert.match(out.terse, /^56\.54 m\+NN · \d+(st|nd|rd|th) pct of 3y · JUL mean 56\.\d\d \([+-][\d.]+σ\)$/,
+    `the terse line prints the gauge's unit: "${out.terse}"`);
+  assert.match(out.compact, /⌀56\.\d\d /, `so does the compact one: "${out.compact}"`);
+  assert.ok(!/ cm\b/.test(out.terse) && !/ cm\b/.test(out.say), 'nothing on the readout says cm');
+  // the July mean of the fixture is ~56.20; the anomaly is 0.34 m, which a
+  // mean rounded to "56" would have stretched to 0.54
+  assert.match(out.say, /<b>0\.3\d m\+NN<\/b> above the usual <b>56\.2\d m\+NN<\/b>/, out.say);
+  assert.ok(out.sd < 0.05, `the σ floor is one hundredth of a metre, not one metre: sd ${out.sd}`);
+  assert.ok(Math.abs(out.u.z) >= 1, `0.34 m above a ~0.01 m σ is clearly wet, z ${out.u.z}`);
+  assert.match(out.say, /clearly wet/);
+  // the history drawing: min and max are 0.4 m apart, so the highest reading
+  // must sit at the top of the drawing, not half way up a 1 m span
+  // anchored to the drawing's own polyline, not the key's swatch (whose
+  // sample points reach y=2 whatever the data does)
+  const at = out.html.indexOf('class="chart hist"');
+  const chart = out.html.slice(at, out.html.indexOf('</svg>', at));
+  const line = chart.match(/<polyline class="h-line" points="([^"]+)"/);
+  assert.ok(line, 'the history plots a polyline');
+  const ys = line[1].split(' ').map(p => +p.split(',')[1]);
+  assert.ok(ys.length > 10, 'over more than ten columns');
+  assert.ok(Math.min(...ys) < 2, `the top reading reaches the top edge (y=${Math.min(...ys)})`);
+  // the heat table: a 0.4 m range fills all four bins, not one
+  assert.equal(out.bins, 4, 'the years heat table spreads a 0.4 m range over four bins');
+  assert.match(out.readout.say, /^July 2025 averaged 56\.\d\d m\+NN, ranging 56\.\d\d–56\.\d\d m\+NN\./, out.readout.say);
+  assert.ok(!/\b5[67] cm\b/.test(out.yhtml), 'the years plate prints no whole-metre "cm" anywhere');
+  assert.match(out.yhtml, /56\.\d\d m\+NN/, 'and names the unit');
+});
+
 test('a centimetre gauge is unchanged by any of it', () => {
   const app = loadApp({ now: NOON });
   const out = app.run(`(() => {
