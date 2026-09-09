@@ -3577,9 +3577,27 @@ const tableAt = (html, cls) => {
 // in words instead.
 const NOT_A_MARK = new Set(['scene', 'chart', 'hist', 'profile', 'precip', 'response', 'hit', 'stuck', 'aground']);
 
-const assertNamed = (drawing, key, what) => {
-  const missing = [...classesIn(drawing)].filter(c => !NOT_A_MARK.has(c) && !key.has(c));
+// The chip machinery a key is built from — <span class="lg">, the name, the
+// percentage, the swatch <svg> — none of it is a mark.
+// `warn` marks a NOTE in the key (<dd class="warn">), not a mark in the drawing.
+const KEY_CHROME = new Set(['p-key', 'lg', 'lgn', 'lgp', 'lg-bar', 'sw', 'swr', 'hsw', 'ksw', 'note', 'warn', 'diverge']);
+
+// `both` also asserts the way back: every mark the key NAMES is really drawn.
+// Checking one direction only let a mark fall out of the drawing while the key
+// kept promising it — measured 2026-09-09: dropping the history band from the
+// chart and leaving its swatch in the key kept the whole suite green (238/0).
+// It is opt-in because some keys legitimately spell out a VOCABULARY rather
+// than an inventory: ?river=ERFT names k-low and k-high so the reader knows the
+// glyphs, on a day when no gauge stands low or high. Pass `both` wherever the
+// key entry hangs on the same condition as the drawing — there, a named mark
+// that is not drawn is a bug.
+const assertNamed = (drawing, key, what, both = false) => {
+  const drawn = classesIn(drawing);
+  const missing = [...drawn].filter(c => !NOT_A_MARK.has(c) && !key.has(c));
   assert.deepEqual(missing, [], `${what}: every mark drawn is named in the key`);
+  if (!both) return;
+  const unkept = [...key].filter(c => !KEY_CHROME.has(c) && !drawn.has(c));
+  assert.deepEqual(unkept, [], `${what}: every mark the key names is really drawn`);
 };
 
 test('the scene names every mark it draws, in every weather it draws', () => {
@@ -3604,21 +3622,21 @@ test('the scene names every mark it draws, in every weather it draws', () => {
   assert.equal(night.flags.night, true, 'the fixture really is a night');
   assert.equal(night.flags.drought, true, 'and really is below mean low water');
   assert.ok(night.moon != null, 'so the moon is drawn');
-  assertNamed(svgAt(night.html), keyClasses(night.html), 'clear night, low water');
+  assertNamed(svgAt(night.html), keyClasses(night.html), 'clear night, low water', true);
 
   // 2. a bright dry noon: the sun instead of the sky
   const sun = seed(loadApp({ now: NOON }), 100,
     'state.weather = { cloud_cover: 5, precipitation: 0, snowfall: 0, wind_speed_10m: 4 };');
   assert.equal(sun.flags.night, false);
   assert.ok(sun.html.includes('class="sun"'), 'the sun is on the drawing');
-  assertNamed(svgAt(sun.html), keyClasses(sun.html), 'clear dry noon');
+  assertNamed(svgAt(sun.html), keyClasses(sun.html), 'clear dry noon', true);
 
   // 3. a flood in the rain, blowing hard: clouds, rain, waves, a boat
   const flood = seed(loadApp({ now: NOON }), 900,
     'state.weather = { cloud_cover: 90, precipitation: 3, snowfall: 0, wind_speed_10m: 40 };');
   assert.equal(flood.flags.flood, true);
   assert.equal(flood.flags.windy, true);
-  assertNamed(svgAt(flood.html), keyClasses(flood.html), 'windy flood');
+  assertNamed(svgAt(flood.html), keyClasses(flood.html), 'windy flood', true);
 
   // 4. a frozen river under snow: floes instead of waves
   const ice = seed(loadApp({ now: NOON }), 300,
@@ -3626,7 +3644,7 @@ test('the scene names every mark it draws, in every weather it draws', () => {
   assert.equal(ice.flags.icy, true);
   assert.equal(ice.flags.snow, true);
   assert.ok(ice.html.includes('class="floe"'), 'floes are on the drawing');
-  assertNamed(svgAt(ice.html), keyClasses(ice.html), 'iced over, snowing');
+  assertNamed(svgAt(ice.html), keyClasses(ice.html), 'iced over, snowing', true);
 
   // and the key does not invent marks the drawing never made: no sun at night
   assert.equal(night.html.includes('class="sun"'), false, 'no sun in the night key');
@@ -3671,7 +3689,7 @@ test('the history plate names every mark it draws, in every window it draws', ()
   const gate = (r, what) => {
     assert.equal(r.h.empty, false, `${what}: the fixture draws a chart`);
     assert.ok(r.html.includes('class="h-fill"'), `${what}: the water body is drawn`);
-    assertNamed(histSvg(r.html), keyClasses(r.html), what);
+    assertNamed(histSvg(r.html), keyClasses(r.html), what, true);
   };
 
   // 1. thirty days of hourly readings: more readings than columns, so a band
@@ -4573,7 +4591,7 @@ test('PRECIPITATION: every mark it draws is named in its own key, and a new one 
   const app = await precipApp();
   const html = app.run(`(() => { historyKey = '30d'; return renderPrecip(precipViewModel()); })()`);
   const svg = svgAt(html, html.lastIndexOf('<svg', html.indexOf('class="chart precip"')));
-  assertNamed(svg, keyClasses(html), 'the precipitation plate');
+  assertNamed(svg, keyClasses(html), 'the precipitation plate', true);
   // put the fix back out: a mark the key does not carry must fail
   const broken = svg.replace('class="pr-bar"', 'class="pr-ghost"');
   assert.throws(() => assertNamed(broken, keyClasses(html), 'x'), /every mark drawn is named/);
@@ -4798,7 +4816,7 @@ test('RESPONSE: the peak is marked, and the sentence names the other estimator',
   assert.match(html, /\+13\.4 cm per 10 mm of rain around the gauge, peaking at lag 1 \(58 events ≥ 10 mm\)/);
   assert.match(html, /three estimators: the bars are Pearson r over DAYS, the sentence is a slope per rain event, and the response time is a class measured on HOURLY data/);
   assert.match(html, /r = 0\.59 over 700 days/);
-  assertNamed(svg, keyClasses(html), 'the response plate');
+  assertNamed(svg, keyClasses(html), 'the response plate', true);
 });
 
 test('RESPONSE: a weak or thin relationship warns instead of reading as a measurement', async () => {

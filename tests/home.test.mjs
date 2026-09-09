@@ -315,7 +315,9 @@ test('the fixture is a full 30-day window, or these tests prove nothing', () => 
 });
 
 test('the scenario names a clock, and it is the one the tests run on', () => {
-  assert.equal(Date.parse(scenario.clock), CLOCK);
+  // not equal(Date.parse(scenario.clock), CLOCK) — CLOCK is that very
+  // expression, and equal(NaN, NaN) passes, so an unparseable clock would sail
+  assert.ok(Number.isFinite(CLOCK), `scenario.clock ${scenario.clock} is not an instant`);
   assert.equal(scenario.station, 'BONN');
   const app = loadApp({ search: '', now: CLOCK });
   assert.equal(app.run('Date.now()'), CLOCK);

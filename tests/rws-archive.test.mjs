@@ -113,13 +113,11 @@ test('fetchStation reports the failed years it swallowed', async () => {
   assert.equal(dead.failed, 1, 'the swallowed year is still reported to the caller');
   assert.equal(dead.years.size, 0);
   // this pair — no points, and a year that explicitly failed — is what the
-  // caller now classifies as a failed station rather than a fetched one
-  assert.ok(dead.pts === 0 && dead.failed > 0, 'asked for, errored, nothing back');
+  // caller classifies as a failed station rather than a fetched one
 
   // an empty-but-healthy answer is NOT a failure: nothing errored, so a silent
   // gauge must not turn a run red
   const quiet = await fetchStation(st, 2026, 2026, async () => ({ status: 204 }));
   assert.equal(quiet.pts, 0);
   assert.equal(quiet.failed, 0, 'a 204 is an answer, not an error');
-  assert.ok(!(quiet.pts === 0 && quiet.failed > 0), 'a quiet gauge stays green');
 });

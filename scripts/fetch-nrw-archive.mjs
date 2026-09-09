@@ -361,7 +361,6 @@ export function mezParts(ts) {
   return { y: x.getUTCFullYear(), m: x.getUTCMonth() + 1, d: x.getUTCDate(), hh: x.getUTCHours(), mm: x.getUTCMinutes() };
 }
 
-export const dayIndex = (y, m, d) => (Date.UTC(y, m - 1, d) - Date.UTC(y, 0, 1)) / 864e5;
 export const isoDay = (y, d) => new Date(Date.UTC(y, 0, 1) + d * 864e5).toISOString().slice(0, 10);
 
 // the (year, day index) a stamp belongs to under a day boundary: a rain stamp

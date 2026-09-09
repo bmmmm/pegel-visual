@@ -209,7 +209,6 @@ export function pearson(xs, ys) {
 export const dayNum = (y, m, d) => Date.UTC(y, m - 1, d) / DAY_MS;
 export const yearStartDay = y => Date.UTC(y, 0, 1) / DAY_MS;
 export const dayToISO = a => new Date(a * DAY_MS).toISOString().slice(0, 10);
-export const isoToDay = iso => Date.parse(iso + 'T00:00:00Z') / DAY_MS;
 
 // ---------- reading the tree ----------
 
