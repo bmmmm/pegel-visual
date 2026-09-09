@@ -23,9 +23,17 @@ const {
   hourlyAxis, rotateLevel, rotationShifts, benjaminiHochberg, classOf, reasonFor,
   inputsDigest, hiresFiles, dailyGauges,
   CLASSES, MIN_PEAK_R, ROTATIONS, FDR_Q, ROTATION_GUARD_H, MAX_LAG_H,
-  LAG_RULE_VERSION, MIN_RAIN_HOUR_FRAC,
+  LAG_RULE_VERSION, MIN_RAIN_HOUR_FRAC, WINDOW_H,
 } = await import('../scripts/build-nrw-hourly-lag.mjs');
 const { RULE_VERSION } = await import('../scripts/build-nrw-precip.mjs');
+// The gate reads what this builder writes. Importing it here is the point: the
+// two were written apart, and until this seam existed a change to the file's
+// own timestamp format left all 611 tests green while the shipped file became
+// unreadable to N9 — caught in CI, which is the step standing in front of a
+// push whose data perishes.
+const {
+  checkHourlyShape, MIN_HOURLY_PUBLISHED, MIN_HOURLY_WINDOW_HOURS, MAX_HOURLY_WINDOW_HOURS,
+} = await import('../scripts/check-nrw-consistency.mjs');
 
 // ---------- fixture ----------
 
@@ -150,6 +158,25 @@ test('THE TRAP: a rotation by the window length is the identity', () => {
   assert.notDeepEqual([...rotateLevel(level, 10, 12, 1)].sort(), [...level].sort());
 });
 
+test('THE OTHER TRAP: hours outside the window are dropped, not folded into the null', () => {
+  // The mirror holds more history than the window analyses — a median of 1598
+  // hours against 1512, so 85 sit before `from`. Folding them in puts a
+  // correctly-aligned rain/level pair inside the null, which is the one thing a
+  // null may not contain. It stayed invisible for a while because the map
+  // iterates ascending and a gap-free in-window series overwrites the folded
+  // values; that is an unstated invariant, not a defence.
+  const level = new Map([[7, 70], [8, 80], [9, 90], [10, 1], [11, 2], [12, 3]]);
+  const r = rotateLevel(level, 10, 12, 1);
+  assert.deepEqual([...r.keys()].sort((a, b) => a - b), [10, 11, 12], 'no hour outside [from, to] survives');
+  assert.deepEqual([...r.values()].sort((a, b) => a - b), [1, 2, 3], 'and no value from outside leaks in');
+  // …including when the in-window series has a GAP, which is exactly the case
+  // the overwrite used to hide
+  const gappy = new Map([[7, 70], [8, 80], [10, 1], [12, 3]]);
+  const g = rotateLevel(gappy, 10, 12, 1);
+  assert.equal(g.size, 2, 'a gap must stay a gap rather than being filled from before the window');
+  assert.ok(![...g.values()].some(v => v >= 70), 'a pre-window value in the null is the bug this guards');
+});
+
 test('the rotation set never contains the identity, and honours its guard band', () => {
   const span = 1597;
   const shifts = rotationShifts(span);
@@ -175,6 +202,19 @@ test('the rotation set is DETERMINISTIC — a Math.random() here would kill --ch
 test('a window too short to rotate safely gets no rotations at all, rather than bad ones', () => {
   assert.deepEqual(rotationShifts(2 * ROTATION_GUARD_H), []);
   assert.deepEqual(rotationShifts(10), []);
+  // AND the case in between, which is the dangerous one: the guard band leaves
+  // room, so the naive test `hi > lo` passes, but the shifts collide. 337 h
+  // gives a band ONE hour wide and 99 shifts of which 2 are distinct — a null
+  // with a hundredth of the draws it claims, invisible downstream because the
+  // count would still read 99.
+  const narrow = 2 * ROTATION_GUARD_H + 1;
+  assert.ok(narrow - ROTATION_GUARD_H > ROTATION_GUARD_H, 'the naive room test really does pass here');
+  assert.deepEqual(rotationShifts(narrow), [], 'and it is refused anyway');
+  // the exact boundary: 99 distinct shifts need a band 100 h wide
+  const need = 2 * ROTATION_GUARD_H + ROTATIONS + 1;
+  assert.equal(rotationShifts(need).length, ROTATIONS);
+  assert.equal(new Set(rotationShifts(need)).size, ROTATIONS);
+  assert.deepEqual(rotationShifts(need - 1), []);
 });
 
 // ---------- the correction ----------
@@ -426,6 +466,134 @@ test('the digest reads the tree in one fixed order, whatever the filesystem hand
   } finally { rmSync(a, { recursive: true, force: true }); rmSync(b, { recursive: true, force: true }); }
 });
 
+// ---------- the seams: what the builder writes is what the gate and the plate read ----------
+
+test('SEAM: what the builder writes passes the gate that guards it', () => {
+  const r = build();
+  // The fixture is far under the published floor, so the floor and the window
+  // rules are relaxed to the fixture's own size — everything else is the real
+  // clause, including the timestamp format, the class shape, the rule ranges,
+  // the provenance fields and the accounting identity.
+  const v = checkHourlyShape(r.doc, {
+    topologyGauges: Object.fromEntries(SPECS.map(s => [s.no, {}])),
+    precip: Object.fromEntries(SPECS.map(s => [s.no, { series: true }])),
+    minPublished: 1, minWindowHours: 1, maxWindowHours: 1e6,
+    // no clock: freshness is about the mirror, not about a fixture
+  });
+  assert.deepEqual(v, [], v.join('\n'));
+});
+
+test('SEAM: the window stamps the builder writes are readable as dates', () => {
+  // The exact mutation that slipped past 611 tests: an hour-resolution stamp
+  // that Date.parse cannot read. Every later reader — N9(b), the plate's age
+  // line — silently gets NaN out of it.
+  const w = build().doc.window;
+  for (const k of ['from', 'to']) {
+    assert.ok(Number.isFinite(Date.parse(w[k])), `window.${k} = ${JSON.stringify(w[k])} is not a readable timestamp`);
+  }
+  assert.equal((Date.parse(w.to) - Date.parse(w.from)) / 36e5 + 1, w.hours, 'and `hours` is the span they describe');
+});
+
+// The plate reads these and nothing else out of the file. A rename here is
+// invisible to every other test — the plate's own fixture is a hand-written
+// copy — and shows up as a missing caveat on a live page.
+const PLATE_READS = [
+  d => d.rule.classes, d => d.gauges, d => d.window.hours, d => d.window.to, d => d.note,
+  d => d.counts.weak, d => d.counts.noPeak, d => d.counts.noPeakWhy.wetHours,
+  d => d.counts.notInHires, d => d.counts.notSignificant,
+];
+test('SEAM: every field the plate reads is present and of the shape it assumes', () => {
+  const d = build().doc;
+  for (const [i, read] of PLATE_READS.entries()) {
+    const v = read(d);
+    assert.notEqual(v, undefined, `the plate reads field #${i} and the builder does not write it`);
+  }
+  assert.ok(Array.isArray(d.rule.classes) && d.rule.classes.length === 3);
+  assert.equal(typeof d.note, 'string');
+  for (const k of ['weak', 'noPeak', 'notInHires', 'notSignificant']) assert.equal(typeof d.counts[k], 'number');
+});
+
+// ---------- the window is BOUNDED, not the mirror's extent ----------
+
+test('the window is cut to the rule\'s own length, however much history the mirror holds', () => {
+  // The mirror only grows — the collector runs with no pruning lever — while the
+  // source offers a rolling window. Reading the window off the mirror's extent
+  // (which the measurement bench did) grows it by 24 h a day, away from the
+  // length every constant and every caveat were calibrated on.
+  const long = mkTrees(SPECS.map(sp => ({
+    ...sp,
+    // three times the window, all of it real data
+    rain: sp.rain ? [...sp.rain, ...sp.rain, ...sp.rain] : null,
+    level: sp.level ? [...sp.level, ...sp.level, ...sp.level] : null,
+  })));
+  try {
+    const b = loadBench(long.tree, long.hires);
+    assert.equal(b.held, 3 * N, 'the mirror really does hold three windows');
+    assert.equal(b.to - b.from + 1, WINDOW_H, 'and the bench uses exactly one');
+    assert.equal(b.to, b.from + WINDOW_H - 1);
+    const r = buildHourlyLag({ tree: long.tree, hires: long.hires, out: join(long.tree, 'hourly'), generated: '2026-07-31' });
+    assert.equal(r.doc.window.hours, WINDOW_H);
+    assert.ok(r.doc.window.hours <= MAX_HOURLY_WINDOW_HOURS, 'and it stays under the gate ceiling');
+  } finally { rmSync(long.dir, { recursive: true, force: true }); }
+});
+
+test('a mirror shorter than the window is used whole, not padded', () => {
+  const b = loadBench(FIX.tree, FIX.hires);
+  assert.equal(b.held, N);
+  assert.equal(b.to - b.from + 1, N, `${N} h of data must give a ${N} h window, not ${WINDOW_H}`);
+});
+
+test('a window too short to rotate refuses to produce a product at all', () => {
+  // With no rotations every gauge would be marked significant and
+  // counts.notSignificant would read 0 — a filter that stopped filtering, under
+  // a file still advertising a rotation count.
+  const b = loadBench(FIX.tree, FIX.hires);
+  assert.throws(() => publish(b, { from: b.from, to: b.from + 2 * ROTATION_GUARD_H, only: dailyGauges(b.manifest) }),
+    /no permutation filter means no product/);
+});
+
+test('the file reports the rotations that RAN, not the constant that was asked for', () => {
+  const r = build();
+  assert.equal(r.doc.rule.rotations, r.shifts.length);
+  assert.equal(r.doc.rule.rotations, ROTATIONS);
+});
+
+// ---------- the acceptance rule inside the areal mean ----------
+
+test('an hour under half the set reporting is a NON-hour, not a thinner mean', () => {
+  // Measured against a fixture where the same two of four stations fall silent:
+  // without this rule the areal mean would quietly become a two-station mean for
+  // those hours, and nothing else in the product would look different.
+  const a = new Map([[0, 4], [1, 4]]), bm = new Map([[0, 2], [1, 2]]);
+  const c = new Map([[0, 0], [1, 0]]), d = new Map([[0, 0]]);   // d misses hour 1
+  const full = arealHourly([a, bm, c, d], 0, 1);
+  assert.deepEqual(full, [1.5, 2], 'hour 0 has all four; hour 1 has three of four, over the half');
+  // two of four is not over the half, and MIN_SET_FOR_SERIES is 3 besides
+  const thin = arealHourly([a, bm, new Map(), new Map()], 0, 1);
+  assert.deepEqual(thin, [null, null]);
+});
+
+test('a sub-hourly RAIN shard is summed, and a partly reported hour is dropped', () => {
+  // Every rain shard in the mirror today is hourly, so this path is unreachable
+  // from the real data and would rot unseen. It is not dead code: the source has
+  // 15-minute rain elsewhere in the same portal.
+  const dir = mkdtempSync(join(tmpdir(), 'sub-'));
+  try {
+    mkdirSync(join(dir, 'rain', 'q'), { recursive: true });
+    // hour 0: all four quarters -> summed; hour 1: three of four -> not an hour
+    writeFileSync(join(dir, 'rain', 'q', '2026-07.json'),
+      JSON.stringify({ id: 'q', month: '2026-07', step: 900, start: START, v: [1, 2, 3, 4, 5, 6, 7, null] }));
+    const axis = hourlyAxis(dir, 'q', 'rain');
+    assert.equal(axis.get(H0), 10, 'four quarters of rain are a SUM, not a mean');
+    assert.equal(axis.has(H0 + 1), false, 'a partly reported hour is not an hour');
+    // …and a level is AVERAGED over the same shape, because a level is a state
+    mkdirSync(join(dir, 'gauges', 'q'), { recursive: true });
+    writeFileSync(join(dir, 'gauges', 'q', '2026-07.json'),
+      JSON.stringify({ id: 'q', month: '2026-07', step: 900, start: START, v: [1, 2, 3, 4] }));
+    assert.equal(hourlyAxis(dir, 'q', 'gauges').get(H0), 2.5);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
 // ---------- the permutation filter, end to end ----------
 
 test('the filter drops a peak that its own rotations reach just as often', () => {
@@ -438,6 +606,41 @@ test('the filter drops a peak that its own rotations reach just as often', () =>
   assert.ok(by['100'].p <= 1 / (ROTATIONS + 1) + 1e-12, `p ${by['100'].p}`);
   assert.equal(by['100'].significant, true);
   assert.ok(by['400'].p > by['100'].p, `noise p ${by['400'].p} vs signal ${by['100'].p}`);
+});
+
+test('the permutation p has a FLOOR of 1/(B+1) — a finite null cannot report certainty', () => {
+  // The test above bounds p from ABOVE, and `p = 0` satisfies that bound: the
+  // `(1 + ge) / (1 + B)` correction could be dropped to `ge / B` with every
+  // other test in this file still green. Measured. Without the +1 a gauge no
+  // rotation beat claims p = 0, and BH over the fleet then rejects strictly
+  // more — the cut moves on a mutation nothing catches.
+  const b = loadBench(FIX.tree, FIX.hires);
+  const r = publish(b, { from: b.from, to: b.to, only: dailyGauges(b.manifest) });
+  const floor = 1 / (r.shifts.length + 1);
+  const tested = r.rows.filter(x => !x.skip && x.h != null && x.p != null);
+  assert.ok(tested.length, 'no gauge was tested — this test would assert nothing');
+  for (const x of tested) assert.ok(x.p >= floor - 1e-12, `gauge ${x.no}: p ${x.p} is under the floor ${floor}`);
+  // …and the floor has to be REACHED, or the loop above passes on any positive
+  // p and says nothing about the numerator
+  const unbeaten = tested.find(x => x.ge === 0);
+  assert.ok(unbeaten, 'the fixture must hold a gauge no rotation reached, or the +1 is never exercised');
+  assert.equal(unbeaten.p, floor, 'ge = 0 must give exactly 1/(B+1), not 0');
+});
+
+test('the BH family is every gauge TESTED, pinned at the call site and not only in the unit', () => {
+  // The rule is stated at `publish`: the correction runs over every gauge that
+  // produced a peak, not over the ones that survived the r cut — otherwise the
+  // family is chosen by looking at the data. On the real mirror both readings
+  // happen to give the same bytes, so the unit test on benjaminiHochberg alone
+  // does not pin the CALL. This does: a weak gauge must be IN the family, which
+  // shows as it having been given a verdict at all.
+  const b = loadBench(FIX.tree, FIX.hires);
+  const r = publish(b, { from: b.from, to: b.to, only: dailyGauges(b.manifest) });
+  const weak = r.rows.find(x => x.no === '400');
+  assert.equal(weak.h != null, true, 'the noise gauge does reach a peak');
+  assert.ok(weak.r < MIN_PEAK_R, 'and it is under the r cut');
+  assert.equal(typeof weak.significant, 'boolean', 'so it was still tested — a family chosen after the r cut would skip it');
+  assert.equal(typeof weak.p, 'number');
 });
 
 test('with the rotations switched off nothing is filtered — the filter is doing the work, not the r cut alone', () => {

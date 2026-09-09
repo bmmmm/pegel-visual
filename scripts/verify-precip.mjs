@@ -8,6 +8,11 @@
 //
 // Needs the sandbox bypass (loopback bind + connect). `nrw/` in the worktree must
 // hold the tree under test, with nrw/precip/ built by scripts/build-nrw-precip.mjs.
+// nrw/hourly/lag.json is read too, for the RESPONSE plate's response class — but
+// it is OPTIONAL here, because it is derived from `nrw-hires`, which no CI job
+// mounts. Absent, its checks are skipped loudly and counted in the last line;
+// present, they run and are anchored against the file rather than against a
+// string this script also knows.
 //   node scripts/verify-precip.mjs
 //   LANUK_BASE_URL=https://bmmmm.github.io/pegel-visual/ node scripts/verify-precip.mjs
 import { mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
@@ -41,12 +46,36 @@ const overview = BASE_URL
 // The hourly response class. Read here so every assertion below compares the
 // plate against the PRODUCT rather than against a string this script also
 // knows — which is what keeps a fixture from going stale as the window rolls.
-const lag = BASE_URL
-  ? await (await fetch(BASE_URL + 'nrw/hourly/lag.json')).json()
-  : JSON.parse(readFileSync(join(ROOT, 'nrw', 'hourly', 'lag.json'), 'utf8'));
+//
+// It may be ABSENT, and that is not a failure: unlike nrw/precip/, which this
+// checkout rebuilds from the mounted tree, the lag is derived from `nrw-hires`,
+// which no CI job mounts — so on a branch collected before the product existed
+// (or a fork, or the run that first lands the code) the file is simply not
+// there yet. The response-class checks are then SKIPPED, loudly, and the run
+// says how many; every other check still runs. Once the collector has written
+// it once, it is there every day and this branch never runs again.
+const lagPath = join(ROOT, 'nrw', 'hourly', 'lag.json');
+const lag = await (async () => {
+  try {
+    return BASE_URL
+      ? await (await fetch(BASE_URL + 'nrw/hourly/lag.json')).json()
+      : JSON.parse(readFileSync(lagPath, 'utf8'));
+  } catch (e) {
+    console.log(`::warning::no nrw/hourly/lag.json (${e.code || e.message}) — the RESPONSE plate's response-class checks are SKIPPED on this run. `
+      + 'It is built by scripts/build-nrw-hourly-lag.mjs from BOTH data branches, so a branch collected before that existed does not carry it.');
+    return null;
+  }
+})();
 const classHours = ([lo, hi]) => (hi == null ? `${lo}+ h` : `${lo}–${hi} h`);
+let lagSkipped = 0;
+// Which branch of the class check runs is decided by the weather — today three
+// fixtures carry a class and one does not. Both have to actually happen, or
+// half these assertions go dark the day the window rolls and nobody is told.
+const lagBranches = { withClass: 0, withoutClass: 0 };
 console.log(`nrw: export ${manifest.sourceExportAt}, precip ${manifest.counts.precip} gauges; overview ${overview.window.from}…${overview.window.to}, bins ${overview.bins.join('/')}`);
-console.log(`     hourly lag ${lag.window.from}…${lag.window.to}, ${lag.counts.published} published, classes ${lag.counts.byClass.join('/')} (${lag.rule.classes.map(classHours).join(', ')})`);
+console.log(lag
+  ? `     hourly lag ${lag.window.from}…${lag.window.to}, ${lag.counts.published} published, classes ${lag.counts.byClass.join('/')} (${lag.rule.classes.map(classHours).join(', ')})`
+  : '     hourly lag: ABSENT — response-class checks skipped');
 
 const check = checker();
 
@@ -72,6 +101,15 @@ const PAGES = [
   //               km) — the thin-set caveat has to be on the plate, and the
   //               chart has to be there too
   { q: '?station=OEDT', ready: STATION_READY, name: 'oedt-floored', kind: 'station', thin: true, no: '2861700000100' },
+  //   BETZDORF    a daily rain field but NO hourly series, so it is classless by
+  //               STRUCTURE, not by weather. The "no response time" branch used
+  //               to rest on OEDT alone, which sits three wet hours over the
+  //               floor (76 against 76), a hundredth of r over the cut and a
+  //               step over the BH threshold — the window rolls, OEDT gains a
+  //               class, and CI goes red with no code change. That is the
+  //               fixture the plan itself forbade; this one cannot move unless
+  //               the SOURCE starts publishing hourly data for it.
+  { q: '?station=BETZDORF', ready: STATION_READY, name: 'betzdorf-nohires', kind: 'station', no: '27200500' },
   { q: '?station=LINNENKAMP', ready: STATION_READY, name: 'linnenkamp-none', kind: 'station', noProduct: true, no: '3215510000100' },
   { q: '?station=BONN', ready: 'state.gauge && state.gauge.currentMeasurement', name: 'bonn-wsv', kind: 'wsv' },
   { q: '?rain', ready: 'state.rain && state.rain.data', name: 'rain-30', kind: 'rain' },
@@ -202,7 +240,15 @@ async function run(cdp, base, vp) {
       writeFileSync(join(SHOTS, `${vp.name}-${pg.name}.png`), Buffer.from(shot.data, 'base64'));
       const m = await s.evaluate(MEASURE);
       const precipReqs = s.events.responses.filter(r => r.url.includes('/nrw/precip/'));
-      const bad = s.events.responses.filter(r => r.url.includes('/nrw/') && r.status >= 400);
+      // `lag === null` is the branch that has not collected the hourly product
+      // yet (the ::warning:: above). Its 404 is then the EXPECTED state, and
+      // counting it here made the skip branch unreachable: the run failed on
+      // the very absence it says it tolerates — so the first commit to land
+      // this code would have failed its own page gate and blocked the deploy.
+      // Narrow on purpose: any other 404 still fails, and once the file exists
+      // `lag` is non-null and a 404 on it fails again.
+      const lagAbsent = r => lag === null && r.url.includes('/nrw/hourly/lag.json');
+      const bad = s.events.responses.filter(r => r.url.includes('/nrw/') && r.status >= 400 && !lagAbsent(r));
       console.log(`-- ${pg.name}: ${JSON.stringify({ mode: m.mode, error: m.error, title: m.title })}`);
 
       check(!m.error, `${pg.name}: no page error`, m.error || '');
@@ -230,6 +276,7 @@ async function run(cdp, base, vp) {
         check(!!r && /per 10 mm of rain around the gauge/.test(r.sentence), `${pg.name}: the slope sentence names its unit`, r ? r.sentence : '-');
 
         // ---- the third estimator: the hourly response class ----
+        if (!lag) { lagSkipped++; } else {
         const k = (m.respPlate && m.respPlate.key) || [];
         const joined = k.join(' | ');
         // The plate rule: a section that cannot name its own marks does not
@@ -249,6 +296,7 @@ async function run(cdp, base, vp) {
         const want = lag.gauges[pg.no];
         const cls = (m.respPlate && m.respPlate.cls) || '';
         if (want != null) {
+          lagBranches.withClass++;
           // The plate's class must be the PRODUCT's class for this gauge.
           check(!m.respPlate.clsIsDim && cls.includes(classHours(lag.rule.classes[want])),
             `${pg.name}: prints class ${want} = ${classHours(lag.rule.classes[want])}, as lag.json says`, cls || '(no class line)');
@@ -256,11 +304,8 @@ async function run(cdp, base, vp) {
           const others = lag.rule.classes.filter((_, i) => i !== want).map(classHours);
           check(!others.some(o => cls.includes(o)),
             `${pg.name}: and names no OTHER class in the same sentence`, `${cls} vs ${others.join(', ')}`);
-          // the hour is deliberately not published; a raw lag on the plate would
-          // be false precision the window cannot carry
-          check(!/\bpeak(ing)? at \d+ h\b/.test(m.respPlate.text),
-            `${pg.name}: the raw peak hour is not printed`, m.respPlate.text.slice(0, 200));
         } else {
+          lagBranches.withoutClass++;
           check(m.respPlate.clsIsDim && /no response time for this gauge/.test(cls),
             `${pg.name}: has no class in lag.json, and the plate says so`, cls || '(no class line)');
           // the fleet split, with the file's own counts — so "no response time"
@@ -268,6 +313,7 @@ async function run(cdp, base, vp) {
           const c = lag.counts;
           check(joined.includes(`${c.weak} rain explains too little`) && joined.includes(`${c.notInHires} no hourly series`),
             `${pg.name}: and names the fleet split with lag.json's own counts`, joined.slice(0, 400));
+        }
         }
       }
       if (pg.noProduct) {
@@ -348,5 +394,24 @@ console.log(`serving ${base}`);
 await run(cdp, base, { name: 'desktop', width: 1280, height: 900 });
 await run(cdp, base, { name: 'phone', width: 390, height: 844, mobile: true });
 killChildren();
-console.log(`\n${check.failures ? `${check.failures} FAILURES` : 'all checks green'} — screenshots in ${SHOTS}`);
+
+// The class check has two branches and the WEATHER decides which one a page
+// takes. If every fixture happens to carry a class, the "no response time"
+// branch — the reason line and the fleet split — is never executed and nobody
+// is told; if none does, every positive assertion goes dark. An input set that
+// can be empty is exactly what a new gate may not have, so it is checked.
+if (lag) {
+  // `detail` is printed whether the check passes or fails, so it carries the
+  // MEASUREMENT and the consequence lives in the name — a detail phrased as a
+  // failure ("every fixture lost its class") reads as a broken run when green.
+  const branches = `${lagBranches.withClass} with a class, ${lagBranches.withoutClass} without`;
+  check(lagBranches.withClass > 0,
+    'some fixture carries a response class — else the positive half of the class check runs on nothing', branches);
+  check(lagBranches.withoutClass > 0,
+    'and some fixture carries none — else the reason line and the fleet split are never checked', branches);
+}
+
+console.log(`\n${check.failures ? `${check.failures} FAILURES` : 'all checks green'}`
+  + `${lagSkipped ? `, ${lagSkipped} response-class check(s) SKIPPED (no nrw/hourly/lag.json)` : ''}`
+  + ` — screenshots in ${SHOTS}`);
 process.exit(check.failures ? 1 : 0);

@@ -123,6 +123,21 @@ export const ROTATION_GUARD_H = 168;
 // which is meaningless across a rule change; on a version change it demands
 // PRE-REGISTERED numbers instead (LAG_RULE_BASELINES in the gate).
 export const LAG_RULE_VERSION = 1;
+// THE WINDOW IS BOUNDED HERE, and it has to be. The source offers a rolling 63
+// days of fine resolution; the MIRROR only grows — the collector is run without
+// any pruning lever on purpose, so a day that has rolled out of the source is
+// kept forever. Read the window off the mirror's extent (which is what the
+// measurement bench did) and it therefore grows by 24 h every day, silently,
+// away from the 63 days every constant, every caveat and the shipped `note`
+// were calibrated on. Measured on 2026-09-08: the mirror already reached back
+// 66.5 days, four days past what the source still offered, and a doubling of
+// the window costs ~43 published gauges — which walks the product towards
+// MIN_HOURLY_PUBLISHED, and the gate that would then fire runs BEFORE both
+// pushes, so the day's fine resolution would be lost rather than merely
+// unpublished. The right edge rolls with the data; the left edge is derived
+// from it, never from how much history the mirror happens to hold.
+export const WINDOW_DAYS = 63;
+export const WINDOW_H = WINDOW_DAYS * 24;
 // Pre-registered on 2026-09-08, and it belongs in the FILE, not in anyone's
 // memory: the window is 63 days of high summer. In February the estimator sees
 // frontal rain, snow (which produces no response at any lag) and melt (which
@@ -130,15 +145,20 @@ export const LAG_RULE_VERSION = 1;
 // ONE summer window and can say nothing about that.
 export const SEASONAL_RETEST = '2027-02';
 // The stability gate's result, measured by scripts/probe-hourly-lag.mjs on
-// 2026-09-08 (--split under the shipping RULE): 58 of 81 gauges agreed within
-// ±3 h across the two halves of the window. It rides in the FILE and onto the
-// plate because it is the product's headline caveat — and note the denominator:
-// a gauge estimable in BOTH halves is a well-covered gauge, so 71.6 % describes
-// the best third of the fleet (81 of 222), not the fleet. Constants, not
-// recomputed here: the split is the probe's measurement, not this run's, and a
-// number this file could not check is better named than silently regenerated.
-export const STABILITY_PCT = 71.6;
-export const STABILITY_COVERAGE_PCT = 36;
+// 2026-09-08 (--split under the shipping RULE, on the bounded window): 29 of 38
+// gauges agreed within ±3 h across the two halves. It rides in the FILE and onto
+// the plate because it is the product's headline caveat — and the DENOMINATOR is
+// the caveat, not the percentage. Measured: the first half of this window is
+// dry. Mean wet hours per gauge are 26.8 in half A against 71.9 in half B, the
+// wet-hour floor for a half is 38, and so 213 of 251 gauges are not estimable in
+// half A at all. The split therefore compares a dry half against a wet one on
+// the best-covered gauges only — 38 of 224 — and that is what 76.3 % describes.
+// Constants, not recomputed here: the split is the probe's measurement, not this
+// run's, and a number this file cannot check is better named than silently
+// regenerated.
+export const STABILITY_PCT = 76.3;
+export const STABILITY_N = 38;
+export const STABILITY_OF = 224;
 
 // ---------- the hourly axis ----------
 
@@ -223,6 +243,14 @@ export function lagStats(rain, level, from, to) {
   }
   let best = null;
   for (const l of lags) if (l.r != null && (best === null || l.r > best.r)) best = l;
+  // KNOWN AND CONSERVATIVE, stated rather than fixed: `minPairs` is applied to
+  // the argmax lag AFTER the maximum is taken, not per lag before it. A single
+  // thin lag with a spuriously high r can therefore win the argmax and then fail
+  // the floor, withholding a gauge whose other lags were solid. The direction is
+  // always "publish less", never "publish a worse number", and it does not fire
+  // on the real mirror — `counts.noPeakWhy.pairs` is 0 there. Filtering per lag
+  // first would be one line and a different product; it is not worth
+  // re-registering every calibrated constant for a clause that never runs.
   if (!best || best.n < minPairs || wet < minWet || !(best.r > 0)) {
     return {
       h: null, r: null, n: best ? best.n : 0, wet,
@@ -252,10 +280,14 @@ export function loadBench(tree, hires) {
     if (!levelH.has(no)) levelH.set(no, existsSync(join(hires, 'gauges', no)) ? hourlyAxis(hires, no, 'gauges') : new Map());
     return levelH.get(no);
   };
-  // the window the hires tree actually covers, read off the data
+  // The right edge is read off the data; the left edge is WINDOW_H back from it,
+  // never the mirror's own extent — see WINDOW_DAYS above for why that
+  // difference is the whole point. `held` is kept so a caller can see how much
+  // history was there to ignore.
   let lo = Infinity, hi = -Infinity;
   for (const no of haveRain) for (const h of rainOf(no).keys()) { if (h < lo) lo = h; if (h > hi) hi = h; }
-  return { nodes, rain, manifest, assign, up, rainOf, levelOf, from: lo, to: hi };
+  const from = Number.isFinite(hi) ? Math.max(lo, hi - WINDOW_H + 1) : lo;
+  return { nodes, rain, manifest, assign, up, rainOf, levelOf, from, to: hi, held: Number.isFinite(hi) ? hi - lo + 1 : 0 };
 }
 
 // Every gauge's inputs, computed ONCE: the rain field's hourly mean and the
@@ -285,16 +317,32 @@ export function gaugeInputs(bench, { from, to, opts = RULE, only = null } = {}) 
 // the negative control, and the null distribution of the permutation filter.
 // Zero is the real measurement.
 //
-// It rotates the WHOLE level map, including the one hour before the window that
-// 252 of 253 gauges carry (lagStats reads level[from-1] for its first
-// difference). That hour folds into the window rather than being dropped: 1 of
-// 1597, and it leaks a correctly-aligned value into the null, which can only
-// make significance HARDER to reach. Measured and left as it is — changing it
-// would move the pre-registered control numbers for a sixteenth of a percent.
+// Only hours INSIDE [from, to] are rotated; anything the mirror holds outside
+// the analysed window is dropped rather than folded into it.
+//
+// It used to rotate the whole level map, on a comment claiming that meant "1 of
+// 1597" — the one hour before the window that lagStats reads for its first
+// difference. Measured 2026-09-09 on the real mirror: the map holds a median of
+// 1598 hours against a 1512 h window, so **85** of them sat outside it, not 1,
+// and that slab grows by 24 h a day while the window stays fixed. Those hours
+// carry a correctly-aligned rain/level relationship into the null, which is the
+// one thing a null may not contain. It stayed invisible because the map
+// iterates ascending and the gap-free in-window series overwrote the folded
+// values — an invariant nobody stated, depending on insertion order, and true
+// only while the series has no gaps.
+//
+// The cost is that the rotated map has no [from-1], so the null loses its first
+// difference: 1511 pairs against the real measurement's 1512. That is the right
+// direction to be wrong in — the null is slightly SMALLER, never contaminated.
 export function rotateLevel(level, from, to, shift) {
   if (!shift) return level;
   const span = to - from + 1;
-  return new Map([...level].map(([h, v]) => [from + (((h - from + shift) % span) + span) % span, v]));
+  const out = new Map();
+  for (const [h, v] of level) {
+    if (h < from || h > to) continue;
+    out.set(from + (((h - from + shift) % span) + span) % span, v);
+  }
+  return out;
 }
 
 export function estimateAll(bench, { from, to, opts = RULE, levelShift = 0, only = null } = {}) {
@@ -325,12 +373,18 @@ export function classOf(h, classes = CLASSES) {
 // Evenly spread strictly inside [guard, span - guard]: the identity (a rotation
 // by 0 or by the span) is unreachable, and no rotation lands near enough to the
 // origin for the same weather system to line up with the same flood.
+// ALL of them or NONE, and the distinctness is the reason. `hi > lo` alone is
+// not enough: at a span of 337 the band is one hour wide and the formula below
+// returns 99 shifts of which 2 are distinct — a null distribution with a
+// hundredth of the draws it advertises, which no clause downstream could see
+// because the count still read 99. Either the window carries the whole
+// pre-registered rotation set or it carries no product at all.
 export function rotationShifts(span, count = ROTATIONS, guard = ROTATION_GUARD_H) {
   const lo = guard, hi = span - guard;
   if (!(hi > lo) || count < 1) return [];
   const out = [];
   for (let k = 1; k <= count; k++) out.push(lo + Math.round((k * (hi - lo)) / (count + 1)));
-  return out;
+  return new Set(out).size === count ? out : [];
 }
 
 // Benjamini-Hochberg at level q over m p-values: returns the set of indices that
@@ -359,6 +413,13 @@ export function publish(bench, {
   permute = true,
 } = {}) {
   const shifts = permute ? rotationShifts(to - from + 1, rotations, guard) : [];
+  // A window too short to rotate safely produces NO rotations, and then every
+  // gauge that reached a peak would be marked significant and `notSignificant`
+  // would read 0 — a filter that silently stopped filtering, under a file still
+  // claiming 99 rotations. Refuse instead: there is no product to make here.
+  if (permute && !shifts.length) {
+    throw new Error(`a ${to - from + 1} h window cannot carry ${rotations} rotations outside a ${guard} h guard band — no permutation filter means no product`);
+  }
   const rows = [];
   for (const g of gaugeInputs(bench, { from, to, opts, only })) {
     if (g.skip) { rows.push({ no: g.no, skip: g.skip, why: g.why }); continue; }
@@ -500,6 +561,11 @@ export function buildHourlyLag({ tree, hires, out, check = false, generated, ben
   const only = dailyGauges(b.manifest);
   if (!only.size) throw new Error(`no gauge in ${tree}/manifest.json carries precip.series — run scripts/build-nrw-precip.mjs first`);
   const r = publish(b, { from: b.from, to: b.to, only });
+  // `unclassed` is a row that reached a peak, cleared both filters and still got
+  // no class, which only a `classes` list that does not cover the search range
+  // can produce. It is counted so the gate's accounting identity closes without
+  // a remainder nobody can name.
+  const unclassed = r.rows.filter(x => x.reject === 'unclassed').length;
 
   const doc = {
     schema: SCHEMA,
@@ -508,25 +574,29 @@ export function buildHourlyLag({ tree, hires, out, check = false, generated, ben
     ruleVersion: RULE_VERSION,
     lagRuleVersion: LAG_RULE_VERSION,
     rule: {
-      classes: CLASSES, minR: MIN_PEAK_R, rotations: ROTATIONS, fdrQ: FDR_Q,
-      rotationGuardH: ROTATION_GUARD_H, maxLagH: MAX_LAG_H,
+      classes: CLASSES, minR: MIN_PEAK_R,
+      // what actually RAN, not the constant that was asked for: a file saying 99
+      // while 0 rotations happened is the one way this filter can stop working
+      // and still look like it is working
+      rotations: r.shifts.length, fdrQ: FDR_Q,
+      rotationGuardH: ROTATION_GUARD_H, maxLagH: MAX_LAG_H, windowDays: WINDOW_DAYS,
       minPairFrac: MIN_PAIR_FRAC, minRainHourFrac: MIN_RAIN_HOUR_FRAC, rainHourMm: RAIN_HOUR_MM,
     },
     window: { from: iso(b.from), to: iso(b.to), hours: b.to - b.from + 1 },
     inputs: inputsDigest(hires),
-    counts: r.counts,
+    counts: { ...r.counts, unclassed },
     // The product's headline caveat, in the FILE rather than in the display
     // layer: the plate prints it word for word, so a later reader cannot get
     // the class without it, and a browser check can compare the two.
-    note: 'a class describes this rolling window of high summer, not the gauge. '
+    note: `a class describes this rolling ${WINDOW_DAYS}-day window of high summer, not the gauge. `
       + `Pre-registered: re-tested across the season in ${SEASONAL_RETEST}, and withdrawn below 2/3 class agreement across it. `
-      + `Stability today is ${STABILITY_PCT} %, measured on the ${STABILITY_COVERAGE_PCT} % of gauges estimable in both halves of one window.`,
+      + `Its two halves agree on ${STABILITY_PCT} % of gauges — but on only ${STABILITY_N} of ${STABILITY_OF}, because the first half is dry and most gauges cannot be estimated in it at all.`,
     gauges: Object.fromEntries(Object.keys(r.gauges).sort(cmpNo).map(no => [no, r.gauges[no]])),
   };
 
   const o = new Out(out, check);
   o.put('lag.json', JSON.stringify(doc, null, 1) + '\n');
-  return { out: o, doc, ...r };
+  return { out: o, doc, held: b.held, ...r };
 }
 
 // ---------- CLI ----------
@@ -543,7 +613,8 @@ function main(argv) {
   const t0 = Date.now();
   const r = buildHourlyLag({ tree, hires, out, check, generated });
   const c = r.counts;
-  console.log(`hourly lag: window ${r.doc.window.from} … ${r.doc.window.to} = ${(c && r.doc.window.hours / 24).toFixed(1)} days, ${r.shifts.length} rotations`);
+  console.log(`hourly lag: window ${r.doc.window.from} … ${r.doc.window.to} = ${(r.doc.window.hours / 24).toFixed(1)} days `
+    + `of the ${(r.held / 24).toFixed(1)} the mirror holds, ${r.shifts.length} rotations`);
   console.log(`  ${c.daily} gauges with a daily rain field: ${c.notInHires} not in nrw-hires, ${c.attempted} attempted, ${c.withPeak} with a peak`);
   console.log(`  dropped: ${c.noPeak} no peak (${Object.entries(c.noPeakWhy).filter(([, n]) => n).map(([k, n]) => `${k} ${n}`).join(', ') || 'none'}), ${c.weak} peak r < ${MIN_PEAK_R}, ${c.notSignificant} not significant at q=${FDR_Q}`);
   console.log(`  published: ${c.published} — classes ${c.byClass.join(' / ')} (${CLASSES.map(([lo, hi]) => hi == null ? `${lo}+ h` : `${lo}-${hi} h`).join(', ')})`);

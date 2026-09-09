@@ -253,11 +253,11 @@ the run's own header.
 
 **The winner's curse is corrected, and the first correction was wrong.** The
 estimator takes a maximum over 49 lags. A permutation test with **12** rotations
-cannot carry that: the smallest attainable p is 1/13 = 0.077, so over 222 gauges
+cannot carry that: the smallest attainable p is 1/13 = 0.077, so over ~222 gauges
 ~17 false positives are expected under the global null — a *weaker* filter than
 the r cut beside it. Done properly — **99 deterministic, evenly spread rotations
-plus Benjamini–Hochberg at q = 0.05 over m = 222** — 162 of the 168 gauges over
-r 0.25 survive. Two traps, both hit: a rotation by the window LENGTH is the
+plus Benjamini–Hochberg at q = 0.05 over m = every gauge TESTED** (224 on the
+2026-09-09 mirror) — 162 of the 168 gauges over r 0.25 survive. Two traps, both hit: a rotation by the window LENGTH is the
 identity (it reported 1.8 % significant instead of 87.8 %), so the shifts need a
 guard band, which is set at 168 h — a week, because weather autocorrelates on
 the synoptic scale and a 50 h rotation still lines the same front up with the
@@ -265,14 +265,16 @@ same flood. And the set must be **deterministic**: a `Math.random()` there kills
 the `--check` purity claim silently and looks green for weeks.
 
 **Correction to the plan that specified this: the permutation filter does NOT
-lower the churn.** Measured both ways over the same 14 steps: **8.5/day with the
-filter, 8.2/day without.** The plan predicted 7.1 against 8.1. The filter is
-justified by the multiple-comparison correction alone, and it costs ~26 s a day.
+lower the churn.** Re-measured 2026-09-09 with the guard band applied, both ways
+over the same 14 steps: **8.2/day with the filter, 8.2/day without** — 115
+rewrites either way, differently distributed, not fewer. The plan predicted 7.1
+against 8.1. The filter is justified by the multiple-comparison correction
+alone, and it costs ~26 s a day.
 
 **Who gets a class.** Of 275 gauges with a daily rain field: **162 published**
-(102 / 49 / 11 across the three classes), 24 not in `nrw-hires` at all, 29 with
-too few wet hours, 54 with a peak r under 0.25, 6 not clear of chance.
-**63 % land in class 0** — real per the control, but a three-class product where
+(101 / 49 / 12 across the three classes), 24 not in `nrw-hires` at all, 27 with
+too few wet hours, 56 with a peak r under 0.25, 6 not clear of chance.
+**62 % land in class 0** — real per the control, but a three-class product where
 two thirds of readers see one class is close to a one-class product, which is
 what the wording has to carry rather than the decision to ship.
 
@@ -280,20 +282,35 @@ what the wording has to carry rather than the decision to ship.
 
 | gate | criterion | result |
 |---|---|---|
-| stability, halves within ±3 h | ≥ 2/3 | **71.6 %** (58 of 81) — PASS |
-| class agreement across the halves | — | **75.0 %** (42 of 56) |
-| churn of the published value | ≤ ~10/day | **8.5/day** — PASS |
-| negative control (level rotated) | — | median r **0.391 → 0.044–0.066**, lag-0 share 40.1 % → 0.9–8.1 % — PASS |
+| stability, halves within ±3 h | ≥ 2/3 | **76.3 %** (29 of 38) — PASS |
+| class agreement across the halves | — | **75.0 %** (21 of 28) |
+| churn of the published value | ≤ ~10/day | **8.2/day** — PASS |
+| negative control (level rotated) | — | median r **0.401 → 0.056–0.057**, lag-0 share 40.2 % → 1.3–3.6 % — PASS |
 
-Stability is measured on the **36 %** of gauges estimable in both halves (81 of
-222) — a gauge estimable in both is a well-covered gauge, so 71.6 % describes
-the best third of the fleet. That sentence belongs beside the number wherever it
-is quoted, and it rides in the file's own `note` onto the plate.
+Every number in that table was re-measured on 2026-09-09 against the **shipped**
+window (1512 h) and with the rotation guard band actually applied — the figures
+that stood here before came off a 1597 h window and a `rotationShifts()` that
+took a `guard` argument and ignored it, so its null contained near-identity
+rotations. Do not compare a future run against anything older than this note.
+
+Stability is measured on the **17 %** of gauges estimable in both halves (38 of
+the 224 with a peak) — a gauge estimable in both is a well-covered gauge, so
+76.3 % describes the best sixth of the fleet, and the bounded window made that
+denominator smaller, not larger. That sentence belongs beside the number
+wherever it is quoted, and it rides in the file's own `note` onto the plate.
 
 **The 15 km footprint carries hourly too — re-measured here, not carried over.**
 The hypothesis was that convective cells are far smaller at an hourly
 resolution, so a tighter ring should transmit better; that predicts monotone
 improvement as the ring shrinks, and it does not happen:
+
+The six rows below come from ONE run on the 1597 h window and the pre-guard
+rotation set, and they are left exactly as measured: a ring comparison is only
+worth anything if every row saw the same conditions, so replacing the shipped
+row with today's figures would make the table unreadable rather than truer. Read
+them against each other, never as the shipped counts — those are the table
+above. The guard band applies to every row alike, so the ordering is unaffected;
+what is not re-measured is the absolute level of each cell.
 
 | ring | attempted | with peak | published | median r | class stability |
 |---|---|---|---|---|---|
@@ -378,6 +395,9 @@ re-proposed as a fresh insight. **Do not reopen without new facts.**
   rule gives **81 gauges, 58 agreeing, 71.6 % — PASS.** The difference was the
   rule, not the day. **The probe now prints the rule it used**, on every run,
   above every number — that line is the whole fix.
+  *Every figure in this bullet is the 2026-09-08 run on the 1597 h window and is
+  kept as the record of that day; the shipped numbers are the gate table above,
+  and they are not the same.*
   The churn gate failed too, at **10.4/day**, and it was right to: it was
   measuring the raw hour. The ceiling was NOT re-registered after seeing the
   number it failed — the product was changed to come under it, by publishing a

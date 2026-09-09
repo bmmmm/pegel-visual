@@ -159,9 +159,10 @@
 //                     the rain field may shrink, this product is one file that
 //                     always exists, so a deletion is a regression and gets a
 //                     second guard N9 knows nothing about.
-//                     Measured 2026-09-08: 275 gauges with a rain field, 24 not
-//                     in nrw-hires, 251 attempted, 222 with a peak, 54 under
-//                     r 0.25, 6 not clear of chance, 162 published as 102/49/11.
+//                     Measured 2026-09-08 on the bounded 63-day window: 275
+//                     gauges with a rain field, 24 not in nrw-hires, 251
+//                     attempted, 224 with a peak, 56 under r 0.25, 6 not clear
+//                     of chance, 162 published as 101/49/12.
 //
 // Deliberate limits, as in the sibling gate: N4 compares against the branch's
 // own HEAD, so a base poisoned by a force-push looks clean to it — branch
@@ -290,6 +291,12 @@ export const MAX_HOURLY_WINDOW_LAG_H = 48;
 // the floor is not cutting into a working regime — it is there to catch a
 // collector that delivered a stump.
 export const MIN_HOURLY_WINDOW_HOURS = 960;
+// …and a CEILING, which the first cut of this clause did not have. The builder
+// cuts the window to the source's own 63 rolling days; the MIRROR grows without
+// limit, so "the builder stopped bounding the window" is a real failure mode and
+// it moves this number UP, where a floor cannot see it. Two days of slack over
+// the builder's own 1512 h, for a run that reads a shard stamped slightly wide.
+export const MAX_HOURLY_WINDOW_HOURS = 63 * 24 + 48;
 // Measured largest class share 63.0 % (at the longest window); 57-60 % at the
 // others. A three-class product in which nine of ten readers see one class is a
 // one-class product wearing a legend.
@@ -313,7 +320,7 @@ export const MAX_HOURLY_PUBLISHED_DROP = 20;
 // consulted after a membership bump and compared against numbers measured for a
 // different set of rain fields.
 export const LAG_RULE_BASELINES = {
-  '1.2': { daily: 275, attempted: 251, withPeak: 222, published: 162 },
+  '1.2': { daily: 275, attempted: 251, withPeak: 224, published: 162 },
 };
 // Thirty, not the two RULE_BASELINE_SLACK gives the daily product, and the
 // difference is measured rather than generous: `published` is a STATISTIC over
@@ -1008,7 +1015,8 @@ export function readPrecip(precipDir) {
 export function checkHourlyShape(lag, {
   topologyGauges = null, precip = null, nowDate = null,
   minPublished = MIN_HOURLY_PUBLISHED, maxWindowLagH = MAX_HOURLY_WINDOW_LAG_H,
-  minWindowHours = MIN_HOURLY_WINDOW_HOURS, maxClassShare = MAX_HOURLY_CLASS_SHARE,
+  minWindowHours = MIN_HOURLY_WINDOW_HOURS, maxWindowHours = MAX_HOURLY_WINDOW_HOURS,
+  maxClassShare = MAX_HOURLY_CLASS_SHARE,
 } = {}) {
   // (a) presence and schema
   if (!lag || lag.schema !== 1) return ['N9: hourly/lag.json missing, unparseable or not schema 1'];
@@ -1048,15 +1056,47 @@ export function checkHourlyShape(lag, {
     if (w.hours !== spanned) v.push(`N9: hourly window says ${w.hours} hours but spans ${spanned} (${w.from} … ${w.to})`);
   }
   if (!(w.hours >= minWindowHours)) v.push(`N9: the hourly window is ${w.hours} h, floor is ${minWindowHours} (${(minWindowHours / 24).toFixed(0)} days)`);
+  // A CEILING as well as a floor, because the mirror only grows. The source
+  // offers 63 rolling days and the builder cuts to them; a window that ran past
+  // that means the builder stopped bounding it, and every constant here — and
+  // every caveat on the plate — was calibrated on the shorter one. A floor alone
+  // cannot see that: the number it watches would be moving the OTHER way.
+  if (!(w.hours <= maxWindowHours)) {
+    v.push(`N9: the hourly window is ${w.hours} h (${(w.hours / 24).toFixed(1)} days), ceiling is ${maxWindowHours} — `
+      + 'the mirror grows and the source does not, so a window past this is history the source no longer offers');
+  }
 
-  // (c) VOCABULARY AND REFERENCES. A class id, never an hour, never a null,
-  // never free text — the plate maps this number onto a phrase, and anything
-  // else would print as "undefined" or, worse, as a plausible wrong class.
+  // The RULE itself, and not only its shape. The plate binds its three words to
+  // the class INDEX positionally, so a `classes` list that is reordered,
+  // overlapping or gapped makes the plate print a true class id under the wrong
+  // words — "within the hour (9+ h)" — with every other clause here green.
   const classes = Array.isArray(R.classes) ? R.classes : null;
   if (!classes || !classes.length || !classes.every(x => Array.isArray(x) && x.length === 2 && Number.isInteger(x[0]) && (x[1] === null || Number.isInteger(x[1])))) {
     v.push(`N9: rule.classes is not a list of [lo, hi] pairs (${JSON.stringify(R.classes)})`);
     return v;
   }
+  if (classes[0][0] !== 0) v.push(`N9: rule.classes starts at ${classes[0][0]} h, so a lag of 0 falls through it`);
+  if (classes[classes.length - 1][1] !== null) v.push('N9: the last of rule.classes is bounded, so a lag past it has no class at all');
+  for (let i = 0; i < classes.length; i++) {
+    const [lo, hi] = classes[i];
+    if (hi != null && hi < lo) v.push(`N9: rule.classes[${i}] is empty (${lo}..${hi})`);
+    if (i && classes[i - 1][1] !== lo - 1) {
+      v.push(`N9: rule.classes[${i - 1}] ends at ${classes[i - 1][1]} and [${i}] starts at ${lo} — the classes must be ascending, adjacent and non-overlapping, because the plate binds its words to the INDEX`);
+    }
+  }
+  // The filters have to be able to filter. A run with 0 rotations marks every
+  // gauge significant and reports notSignificant 0, which reads exactly like a
+  // filter that found nothing to drop.
+  if (!(typeof R.minR === 'number' && R.minR > 0 && R.minR <= 1)) v.push(`N9: rule.minR is ${JSON.stringify(R.minR)}, which is not a correlation cut in (0, 1]`);
+  if (!(Number.isInteger(R.rotations) && R.rotations >= 1)) v.push(`N9: rule.rotations is ${JSON.stringify(R.rotations)} — a permutation filter that ran no rotations calls everything significant`);
+  if (!(typeof R.fdrQ === 'number' && R.fdrQ > 0 && R.fdrQ < 1)) v.push(`N9: rule.fdrQ is ${JSON.stringify(R.fdrQ)}, which is not a false-discovery rate in (0, 1)`);
+
+  // The run's own provenance. Without these the file can claim anything about
+  // where it came from and (g) has nothing to compare against — and (g) is
+  // exactly the clause that does not run without --hires.
+  if (!/^[0-9a-f]{64}$/.test(String((lag.inputs || {}).sha256))) v.push(`N9: inputs.sha256 is not a sha256 digest (${JSON.stringify((lag.inputs || {}).sha256)})`);
+  if (!(Number.isInteger((lag.inputs || {}).files) && lag.inputs.files > 0)) v.push(`N9: inputs.files is ${JSON.stringify((lag.inputs || {}).files)} — a digest over no files is not a digest`);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(lag.generated))) v.push(`N9: generated is ${JSON.stringify(lag.generated)}, not a date`);
   const byClass = classes.map(() => 0);
   let bad = 0;
   for (const [no, cls] of Object.entries(g)) {
@@ -1081,6 +1121,24 @@ export function checkHourlyShape(lag, {
   if (!(published >= minPublished)) v.push(`N9: only ${published} gauges carry a response class, floor is ${minPublished}`);
   if (!(c.published <= c.withPeak && c.withPeak <= c.attempted && c.attempted <= c.daily)) {
     v.push(`N9: the counts do not nest: published ${c.published} <= withPeak ${c.withPeak} <= attempted ${c.attempted} <= daily ${c.daily}`);
+  }
+  // THE ACCOUNTING IDENTITY. Nesting alone leaves every drop-out counter free:
+  // `weak` could read 99999 and nothing here would notice — and the plate prints
+  // those four numbers to the reader as the fleet split. Each gauge leaves the
+  // pipeline exactly once, so the three balances below must close exactly.
+  const balances = [
+    ['daily', c.daily, ['notInHires', 'noDailySet', 'attempted']],
+    ['attempted', c.attempted, ['noPeak', 'withPeak']],
+    ['withPeak', c.withPeak, ['weak', 'notSignificant', 'unclassed', 'published']],
+  ];
+  for (const [name, total, parts] of balances) {
+    const nums = parts.map(k => c[k]);
+    if (!nums.every(n => Number.isInteger(n) && n >= 0)) {
+      v.push(`N9: counts.${parts.filter(k => !(Number.isInteger(c[k]) && c[k] >= 0)).join('/')} is not a count (${JSON.stringify(nums)})`);
+      continue;
+    }
+    const sum = nums.reduce((a, n) => a + n, 0);
+    if (sum !== total) v.push(`N9: counts do not balance: ${parts.join(' + ')} = ${sum}, but ${name} is ${total} — every gauge leaves the pipeline exactly once`);
   }
   // A three-class product in which everyone is in one class is a one-class
   // product wearing a legend.

@@ -4074,8 +4074,12 @@ const NRW_LAG = {
   window: { from: '2026-07-03T15:00Z', to: '2026-09-08T03:00Z', hours: 1597 },
   inputs: { sha256: 'f'.repeat(64), files: 1674 },
   counts: {
-    daily: 275, notInHires: 24, noDailySet: 0, attempted: 251, withPeak: 222,
-    noPeak: 29, weak: 54, notSignificant: 6, published: 162, byClass: [102, 49, 11],
+    daily: 275, notInHires: 24, noDailySet: 0, attempted: 251, withPeak: 224,
+    // 27 of the 29 that reached no peak did so for want of wet hours; the other
+    // two stand for the three OTHER codes `noPeak` aggregates, which the plate
+    // must not print as "too few hours of rain"
+    noPeak: 29, noPeakWhy: { wetHours: 27, pairs: 1, noPositiveLag: 1, noPair: 0 },
+    weak: 56, notSignificant: 6, unclassed: 0, published: 162, byClass: [101, 49, 12],
   },
   note: 'a class describes this rolling window, not the gauge.',
   gauges: { 2729100000100: 1, 2821530000200: 0 },
@@ -4713,8 +4717,23 @@ test('RESPONSE: a gauge with no class says so, and names how the fleet splits in
   })()`));
   assert.match(s, /class="p-dim rs-class">no response time for this gauge</);
   assert.doesNotMatch(s, /the level answers the rain/);
-  // the counts come out of the file, so they cannot drift from the product
-  assert.match(s, /of the gauges with a rain field, this many have no response time — 54 rain explains too little, 29 too few hours of rain, 24 no hourly series, 6 peak not clear of chance/);
+  // The counts come out of the file, so they cannot drift from the product —
+  // and `noPeak` is SPLIT by its own reason rather than labelled with one of
+  // them. Printing all 29 as "too few hours of rain" states a cause the product
+  // did not measure: it is true by accident whenever the other three codes are
+  // zero, and false about real gauges the first window in which they are not.
+  assert.match(s, /of the gauges with a rain field, this many have no response time — 56 rain explains too little, 27 too few hours of rain, 2 no peak to read, 24 no hourly series, 6 peak not clear of chance/);
+});
+
+test('RESPONSE: with no reason split in the file the plate falls back to the total, and never invents the remainder', async () => {
+  const app = await precipApp();
+  const s = respSection(app.run(`(() => {
+    const c = { ...state.precip.lag.counts }; delete c.noPeakWhy;
+    state.precip.lag = { ...state.precip.lag, counts: c, gauges: {} };
+    return renderResponse(responseViewModel());
+  })()`));
+  assert.match(s, /29 too few hours of rain/, 'the whole total, under the only label there is');
+  assert.doesNotMatch(s, /no peak to read/, 'and no remainder conjured out of a missing field');
 });
 
 test('RESPONSE: a build with more classes than this page has words for prints NO class', async () => {

@@ -6,7 +6,7 @@
 // red on exactly the defect it was written for.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { cpSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
@@ -592,15 +592,22 @@ export function hourlyLagFor(nrw, { to = new Date(Date.parse(NOW) - 9 * 36e5), n
   const byClass = [0, 0, 0];
   for (const c of Object.values(gauges)) byClass[c]++;
   const hourIso = d => d.toISOString().slice(0, 13) + ':00Z';
+  const hours = 63 * 24;
+  const daily = Object.keys(manifest.precip || {}).length;
+  // the counts have to BALANCE, or N9(d)'s accounting identity is red on the
+  // fixture every other CLI test depends on
+  const notInHires = 24, attempted = daily - notInHires, noPeak = 20;
+  const withPeak = attempted - noPeak, notSignificant = 6;
   return {
     schema: 1, generated: NOW.slice(0, 10), ruleVersion: 2, lagRuleVersion: 1,
     rule: { classes: [[0, 1], [2, 8], [9, null]], minR: 0.25, rotations: 99, fdrQ: 0.05 },
-    window: { from: hourIso(new Date(to.getTime() - 1596 * 36e5)), to: hourIso(to), hours: 1597 },
+    window: { from: hourIso(new Date(to.getTime() - (hours - 1) * 36e5)), to: hourIso(to), hours },
     inputs: { sha256: 'f'.repeat(64), files: 1674 },
     counts: {
-      daily: Object.keys(manifest.precip || {}).length, notInHires: 24, noDailySet: 0,
-      attempted: n + 40, withPeak: n + 20, noPeak: 20, weak: 14, notSignificant: 6,
-      published: n, byClass,
+      daily, notInHires, noDailySet: 0, attempted, withPeak, noPeak,
+      weak: withPeak - notSignificant - n, notSignificant, unclassed: 0, published: n,
+      noPeakWhy: { wetHours: noPeak, pairs: 0, noPositiveLag: 0, noPair: 0 },
+      byClass,
     },
     gauges,
     ...over,
@@ -1236,6 +1243,51 @@ test('CLI: a nonexistent --hires is red, not a quiet skip', () => {
   assert.doesNotMatch(stdout, /SKIPPED/, 'a wrong path must not read as "no path given"');
 });
 
+// The CLI half of N9(g) and N9(h). Their CONTENT is proven against the real
+// mirror (see this file's N9 header) — but that proves nothing about their
+// DISPATCH, and a clause nothing dispatches is a clause that is not there. The
+// same hole was measured on N8 once and closed with the pair of tests above.
+// Measured here before this test existed: deleting the (g) digest block, or the
+// (h) recompute block, or both, left all 105 tests in this file green.
+//
+// A minimal hires tree is enough, and deliberately so: the fixture's lag.json is
+// SYNTHETIC (hourlyLagFor, not the builder), so the digest cannot match and the
+// rebuild cannot agree — which is precisely what makes both clauses speak.
+test('CLI: N9(g) and N9(h) are dispatched — a --hires tree the product was not built over is red', () => {
+  const repo = cloneSeed();
+  const hires = join(repo, 'nrw-hires');
+  // Shards for the fixture's OWN stations, and enough of them that the builder
+  // RUNS instead of throwing. That distinction is the test: with a tree the
+  // builder cannot read, the catch block below reports "could not recompute"
+  // and a dead diffs loop passes unnoticed — measured, which is why the last
+  // assertion here forbids that wording. The window must also clear the
+  // rotation guard band (2*168 + 99 + 1 h), or publish() refuses outright.
+  const month = '2026-08', start = '2026-08-01T00:00:00+01:00', N = 24 * 30;
+  const shard = (id, v) => JSON.stringify({ id, month, step: 3600, start, v });
+  for (const id of readdirSync(join(repo, 'nrw', 'rain')).slice(0, 20)) {
+    mkdirSync(join(hires, 'rain', id), { recursive: true });
+    writeFileSync(join(hires, 'rain', id, `${month}.json`),
+      shard(id, Array.from({ length: N }, (_, i) => (i % 7 === 0 ? 0.5 : 0))));
+  }
+  const precip = readManifest(repo).precip || {};
+  for (const no of Object.keys(precip).filter(k => precip[k].series === true).slice(0, 5)) {
+    mkdirSync(join(hires, 'gauges', no), { recursive: true });
+    writeFileSync(join(hires, 'gauges', no, `${month}.json`),
+      shard(no, Array.from({ length: N }, (_, i) => 100 + (i % 13))));
+  }
+  const { code, stdout } = runChecker(repo, ['--hires', hires]);
+  assert.equal(code, 1, stdout);
+  // (g): the digest of the bytes actually read cannot match a synthetic file
+  assert.match(stdout, /::error::N9: hourly\/lag\.json was built over different hires bytes than the tree holds/);
+  // (h): the rebuild must REPORT ITS DIFFS, not merely fail to start
+  assert.match(stdout, /::error::N9: hourly lag is not what the rule produces/);
+  assert.doesNotMatch(stdout, /could not recompute the hourly lag/,
+    'the builder has to actually run here, or (h) is pinned by its catch block instead of by its diffs');
+  // and with a tree given, neither clause may report itself as skipped
+  assert.doesNotMatch(stdout, /N9 partial/);
+  assert.doesNotMatch(stdout, /N9\(g\) input digest and N9\(h\) recomputation SKIPPED/);
+});
+
 test('CLI: N8 counters are red when the product shrinks below its floor', () => {
   const repo = cloneSeed();
   const p = join(repo, 'nrw', 'precip', 'index.json');
@@ -1284,7 +1336,7 @@ test('the collector places every station inside the box, and no station outside 
 
 const {
   checkHourlyShape, checkHourlyDrift,
-  MIN_HOURLY_PUBLISHED, MIN_HOURLY_WINDOW_HOURS, MAX_HOURLY_WINDOW_LAG_H,
+  MIN_HOURLY_PUBLISHED, MIN_HOURLY_WINDOW_HOURS, MAX_HOURLY_WINDOW_HOURS, MAX_HOURLY_WINDOW_LAG_H,
   MAX_HOURLY_CLASS_DRIFT, MAX_HOURLY_PUBLISHED_DROP, MAX_HOURLY_CLASS_SHARE,
 } = await import('../scripts/check-nrw-consistency.mjs');
 
@@ -1295,20 +1347,28 @@ const lagGauges = () => Object.fromEntries(LAG_IDS.map((no, i) => [no, i < 60 ? 
 const LAG_TOPO = Object.fromEntries(LAG_IDS.map(no => [no, {}]));
 const LAG_PRECIP = Object.fromEntries(LAG_IDS.map(no => [no, { series: true }]));
 
-// The window ends 9 h before the pinned clock and spans 1597 h, both inside the
-// rule; derived rather than typed, so the two can never disagree by a typo.
+// The window ends 9 h before the pinned clock and spans the builder's own 63
+// days, inside both the floor and the ceiling; derived rather than typed, so the
+// span and the two stamps can never disagree by a typo.
+const LAG_HOURS = 63 * 24;
 const LAG_TO = new Date(nowDate.getTime() - 9 * 36e5);
 const hourIso = d => d.toISOString().slice(0, 13) + ':00Z';
-const LAG_WINDOW = { from: hourIso(new Date(LAG_TO.getTime() - 1596 * 36e5)), to: hourIso(LAG_TO), hours: 1597 };
+const LAG_WINDOW = { from: hourIso(new Date(LAG_TO.getTime() - (LAG_HOURS - 1) * 36e5)), to: hourIso(LAG_TO), hours: LAG_HOURS };
 
 const healthyLag = (over = {}) => ({
   schema: 1, generated: '2026-09-04', ruleVersion: 2, lagRuleVersion: 1,
   rule: { classes: [[0, 1], [2, 8], [9, null]], minR: 0.25, rotations: 99, fdrQ: 0.05 },
   window: { ...LAG_WINDOW },
   inputs: { sha256: 'f'.repeat(64), files: 1674 },
+  // The counts BALANCE: 251 = 24 + 0 + 227, 227 = 29 + 198, 198 = 54 + 6 + 0 +
+  // 138 … which is not 120, so the fixture uses its own consistent set rather
+  // than the mirror's. A fixture that could not satisfy the accounting identity
+  // would make every test below pass or fail for the wrong reason.
   counts: {
-    daily: 275, notInHires: 24, noDailySet: 0, attempted: 251, withPeak: 222,
-    noPeak: 29, weak: 54, notSignificant: 6, published: 120, byClass: [60, 40, 20],
+    daily: 200, notInHires: 24, noDailySet: 0, attempted: 176, withPeak: 160,
+    noPeak: 16, weak: 34, notSignificant: 6, unclassed: 0, published: 120,
+    noPeakWhy: { wetHours: 16, pairs: 0, noPositiveLag: 0, noPair: 0 },
+    byClass: [60, 40, 20],
   },
   gauges: lagGauges(),
   ...over,
@@ -1349,7 +1409,7 @@ test('N9b: a window that was not rebuilt, one from the future, and one too short
   const short = { from: LAG_WINDOW.from, to: LAG_WINDOW.to, hours: MIN_HOURLY_WINDOW_HOURS - 1 };
   assert.match(shapeLag({ window: short }), /the hourly window is 959 h, floor is 960/);
   // `hours` may not be a number the file merely asserts about itself
-  assert.match(shapeLag({ window: { ...LAG_WINDOW, hours: 1200 } }), /says 1200 hours but spans 1597/);
+  assert.match(shapeLag({ window: { ...LAG_WINDOW, hours: 1200 } }), new RegExp(`says 1200 hours but spans ${LAG_HOURS}`));
   assert.match(shapeLag({ window: { from: 'never', to: 'never', hours: 1597 } }), /not a readable pair of timestamps/);
 });
 
@@ -1367,6 +1427,59 @@ test('N9c: an hour where a class id belongs, and the two reference checks', () =
   assert.match(shapeLag({ counts: { ...healthyLag().counts, byClass: [60, 40, 21] } }),
     /counts\.byClass is \[60,40,21\], a recount of `gauges` gives \[60,40,20\]/);
   assert.match(shapeLag({ rule: { classes: 'three' } }), /rule\.classes is not a list of \[lo, hi\] pairs/);
+});
+
+test('N9c: the RULE itself, not only its shape — reordered classes make the plate lie', () => {
+  // The plate binds its three words to the class INDEX positionally, so a
+  // `classes` list that is reordered, gapped or overlapping makes it print a
+  // real class id under the wrong words ("within the hour (9+ h)") with every
+  // other clause green.
+  const rule = classes => ({ rule: { ...healthyLag().rule, classes } });
+  assert.match(shapeLag(rule([[9, null], [2, 8], [0, 1]])), /must be ascending, adjacent and non-overlapping/);
+  assert.match(shapeLag(rule([[0, 1], [0, 1], [2, null]])), /must be ascending, adjacent and non-overlapping/);
+  assert.match(shapeLag(rule([[0, 1], [4, 8], [9, null]])), /ends at 1 and \[1\] starts at 4/, 'a gap swallows lags 2 and 3');
+  assert.match(shapeLag(rule([[2, 8], [9, null]])), /starts at 2 h, so a lag of 0 falls through it/);
+  assert.match(shapeLag(rule([[0, 1], [2, 8], [9, 48]])), /the last of rule.classes is bounded/);
+  assert.match(shapeLag(rule([[0, 1], [2, 8], [9, 8]])), /rule.classes\[2\] is empty/);
+  // and the filters have to be able to filter
+  const R = over => ({ rule: { ...healthyLag().rule, ...over } });
+  assert.match(shapeLag(R({ rotations: 0 })), /a permutation filter that ran no rotations calls everything significant/);
+  assert.match(shapeLag(R({ minR: 0 })), /rule.minR is 0, which is not a correlation cut/);
+  assert.match(shapeLag(R({ fdrQ: 1 })), /rule.fdrQ is 1, which is not a false-discovery rate/);
+});
+
+test('N9: the run\'s own provenance is checked, because (g) does not run without --hires', () => {
+  assert.match(shapeLag({ inputs: { sha256: 'nope', files: 10 } }), /inputs.sha256 is not a sha256 digest/);
+  assert.match(shapeLag({ inputs: undefined }), /inputs.sha256 is not a sha256 digest/);
+  assert.match(shapeLag({ inputs: { sha256: 'f'.repeat(64), files: 0 } }), /a digest over no files is not a digest/);
+  assert.match(shapeLag({ generated: 'banana' }), /generated is "banana", not a date/);
+});
+
+test('N9d: the counts BALANCE — a drop-out counter cannot be invented', () => {
+  // Nesting alone leaves every drop-out counter free, and the plate prints four
+  // of them to the reader as the fleet split. Measured against the real file
+  // before this clause existed: weak = 99999 was green.
+  const c = healthyLag().counts;
+  const sum = (...ks) => ks.reduce((a, k) => a + c[k], 0);
+  assert.match(shapeLag({ counts: { ...c, weak: 99999 } }),
+    new RegExp(`weak \\+ notSignificant \\+ unclassed \\+ published = ${99999 + sum('notSignificant', 'unclassed', 'published')}, but withPeak is ${c.withPeak}`));
+  assert.match(shapeLag({ counts: { ...c, notInHires: 0 } }),
+    new RegExp(`notInHires \\+ noDailySet \\+ attempted = ${sum('noDailySet', 'attempted')}, but daily is ${c.daily}`));
+  assert.match(shapeLag({ counts: { ...c, noPeak: 0 } }),
+    new RegExp(`noPeak \\+ withPeak = ${c.withPeak}, but attempted is ${c.attempted}`));
+  assert.match(shapeLag({ counts: { ...c, weak: -1, notSignificant: 41 } }), /counts.weak is not a count/);
+  assert.match(shapeLag({ counts: { ...c, unclassed: undefined } }), /counts.unclassed is not a count/);
+});
+
+test('N9b: a window past the source\'s own length is red, which a floor cannot see', () => {
+  // The mirror only grows and the source does not. A builder that stopped
+  // bounding the window moves this number UP; the floor watches it going down.
+  const long = { ...LAG_WINDOW, hours: MAX_HOURLY_WINDOW_HOURS + 1 };
+  const v = shapeLag({ window: { from: hourIso(new Date(LAG_TO.getTime() - MAX_HOURLY_WINDOW_HOURS * 36e5)), to: LAG_WINDOW.to, hours: MAX_HOURLY_WINDOW_HOURS + 1 } });
+  assert.match(v, /ceiling is 1560/);
+  assert.match(v, /the mirror grows and the source does not/);
+  assert.doesNotMatch(shapeLag({}), /ceiling is/, 'and the healthy window is well inside it');
+  assert.ok(long.hours > MIN_HOURLY_WINDOW_HOURS, 'the case really is above the floor, so only the ceiling can catch it');
 });
 
 test('N9d: the floors, the nesting and the one-class collapse', () => {

@@ -3245,6 +3245,7 @@ const T = {
   respClassSplit: 'of the gauges with a rain field, this many have no response time —',
   respClassWeak: 'rain explains too little',
   respClassThin: 'too few hours of rain',
+  respClassNoPeak: 'no peak to read',
   respClassNoHires: 'no hourly series',
   respClassChance: 'peak not clear of chance',
   respClassUnnamed: 'this build publishes classes this page has no words for',
@@ -4510,11 +4511,14 @@ function hourlyClassView(lag, no) {
   const cls = Number.isInteger(raw) && raw >= 0 && raw < classes.length ? raw : null;
   // A build that ships more classes than this page has words for prints NO
   // class and says so, rather than an index the reader would read as a fourth.
+  // It says so whether or not THIS gauge has one: "no words for these classes"
+  // and "this gauge has no response time" are different facts, and collapsing
+  // them tells a reader something false about the gauge.
   const named = classes.length === T.respClasses.length;
   return {
     ok: true, classes, named,
     cls: named ? cls : null,
-    unnamed: cls != null && !named,
+    unnamed: !named,
     hours: lag.window && Number.isFinite(lag.window.hours) ? lag.window.hours : null,
     to: lag.window ? String(lag.window.to || '') : '',
     counts: lag.counts || null,
@@ -4570,8 +4574,17 @@ function hourlyClassSay(h) {
 function hourlyClassKey(h) {
   if (!h || !h.ok) return [];
   const c = h.counts || {};
+  // `noPeak` aggregates FOUR reasons (too few wet hours, too few pairs, no
+  // positive lag at all, no pair) and the file ships the split beside it. Naming
+  // the total "too few hours of rain" is a cause the product did not measure —
+  // true by accident today (all 27 are wet hours) and false the first window in
+  // which a gauge correlates nowhere. So the named reason gets its own count and
+  // whatever is left over is named as what it is.
+  const w = c.noPeakWhy || {};
+  const wet = Number.isFinite(w.wetHours) ? w.wetHours : (Number.isFinite(c.noPeak) ? c.noPeak : null);
+  const otherNoPeak = Number.isFinite(c.noPeak) && Number.isFinite(wet) ? c.noPeak - wet : 0;
   const split = [
-    [c.weak, T.respClassWeak], [c.noPeak, T.respClassThin],
+    [c.weak, T.respClassWeak], [wet, T.respClassThin], [otherNoPeak, T.respClassNoPeak],
     [c.notInHires, T.respClassNoHires], [c.notSignificant, T.respClassChance],
   ].filter(([n]) => Number.isFinite(n) && n > 0).map(([n, what]) => `${n} ${what}`);
   return [

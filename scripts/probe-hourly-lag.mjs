@@ -129,8 +129,19 @@ function main(argv) {
     // This repo already knows why: the forecast gate's R5 exists because R1 can
     // insist on noise, and the 2026-09-07 run's shuffled control scored BETTER
     // than the real rain. An estimator without one is a hypothesis.
+    //
+    // THE SHIFTS ARE DERIVED FROM THE SPAN, never written down — and that is a
+    // repair, not a tidy-up. The list used to be [0, 601, 1009, 1511], picked
+    // by hand for a 1597 h window. Against the bounded 1512 h one, 1511 is a
+    // rotation by MINUS ONE HOUR: the identity in all but name. It duly
+    // "survived" the shuffle at median r 0.261 with 34 % of gauges still at lag
+    // 0, and the gate read FAIL — the control was measuring the real signal and
+    // reporting it as noise. The publication filter already solves exactly this
+    // with a guard band, so the control takes three of ITS rotations.
+    const shifts = rotationShifts(span);
+    if (!shifts.length) throw new Error(`a ${span} h window cannot carry a rotation set — the control cannot run`);
     const rows = [];
-    for (const shift of [0, 601, 1009, 1511]) {
+    for (const shift of [0, ...[0.25, 0.5, 0.75].map(q => shifts[Math.floor(shifts.length * q)])]) {
       const est = estimateAll(bench, { from: bench.from, to: bench.to, opts, levelShift: shift });
       const ok2 = [...est.values()].filter(x => x.h != null);
       rows.push({ shift, n: ok2.length, zero: ok2.filter(x => x.h === 0).length, r: median(ok2.map(x => x.r)), h: median(ok2.map(x => x.h)) });

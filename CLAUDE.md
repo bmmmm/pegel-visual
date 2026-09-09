@@ -41,7 +41,7 @@ because they are the ones you break without knowing you are in that domain:
 Its own file: **`.claude/domains/lanuk-nrw.md`** — read it before touching the
 collector, the **rain-field product** (`nrw/precip/`, its **N8** gate, the
 `?rain` mode, the station PRECIPITATION/RESPONSE blocks), the **hourly response
-class** (`nrw/hourly/lag.json`, gate **N9**, deployed 2026-09-08), the data
+class** (`nrw/hourly/lag.json`, gate **N9**, built 2026-09-08), the data
 branches or the LANUK seam in `index.html`. Six things to carry without opening
 it: the source has **no CORS and no live feed** (a daily export, ~24 h
 old, mirrored into two GitHub-only orphan branches); its window **rolls**, so a
