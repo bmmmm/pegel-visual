@@ -221,9 +221,15 @@ def _deranged(rows: np.ndarray, min_dist: int) -> np.ndarray:
     hoped for. Regularity is not a defect in a control that only has to be FAR.
     """
     n = len(rows)
-    if n < 2:
-        return rows
-    shift = max(1, n // 2)
+    shift = n // 2
+    # `min_dist` was passed and never read (audit 2026-09-09): at n = 3 the
+    # half-cycle is a one-origin shift — the rain of seven days earlier, the
+    # very case the docstring calls unfit. A control that is not far is not a
+    # control, so a run too short for the distance stops here rather than
+    # scoring a comparison that means nothing.
+    if shift < min_dist:
+        raise ValueError(f"{n} windows give a half-cycle of {shift} origins, under the "
+                         f"registered minimum of {min_dist}: too short a run for a control arm")
     return rows[(np.arange(n) + shift) % n]
 
 
@@ -515,11 +521,7 @@ def main(argv=None) -> int:
             # the arm that actually ran, shuffle included: repeating the plain
             # covariate would prove the wrong path reproduces
             if arm == "shuffled":
-                rng2 = np.random.default_rng(7)
-                perm2 = rng2.permutation(len(cv))
-                while len(perm2) > 1 and (perm2 == np.arange(len(perm2))).any():
-                    perm2 = rng2.permutation(len(cv))
-                cv = cv[perm2][:b]
+                cv = _deranged(cv, MIN_SHUFFLE_DISTANCE)
             po = None if arm == "plain" else cv
             a1 = tfm.forecast_batch(model, ctx, proto["horizon"], po)
             a2 = tfm.forecast_batch(model, ctx, proto["horizon"], po)

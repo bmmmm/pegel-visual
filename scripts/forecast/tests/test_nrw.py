@@ -483,9 +483,12 @@ def test_the_control_arm_is_far_from_the_window_it_replaces():
     assert moved.min() == 24, "a half-cycle moves every window the same maximal distance"
     # deterministic, so two runs of the same arm reproduce
     assert np.array_equal(out, backtest._deranged(rows, backtest.MIN_SHUFFLE_DISTANCE))
-    # and it degrades rather than looping for ever on a run too short for the distance
+    # a run too short for the distance is refused, not quietly shifted by one
+    # origin (which at step 7 is the rain of seven days earlier)
     short = np.arange(3)[:, None] * np.ones((1, 2))
-    assert backtest._deranged(short, 8).shape == short.shape
+    with pytest.raises(ValueError, match="too short"):
+        backtest._deranged(short, 8)
+    assert backtest._deranged(np.arange(16)[:, None] * np.ones((1, 2)), 8).shape == (16, 2), 'sixteen is enough'
 
 
 # ---------- the control arm gets the same checks the plain arm got ----------

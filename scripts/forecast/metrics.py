@@ -21,13 +21,6 @@ def mae(pred: np.ndarray, y: np.ndarray, mask: np.ndarray) -> float:
     return float(err[sel].mean()) if sel.any() else float("nan")
 
 
-def abs_err_sum_count(pred: np.ndarray, y: np.ndarray, mask: np.ndarray):
-    """(sum of |err|, count) so callers can pool across stations without re-weighting."""
-    err = np.abs(pred - y)
-    sel = mask & ~np.isnan(err)
-    return float(err[sel].sum()), int(sel.sum())
-
-
 def skill(mae_model: float, mae_base: float) -> float:
     return 1.0 - mae_model / mae_base if mae_base > 0 else float("nan")
 

@@ -109,13 +109,13 @@ def fmt(v, digits=3):
 METHODS = ("persist", "clim", "snaive", "blend", "tfm_point", "upstream")
 
 
-def per_h_abs_err(d: dict, split: str = "is_test") -> tuple[dict, dict]:
+def per_h_abs_err(d: dict, split: str = "is_test", methods: tuple = None) -> tuple[dict, dict]:
     """(sum of |err|, count) per lead day h = 1..H and method, on the given split —
     the raw material for a curve over the lead day, poolable across stations."""
     sel = d[split].astype(bool)
     y, m = d["y"][sel], d["tmask"][sel]
     sums, counts = {}, {}
-    for k in METHODS:
+    for k in methods or METHODS:
         err = np.abs(d[k][sel] - y)
         ok = m & ~np.isnan(err)
         sums[k] = np.where(ok, err, 0.0).sum(axis=0)
@@ -190,7 +190,7 @@ def pooled(data: dict, blocks: dict, thresholds: dict) -> dict:
         crps_t = crps_b = 0.0
         inside = total = 0
         inside_b = 0
-        old_t = old_b = new_t = new_b = 0.0
+        new_t = new_b = 0.0
         for si, u in enumerate(uuids):
             d = data[u]
             sel = d["is_test"].astype(bool)
@@ -209,11 +209,11 @@ def pooled(data: dict, blocks: dict, thresholds: dict) -> dict:
             inside += int(((q[:, :, 0] <= y) & (y <= q[:, :, 8]))[m].sum())
             inside_b += int(((qb[:, :, 0] <= y) & (y <= qb[:, :, 8]))[m].sum())
             total += int(m.sum())
-            # contamination probe uses h1-30 only; computed here for every block, read for h1-30
+            # the recent-years slice for ss_new. Its old-years twin (2003-2015) was
+            # summed here too and never read: the TEST split starts in 2016, so
+            # it was provably empty — contamination() carries A7 on its own
             yrs = year_of(d["o_dates"][sel])
-            old = (yrs >= CONTAMINATION_OLD[0]) & (yrs <= CONTAMINATION_OLD[1])
             new = (yrs >= CONTAMINATION_NEW[0]) & (yrs <= CONTAMINATION_NEW[1])
-            old_t += et[old].sum(); old_b += eb[old].sum()
             new_t += et[new].sum(); new_b += eb[new].sum()
         ss = 1 - E_t.sum() / E_b.sum() if E_b.sum() > 0 else float("nan")
 
@@ -430,15 +430,7 @@ NRW_METHODS = ("persist", "snaive", "blend", "rain_ols", "tfm_point")
 
 
 def nrw_per_h_abs_err(d: dict) -> tuple[dict, dict]:
-    sel = d["is_test"].astype(bool)
-    y, m = d["y"][sel], d["tmask"][sel]
-    sums, counts = {}, {}
-    for k in NRW_METHODS:
-        err = np.abs(d[k][sel] - y)
-        ok = m & ~np.isnan(err)
-        sums[k] = np.where(ok, err, 0.0).sum(axis=0)
-        counts[k] = ok.sum(axis=0)
-    return sums, counts
+    return per_h_abs_err(d, methods=NRW_METHODS)
 
 
 def nrw_score_station(d: dict, blocks: dict, th: dict, other: dict | None = None) -> dict:
