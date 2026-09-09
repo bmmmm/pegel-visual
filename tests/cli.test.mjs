@@ -3,9 +3,9 @@
 // starts with `--`, flag() throws on a missing value, listDirs is sorted.
 // Plus the git probe's one swallowed failure, and a smoke import of
 // lib/cdp.mjs, which no browser check can gate inside `node --test`.
-import test from 'node:test';
+import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
@@ -13,6 +13,11 @@ import { fileURLToPath } from 'node:url';
 import { parseArgs, listDirs, listChanges, readHead, readJson } from '../scripts/lib/cli.mjs';
 
 const SCRIPTS = fileURLToPath(new URL('../scripts/', import.meta.url));
+
+// every scratch tree this file makes, removed once at the end (they used to pile up in $TMPDIR)
+const scratch = [];
+const tmp = prefix => { const d = mkdtempSync(join(tmpdir(), prefix)); scratch.push(d); return d; };
+after(() => { for (const d of scratch) rmSync(d, { recursive: true, force: true }); });
 
 test('parseArgs: opt falls back, has is a switch, flag throws on a missing value', () => {
   const p = parseArgs(['--out', 'x', '--check', '--tree']);
@@ -37,7 +42,7 @@ test('parseArgs: a value never starts with --, so `--out --check` reads --out as
 });
 
 test('listDirs is sorted whatever order the filesystem hands back', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'cli-dirs-'));
+  const dir = tmp('cli-dirs-');
   for (const n of ['b', '10', 'a', '2']) mkdirSync(join(dir, n));
   writeFileSync(join(dir, 'file'), '');
   assert.deepEqual(listDirs(dir), ['10', '2', 'a', 'b']);
@@ -45,7 +50,7 @@ test('listDirs is sorted whatever order the filesystem hands back', () => {
 });
 
 test('readJson: null for a missing and for a malformed file', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'cli-json-'));
+  const dir = tmp('cli-json-');
   writeFileSync(join(dir, 'bad.json'), '{');
   writeFileSync(join(dir, 'ok.json'), '{"a":1}');
   assert.equal(readJson(join(dir, 'bad.json')), null);
@@ -57,11 +62,19 @@ const gitIn = (dir, ...a) => execFileSync('git', ['-C', dir, '-c', 'user.name=t'
   '-c', 'core.hooksPath=/dev/null', ...a], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
 
 test('listChanges: an unborn HEAD is "everything is new"; any other git failure still throws', () => {
-  const repo = mkdtempSync(join(tmpdir(), 'cli-git-'));
+  const repo = tmp('cli-git-');
   gitIn(repo, 'init', '-q');
   mkdirSync(join(repo, 'data'));
   writeFileSync(join(repo, 'data', 'a.json'), '{"v":1}');
-  assert.deepEqual(listChanges(repo, 'data'), [{ status: 'A', path: 'data/a.json' }]);
+  // the unborn case says so on stdout — captured here, so the suite's output
+  // stays clean and the note itself is asserted rather than silenced
+  const logged = [];
+  const log = console.log;
+  console.log = (...a) => logged.push(a.join(' '));
+  let unborn;
+  try { unborn = listChanges(repo, 'data'); } finally { console.log = log; }
+  assert.deepEqual(unborn, [{ status: 'A', path: 'data/a.json' }]);
+  assert.match(logged.join('\n'), /no HEAD to compare against/);
   assert.equal(readHead(repo, 'data/a.json'), null, 'no HEAD version yet');
   gitIn(repo, 'add', '-A');
   gitIn(repo, 'commit', '-q', '-m', 'seed');
@@ -96,7 +109,7 @@ test('lib/cdp.mjs imports and binds what it re-exports', async () => {
 // snapshot-wsv and fetch-rws-archive used to fetch before they validated
 // anything; their unknown-flag sweep (exit 2) is what makes them spawnable here.
 test('every collector and builder main() gets past its argument parsing', () => {
-  const missing = join(mkdtempSync(join(tmpdir(), 'cli-main-')), 'nowhere');
+  const missing = join(tmp('cli-main-'), 'nowhere');
   const cases = [
     [['fetch-wsv-archive.mjs', '--migrate'], 2, /unknown flag --migrate/],
     [['fetch-wsv-archive.mjs', '--current', '--running'], 1, /separate passes/],
