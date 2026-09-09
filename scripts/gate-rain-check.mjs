@@ -10,6 +10,7 @@ import { mkdirSync, writeFileSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { sleep, serve, chrome, session, checker, killChildren } from './lib/cdp.mjs';
+import { NRW_BLOCKS } from '../gate/gate.js';
 
 // the checkout this file lives in — a worktree runs its own copy, and a
 // hardcoded path would send every worktree's run at the main checkout
@@ -22,11 +23,17 @@ const check = checker();
 // 2026-09-09 this check demanded every bar negative because every bar WAS,
 // and the next gate run with a positive block would have turned CI red for
 // a data reason. The expectation is read off the report the page draws —
-// pooled.blocks, in order; the control arm's own numbers live in
-// report-3p0-rain-shuffled.json and are not drawn as bars.
-const RAIN_REPORT = join(ROOT, 'gate', 'nrw-mid', 'report-3p0-rain.json');
-const expectFills = Object.values(JSON.parse(readFileSync(RAIN_REPORT, 'utf8')).pooled.blocks)
-  .map(b => (b.ss_vs_other < 0 ? '-45deg' : '45deg'));
+// pooled.blocks in the page's own NRW_BLOCKS order; the control arm's numbers
+// live in report-3p0-rain-shuffled.json and are not drawn as bars. Against a
+// deployed page (GATE_BASE_URL) the report is read from that origin too —
+// a local report ahead of a deploy would otherwise expect bars the page
+// does not draw yet.
+const RAIN_REPORT = 'gate/nrw-mid/report-3p0-rain.json';
+const rainReport = process.env.GATE_BASE_URL
+  ? await (await fetch(new URL(RAIN_REPORT, process.env.GATE_BASE_URL))).json()
+  : JSON.parse(readFileSync(join(ROOT, RAIN_REPORT), 'utf8'));
+const expectFills = NRW_BLOCKS.filter(b => rainReport.pooled.blocks[b])
+  .map(b => (rainReport.pooled.blocks[b].ss_vs_other < 0 ? '-45deg' : '45deg'));
 if (!expectFills.length) throw new Error(`${RAIN_REPORT}: no pooled blocks to expect bars for`);
 
 // GATE_BASE_URL=https://bmmmm.github.io/pegel-visual/ checks the deployed page
@@ -71,7 +78,7 @@ for (const vp of [{ n: 'desktop', w: 1280, h: 900 }, { n: 'phone', w: 390, h: 84
   console.log(`  title: ${m.title}`);
   for (const r of m.rows) console.log(`  row: ${r}`);
   check(errs.length === 0, `${vp.n}: no uncaught exception`, errs.join(' | '));
-  check(m.rows.length === 3, `${vp.n}: one row per block`, String(m.rows.length));
+  check(m.rows.length === expectFills.length, `${vp.n}: one row per block`, String(m.rows.length));
   check(m.tables === 2, `${vp.n}: the clause table and the per-gauge twin`, String(m.tables));
   check(m.swatchesEmpty === 0, `${vp.n}: no empty swatch`, String(m.swatchesEmpty));
   check(m.wide.length === 0, `${vp.n}: nothing sticks out`, m.wide.join(', '));

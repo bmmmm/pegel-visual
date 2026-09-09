@@ -402,6 +402,33 @@ test('response: 9 events is null, 10 is a number', () => {
   assert.equal(typeof mk(MIN_EVENTS).events.risePer10mm, 'number');
 });
 
+test('response: eventLag selects the estimator — max is the shipped one, peak and a fixed lag read one delta', () => {
+  // the linear system of the test above: delta[i] = 0.8 * rain[i-1], peak at lag 1
+  const N = 500;
+  let seed = 12345;
+  const rnd = () => { seed = (1664525 * seed + 1013904223) >>> 0; return seed / 2 ** 32; };
+  const rain = Array.from({ length: N }, () => Math.round(rnd() * 20));
+  const level = new Float64Array(N);
+  level[0] = 100;
+  for (let i = 1; i < N; i++) level[i] = level[i - 1] + 0.8 * rain[i - 1];
+  const at = eventLag => responseStats(rain, level, { from: 0, to: N - 1, id: 'x', nRain: 5, unit: 'cm', eventLag });
+  assert.deepEqual(at(undefined), at('max'), 'the default is the shipped estimator');
+  assert.equal(at('peak').events.risePer10mm, 8, 'at the peak lag the linear slope is exact');
+  assert.equal(at(1).events.risePer10mm, 8, 'a fixed lag of 1 reads the same slope');
+  // a fixed lag that misses the response reads the next day's rain, not this one's
+  assert.notEqual(at(0).events.risePer10mm, 8);
+  assert.equal(at(0).events.n, at('max').events.n, 'the event count does not depend on the estimator');
+  // no peak (too few pairs): 'peak' prints no rise and says why, and the reason is the lag stage's
+  const short = Array(MIN_RESPONSE_DAYS + 10).fill(null);
+  const lvl = flat(short.length, 100);
+  for (let i = 0; i < MIN_RESPONSE_DAYS - 1; i++) { short[i] = 8 + (i % 5); lvl[i + 1] = 100 + (i % 5); }
+  const np = responseStats(short, lvl, { from: 0, to: short.length - 1, id: 'x', nRain: 3, unit: 'cm', eventLag: 'peak' });
+  assert.equal(np.peakLag, null);
+  assert.equal(np.events.n, 0);
+  assert.equal(np.events.risePer10mm, null);
+  assert.match(np.reason, /too few pairs/);
+});
+
 test('response: the unit rides along with the gauge, it is not assumed to be cm', () => {
   const r = responseStats([null], flat(1, 0), { from: 0, to: 0, id: 'x', nRain: 3, unit: 'm+NN' });
   assert.equal(r.unit.rise, 'm+NN per 10 mm of rain around the gauge');

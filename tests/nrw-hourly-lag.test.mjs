@@ -17,6 +17,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
 
 const {
   buildHourlyLag, publish, estimateAll, loadBench, gaugeInputs, lagStats, arealHourly,
@@ -649,4 +650,22 @@ test('with the rotations switched off nothing is filtered — the filter is doin
   assert.equal(off.shifts.length, 0);
   assert.equal(off.counts.notSignificant, 0);
   for (const x of off.rows) if (!x.skip && x.h != null) assert.equal(x.p, null);
+});
+
+// The CLI, not only the function behind it: nrw-update.yml runs
+// `build-nrw-hourly-lag.mjs --report` and pushes only if it exits 0. After
+// the C4 refactor the --report branch read a variable that no longer existed
+// and every run died with a ReferenceError — 651 tests green, because none
+// of them drove main(). This one does.
+test('CLI: --report on the fixture trees runs to the end and prints the diagnostics table', () => {
+  const out = join(FIX.dir, 'cli-out', 'hourly'); // the writer insists on that leaf
+  const stdout = execFileSync(process.execPath, [
+    new URL('../scripts/build-nrw-hourly-lag.mjs', import.meta.url).pathname,
+    '--tree', FIX.tree, '--hires', FIX.hires, '--out', out, '--report',
+  ], { encoding: 'utf8', env: { ...process.env, PEGEL_NOW: '2026-07-31T12:00:00Z' } });
+  assert.match(stdout, /^hourly lag: window /m);
+  assert.match(stdout, /^no\tclass\th\tr\tn\twet\tp\tsig\tstate$/m, 'the --report table header');
+  assert.match(stdout, /^100\t0\t/m, 'gauge 100 is class 0 in the table');
+  assert.match(stdout, /file\(s\) written$/m);
+  assert.ok(JSON.parse(readFileSync(join(out, 'lag.json'), 'utf8')).gauges, 'lag.json written by the CLI');
 });

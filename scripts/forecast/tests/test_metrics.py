@@ -88,4 +88,10 @@ def test_deciles_have_one_source():
     import tfm
     assert baselines.DECILES is metrics.DECILES
     assert tfm.DECILE_LEVELS == [float(q) for q in metrics.DECILES]
+    # the value comparison above cannot tell a derived list from a retyped one;
+    # the source can: no literal decile list may exist outside metrics.py
+    import inspect
+    import re
+    for mod in (tfm, baselines):
+        assert not re.search(r"\[\s*0\.1\s*,\s*0\.2\b", inspect.getsource(mod)), mod.__name__
     assert list(metrics.DECILES) == [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]

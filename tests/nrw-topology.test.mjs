@@ -109,6 +109,26 @@ test('topology: the basin-only station of a name is placed, the gauge of another
   assert.equal([...registry.values()].filter(isGaugeLike).length, 27);
 });
 
+test('topology: a gauge whose catchment shrinks downstream is off the chain (the Lippstadt-Nordumflut case)', () => {
+  // the Sieg fixture has no such gauge — measured, 0 flagged — so the one
+  // hand-written exception in buildTopology is exercised here on three rows
+  const row = (no, dist, km2) => [no, {
+    station_no: no, _src: ['stations', 'pegel'], object_type: 'Oberflächengewässer', station_name: no,
+    site_no: '100', catchment_no: '278', catchment_name: 'Lippe', WTO_OBJECT: 'Lippe',
+    DIST_TO_CONFL: `${dist} km`, CATCHMENT_SIZE: `${km2} km²`,
+  }];
+  const registry = new Map([row('a', '150,0', '900'), row('bypass', '0,45', '1385'), row('c', '80,0', '3000'), row('d', '10,0', '4800')]);
+  const bidx = basinIndex(registry);
+  const topo = buildTopology(registry, e => assignBasin(e, bidx), () => true);
+  // by distance the bypass would sit at the mouth; its 1385 km² says it does not
+  assert.equal(topo.gauges.bypass.flag, 'km2-order');
+  assert.equal(topo.gauges.bypass.down, null);
+  assert.equal(topo.basins['278'].mouth, 'd');
+  assert.equal(topo.gauges.a.down, 'c');
+  assert.equal(topo.gauges.c.down, 'd');
+  assert.ok(!Object.values(topo.gauges).some(g => g.down === 'bypass'), 'nothing flows into the bypass');
+});
+
 // ---------- the registry and its parsers ----------
 
 test('parseTable: header, CRLF, an empty line and a short row', () => {

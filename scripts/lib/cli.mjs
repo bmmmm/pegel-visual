@@ -77,12 +77,19 @@ export function git(gitDir, gitArgs, stdio) {
 
 // changed = diff vs HEAD plus untracked files (a brand-new month shard or
 // station dir is invisible to `git diff HEAD`); a repo without a commit yet
-// has no baseline at all, so everything in it is new
+// has no baseline at all, so everything in it is new. ONLY that case is
+// swallowed: any other git failure (no such directory, a corrupt HEAD) must
+// stay a crash, or a checker comparing against HEAD would read "nothing
+// changed" off a broken repo and pass it.
+const UNBORN_HEAD = /bad revision 'HEAD'|unknown revision|ambiguous argument 'HEAD'/;
 export function listChanges(gitDir, prefix) {
   const changes = [];
   let diff = '';
-  try { diff = git(gitDir, ['diff', '--name-status', 'HEAD', '--', prefix], ['ignore', 'pipe', 'ignore']); }
-  catch { console.log('note: no HEAD to compare against — every file counts as new'); }
+  try { diff = git(gitDir, ['diff', '--name-status', 'HEAD', '--', prefix], ['ignore', 'pipe', 'pipe']); }
+  catch (e) {
+    if (!UNBORN_HEAD.test(String(e.stderr || ''))) throw e;
+    console.log('note: no HEAD to compare against — every file counts as new');
+  }
   for (const line of diff.split('\n')) {
     if (!line) continue;
     const parts = line.split('\t');

@@ -65,7 +65,7 @@ const classMap = est => {
 };
 
 function main(argv) {
-  const { flag } = parseArgs(argv.slice(2));
+  const { flag, has } = parseArgs(argv.slice(2));
   const tree = flag('tree') || 'nrw';
   const hires = flag('hires') || 'nrw-hires';
   const variant = flag('variant');
@@ -96,7 +96,7 @@ function main(argv) {
     console.log(`  peak r below ${MIN_PEAK_R}: ${weak} (${pct(weak, ok.length)}) — a lag off a correlation that weak is not a measurement`);
   }
 
-  if (args.includes('--split')) {
+  if (has('split')) {
     const mid = bench.from + Math.floor((bench.to - bench.from) / 2);
     const A = estimateAll(bench, { from: bench.from, to: mid, opts });
     const B = estimateAll(bench, { from: mid + 1, to: bench.to, opts });
@@ -118,7 +118,7 @@ function main(argv) {
     console.log(`  class agreement (${CLASSES.length} classes, r >= ${MIN_PEAK_R}): ${same.length}/${shared.length} = ${pct(same.length, shared.length)}`);
   }
 
-  if (args.includes('--control')) {
+  if (has('control')) {
     // THE NEGATIVE CONTROL. 40 % of the gauges put their response at lag 0, and
     // the only way to tell a very fast catchment from an artefact is to destroy
     // the timing and see whether the estimator still finds it. The level series
@@ -158,7 +158,7 @@ function main(argv) {
       `${real.r > 2 * worst ? 'is more than double' : 'does NOT clear double'} the best shuffled one (${worst.toFixed(3)})`);
   }
 
-  if (args.includes('--permute')) {
+  if (has('permute')) {
     // The winner's curse, corrected — and the correction has to be able to do
     // work. 99 rotations, not 12: with 12 the smallest attainable p is 1/13,
     // over 222 gauges ~17 false positives are expected under the global null,
@@ -176,7 +176,7 @@ function main(argv) {
     console.log(`  published: ${r.counts.published} — classes ${r.counts.byClass.join(' / ')} (${((Date.now() - t0) / 1000).toFixed(1)} s)`);
   }
 
-  const churnDays = Number(flag('--churn') || 0);
+  const churnDays = Number(flag('churn') || 0);
   if (churnDays > 0) {
     // Replay the product as CI would write it: one estimate per day, over the
     // window that day would have had.
@@ -188,7 +188,7 @@ function main(argv) {
     // steps are not the same measurement is not a replay.
     const W = span - churnDays * 24;
     if (W < 24 * 14) throw new Error(`--churn ${churnDays} leaves only ${(W / 24).toFixed(1)} days per window`);
-    const permute = !args.includes('--no-permute');
+    const permute = !has('no-permute');
     const only = dailyGauges(bench.manifest);
     console.log(`CHURN: ${churnDays} day steps over a FIXED ${(W / 24).toFixed(1)}-day window${permute ? ', with the permutation filter' : ', WITHOUT the permutation filter'}`);
     const runs = [];

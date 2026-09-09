@@ -618,7 +618,7 @@ function main(argv) {
   console.log(`  published: ${c.published} — classes ${c.byClass.join(' / ')} (${CLASSES.map(([lo, hi]) => hi == null ? `${lo}+ h` : `${lo}-${hi} h`).join(', ')})`);
   console.log(`  inputs: ${r.doc.inputs.files} hires files, sha256 ${r.doc.inputs.sha256.slice(0, 16)}… (${((Date.now() - t0) / 1000).toFixed(1)} s)`);
 
-  if (args.includes('--report')) {
+  if (has('report')) {
     // The diagnostics the FILE deliberately does not carry — r, h, n, wet, p
     // churn 21-76 lines a day on the branch, and CI keeps its log for 90 days.
     console.log('\nno\tclass\th\tr\tn\twet\tp\tsig\tstate');

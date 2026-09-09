@@ -103,11 +103,13 @@ export function runVariant(name, trials = TRIALS) {
   values.sort((a, b) => a - b);
   const median = values.length ? values[Math.floor(values.length / 2)] : null;
   const pct = trials ? (positive / trials) * 100 : 0;
-  return { name, trials, printed, positive, pct, median, pass: pct <= LIMIT_POSITIVE_PCT };
+  // a variant that prints nothing cannot pass by emptiness: the criterion is
+  // about the sign of what the plate would show, and nothing shown is no answer
+  return { name, trials, printed, positive, pct, median, pass: printed > 0 && pct <= LIMIT_POSITIVE_PCT };
 }
 
 export const line = r => `${r.name.padEnd(5)} null-control: ${r.trials} trials · printed ${r.printed} · positive ${r.positive} (${r.pct.toFixed(1)} %)`
-  + ` · median ${r.median == null ? '—' : (r.median >= 0 ? '+' : '') + r.median.toFixed(2)} · ${r.pass ? 'PASS' : 'FAIL'} (limit ${LIMIT_POSITIVE_PCT} %)`;
+  + ` · median ${r.median == null ? '—' : (r.median >= 0 ? '+' : '') + r.median.toFixed(2)} · ${r.pass ? 'PASS' : r.printed ? 'FAIL' : 'EMPTY'} (limit ${LIMIT_POSITIVE_PCT} %)`;
 
 function main(argv) {
   const { flag, has } = parseArgs(argv.slice(2));
