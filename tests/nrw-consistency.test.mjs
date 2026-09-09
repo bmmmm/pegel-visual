@@ -23,6 +23,7 @@ const {
   MIN_FULL_TRIPLES, MIN_GAUGES,
 } = await import('../scripts/check-nrw-consistency.mjs');
 const { daysInYear } = await import('../scripts/fetch-wsv-archive.mjs');
+const { buildTopology, basinIndex, assignBasin } = await import('../scripts/fetch-nrw-archive.mjs');
 const { build: buildPrecip } = await import('../scripts/build-nrw-precip.mjs');
 
 // ---------- fixtures ----------
@@ -93,15 +94,28 @@ const fixLat = i => 51 + i * 0.005;
 export const gaugeCoords = i => ({ lat: fixLat(i), lon: 7 });
 const rainCoords = j => ({ lat: fixLat(Math.floor(j * N_GAUGES / N_RAIN)), lon: 7 });
 
-const topologyOf = gauges => ({
-  schema: 1,
-  // `basins[].gauges` stays the 20 N1 has always checked; `gauges` is the
-  // routing graph the areal rule reads, and that one is the whole fleet.
-  basins: { 272: { name: 'Sieg', river: 'Sieg', rivers: ['Sieg'], gauges: [...gauges.keys()].slice(0, 20), noLevel: [], rain: Array.from({ length: N_RAIN }, (_, j) => 'r' + j), temp: [], mouth: 'g0' } },
-  gauges: Object.fromEntries([...gauges.keys()].map((no, i) => [no, {
-    id: no, name: no, water: 'Sieg', basin: '272', siteNo: '100', km2: 100 + i, down: null,
-  }])),
-});
+// The graph the collector's own builder makes of this fleet — not a
+// hand-written one. Until 2026-09-09 this was 300 gauges with `down: null`,
+// so N8 had never seen a chain buildTopology built. The registry is the
+// fleet as the source would describe it: one river, every gauge `i` at
+// `i/2 + 1` km above the mouth with a catchment that grows downstream, so
+// the builder chains g299 -> ... -> g0 and marks g0 the mouth.
+const registryOf = gauges => new Map([
+  ...[...gauges.keys()].map((no, i) => [no, {
+    station_no: no, _src: ['stations', 'pegel'], object_type: 'Oberflächengewässer', station_name: no,
+    site_no: '100', catchment_no: '272', catchment_name: 'Sieg', WTO_OBJECT: 'Sieg',
+    DIST_TO_CONFL: `${(i / 2 + 1).toFixed(2)} km`, CATCHMENT_SIZE: `${400 - i},00 km²`,
+  }]),
+  ...Array.from({ length: N_RAIN }, (_, j) => ['r' + j, {
+    station_no: 'r' + j, _src: ['stations', 'nieder'], object_type: 'Klimastation', station_name: 'r' + j,
+    site_no: '100', catchment_no: '272', catchment_name: 'Sieg',
+  }]),
+]);
+const topologyOf = gauges => {
+  const registry = registryOf(gauges);
+  const bidx = basinIndex(registry);
+  return { schema: 1, ...buildTopology(registry, e => assignBasin(e, bidx), () => true) };
+};
 
 function healthyFleet() {
   const gauges = mkGauges(300);
@@ -745,10 +759,15 @@ test('CLI: revised alert stages are printed as notes on a green run', () => {
 
 test('CLI: --allow-prune lets a deliberate deletion through, --skip silences a rule', () => {
   const repo = cloneSeed();
-  rmSync(join(repo, 'nrw', 'gauges', 'g250'), { recursive: true }); // not in the topology
+  rmSync(join(repo, 'nrw', 'gauges', 'g250'), { recursive: true });
   const m = readManifest(repo);
   delete m.gauges.g250;
   writeFileSync(manifestPath(repo), JSON.stringify(m));
+  // a pruned gauge leaves the topology too — the collector rebuilds it from
+  // the registry every run, and N1 holds the basin list to the directories
+  const rest = mkGauges(N_GAUGES);
+  rest.delete('g250');
+  writeFileSync(join(repo, 'nrw', 'topology.json'), JSON.stringify(topologyOf(rest)));
   rebuildPrecip(repo);
   let r = runChecker(repo);
   assert.equal(r.code, 1);
