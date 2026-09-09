@@ -65,7 +65,7 @@ const API = 'https://www.pegelonline.wsv.de/webservices/rest-api/v2';
 // PEGEL_NOW pins the clock for tests and local two-day rehearsals
 const now = pinnedNow();
 
-const { opt } = parseArgs();
+const { opt, args } = parseArgs();
 
 const OUT = opt('out', 'archive/snapshots');
 const ARCHIVE_DIR = opt('archive', join(OUT, '..')); // per-station daily min/max bundles
@@ -434,6 +434,17 @@ async function healMissingDays(shards, roster, records) {
 }
 
 async function main() {
+  // Unknown flags refuse before the first fetch: `--max-month 6` or a bare
+  // `--max-months` used to fall silently onto the default and keep everything.
+  // The sweep is also what lets tests/cli.test.mjs spawn this main() offline.
+  const KNOWN = new Set(['out', 'archive', 'max-months', 'heal-days', 'heal-source']);
+  for (const a of args) {
+    if (!a.startsWith('--')) continue;
+    if (!KNOWN.has(a.slice(2).split('=')[0])) {
+      console.error(`unknown flag ${a} — known are ${[...KNOWN].map(k => '--' + k).join(', ')}`);
+      process.exit(2);
+    }
+  }
   const res = await fetch(
     `${API}/stations.json?includeTimeseries=true&includeCurrentMeasurement=true`,
     { signal: AbortSignal.timeout(60000) });

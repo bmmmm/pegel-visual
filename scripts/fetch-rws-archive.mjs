@@ -107,7 +107,7 @@ export const STATIONS = [
 ];
 const SOURCE = 'Rijkswaterstaat';
 
-const { opt, has } = parseArgs();
+const { opt, has, args } = parseArgs();
 
 const now = pinnedNow();
 const CURRENT_YEAR = now.getUTCFullYear();
@@ -239,6 +239,17 @@ export function updateManifest(out, stations) {
 if (import.meta.url === pathToFileURL(process.argv[1] || '').href) await main();
 
 async function main() {
+  // Unknown flags refuse before the first fetch (a `--throttle` typo used to
+  // fall silently onto 1200 ms). The sweep is also what lets
+  // tests/cli.test.mjs spawn this main() offline.
+  const KNOWN = new Set(['out', 'from', 'to', 'current', 'throttle', 'station']);
+  for (const a of args) {
+    if (!a.startsWith('--')) continue;
+    if (!KNOWN.has(a.slice(2).split('=')[0])) {
+      console.error(`unknown flag ${a} — known are ${[...KNOWN].map(k => '--' + k).join(', ')}`);
+      process.exit(2);
+    }
+  }
   const stations = STATIONS.filter(s => !ONLY || s.name.toLowerCase() === ONLY || s.uuid === ONLY);
   if (!stations.length) { console.error(`no station matches --station ${ONLY}`); process.exitCode = 1; return; }
   // --current: running year (in January also the just-completed one, so it

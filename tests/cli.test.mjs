@@ -93,8 +93,8 @@ test('lib/cdp.mjs imports and binds what it re-exports', async () => {
 // suite stayed green because nothing spawned those mains. Each line below
 // stops at the script's OWN first validation error — a message it prints on
 // purpose — which is only reachable once the parsing above it has run.
-// snapshot-wsv and fetch-rws-archive fetch before they validate anything and
-// are not here; they are the two mains still without a spawn test.
+// snapshot-wsv and fetch-rws-archive used to fetch before they validated
+// anything; their unknown-flag sweep (exit 2) is what makes them spawnable here.
 test('every collector and builder main() gets past its argument parsing', () => {
   const missing = join(mkdtempSync(join(tmpdir(), 'cli-main-')), 'nowhere');
   const cases = [
@@ -106,6 +106,8 @@ test('every collector and builder main() gets past its argument parsing', () => 
     [['probe-precip-rule.mjs', '--tree', missing], 1, /no topology\.json under/],
     [['probe-hourly-lag.mjs', '--tree', missing, '--hires', missing], 1, /no topology\.json under|no hourly rain/],
     [['fetch-nrw-archive.mjs', '--dry-run', '--out', missing, '--raw', missing], 1, /ENOENT.*stations\.json/],
+    [['snapshot-wsv.mjs', '--nope'], 2, /unknown flag --nope/],
+    [['fetch-rws-archive.mjs', '--nope'], 2, /unknown flag --nope/],
   ];
   for (const [argv, code, expect] of cases) {
     const r = spawnSync(process.execPath, [join(SCRIPTS, argv[0]), ...argv.slice(1)], { encoding: 'utf8', timeout: 20000 });
