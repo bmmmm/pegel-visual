@@ -2367,7 +2367,10 @@ function lanukFeed(latest) {
   };
 }
 
-async function loadLanukStation() {
+// `signal` is the supersede token of loadData: the shard fetches are shared
+// promises (lanukMetaCache) and are not aborted, but a superseded run's answer
+// is dropped, so the newest run is the one whose reading stands
+async function loadLanukStation(signal = { aborted: false }) {
   const forStation = station; // guard against a mid-flight station switch
   const id = stationId();
   const no = lanukNo(id);
@@ -2378,11 +2381,11 @@ async function loadLanukStation() {
   refreshTimer = null;
   try {
     const [meta, manifest] = await Promise.all([lanukMeta(no), loadRepoManifest()]);
-    if (station !== forStation || mode !== 'station') return; // switched away while fetching — discard
+    if (signal.aborted || station !== forStation || mode !== 'station') return; // superseded or switched away — discard
     if (!meta) throw new Error(`no meta.json under ${seriesBase(id)}`);
     const entry = (manifest || {})[id] || {};
     const latest = await lanukLatest(no, entry);
-    if (station !== forStation || mode !== 'station') return;
+    if (signal.aborted || station !== forStation || mode !== 'station') return;
     if (!latest) throw new Error('the mirrored year shards hold no daily reading');
     state.info = lanukInfoFrom(meta, id);
     state.gauge = lanukGaugeFrom(meta, latest);
@@ -2459,7 +2462,7 @@ async function loadDataNow(signal) {
   // index knows the name — every switch after boot, and every warm session.
   // A cold boot on such a deep link, with the index still in flight, gets
   // there through the 404 path below; the live path is never delayed for it.
-  if (isLanukId(stationId())) return loadLanukStation();
+  if (isLanukId(stationId())) return loadLanukStation(signal);
   const isNewStation = !state.info; // switchStation resets info to null before calling us
   try {
     const enc = encodeURIComponent(forStation);
@@ -2537,7 +2540,7 @@ async function loadDataNow(signal) {
       // did-you-mean screen, none keeps the error.
       await lanukIndex();
       if (station !== forStation || mode !== 'station') return;
-      if (isLanukId(stationId())) return loadLanukStation();
+      if (isLanukId(stationId())) return loadLanukStation(signal);
     }
     state.error = `station "${forStation}" failed: ${e.message}\n` +
       `check the name against ${API}/stations.json or try ?station=BONN`;
@@ -5112,7 +5115,9 @@ function buildHistStats(pts, nowMs, unit = gaugeUnit()) {
 let histCache = null;
 function histStats() {
   const a = state.archive;
-  const key = station + ':' + a.length + ':' + (a.length ? a[0][0] + ':' + a[a.length - 1][0] : '');
+  // the unit is part of the key: the σ floor and the lo/hi rule inside are in
+  // the gauge's own step, so stats built before the gauge answered must not survive it
+  const key = station + ':' + gaugeUnit() + ':' + a.length + ':' + (a.length ? a[0][0] + ':' + a[a.length - 1][0] : '');
   if (!histCache || histCache.key !== key) histCache = { key, stats: buildHistStats(a, Date.now()) };
   return histCache.stats;
 }
@@ -5383,7 +5388,7 @@ function renderYearsClim(vm) {
   let vmin = Infinity, vmax = -Infinity;
   for (const c of vm.clim) if (c) { vmin = Math.min(vmin, c.min); vmax = Math.max(vmax, c.max); }
   for (const v of vm.curMonthly) if (v != null) { vmin = Math.min(vmin, v); vmax = Math.max(vmax, v); }
-  const span = Math.max(vmax - vmin, 1);
+  const span = Math.max(vmax - vmin, unitStep()); // one STEP, not one whole metre (see unitStep)
   const X = m => 16 + (m + 0.5) * ((CLIM_W - 24) / 12);
   const Y = v => 6 + (1 - (v - vmin) / span) * (CLIM_H - 26);
   const parts = [];
@@ -5403,7 +5408,7 @@ function renderYearsClim(vm) {
   const svg = svgWrap(`0 0 ${CLIM_W} ${CLIM_H}`, parts.join(''),
     ' class="chart clim" preserveAspectRatio="none" role="img"' + attr('aria-label', T.yearsRangeAria));
   const chart = `<div class="plot-wrap">` +
-    `<div class="v-scale"><span>${Math.round(vmax)}</span><span>${Math.round(vmin)}</span></div>${svg}</div>` +
+    `<div class="v-scale"><span>${esc(fmtLevel(vmax))}</span><span>${esc(fmtLevel(vmin))}</span></div>${svg}</div>` +
     '<div class="x-axis months">' + MONTH_ABBR.map((mn, m) =>
       `<span${attr('style', `left:${(X(m) / CLIM_W * 100).toFixed(2)}%`)}>${esc(mn[0])}</span>`).join('') + '</div>';
   const key = plateKey([
@@ -5424,7 +5429,7 @@ const OVER_W = 320, OVER_H = 120;
 // "is this year unusual?" answered by shape rather than by a number
 function renderYearsOverlay(vm) {
   const o = vm.overlay;
-  const span = Math.max(o.max - o.min, 1);
+  const span = Math.max(o.max - o.min, unitStep());
   const X = d => 16 + (d / 366) * (OVER_W - 24);
   const Y = v => 6 + (1 - (v - o.min) / span) * (OVER_H - 26);
   const trace = (days, cls) => {
@@ -5453,7 +5458,7 @@ function renderYearsOverlay(vm) {
     ' class="chart overlay" preserveAspectRatio="none" role="img"' +
     attr('aria-label', `every archived year by day of year, ${vm.selYear} highlighted`));
   const chart = `<div class="plot-wrap">` +
-    `<div class="v-scale"><span>${Math.round(o.max)}</span><span>${Math.round(o.min)}</span></div>${svg}</div>` +
+    `<div class="v-scale"><span>${esc(fmtLevel(o.max))}</span><span>${esc(fmtLevel(o.min))}</span></div>${svg}</div>` +
     '<div class="x-axis months">' + MONTH_ABBR.map((mn, m) =>
       `<span${attr('style', `left:${(X(monthDoy(2001, m)) / OVER_W * 100).toFixed(2)}%`)}>${esc(mn[0])}</span>`).join('') + '</div>';
   const key = plateKey([
@@ -8513,7 +8518,7 @@ function setScreenHtml(html) {
   const inside = active && active !== document.body && typeof screen.contains === 'function' && screen.contains(active);
   const again = !inside ? null
     : active.dataset && active.dataset.nav ? `[data-nav=${cssStr(active.dataset.nav)}]`
-    : active.id ? `#${active.id}` : null;
+    : active.id ? `#${typeof CSS !== 'undefined' && CSS.escape ? CSS.escape(active.id) : active.id}` : null;
   const waveBefore = screen.querySelector('.wave-wrap');
   const waveLeft = waveBefore ? waveBefore.scrollLeft : null;
   lastScreen = html;

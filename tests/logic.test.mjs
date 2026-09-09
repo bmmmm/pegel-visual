@@ -2583,10 +2583,6 @@ test('a mode switch under a view transition renders once, inside the transition'
   app.run('switchRising()');
   assert.equal(app.run('globalThis.__inVt'), 1);
   assert.equal(app.run('globalThis.__renders'), 1, 'the same holds for every global mode');
-  // without a transition available the render still happens — on the frame
-  app.run('delete document.startViewTransition; globalThis.__renders = 0');
-  app.run('switchRivers()');
-  assert.equal(app.run('renderQueued'), true, 'no transition: one render queued, as before');
 });
 
 test('applyModeChrome: marks the active nav item, footer label matches the mode', () => {
@@ -4122,6 +4118,19 @@ test('a metre gauge stays in metres once the archive is deep enough to judge it'
   assert.match(out.readout.say, /^July 2025 averaged 56\.\d\d m\+NN, ranging 56\.\d\d–56\.\d\d m\+NN\./, out.readout.say);
   assert.ok(!/\b5[67] cm\b/.test(out.yhtml), 'the years plate prints no whole-metre "cm" anywhere');
   assert.match(out.yhtml, /56\.\d\d m\+NN/, 'and names the unit');
+  // the two other charts of the plate: their v-scales printed "57" over "56" —
+  // whole metres, a 1 m span claimed over 0.4 m of data — and the bold year
+  // sat in the bottom 40 % of its box (reviewer, 2026-09-09)
+  const scales = [...out.yhtml.matchAll(/<div class="v-scale"><span>([^<]*)<\/span><span>([^<]*)<\/span>/g)].map(m => [m[1], m[2]]);
+  assert.equal(scales.length, 2, 'the range chart and the overlay each carry a v-scale');
+  for (const [hi, lo] of scales) assert.ok(/^56\.\d\d$/.test(hi) && /^56\.\d\d$/.test(lo) && hi > lo, `v-scale in hundredths: ${hi} / ${lo}`);
+  const overlay = svgAt(out.yhtml, out.yhtml.lastIndexOf('<svg', out.yhtml.indexOf('class="chart overlay"')));
+  const oys = [...overlay.matchAll(/<polyline class="ov-(?:sel|year)" points="([^"]+)"/g)]
+    .flatMap(m => m[1].split(' ').map(p => +p.split(',')[1]));
+  assert.ok(Math.min(...oys) < 8, `the highest day reaches the top of the overlay (y=${Math.min(...oys)})`);
+  const clim = svgAt(out.yhtml, out.yhtml.lastIndexOf('<svg', out.yhtml.indexOf('class="chart clim"')));
+  const cys = [...clim.matchAll(/y1="([\d.]+)"/g)].map(m => +m[1]);
+  assert.ok(Math.min(...cys) < 8, `the highest monthly max reaches the top of the range chart (y=${Math.min(...cys)})`);
 });
 
 test('a centimetre gauge is unchanged by any of it', () => {

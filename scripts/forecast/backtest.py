@@ -221,16 +221,20 @@ def _deranged(rows: np.ndarray, min_dist: int) -> np.ndarray:
     hoped for. Regularity is not a defect in a control that only has to be FAR.
     """
     n = len(rows)
-    shift = n // 2
-    # `min_dist` was passed and never read (audit 2026-09-09): at n = 3 the
-    # half-cycle is a one-origin shift — the rain of seven days earlier, the
-    # very case the docstring calls unfit. A control that is not far is not a
-    # control, so a run too short for the distance stops here rather than
-    # scoring a comparison that means nothing.
-    if shift < min_dist:
-        raise ValueError(f"{n} windows give a half-cycle of {shift} origins, under the "
-                         f"registered minimum of {min_dist}: too short a run for a control arm")
-    return rows[(np.arange(n) + shift) % n]
+    if n < 2:
+        return rows
+    return rows[(np.arange(n) + control_shift(n)) % n]
+
+
+def control_shift(n: int) -> int:
+    """How far _deranged moves every window, in origins. `min_dist` above was
+    passed and never read (audit 2026-09-09): at n = 3 the half-cycle is a
+    one-origin shift — the rain of seven days earlier, the case the docstring
+    calls unfit. Raising here would abort a whole model run at the one short
+    station and orphan every .npz before it; instead the shift is WRITTEN into
+    the station's results and the gate voids a control that came too close
+    (`R5_control_shift_min`). Measured, voided, never crashed."""
+    return max(1, n // 2)
 
 
 def _nrw_covariate(rain: np.ndarray, origins: np.ndarray, context: int) -> np.ndarray:
@@ -370,6 +374,8 @@ def backtest_nrw_station(no: str, tree: Path, model, proto: dict, arm: str, log)
         # where it was supposed to end.
         "cov_last": _cov_last(cov_full, is_test),
         "rain_lags_first": rain_lags[:, 0],
+        # how far the control's rain came from, for the gate to judge
+        "control_shift": np.array(control_shift(int(is_test.sum())) if arm == "shuffled" else 0),
     }
     meta = loaders.nrw_meta(tree, no)
     # A rain event is a TEST WINDOW that has something to forecast: at least one

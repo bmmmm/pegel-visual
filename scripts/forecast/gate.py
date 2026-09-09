@@ -68,6 +68,10 @@ THRESHOLDS = {
     "R4_station_ss_floor": -0.05,
     "R5_control_ss_max": 0.02,
     "R5_true_minus_control_min": 0.03,
+    # the half-cycle a control window's rain was moved by, in origins (see
+    # backtest.control_shift): closer than this and it shares the recent days
+    # a lag-1 response lives on — not a control
+    "R5_control_shift_min": 8,
     "U1_ss_h1_3_min": 0.10,
     "U2_ss_min": 0.00,
     "nrw_newey_west_lag": 2,
@@ -711,6 +715,10 @@ def nrw_void(header: dict, data: dict, th: dict, against: dict | None, control: 
             if not np.array_equal(data[u]["origins"][data[u]["is_test"].astype(bool)],
                                   cd[u]["origins"][cd[u]["is_test"].astype(bool)]):
                 reasons.append(f"{st.nrw_name_of(u)}: the control arm does not share the TEST origins")
+            shift = int(cd[u]["control_shift"]) if "control_shift" in cd[u] else None
+            if shift is not None and shift < th["R5_control_shift_min"]:
+                reasons.append(f"{st.nrw_name_of(u)}: the control's rain came from only {shift} origin(s) away "
+                               f"(minimum {th['R5_control_shift_min']}) — too close to be a control")
     return reasons
 
 

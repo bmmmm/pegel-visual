@@ -483,12 +483,24 @@ def test_the_control_arm_is_far_from_the_window_it_replaces():
     assert moved.min() == 24, "a half-cycle moves every window the same maximal distance"
     # deterministic, so two runs of the same arm reproduce
     assert np.array_equal(out, backtest._deranged(rows, backtest.MIN_SHUFFLE_DISTANCE))
-    # a run too short for the distance is refused, not quietly shifted by one
-    # origin (which at step 7 is the rain of seven days earlier)
+    # a run too short for the distance still runs (one short station must not
+    # orphan a whole model run) — but it SAYS how far it moved, and the gate
+    # voids a control that came too close
     short = np.arange(3)[:, None] * np.ones((1, 2))
-    with pytest.raises(ValueError, match="too short"):
-        backtest._deranged(short, 8)
-    assert backtest._deranged(np.arange(16)[:, None] * np.ones((1, 2)), 8).shape == (16, 2), 'sixteen is enough'
+    assert backtest._deranged(short, 8).shape == short.shape
+    assert backtest.control_shift(3) == 1 and backtest.control_shift(48) == 24
+
+
+def test_a_control_whose_rain_came_from_too_close_is_void():
+    header = _header(protocol={"blocks": {"h1-3": [1, 3]}}, stations=FULL)
+    d = _data()
+    plain = ({**header, "arm": "plain", "model_key": "3p0"}, d)
+    ctl = _header(arm="shuffled", model_key="3p0-rain-shuffled")   # gitleaks:allow
+    close = {u: {**v, "control_shift": np.array(1)} for u, v in _data().items()}
+    v = gate.nrw_void(header, d, TH, plain, (ctl, close))
+    assert any("too close" in r for r in v), v
+    far = {u: {**v, "control_shift": np.array(24)} for u, v in _data().items()}
+    assert gate.nrw_void(header, d, TH, plain, (ctl, far)) == []
 
 
 # ---------- the control arm gets the same checks the plain arm got ----------
