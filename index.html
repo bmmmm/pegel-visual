@@ -3102,7 +3102,6 @@ function esc(s) { return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(
 // UI strings routed through one flat table so a ?lang=de locale is one PR,
 // not a rewrite. Keys grow view by view as the plates land.
 const T = {
-  source: 'SOURCE',
   sourceWsv: 'PEGELONLINE (WSV)',
   refreshEvery: 'refreshes every 5 min',
   noLiveFeed: 'no live feed',
@@ -3114,7 +3113,6 @@ const T = {
   lanukReach: 'the LANUK export reaches back two years',
   lanukKmNote: 'km counts DOWN to the mouth here: the source gives each gauge’s distance to the confluence, not a river kilometre.',
   riverNoElev: 'No gauge on this water publishes a gauge datum, so there is no elevation profile to draw. The list below runs in flow order, upstream first.',
-  link: 'LINK',
   copy: 'copy',
   copied: 'copied',
   key: 'KEY',
@@ -3312,7 +3310,6 @@ const T = {
   rainBasinNotCatchment: 'a basin is the source’s own grouping, not one gauge’s catchment — the station plates carry those',
   rainNoRiver: 'no gauged river of its own',
   rainNoRiverKey: 'a basin name that is not a link has no gauged river of its own (Emscher)',
-  rainBasins: 'basins',
   rainBasin: 'basin',
   rainDaysCol: 'daily rainfall',
   rainSum7Col: 'Σ7d',
@@ -3367,7 +3364,7 @@ function svgWrap(viewBox, body, attrs = '') {
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${viewBox}"${attrs}>${body}</svg>`;
 }
 
-// The click-target grammar shared with the grid's data-st layer: "cmd:…" are
+// The click-target grammar carried by every [data-nav]: "cmd:…" are
 // in-view controls, "river:NAME" opens the whole-river profile, "rising" the
 // board, anything else is a station name. URL-addressable targets carry an
 // honest href so middle-click / open-in-new-tab work; cmd:… stay buttons.
@@ -4686,7 +4683,6 @@ function renderStation(vm) {
 
 // color alone can't carry meaning, so each state gets a distinct glyph too
 const RIVER_GLYPH = { low: '▼', high: '▲', normal: '◉' };
-const RIVER_CLS = { low: 's', high: 'w2', normal: 'b' };
 
 const fmtKm = k => Number.isInteger(k) ? String(k) : k.toFixed(1);
 
@@ -4964,7 +4960,8 @@ function buildHistStats(pts, nowMs) {
   };
 }
 
-// render runs at 8 fps — the stats must never recompute per frame
+// a repaint rebuilds the whole plate, so the stats are computed once per
+// data change, never per render
 let histCache = null;
 function histStats() {
   const a = state.archive;
@@ -5008,7 +5005,6 @@ function setHistYear(y, push = true) {
 }
 
 const HIST_MIN_DAYS = 45; // below this the sections are noise — show a note instead
-const HIST_CLIM_H = 9, HIST_OVER_H = 10;
 
 // "is this unusual?" — the header only carries the WSV three-bucket state, while
 // the archive knows the whole distribution. Pure over a buildHistStats result plus
@@ -5021,7 +5017,7 @@ function unusualStats(st, cm, monthIdx) {
   const sorted = st.allSorted || [];
   if (sorted.length < HIST_MIN_DAYS) return null;
   // percentile rank = share of archived days at or below this level; binary
-  // search for that upper bound so the line costs nothing at 8 fps
+  // search for that upper bound so the line costs nothing per repaint
   let a = 0, b = sorted.length;
   while (a < b) { const m = (a + b) >> 1; if (sorted[m] <= cm) a = m + 1; else b = m; }
   const c = st.clim[monthIdx];
@@ -6256,7 +6252,6 @@ function renderRising(vm) {
 // zoom levels), <year>.json carries every river at daily grain for the
 // drilldown. Elevation-reporting gauges (m+NN) are excluded at build time.
 const TOTAL_TOP_K = 5; // named bands; + OTHER = the 6 existing semantic classes
-const TOTAL_BAND_CLASS = ['b', 'w2', 'w', 's', 'bed'];
 const TOTAL_BAND_GLYPH = ['●', '◆', '▲', '■', '▶'];
 
 // band identity is fixed for the whole dataset (ranked by all-time mean sum),
@@ -6268,7 +6263,6 @@ function totalTopRivers(overview) {
     .slice(0, TOTAL_TOP_K)
     .map(r => r.name);
 }
-const totalBandCls = (name, top) => { const i = top.indexOf(name); return i >= 0 ? TOTAL_BAND_CLASS[i] : 'd'; };
 const totalBandGlyph = (name, top) => { const i = top.indexOf(name); return i >= 0 ? TOTAL_BAND_GLYPH[i] : '·'; };
 
 // summed stages get big: humanize cm to metres, then kilometres
@@ -6424,7 +6418,7 @@ function totalDiffDayBreakdown(shard, year, month, day) {
     provisional: shard.provisionalFrom != null && d >= shard.provisionalFrom };
 }
 
-// render runs at 8 fps — assemble the view once per zoom/data/width change
+// assemble the view once per zoom/data/width change, not once per repaint
 let totalViewCache = null;
 function totalView() {
   const { overview: ov, top } = state.total;
@@ -6768,9 +6762,9 @@ async function loadTotalYear(y) {
 
 // zoom within the view: cheap, no refetch — the mode-switch/zoom split mirrors
 // switchStation vs setHistYear
-function totalSetZoom(y, m, d, push = true) {
+function totalSetZoom(y, m, d) {
   totalYear = y; totalMonth = m; totalDay = d;
-  history[push ? 'pushState' : 'replaceState'](null, '', totalQuery());
+  history.pushState(null, '', totalQuery());
   applyTotalChrome();
   scheduleRender();
   setScreenAria();
@@ -6825,7 +6819,7 @@ function setView(v, push = true) {
   }
 }
 
-// controls shared by the in-grid targets (data-st="cmd:…") and the bar chips
+// controls shared by the in-plate targets (nav "cmd:…") and the bar chips
 function runGridCmd(c) {
   if (c === 'retry') { state.error = null; scheduleRender(); if (mode === 'station') loadData(); else if (mode === 'river') loadRiver(); else if (mode === 'rising') loadRising(); else if (mode === 'total') loadTotal(); else if (mode === 'rain') { state.rain = null; loadRain(); } }
   else if (c === 'live') setView('live');
@@ -7512,13 +7506,10 @@ document.getElementById('prompt').addEventListener('submit', e => {
   e.preventDefault();
   (document.activeElement === riverInput ? applyRiver : applyPrompt)();
 });
-// stations drawn into the grid (river markers/labels/trouble rows, profile
-// neighbors) and cmd:… controls are click targets. Native click events race
-// the animated views' innerHTML swap: when a repaint lands between mousedown
-// and mouseup the browser may never synthesize a click at all, which read as
-// "I have to double-click". So the target is resolved at pointerdown time and
-// the action fires on pointerup — unless the pointer moved away, which is a
-// scroll or drag, not a click.
+// stations drawn into the plate (river markers/labels/trouble rows, profile
+// neighbors) and cmd:… controls are click targets. They reach here through the
+// delegated [data-nav] handler below — every one of them is a real link or
+// button, so the browser's own click is the event we act on.
 function actOnGridTarget(st) {
   // river:NAME opens the whole-river profile (self labels, suggest rows);
   // cmd:… are in-grid controls (view switches, heatmap toggles); the bare
@@ -7532,9 +7523,9 @@ function actOnGridTarget(st) {
   else switchStation(st);
 }
 // Plate targets are real links/buttons: one delegated handler (app bar, crumbs,
-// finder rows and in-plate marks alike) dispatches them through the same
-// grammar as the grid's data-st layer. A modified click (new tab, download, …)
-// keeps its native meaning — the href is honest.
+// finder rows and in-plate marks alike) dispatches them through the click-target
+// grammar. A modified click (new tab, download, …) keeps its native meaning —
+// the href is honest.
 document.addEventListener('click', e => {
   const el = e.target && e.target.closest ? e.target.closest('[data-nav]') : null;
   if (!el) return;
@@ -7543,21 +7534,6 @@ document.addEventListener('click', e => {
   navTo(el.dataset.nav);
   const dlg = el.closest('dialog');
   if (dlg && dlg.open) dlg.close(); // picking a finder row lands you there
-});
-let pressSt = null, pressX = 0, pressY = 0;
-screen.addEventListener('pointerdown', e => {
-  const hit = document.elementFromPoint(e.clientX, e.clientY);
-  const el = hit && hit.closest('[data-st]');
-  pressSt = el ? el.dataset.st : null;
-  pressX = e.clientX; pressY = e.clientY;
-});
-screen.addEventListener('pointercancel', () => { pressSt = null; });
-screen.addEventListener('pointerup', e => {
-  const st = pressSt;
-  pressSt = null;
-  if (!st) return;
-  if (Math.hypot(e.clientX - pressX, e.clientY - pressY) > 8) return; // drag/scroll, not a click
-  actOnGridTarget(st);
 });
 // The keyboard layer. Every binding is echoed in the ? sheet and in the
 // matching control's title, so it is discoverable without reading a manual.
@@ -8468,21 +8444,17 @@ function setScreenHtml(html) {
   const wave = screen.querySelector && screen.querySelector('.wave-wrap');
   if (wave && wave.scrollWidth > wave.clientWidth) wave.scrollLeft = wave.scrollWidth;
 }
-// Coexistence scaffolding while views migrate off the character grid: a plate
-// view flips #screen out of pre/mono mode (and drops fitFont's inline font
-// size), a grid view flips it back. Dies with the last draw* function.
-const setScreenPlate = setScreenHtml;
 function render() {
-  if (state.help) { setScreenPlate(`<pre class="manpage">${esc(state.help)}</pre>`); return; }
+  if (state.help) { setScreenHtml(`<pre class="manpage">${esc(state.help)}</pre>`); return; }
   if (state.suggest) {
     const vm = suggestViewModel(state.suggest);
-    setScreenPlate(renderSuggest(vm));
+    setScreenHtml(renderSuggest(vm));
     return;
   }
   if (mode === 'rivers') {
     if (!riversOverview().length) return setScreenLoading(T.loadMap);
     const vm = riversViewModel();
-    setScreenPlate(renderRivers(vm));
+    setScreenHtml(renderRivers(vm));
     setSourceLine(vm.source);
     return;
   }
@@ -8490,7 +8462,7 @@ function render() {
     if (state.rising && state.rising.error) return setScreenError(state.rising.error);
     if (!state.rising) return setScreenLoading(T.loadRising);
     const vm = risingViewModel();
-    setScreenPlate(renderRising(vm));
+    setScreenHtml(renderRising(vm));
     setSourceLine(vm.source);
     return;
   }
@@ -8504,7 +8476,7 @@ function render() {
       return view.error ? setScreenError(view.error) : setScreenLoading(`${T.loadTotalYear} ${totalYear}…`);
     }
     const vm = totalPlateModel();
-    setScreenPlate(renderTotal(vm));
+    setScreenHtml(renderTotal(vm));
     setSourceLine(vm.source);
     return;
   }
@@ -8513,7 +8485,7 @@ function render() {
     if (!state.rain) return setScreenLoading(T.loadRain);
     const vm = rainViewModel();
     if (!vm) return setScreenError(T.rainUnreadable);
-    setScreenPlate(renderRain(vm));
+    setScreenHtml(renderRain(vm));
     // no live feed on this source, ever: the foot says so rather than leaving
     // the reader to assume the newest column is this morning
     setSourceLine(`${LANUK} · ${T.rainMirrored} ${vm.exportAt ? String(vm.exportAt).slice(0, 10) : '—'} · ${T.rainDayStart} · ${T.noLiveFeed}`);
@@ -8529,12 +8501,12 @@ function render() {
         return setScreenLoading(`${T.loadWave} ${state.river}…`);
       }
       const vm = waveViewModel(waveData);
-      setScreenPlate(renderWave(vm));
+      setScreenHtml(renderWave(vm));
       setSourceLine(vm.source);
       return;
     }
     const vm = riverViewModel(state.riverStations);
-    setScreenPlate(renderRiver(vm));
+    setScreenHtml(renderRiver(vm));
     setSourceLine(vm.source);
     return;
   }
@@ -8547,12 +8519,12 @@ function render() {
   }
   if (viewMode === 'years') {
     const vm = yearsViewModel();
-    setScreenPlate(renderYears(vm));
+    setScreenHtml(renderYears(vm));
     setSourceLine(vm.source);
     return;
   }
   const vm = stationViewModel();
-  setScreenPlate(renderStation(vm));
+  setScreenHtml(renderStation(vm));
   setSourceLine(vm.source);
 }
 
@@ -8563,19 +8535,17 @@ function render() {
 const pendingSource = () => (mode === 'rain' ? `${LANUK} · ${T.noLiveFeed}` : T.sourceWsv);
 
 function setScreenLoading(what) {
-  setScreenPlate(renderState('loading', what, T.loadBody));
+  setScreenHtml(renderState('loading', what, T.loadBody));
   setSourceLine(pendingSource());
 }
 
 function setScreenError(msg) {
   // the sea monster's successor: same buddy, empty and holding still
-  setScreenPlate(renderState('error', T.errorTitle, msg,
+  setScreenHtml(renderState('error', T.errorTitle, msg,
     `<p class="state-actions">${navOpen('cmd:retry')}${esc(T.tryAgain)}${navClose('cmd:retry')}` +
     ` <a href="#" id="state-report">${esc(T.reportThis)}</a></p>`));
   setSourceLine(pendingSource());
 }
-
-let fitted = false;
 
 function renderNow() { render(); }
 

@@ -973,26 +973,6 @@ test('archive script: the January freeze graduates a pre-accumulated current.jso
   assert.equal(out.currentJan1, 261);
 });
 
-test('archive script: migrateStation folds per-year files into a sorted closed.json bundle', async () => {
-  const { migrateStation } = await import('../scripts/fetch-wsv-archive.mjs');
-  const { mkdtempSync, writeFileSync, readFileSync, readdirSync } = await import('node:fs');
-  const { tmpdir } = await import('node:os');
-  const { join } = await import('node:path');
-  const dir = mkdtempSync(join(tmpdir(), 'pegel-migrate-'));
-  const y2001 = { y: 2001, min: [1], max: [2] };
-  const y2000 = { y: 2000, min: [3], max: [4] };
-  const y2002 = { y: 2002, min: [5], max: [6] };
-  writeFileSync(join(dir, '2001.json'), JSON.stringify(y2001));
-  writeFileSync(join(dir, '2000.json'), JSON.stringify(y2000));
-  writeFileSync(join(dir, '2002.json'), JSON.stringify(y2002));
-  writeFileSync(join(dir, 'meta.json'), '{"name":"BONN","fetchedThrough":2002}');
-  const n = migrateStation(dir);
-  assert.equal(n, 3);
-  assert.deepEqual(readdirSync(dir).sort(), ['closed.json', 'meta.json'], 'year files removed, meta untouched');
-  const bundle = JSON.parse(readFileSync(join(dir, 'closed.json')));
-  assert.deepEqual(bundle, [y2000, y2001, y2002], 'bundle is the sorted union of the year files');
-});
-
 test('client in January: a not-yet-frozen current.json still maps to its own year', async () => {
   // Jan 5, 2027: the CI freeze has not run yet, current.json still carries 2026
   const app = loadApp({ now: Date.UTC(2027, 0, 5, 12) });
@@ -1320,18 +1300,6 @@ test('loadData: the delta window never starts in the future', async () => {
     'a point dated after the clock is not a valid delta anchor — seed the full window instead');
   assert.equal(await seeStart(NOON - 2 * 864e5), new Date(NOON - 2 * 864e5 + 1000).toISOString(),
     'a recent point still yields its delta — the guard must not disable the delta path');
-});
-
-test('archive script: migrateStation names the malformed year file instead of a bare SyntaxError', async () => {
-  const { migrateStation } = await import('../scripts/fetch-wsv-archive.mjs');
-  const { mkdtempSync, writeFileSync, readdirSync } = await import('node:fs');
-  const { tmpdir } = await import('node:os');
-  const { join } = await import('node:path');
-  const dir = mkdtempSync(join(tmpdir(), 'pegel-badmigrate-'));
-  writeFileSync(join(dir, '2000.json'), JSON.stringify({ y: 2000, min: [1], max: [2] }));
-  writeFileSync(join(dir, '2001.json'), '{nope');
-  assert.throws(() => migrateStation(dir), /2001\.json.*re-run --migrate/s, 'error carries the file path and the next step');
-  assert.deepEqual(readdirSync(dir).sort(), ['2000.json', '2001.json'], 'nothing written or deleted on failure');
 });
 
 // ---------- report issue ----------

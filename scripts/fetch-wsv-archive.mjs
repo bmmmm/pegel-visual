@@ -42,23 +42,18 @@
 //                                        # the REST refresh only reaches ~31 days back)
 //   node scripts/fetch-wsv-archive.mjs --station BONN     # one station
 //   node scripts/fetch-wsv-archive.mjs --from 2020 --to 2024 --out archive
-//   node scripts/fetch-wsv-archive.mjs --migrate --out archive  # year files -> bundles
 //
-// ---- Seed migration + deploy runbook (per-year files -> bundles, Plan A) ----
-// --migrate is a pure reformat of the existing per-year files into closed.json
-// bundles: NO WSV refetch. Run it against a checkout of the data branch and
-// reseed the branch as one fresh commit (copy-pasteable):
+// ---- Reseed + deploy runbook for the archive branch ----
+// Reseeding replaces the data branch's history with one fresh commit. It is the
+// recovery path after an incident (see the 2026-08-23 force-push reset), not a
+// routine operation. From a checkout of the branch:
 //
 //   git worktree add /tmp/arch archive && cd /tmp/arch
-//   node <repo>/scripts/fetch-wsv-archive.mjs --migrate --out archive
-//     # writes every archive/<uuid>/closed.json, deletes the <year>.json files,
-//     # regenerates archive/manifest.json (from/to/gaps derived from bundles)
-//   # update the branch README to the closed.json layout, then reseed:
-//   git checkout --orphan seed && git add -A && git commit -m "Seed archive: year bundles (Plan A)"
+//   # …repair the tree…, then reseed:
+//   git checkout --orphan seed && git add -A && git commit -m "Seed archive"
 //   git branch -M seed archive
-//   # deploy order: main FIRST — the new client degrades gracefully on the old
-//   # data (closed.json 404 is swallowed, current.json still renders), while
-//   # the old client on reseeded data would 404 on every deleted year file.
+//   # deploy order: main FIRST — the client degrades gracefully on older data
+//   # (a closed.json 404 is swallowed, current.json still renders).
 //   # a push to the data branch can NOT trigger pages.yml (the orphan branch
 //   # carries no workflow files — verified 2026-07-17: the force-push produced
 //   # no run), so the dispatch below is what actually deploys the new data.
@@ -109,7 +104,6 @@ const FROM = Number(opt('from', 2000));
 const TO = Number(opt('to', CURRENT_YEAR - 1));
 const CURRENT_ONLY = has('current');
 const RUNNING = has('running');
-const MIGRATE = has('migrate');
 const ONLY_STATION = (opt('station', '') || '').toUpperCase();
 // workers overlap the server-side zip preparation (the actual bottleneck);
 // keep the default sequential so the monthly CI refresh stays extra polite
@@ -698,61 +692,12 @@ export function healRunningYearFromZip(dir, name, y, zy) {
   return true;
 }
 
-// Plan A seed reformat: fold one station's per-year files into a single sorted
-// closed.json bundle and delete them. Pure reformat — no WSV data changes.
-export function migrateStation(dir) {
-  let files;
-  try { files = readdirSync(dir).filter(f => /^\d{4}\.json$/.test(f)); }
-  catch { return 0; }
-  if (!files.length) return 0;
-  const bundle = files
-    .map(f => {
-      try { return JSON.parse(readFileSync(join(dir, f), 'utf8')); }
-      catch (e) { throw new Error(`${join(dir, f)}: ${e.message} — fix or remove the file, then re-run --migrate`); }
-    })
-    .sort((a, b) => a.y - b.y);
-  writeFileSync(join(dir, 'closed.json'), JSON.stringify(bundle));
-  for (const f of files) unlinkSync(join(dir, f));
-  return bundle.length;
-}
-
-// migrate every station dir under `out`, then rebuild manifest.json from the
-// station names/waters already recorded there (no network) so from/to/gaps
-// reflect the new bundles
-function migrateAll(out) {
-  let dirs = [];
-  try { dirs = readdirSync(out, { withFileTypes: true }).filter(d => d.isDirectory()).map(d => d.name); }
-  catch { console.log(`no archive dir at ${out}/`); return; }
-  let migrated = 0, entries = 0;
-  const failed = [];
-  for (const uuid of dirs) {
-    try {
-      const n = migrateStation(join(out, uuid));
-      if (n) { migrated++; entries += n; }
-    } catch (e) { failed.push(e.message); } // keep migrating; the thrower's year files are untouched
-  }
-  const old = readJson(join(out, 'manifest.json'));
-  if (old && old.stations) {
-    const stations = Object.entries(old.stations)
-      .map(([uuid, e]) => ({ uuid, shortname: e.n, water: { shortname: e.w } }));
-    buildManifest(stations, out);
-    console.log(`migrated ${migrated} stations (${entries} year entries) · manifest rebuilt for ${stations.length} stations`);
-  } else {
-    console.log(`migrated ${migrated} stations (${entries} year entries) · no manifest.json to rebuild`);
-  }
-  if (failed.length) {
-    console.error(`error: ${failed.length} stations failed to migrate (their year files are left in place):\n  ${failed.join('\n  ')}`);
-    process.exitCode = 1;
-  }
-}
-
 // ---------- main ----------
 
 // importable as a module (tests): the CLI part only runs when invoked directly
 if (import.meta.url === pathToFileURL(process.argv[1] || '').href) await main();
 
 async function main() {
-  if (MIGRATE) return migrateAll(OUT);
   // --current fetches REST, --running fetches ZIP; together the REST window
   // would be written with the ZIP's authority and writeStation skipped
   if (CURRENT_ONLY && RUNNING) throw new Error('--current and --running are separate passes; run them one after the other');
