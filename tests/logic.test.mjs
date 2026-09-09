@@ -4353,6 +4353,41 @@ test('switching to a mirrored gauge leaves no poll timer behind', async () => {
   assert.equal(app.run('refreshTimer'), null, 'and a second loader run leaves it disarmed');
 });
 
+// ---------- three audit findings of 2026-09-09, each a line or three ----------
+
+test('turning the phone repaints the plate at the density breakpoint', () => {
+  // the only resize listener closed the autocomplete; a rotation left the
+  // desktop plate standing until the next data tick — never, in ?rain/?total
+  const app = loadApp({ width: 1200 });
+  assert.ok(app.mediaQueries().includes('(max-width: 544px)'),
+    `the page listens at the breakpoint plateDensity() reads (${app.mediaQueries()})`);
+  app.run('renderQueued = false');
+  app.fireMedia('(max-width: 544px)', { matches: true });
+  assert.equal(app.run('renderQueued'), true, 'crossing it schedules a render');
+});
+
+test('going Back restores the range without overwriting the remembered preference', () => {
+  // setHistory wrote localStorage before looking at `push`, so the popstate
+  // restore path (push=false) silently turned a 1Y habit into 30D
+  const app = loadApp({ storage: { 'pegel.history': '1y' } });
+  app.run(`historyKey = '1y'`);
+  app.run(`setHistory('30d', false)`);
+  assert.equal(app.run('historyKey'), '30d', 'the view follows the URL being restored');
+  assert.equal(app.localStorage['pegel.history'], '1y', 'the preference does not');
+  app.run(`setHistory('7d')`);
+  assert.equal(app.localStorage['pegel.history'], '7d', 'a click still saves it');
+});
+
+test('loadRepoManifest: concurrent callers share one fetch, not one each', async () => {
+  // the guard compared the VALUE (undefined until the await resolved), so three
+  // callers in the same tick sent three requests for the 737-station index
+  const app = nrwApp();
+  await app.run('Promise.all([loadRepoManifest(), loadRepoManifest(), loadRepoManifest()])');
+  assert.equal(nrwUrls(app).filter(u => u === 'archive/manifest.json').length, 1, `${nrwUrls(app)}`);
+  const m = await app.run('loadRepoManifest()');
+  assert.ok(m['bonn-uuid'], 'and the value is still the value');
+});
+
 test('loadRepoManifest: one map over both mirrors, LANUK gauges keyed by their id', async () => {
   const app = nrwApp();
   await app.run('lanukIndex()');

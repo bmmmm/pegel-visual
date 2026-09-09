@@ -62,6 +62,7 @@ export function loadApp({ width = 1200, search = '', now = null, storage = null 
   // the year) and a no-op stub made them untestable
   const listeners = { keydown: [], popstate: [] };
   const collect = (type, fn) => { (listeners[type] ||= []).push(fn); };
+  const media = {};
   const els = new Map();
   const elById = id => {
     if (!els.has(id)) els.set(id, makeEl(id));
@@ -110,7 +111,9 @@ export function loadApp({ width = 1200, search = '', now = null, storage = null 
     history: { pushState() {}, replaceState() {} },
     navigator: {},
     fetch: () => Promise.reject(new Error('offline (test stub)')),
-    matchMedia: () => ({ matches: false, addEventListener() {} }),
+    // media-query listeners are collected like window's: a test can fire the
+    // one for a query and see what the page does at that breakpoint
+    matchMedia: q => ({ matches: false, media: q, addEventListener(t, fn) { (media[q] ||= []).push(fn); } }),
     requestAnimationFrame: () => 0,
     performance: { now: () => 0 },
     getComputedStyle: () => ({ paddingLeft: '0', paddingRight: '0', borderLeftWidth: '0', borderRightWidth: '0' }),
@@ -139,6 +142,10 @@ export function loadApp({ width = 1200, search = '', now = null, storage = null 
       const full = { preventDefault() {}, metaKey: false, ctrlKey: false, altKey: false, ...ev };
       for (const fn of listeners[type] || []) fn(full);
     },
+    // fireMedia('(max-width: 544px)', { matches: true }) — the page's own
+    // breakpoint listener, if it registered one; the queries it asked for
+    mediaQueries: () => Object.keys(media),
+    fireMedia(q, ev = {}) { for (const fn of media[q] || []) fn({ media: q, matches: false, ...ev }); },
     source,
   };
 }

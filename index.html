@@ -7636,6 +7636,11 @@ ac.addEventListener('mousedown', e => {
 });
 for (const el of [stationInput, riverInput]) el.addEventListener('blur', () => setTimeout(acClose, 150));
 window.addEventListener('resize', acClose);
+// A rotation crosses the density breakpoint plateDensity() reads, and nothing
+// repainted for it: the desktop plate stood until the next data tick — up to
+// five minutes, and never in ?rain/?total, which poll nothing. Listening at
+// the one threshold, not on every resize, keeps the no-render-loop rule.
+matchMedia('(max-width: 544px)').addEventListener('change', scheduleRender);
 document.getElementById('prompt').addEventListener('submit', e => {
   e.preventDefault();
   (document.activeElement === riverInput ? applyRiver : applyPrompt)();
@@ -8198,19 +8203,23 @@ const repoArchiveTried = new Set(); // "<uuid>/<closed|current>" — one attempt
 // it `none` (lock/weir operating gauges, foreign partner gauges: WSV has no
 // pre-30-day archive for those). Missing manifest (e.g. plain local checkout
 // without the data branch) falls back to blind year fetches.
-let repoManifest; // undefined = not fetched yet, null = unavailable
+let repoManifest; // undefined = not fetched yet, else Promise<stations|null>
 // one map over both mirrors: WSV/RWS stations by uuid, LANUK gauges by their
 // `lanuk-<no>` id — every consumer looks a station up by the key its loader
 // knows, so the second source costs it nothing. The LANUK half rides on the
 // index fetch lanukIndex() started (never a fetch of its own: a station page
 // that never asked for the index does not ask here either)
 async function loadRepoManifest() {
+  // the PROMISE is memoised, like lanukShardCache and cachedJson do it: the
+  // old guard compared the value, which stayed undefined across the await, so
+  // three callers in one tick fetched the 737-station index three times
   if (repoManifest === undefined) {
-    repoManifest = await getJson('archive/manifest.json').then(m => m.stations || null).catch(() => null);
+    repoManifest = getJson('archive/manifest.json').then(m => m.stations || null).catch(() => null);
   }
+  const stations = await repoManifest;
   const lanuk = lanukManifestP ? await lanukManifestP : null;
-  if (!lanuk || typeof lanuk.gauges !== 'object' || !lanuk.gauges) return repoManifest;
-  const merged = Object.assign({}, repoManifest || {});
+  if (!lanuk || typeof lanuk.gauges !== 'object' || !lanuk.gauges) return stations;
+  const merged = Object.assign({}, stations || {});
   for (const [no, g] of Object.entries(lanuk.gauges)) {
     if (!g) continue;
     merged['lanuk-' + no] = {
@@ -8356,9 +8365,14 @@ function historyHref(k) {
 function setHistory(k, push = true) {
   if (k === historyKey) return;
   historyKey = k;
-  localStorage.setItem(HISTORY_KEY, k);
-  // keep shared links reproducing the visible range (the default → no param)
-  if (push) history.replaceState(null, '', historyHref(k));
+  // the remembered preference is what the reader CHOSE; the popstate restore
+  // path (push=false) is the URL being replayed, and it used to overwrite a 1Y
+  // habit with 30D on the way back through the history
+  if (push) {
+    localStorage.setItem(HISTORY_KEY, k);
+    // keep shared links reproducing the visible range (the default → no param)
+    history.replaceState(null, '', historyHref(k));
+  }
   ensureHistoryCoverage(historyPreset().d);
   scheduleRender();
 }
