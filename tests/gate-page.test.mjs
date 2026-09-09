@@ -6,9 +6,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { BLOCKS, LABEL_GAP, LINKS, MODEL_MARKS, NC_GLYPH, PANEL_IDS, TARGETS, buildModel, controls, drawable, leadSay, markOf, parseState, renderPage, screenSummary, signed, stackLabels, stateHref } from '../gate/gate.js';
 
-const ROOT = new URL('../gate/', import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL('../gate/', import.meta.url));
 // the page is manifest-driven, so its tests read the same manifest the browser does
 const MANIFEST = JSON.parse(readFileSync(join(ROOT, 'models.json'), 'utf8'));
 const MODEL_KEYS = MANIFEST.models.map(mo => mo.key);

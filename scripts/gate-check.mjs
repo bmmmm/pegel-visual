@@ -22,10 +22,11 @@
 // is the contract of the page's behaviour — extend it with the page.
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { sleep, serve, chrome, session, checker, helpers, killChildren } from './lib/cdp.mjs';
 import { parseArgs } from './lib/cli.mjs';
 
-const ROOT = resolve(new URL('..', import.meta.url).pathname);
+const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const { opt } = parseArgs();
 const shots = resolve(opt('shots', join(ROOT, 'tmp-forecast', 'gate-check')));
 mkdirSync(shots, { recursive: true });

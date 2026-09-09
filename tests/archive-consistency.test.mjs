@@ -7,6 +7,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
 
 // pin the clock before the module (and its fetch-wsv-archive import) reads it
@@ -332,7 +333,7 @@ test('R6 stays inert in the first fortnight, when the freeze has emptied current
 
 // ---------- CLI integration: a real git baseline, green then sabotaged ----------
 
-const SCRIPT = new URL('../scripts/check-archive-consistency.mjs', import.meta.url).pathname;
+const SCRIPT = fileURLToPath(new URL('../scripts/check-archive-consistency.mjs', import.meta.url));
 
 // hooksPath is not cosmetic: the machine's global template installs a
 // pre-commit scanner, and committing this fixture's ~450 station files through

@@ -16,6 +16,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 
@@ -660,7 +661,7 @@ test('with the rotations switched off nothing is filtered — the filter is doin
 test('CLI: --report on the fixture trees runs to the end and prints the diagnostics table', () => {
   const out = join(FIX.dir, 'cli-out', 'hourly'); // the writer insists on that leaf
   const stdout = execFileSync(process.execPath, [
-    new URL('../scripts/build-nrw-hourly-lag.mjs', import.meta.url).pathname,
+    fileURLToPath(new URL('../scripts/build-nrw-hourly-lag.mjs', import.meta.url)),
     '--tree', FIX.tree, '--hires', FIX.hires, '--out', out, '--report',
   ], { encoding: 'utf8' });
   assert.match(stdout, /^hourly lag: window /m);
