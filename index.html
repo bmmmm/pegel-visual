@@ -1441,7 +1441,7 @@
   <details id="tools-fold" open>
     <summary>&gt; pegel <span class="hint">· the prompt, your recent gauges and your archive</span></summary>
   <form id="prompt" autocomplete="off">
-    <div class="cmd">&gt; pegel <span class="flag">--station</span> <input id="station-input" name="station" spellcheck="false" placeholder="station" autocomplete="off" role="combobox" aria-expanded="false" aria-controls="ac" aria-autocomplete="list" aria-label="station name"><span class="cmd-deco"> --refresh 300s</span>
+    <div class="cmd">&gt; pegel <span class="flag">--station</span> <input id="station-input" name="station" spellcheck="false" placeholder="station" autocomplete="off" role="combobox" aria-expanded="false" aria-controls="ac" aria-autocomplete="list" aria-label="station name"><span class="cmd-deco" id="cmd-deco"> --refresh 300s</span>
     </div>
     <div class="cmd cont"><span class="flag">--river</span> <input id="river-input" name="river" spellcheck="false" placeholder="whole river" autocomplete="off" role="combobox" aria-expanded="false" aria-controls="ac" aria-autocomplete="list" aria-label="river name">
     </div>
@@ -1881,6 +1881,11 @@ function applyModeChrome() {
   // points at one gauge's page — goes away with the recent-gauge chips.
   // …and it points at a WSV page, so a gauge fed from elsewhere hides it too
   document.getElementById('wsv-archive-item').hidden = !perStation || !!(state.feed && !state.feed.live);
+  // The prompt's decoration is a promise about the feed, so it may not outlive
+  // it: a mirrored gauge or river (LANUK is a daily export, no CORS, no live
+  // endpoint) is never polled, and "--refresh 300s" would be a plain lie there.
+  document.getElementById('cmd-deco').textContent =
+    state.feed && !state.feed.live ? ' --mirror daily' : ' --refresh 300s';
   if (!perStation) document.getElementById('recent').hidden = true;
   else renderRecent();
   // The app bar's station item doubles as the way back: neither the map nor the
@@ -2691,6 +2696,7 @@ async function loadLanukRiver(forRiver, ids) {
       state.feed = { name: LANUK, live: false, collectedAt: (lanukManifestInfo || {}).generated || null, kmNote: T.lanukKmNote };
       state.archiveSource = LANUK;
       state.error = null;
+      applyModeChrome(); // the prompt's --refresh promise goes away now that the feed is known
       if (viewMode === 'wave') loadWave(); // the wave view needs the station list first
     }
   } catch (e) {

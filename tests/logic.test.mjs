@@ -4745,6 +4745,26 @@ test('?river=ERFT: the LANUK river plate lists every gauge in flow order, mouth 
   assert.equal(app.run('waveViewModel(waveData)').source, 'LANUK NRW daily archive · no live feed');
 });
 
+test('the prompt promises a refresh only where there is a feed to refresh', async () => {
+  const wsv = loadApp({ search: '?station=BONN' });
+  wsv.run('applyModeChrome()');
+  assert.equal(wsv.el('cmd-deco').textContent, ' --refresh 300s', 'a WSV gauge IS polled every 5 minutes');
+
+  const station = nrwApp({ search: '?station=MENDEN_1' });
+  await station.run('loadData()');
+  assert.equal(station.run('state.feed && state.feed.live'), false, 'the mirror is not a live feed');
+  assert.equal(station.el('cmd-deco').textContent, ' --mirror daily',
+    'a mirrored gauge says what it really is: a daily export');
+
+  // a mirrored river learns its feed only once the gauges are in, so the
+  // chrome has to be reapplied there rather than at the mode switch
+  const river = nrwApp({ search: '?river=ERFT' });
+  river.run(`lanukWaters.clear(); wsvWaters.clear(); wsvWaters.add('RHEIN')`);
+  await river.run('lanukIndex()');
+  await river.run('loadRiver()');
+  assert.equal(river.el('cmd-deco').textContent, ' --mirror daily', 'and so does a mirrored river');
+});
+
 test('a mirrored wave ends at the mirror\'s own edge, not at the clock', async () => {
   // the export is ~24 h old and the workflow runs daily, so the clock leaves
   // days on the right that no mirrored gauge can ever fill
