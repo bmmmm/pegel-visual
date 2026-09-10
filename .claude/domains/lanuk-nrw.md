@@ -160,28 +160,45 @@ thresholds exist. A non-finite reading, or a ladder with no numeric rung,
 returns `null` — and `msMark` draws nothing at all for it.
 
 **`alertStage` and `troubleKind` are two scales and must stay two.**
-`troubleKind` asks where a gauge stands against its OWN MNW/MHW statistics;
-`alertStage` asks which OFFICIAL threshold it has crossed. A gauge can be
-`high` and MS0 at the same time, and that is not a bug: a reading well above a
-gauge's long-run mean can still sit far below the operator's first alert rung.
-Neither may ever be derived from the other.
+`troubleKind` asks where a gauge stands against its OWN MNW/MHW statistics —
+`lanukState` says `high` at `v > mhw`, the mean of annual MAXIMA, not a
+long-term mean; `alertStage` asks which OFFICIAL threshold it has crossed.
+Neither may ever be derived from the other, and the source's own numbers show
+why. Measured on the live mirror 2026-09-10, over the gauges publishing both:
+**19 of 21 have `MHW ≥ Info_1`**, so on those a `high` reading is MS1 or
+better and the interesting pairing is the CONVERSE — Hommerich (MHW 107,
+first rung 90) reads `normal` at 100 cm while already standing at MS1. The
+other direction is real but rare: it needs `MHW < Info_1`, which holds at 2
+of the 21 (Erft Arloff 91/100 and Bessenich 102/110), where a reading between
+the two prints `high` and MS0 together. Sieg: 11 of 11 the first way.
 
 **On the history chart the stage marks REPLACE the means, they do not join
 them.** `historyRefMarks` draws the ladder rungs that fall inside the drawn
 min/max window; where none does — the ordinary day — it falls back to
 MHW/MW/MNW, so a LANUK gauge still draws the means most days instead of an
-empty chart, and the years overlay is unaffected either way. The two families
-never appear together, and `marksAreStages` tells the key which one was drawn.
-Measured live 2026-09-10: Menden_1 at 16 cm prints `MS0 of 3` in the title
-block and, over a one-year window, a single `MS1 250` line.
+empty chart. The two families never appear together, and `marksAreStages`
+tells the key which one was drawn. **The ladder reaches the history chart
+only.** The years view takes its `marks` straight from `charValue('MHW')` /
+`charValue('MNW')` in `yearsViewModel`, and `lanukGaugeFrom` feeds a LANUK
+gauge those means as ordinary characteristic values — so `▦ YEARS` still
+draws MHW/MNW for a LANUK gauge, alert stages or not.
+Measured against the DEPLOYED site 2026-09-10 (`?station=MENDEN_1&history=1y`
+on Pages, live mirror — not `verify-alert-stages.mjs`, which serves fixtures
+and pins Menden_1 near 44 cm): the gauge stood at 16 cm, printed `MS0 of 3` in
+the title block, and drew a single `MS1 250` line over the one-year window.
 
 **The net view draws the DELIVERED edge and derives no topology of its own.**
 `?river=X&view=net` (or `cmd:net`), valid only on a mirrored river — a
 hand-typed `?view=net` on a WSV river falls back to `live`. Every edge is
 `topo.gauges[id].down` out of `nrw/topology.json`. `down: null` with
-`downSrc: 'mouth'` means nothing below it; `down: null` from any other source
-means the pipeline could not place the gauge, and it is LISTED under the
-drawing rather than drawn into it. Reconstructing the tree from
+`downSrc: 'mouth'` is the ONLY null that still gets drawn — it is the basin's
+mouth gauge, the rightmost node. Everything else `netDistances` cannot resolve
+is LISTED under the drawing rather than drawn into it, and "no `down`" is only
+the commonest of those reasons: a missing `distKm` anywhere along the chain, a
+`down` naming an id the file does not carry, and a cycle all land in the same
+list (`scripts/verify-net.mjs` encodes the wider rule). Today all five
+unplaced gauges happen to be the simple `down: null, downSrc: null` case, so
+do not read that off the plate as the definition. Reconstructing the tree from
 `CATCHMENT_SIZE` and `DIST_TO_CONFL` was rejected before it was written: at
 two tributaries with the same mouth distance it is a guess, and this repo does
 not let a guess look like a reading.
@@ -190,8 +207,11 @@ not let a guess look like a reading.
 Measured live 2026-09-10: **Erft 14 in the basin, 11 drawn, 3 unplaced, 4
 carrying a delivered river km; Sieg 27 in the basin, 25 drawn, 2 unplaced, 6
 carrying one.** The 14 and the 27 are the display filter's own counts from the
-section above. The gauges "on the water" are exactly the ones whose distance
-prints bare — everything else prints with a `≈`.
+section above. On today's data the gauges "on the water" are exactly the ones
+whose distance prints bare (Sieg 6/6, Erft 4/4) — but that is a coincidence of
+a chain that never leaves its own water, not a definition: `n.exact` is
+`dist === own`, so a same-water gauge missing a `distKm` would break the
+identity and no test would notice.
 
 **The readings pass is a deliberate SECOND pass, and it costs two requests per
 basin gauge** — `meta.json` plus the newest daily shard, chunked six at a
@@ -199,8 +219,8 @@ time, each gauge in its own try/catch so one broken gauge loses only its own
 mark. Gauges the river plate already fetched are reused. Topology paints
 first; the stage marks arrive afterwards. **A browser check that waits only
 for "a node exists" measures the first pass and counts zero stage marks** —
-that is the two-pass design, not a missing feature (hit 2026-09-10, on the
-live site: 0 marks on the first probe, 13 once settled).
+that is the two-pass design, not a missing feature (hit 2026-09-10 against the
+deployed `?river=SIEG&view=net`: 0 marks on the first probe, 13 once settled).
 
 ## The rain field around a gauge (`scripts/build-nrw-precip.mjs`, `nrw/precip/`, gate rule N8)
 

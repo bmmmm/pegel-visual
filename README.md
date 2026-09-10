@@ -334,14 +334,17 @@ the net view draws the whole **basin** as the network it is: every gauge a
 node, every edge the downstream neighbour the mirror itself delivers, drawn as
 an elbow so a confluence reads as a confluence. Node size is the gauge's
 catchment area on a three-step ladder; a gauge whose area the file does not
-carry is drawn at the smallest size with a dashed outline — a different kind
-of node, not a smaller one. Where the mirror names no downstream neighbour at
-all, the gauge is listed under the drawing instead of guessed into it: nothing
-here reconstructs a river tree.
+carry is drawn at the smallest size with a dashed outline, or — if it also
+carries an alert stage — with a dashed ring around its stage disc. Either way
+it is a different kind of node, not a smaller one. Where the mirror gives a
+gauge no place in the network, it is listed under the drawing instead of
+guessed into it: nothing here reconstructs a river tree. (The gauge at the
+basin's mouth has no downstream neighbour either, and is simply the rightmost
+node.)
 
 Gauges that publish official alert stages carry them as the mark itself — a
-disc whose sector counts the thresholds reached, MS0 through MS3, every rung
-named in the key. Distances print bare where the file delivers them for that
+disc whose sector says how far up the operator's ladder the gauge stands, MS0
+through MS3, every rung named in the key. Distances print bare where the file delivers them for that
 gauge and with a `≈` where this drawing had to sum them across a confluence;
 only the bare ones are river kilometres anybody surveyed.
 

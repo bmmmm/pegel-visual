@@ -77,8 +77,10 @@ handful of rules you break without knowing you are in this domain at all.
   ONCE per plate that draws a mark (`vm.hasStages ? msPatternDefs() : ''`, the
   river plate and the net plate) and sitting at the plate's FOOT, so the
   plate's first `<svg>` is a drawn mark and not a hidden def. The ids resolve
-  **document-wide**: drawing and key swatches share one set, and a mark on a
-  plate that emitted no defs keeps only its ring. **Known nit:** the tile is 4
+  **document-wide**: drawing and key swatches share one set. Every branch that
+  draws a pattern-filled mark implies `hasStages`, so a plate that emits no
+  defs draws no mark either — do not go looking for the unresolved-`url(#…)`
+  case, it is unreachable rather than handled. **Known nit:** the tile is 4
   units, calibrated for r ≈ 4–5; the net view draws nodes down to r = 2.0,
   where an MS1 sector is ~4 units² against a 16-unit² tile and the texture
   thins to a fragment. The ordinal still rides on the sector, so that is
@@ -86,11 +88,12 @@ handful of rules you break without knowing you are in this domain at all.
   not this one.
 - **A rung key is a VOCABULARY, not an inventory.** All four MS rungs are
   named even on a day when no gauge stands above MS0, exactly as the river
-  plate names `k-low` and `k-high` on a day with neither. Draw those swatches
-  at the LARGEST radius the plate can draw, never `msMark`'s default 5: on the
-  net view, whose whole size channel means catchment area, an MS0 disc bigger
-  than the "500 km² and up" swatch one row above it makes size read as meaning
-  where that row has none.
+  plate names `k-low` and `k-high` on a day with neither. The river plate
+  draws them at `msMark`'s default radius; **a plate whose size channel
+  already carries meaning must not**. The net view draws them at
+  `NET_DOT_STEPS[0].r`, the largest radius it can draw, because an MS0 disc
+  bigger than the "500 km² and up" swatch one row above it would make size
+  read as meaning where that row has none.
 - **The net view: an elbow, and a KIND for the unknown.** Every edge is a
   three-point `polyline.net-edge` that runs along the gauge's own track to the
   column of the gauge below and only then drops onto its track — a confluence
