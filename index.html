@@ -893,6 +893,11 @@
   /* ---- the rain field around the gauge ---- */
   .precip-wrap { margin-left: var(--axis-gutter); }
   .precip { height: 7.2rem; border-bottom: 1px solid var(--ink); }
+  /* the ?rain=<no> page draws the SAME bars with no level row under them, so its
+     viewBox is 56 units tall instead of 132 — a shared height would stretch the
+     bars vertically (preserveAspectRatio="none"). Two classes against one, so
+     it wins on specificity; its position in the file is not load-bearing. */
+  .precip.raingauge { height: 4rem; }
   /* a fill wide enough to read, bounded by the ink hairline every area on this
      page is bounded by */
   .pr-bar { fill: var(--water); stroke: var(--ink); stroke-width: 0.4; vector-effect: non-scaling-stroke; }
@@ -990,7 +995,7 @@
   /* The rain set's rows are not one link each: the name is the member (a rain
      gauge, not a station of this app) and only the gauge it drains to is. So
      the row itself carries the layout the other lists put on their <a>. */
-  .pf-list.precip-set li {
+  .pf-list.precip-set li, .pf-list.rain-usedby li {
     display: flex;
     flex-wrap: wrap;
     gap: 0 1ch;
@@ -998,17 +1003,29 @@
     padding: 0.25em 0.2ch;
     border-bottom: 1px solid var(--rule);
   }
-  .pf-list.precip-set .via { color: var(--mid); }
-  .pf-list.precip-set .km { margin-left: auto; font-variant-numeric: tabular-nums; }
-  .pf-list.precip-set .at { color: var(--dim); flex-basis: 100%; }
-  .pf-list.precip-set .at a { display: inline; border: 0; padding: 0; color: var(--ink); }
-  .pf-list.precip-set .at .nolink { color: var(--mid); }
+  .pf-list.precip-set .via, .pf-list.rain-usedby .via { color: var(--mid); }
+  .pf-list.precip-set .km, .pf-list.rain-usedby .km { margin-left: auto; font-variant-numeric: tabular-nums; }
+  .pf-list.precip-set .at, .pf-list.rain-usedby .at { color: var(--dim); flex-basis: 100%; }
+  .pf-list.precip-set .at a, .pf-list.rain-usedby .at a { display: inline; border: 0; padding: 0; color: var(--ink); }
+  .pf-list.precip-set .at .nolink, .pf-list.rain-usedby .at .nolink { color: var(--mid); }
+  /* The name is a LINK now (?rain=<no> on a member, ?station= on a user), and
+     .pf-list a above lays a whole row out as a flex block with a rule under it.
+     Same override the `at` link already carries, plus a dotted underline so the
+     affordance is visible without the row turning into one big link. */
+  .pf-list.precip-set a.name, .pf-list.rain-usedby a.name {
+    display: inline;
+    border: 0;
+    padding: 0;
+    color: var(--ink);
+    text-decoration: underline dotted;
+    text-underline-offset: 0.2em;
+  }
   @container plate (min-width: 34rem) {
     /* wide enough for one row per member: the distance and the gauge it drains
        to become two right-hand columns, so the numbers line up under each other
        instead of hanging off names of every length */
-    .pf-list.precip-set .at { flex-basis: auto; min-width: 22ch; text-align: right; }
-    .pf-list.precip-set .km { margin-left: auto; min-width: 9ch; text-align: right; }
+    .pf-list.precip-set .at, .pf-list.rain-usedby .at { flex-basis: auto; min-width: 22ch; text-align: right; }
+    .pf-list.precip-set .km, .pf-list.rain-usedby .km { margin-left: auto; min-width: 9ch; text-align: right; }
   }
   /* ---- motion: transform/opacity only, and never under reduced motion ---- */
   @media (prefers-reduced-motion: no-preference) {
@@ -1889,11 +1906,35 @@ const risingQuery = () => risingHref(risingDays);
 const RAIN_WINDOWS = [30, 60, 90];
 const RAIN_DEFAULT = 30;
 let rainDays = RAIN_DEFAULT;
+// `?rain=<no>` is the same MODE zoomed onto one rain gauge. Not a station: a
+// station is a NAME through knownStations, and rain-gauge names collide with
+// gauge names exactly as LANUK's collide with WSV's (WESEL, BRAKE) — a rain
+// gauge has no level, no river and no alert ladder, so it is a plate of its
+// own rather than a row in the finder.
+let rainGaugeNo = null;
+// manifest.rain: <no> -> { n, b, la, lo, from, to, days }. Written by
+// mergeLanukIndex, far below — but declared HERE, because applyRainChrome puts
+// the gauge's name in the tab title at boot and a `let` beside its writer would
+// still be in its temporal dead zone at that point.
+let lanukRainIndex = null;
+// coverage.precip.stationsInNoSetIds — the rain gauges the collector's own rule
+// leaves out of every field (5 of 319 on the 2026-09-10 mirror). On those, a
+// missing used-by file is the EXPECTED state, and saying "this mirror carries no
+// reverse index" about the whole branch would be false.
+let lanukNoSetIds = null;
 function rainSyncFromUrl(p) {
   const w = Number(p.get('w'));
   rainDays = RAIN_WINDOWS.includes(w) ? w : RAIN_DEFAULT;
+  // digits only, and kept as a STRING: the numbers are 8 and 13 digits long and
+  // carry leading zeros (0037122044), both of which a Number would destroy
+  const g = p.get('rain');
+  rainGaugeNo = /^\d+$/.test(g || '') ? g : null;
 }
-const rainHref = n => (n === RAIN_DEFAULT ? '?rain' : '?rain&w=' + n);
+// the window chip's href keeps whichever rain view the reader is on; `no` is
+// passed explicitly by the two callers that mean the OTHER one (the board link
+// in the app bar, and a member row pointing at a gauge page)
+const rainHref = (n, no = rainGaugeNo) =>
+  (no ? '?rain=' + encodeURIComponent(no) : '?rain') + (n === RAIN_DEFAULT ? '' : '&w=' + n);
 const rainQuery = () => rainHref(rainDays);
 rainSyncFromUrl(new URLSearchParams(location.search));
 
@@ -1933,7 +1974,11 @@ const MODE_CHROME = {
   rivers: { title: () => 'PEGEL://RIVERS' + (viewMode === 'list' ? ' · A-Z' : ''), link: () => '?rivers' + viewSuffix(), label: 'rivers link:' },
   rising: { title: () => 'PEGEL://RISING' + (risingDays > 1 ? ' · 7D' : ''), link: risingQuery, label: 'rising link:' },
   total: { title: () => 'PEGEL://TOTAL · ' + totalScope(), link: totalQuery, label: 'total link:' },
-  rain: { title: () => 'PEGEL://RAIN · ' + rainDays + 'D', link: rainQuery, label: 'rain link:' },
+  // on a gauge page the title carries the gauge, not the window: the name is
+  // what a reader looking at a tab strip is trying to tell one rain page from
+  // another by. It comes out of the index, so before that lands it is the number.
+  rain: { title: () => 'PEGEL://RAIN · ' + (rainGaugeNo ? rainGaugeName(rainGaugeNo) : rainDays + 'D'),
+    link: rainQuery, label: 'rain link:' },
 };
 function applyChrome(m) {
   const c = MODE_CHROME[m];
@@ -2009,7 +2054,10 @@ function renderCrumbs() {
     if (mode === 'station') parts.push(here(station));
     else if (mode === 'rising') parts.push(here(T.risingBoard));
     else if (mode === 'total') parts.push(here(T.totalBoard));
-    else if (mode === 'rain') parts.push(here(T.rainBoard));
+    else if (mode === 'rain' && rainGaugeNo) {
+      parts.push(`<a${navAttrs('rain')}>${esc(T.rainBoard)}</a>`);
+      parts.push(here(rainGaugeName(rainGaugeNo)));
+    } else if (mode === 'rain') parts.push(here(T.rainBoard));
   }
   const html = parts.join(' ▸ ');
   if (html === lastCrumbs) return;
@@ -2082,6 +2130,20 @@ function screenSummary() {
     return `Rising board over the last ${d.elapsedDays.toFixed(1)} days: ${d.counts.rising} ${plural(d.counts.rising, 'gauge')} rising, ${d.counts.falling} falling, ` +
       `${d.counts.steady} steady, in cm per day; ${d.counts.tidal} tidal gauges excluded.` +
       (top ? ` Fastest: ${top}.` : '');
+  }
+  if (mode === 'rain' && rainGaugeNo) {
+    const g = state.rainGauge;
+    if (!g || g.loading) return 'Reading one rain gauge of the mirror…';
+    if (g.reason) return `This rain gauge has no drawing: ${g.reason}`;
+    const vm = rainGaugeViewModel();
+    // the mirror can carry an entry whose window is unreadable — that branch has
+    // no columns and no edge, and rainDayISO would throw on it (out of
+    // setScreenAria, which nothing catches)
+    if (!vm || vm.empty) return `This rain gauge has no drawing: ${(vm && vm.reason) || T.rainGaugeFetchFailed}`;
+    const users = vm.usedBy == null ? 'which gauges use it is not on this mirror'
+      : `${vm.usedBy.length} ${plural(vm.usedBy.length, 'gauge')} take it into their rain field`;
+    return `Rain gauge ${vm.name}, ${vm.label} to ${rainDayISO(vm.to)}: ${vm.sumMm} mm in all, ` +
+      `wettest column ${vm.maxCol} mm, ${vm.nd} ${plural(vm.nd, 'day')} with no reading; ${users}. No live feed.`;
   }
   if (mode === 'rain') {
     if (!state.rain) return 'Reading the mirrored rainfall…';
@@ -2186,6 +2248,9 @@ const state = {
   rising: null,     // { data: risingOverview() result, error } while in rising mode
   total: null,      // { overview, top, error } while in total mode (see loadTotal)
   rain: null,       // { data, error } while in rain mode (see loadRain)
+  // one rain gauge's own page (?rain=<no>, see loadRainGauge):
+  // { no, entry, years: {y: shard}, usedBy } | { no, reason } | { no, loading } | null
+  rainGauge: null,
   repoArchive: null, // 'available' | 'none' once the hosted archive manifest was consulted
   archiveSource: null, // manifest entry.source (e.g. 'Rijkswaterstaat'); null → WSV
   // what feeds the plate when it is not the live PEGELONLINE API: null = live
@@ -3468,6 +3533,54 @@ const T = {
   precipSetOrder: 'listed by how each one got in — draining here first, then within 15 km, then standing in — and by distance inside each group',
   precipSetAt: 'drains to',
   precipNoWindow: 'the mirror does not say which day its rain record ends on',
+  // ?rain=<no>: one rain gauge as its own page. A rain gauge is NOT a station of
+  // this app — it has no level, no river and no alert ladder — so it is a mode
+  // of its own rather than a name in the finder.
+  rainGaugeTitle: 'rain gauge',
+  rainGaugeSub: 'one rain gauge of the LANUK NRW mirror: its own daily rainfall, and the gauges whose rain field it stands in',
+  rainGaugeCoords: 'coordinates',
+  rainGaugeBasin: 'the source’s own catchment number:',
+  rainGaugeUsedBy: 'in the rain field of',
+  rainGaugeUsedByOrder: 'listed by how this gauge got into each field — draining there first, then within 15 km, then standing in — and by distance inside each group',
+  // Read the other way round from T.precipReach, because the relation IS the
+  // other way round here: reusing that string made the list read as rain gauges
+  // draining into this one.
+  rainGaugeReach: 'a gauge takes this rain gauge in if the rain drains to it or to one gauge upstream of it, or if this gauge stands within 15 km of it',
+  rainGaugeNoUsedBy: 'this mirror does not carry nrw/precip/used-by/, so which gauges use this rain gauge cannot be said — it is written by the rain-field builder, and this branch was collected before that',
+  rainGaugeNoUsers: 'no gauge on this mirror takes this rain gauge into its field',
+  // The collector's OWN word for it, not this page's guess: `coverage.precip
+  // .stationsInNoSetIds` names the rain gauges its rule leaves out, and on those
+  // a missing used-by file is the expected state rather than a missing index.
+  rainGaugeNoSet: 'the collector’s own coverage counts this rain gauge as unassigned — no gauge’s field reaches it, so there is no reverse entry to carry',
+  // Repeated once per row, so it has to be a LABEL; the claim it stands for is
+  // one key note below, which is where an explanation belongs on a plate.
+  rainGaugeAtOther: 'routed via',
+  rainGaugeAtSelf: 'routed to it directly',
+  rainGaugeAtNote: 'the km in each row is the distance to the gauge this rain is ROUTED to — where that is a gauge further down, the row names it, and the distance is not to the gauge at the head of the row',
+  rainGaugeBar: 'this gauge’s own rainfall',
+  rainGaugeNd: 'this gauge reported nothing on these days — not a dry day',
+  rainGaugeDayStart: 'a rain day runs [d 07:00, d+1 07:00) MEZ — it is not the gauge day the water levels sit on',
+  // True only at one rain day per column. A narrow plate buckets, and then the
+  // column IS a sum of this repo's own making — so the second half is printed
+  // only where it holds (the bar's own label names the width either way).
+  rainGaugeUnits: 'mm per rain day, as the source publishes it',
+  rainGaugeUnitsRaw: '— no aggregation of this repo’s own',
+  rainGaugeUnitsSum: '— a column wider than a day is their sum, which is this page’s arithmetic, not the source’s',
+  // The right edge is THIS gauge's, which is not the mirror's on a gauge that
+  // has fallen silent — 9 of 319 stand up to sixteen months short (measured
+  // 2026-09-10). T.precipEdge would name the mirror's day and be false there.
+  rainGaugeEdge: 'right edge is this gauge’s own newest rain day, not today:',
+  rainGaugeBehindMirror: 'it has reported nothing since — the mirror’s own newest rain day is',
+  rainGaugeFetchFailed: 'the daily rainfall of this rain gauge did not load',
+  // A registry entry without a series is a finding of the SOURCE (11 rain
+  // gauges exist only in one of its two registries), not a failed request —
+  // and saying "did not load" would send the reader after a network problem.
+  rainGaugeNoSeries: 'the mirror carries this rain gauge in its registry but no daily series for it — a finding of the source, not a failed fetch',
+  rainGaugeUnknown: 'the mirror carries no rain gauge with this number',
+  rainGaugeUnreadable: 'the rainfall of this gauge is mirrored, but not in the shape this page reads',
+  // A year file that did not arrive is not a gauge that reported nothing: drawn
+  // as `pr-nd` it would blame the gauge for this page's own failed request.
+  rainGaugeYearMissing: 'a year of this gauge’s record did not load, so the window cannot be drawn without blaming the gauge for the gap:',
   // rain -> level response
   response: 'RESPONSE · rain → level',
   respPos: 'correlation above zero: rain that day, level rises after',
@@ -3752,7 +3865,12 @@ function navHref(target) {
   if (target === 'rising') return '?rising';
   if (target === 'rivers') return '?rivers';
   if (target === 'total') return '?total';
-  if (target === 'rain') return rainQuery();
+  // the bare word is the BOARD, whatever gauge page the reader is on; the
+  // window rides along, because that is plate state the reader chose
+  if (target === 'rain') return rainHref(rainDays, null);
+  // …and one rain gauge's own page. `rain-` cannot collide with a station name:
+  // every other target here is a name, and no gauge is named lowercase.
+  if (target.startsWith('rain-')) return rainHref(rainDays, target.slice(5));
   return '?station=' + encodeURIComponent(target);
 }
 
@@ -4633,6 +4751,47 @@ function newestRainDay() {
   return w && w.to ? rainDayNum(w.to) : null;
 }
 
+// The rain columns themselves, for BOTH plates that draw them: the rain FIELD
+// around a gauge (many rain gauges, averaged by the collector) and one rain
+// gauge's own page (?rain=<no>). Same window arithmetic, same bucketing, same
+// "no day at all" convention — two copies of this would be two chances for the
+// station plate and the gauge page to disagree about which day is newest.
+//   at(arr, d)  reads array `arr` at absolute day number `d`, undefined = the
+//               mirror holds no such day (as against null = held, no reading)
+//   preset.d    days asked for, or falsy for "everything the mirror has"
+function rainBars({ at, edge, first, preset }) {
+  const days = preset.d ? Math.min(preset.d, edge - first + 1) : (edge - first + 1);
+  // whole days per column, so no day is counted in two columns and none is
+  // silently dropped between them
+  const step = Math.max(1, Math.ceil(days / (plateDensity() === 'narrow' ? 60 : 120)));
+  const nCols = Math.ceil(days / step);
+  // built from the right edge inwards: the newest day must land ON the edge,
+  // whatever the remainder of days/step is
+  const cols = [];
+  for (let c = nCols - 1; c >= 0; c--) {
+    const to = edge - (nCols - 1 - c) * step, from = to - step + 1;
+    let mm = 0, reported = 0, seen = 0, nMax = 0;
+    for (let d = from; d <= to; d++) {
+      const v = at('mm', d);
+      if (v === undefined) continue;
+      seen++;
+      if (v == null) continue;
+      mm += v; reported++;
+      nMax = Math.max(nMax, at('n', d) || 0);
+    }
+    cols.unshift({ from, to, mm: reported ? Math.round(mm * 100) / 100 : null, days: reported, seen, n: nMax });
+  }
+  // Sum and scale come from the SAME row the bars are drawn from — a printed
+  // total that was computed over a different window is the classic way for a
+  // plate to lie about its own drawing.
+  const drawn = cols.filter(c => c.mm != null);
+  return {
+    cols, step, days,
+    sumMm: drawn.reduce((s, c) => s + c.mm, 0),
+    maxCol: drawn.reduce((m, c) => Math.max(m, c.mm), 0),
+  };
+}
+
 function precipViewModel() {
   const p = state.precip;
   if (!p) return null;
@@ -4659,33 +4818,7 @@ function precipViewModel() {
     first = edge;
     for (const y of Object.keys(p.years)) first = Math.min(first, Date.UTC(Number(y), 0, 1) / 864e5);
   }
-  const days = preset.d ? Math.min(preset.d, edge - first + 1) : (edge - first + 1);
-  // whole days per column, so no day is counted in two columns and none is
-  // silently dropped between them
-  const step = Math.max(1, Math.ceil(days / (plateDensity() === 'narrow' ? 60 : 120)));
-  const nCols = Math.ceil(days / step);
-  // built from the right edge inwards: the newest day must land ON the edge,
-  // whatever the remainder of days/step is
-  const cols = [];
-  for (let c = nCols - 1; c >= 0; c--) {
-    const to = edge - (nCols - 1 - c) * step, from = to - step + 1;
-    let mm = 0, reported = 0, seen = 0, nMax = 0;
-    for (let d = from; d <= to; d++) {
-      const v = at('mm', d);
-      if (v === undefined) continue;
-      seen++;
-      if (v == null) continue;
-      mm += v; reported++;
-      nMax = Math.max(nMax, at('n', d) || 0);
-    }
-    cols.unshift({ from, to, mm: reported ? Math.round(mm * 100) / 100 : null, days: reported, seen, n: nMax });
-  }
-  // Sum and scale come from the SAME row the bars are drawn from — a printed
-  // total that was computed over a different window is the classic way for a
-  // plate to lie about its own drawing.
-  const drawn = cols.filter(c => c.mm != null);
-  const sumMm = drawn.reduce((s, c) => s + c.mm, 0);
-  const maxCol = drawn.reduce((m, c) => Math.max(m, c.mm), 0);
+  const { cols, step, days, sumMm, maxCol } = rainBars({ at, edge, first, preset });
 
   // The level row over the same columns: the daily mean of whatever readings
   // fall inside each column. Same series the HISTORY plate draws, so the two
@@ -4811,16 +4944,24 @@ const PRECIP_SET_ROWS = 12;
 let precipSetOpen = null;
 const precipSetIsOpen = () => (precipSetOpen == null ? plateDensity() !== 'narrow' : precipSetOpen);
 
-function renderPrecip(p) {
-  if (!p) return '';
-  const head = `<section class="p-block"><h2 class="p-h2">${esc(T.precip)} · ${esc(p.label)}</h2>`;
-  if (p.empty) return head + `<p class="p-dim">${esc(p.reason)}</p></section>`;
-  const W = 320, RH = 56, GAP = 6, LH = 70, H = RH + GAP + LH;
-  const n = p.cols.length;
+// The bar drawing, for both plates that carry one. The level row underneath is
+// OPTIONAL — the ?rain=<no> page has no level to draw, and a chart drawn on the
+// two-row viewBox with nothing in the lower row would leave a third of the
+// plate empty and stretch every bar (preserveAspectRatio="none").
+//   opts: { maxCol, cls, aria, levelRow, level?, lvl? }
+// `levelRow` is the SHAPE (does this plate have a lower row at all), `level` the
+// DATA. They are two questions: the station plate keeps its tall viewBox even
+// while state.archive is still empty and no line can be drawn, or its bars would
+// silently double in height against a CSS height that does not move.
+function precipBarChart(cols, opts) {
+  const W = 320, RH = 56, GAP = 6, LH = 70;
+  const level = opts.level || null;
+  const H = RH + (opts.levelRow ? GAP + LH : 0);
+  const n = cols.length;
   const cw = W / Math.max(1, n);
-  const scale = p.maxCol > 0 ? (RH - 4) / p.maxCol : 0;
+  const scale = opts.maxCol > 0 ? (RH - 4) / opts.maxCol : 0;
   const parts = [`<line class="pr-base" x1="0" y1="0.5" x2="${W}" y2="0.5"/>`];
-  p.cols.forEach((c, i) => {
+  cols.forEach((c, i) => {
     const x = i * cw, w = Math.max(0.8, cw - (cw > 3 ? 0.8 : 0.15));
     if (c.mm == null) {
       // a column no rain gauge stood behind, drawn as an outline over the full
@@ -4831,24 +4972,33 @@ function renderPrecip(p) {
     if (c.mm <= 0) return; // a dry day IS zero — the base line is its drawing
     parts.push(`<rect class="pr-bar" x="${x.toFixed(2)}" y="0.5" width="${w.toFixed(2)}" height="${Math.max(0.6, c.mm * scale).toFixed(2)}"/>`);
   });
-  if (p.level) {
-    const span = Math.max(p.level.hi - p.level.lo, 1);
-    const Y = v => RH + GAP + (1 - (v - p.level.lo) / span) * (LH - 4) + 2;
+  if (level) {
+    const span = Math.max(level.hi - level.lo, 1);
+    const Y = v => RH + GAP + (1 - (v - level.lo) / span) * (LH - 4) + 2;
     const runs = [];
     for (let i = 0, cur = null; i < n; i++) {
-      if (p.lvl[i] == null) { cur = null; continue; }
+      if (opts.lvl[i] == null) { cur = null; continue; }
       if (!cur) runs.push(cur = []);
       cur.push(i);
     }
     for (const run of runs) {
-      const pts = run.map(i => `${(i * cw + cw / 2).toFixed(1)},${Y(p.lvl[i]).toFixed(1)}`);
+      const pts = run.map(i => `${(i * cw + cw / 2).toFixed(1)},${Y(opts.lvl[i]).toFixed(1)}`);
       if (pts.length === 1) pts.push(pts[0]);
       parts.push(`<polyline class="pr-level" points="${pts.join(' ')}"/>`);
     }
   }
-  const chart = svgWrap(`0 0 ${W} ${H}`, parts.join(''),
-    ' class="chart precip" preserveAspectRatio="none" role="img"' +
-    attr('aria-label', `${T.precip}: ${p.sumMm} mm over ${p.label}, ${p.n} rain gauges, against the gauge's daily midrange`));
+  return svgWrap(`0 0 ${W} ${H}`, parts.join(''),
+    ` class="chart ${opts.cls}" preserveAspectRatio="none" role="img"` + attr('aria-label', opts.aria));
+}
+
+function renderPrecip(p) {
+  if (!p) return '';
+  const head = `<section class="p-block"><h2 class="p-h2">${esc(T.precip)} · ${esc(p.label)}</h2>`;
+  if (p.empty) return head + `<p class="p-dim">${esc(p.reason)}</p></section>`;
+  const chart = precipBarChart(p.cols, {
+    maxCol: p.maxCol, cls: 'precip', levelRow: true, level: p.level, lvl: p.lvl,
+    aria: `${T.precip}: ${p.sumMm} mm over ${p.label}, ${p.n} rain gauges, against the gauge's daily midrange`,
+  });
   const days = p.step === 1 ? T.precipDay : `${p.step} ${T.precipDays}`;
   const key = plateKey([
     { sw: keySw('<rect class="pr-bar" x="3" y="0" width="6" height="9"/><line class="pr-base" x1="0" y1="0.5" x2="12" y2="0.5"/>'), label: `${T.precipBar} (${esc(days)})` },
@@ -4915,7 +5065,11 @@ function renderPrecipSet(rows) {
       : { val: label },
   ], T.precipSetTitle);
   const items = shown.map(r =>
-    '<li><span class="name">' + esc(r.name) + '</span>' +
+    // the member's own page: a rain gauge is not a station, so the target is the
+    // ?rain=<no> mode rather than a name through knownStations
+    '<li>' + (r.no
+      ? `<a class="name"${navAttrs('rain-' + r.no)}>${esc(r.name)}</a>`
+      : `<span class="name nolink">${esc(r.name)}</span>`) +
     `<span class="via">${esc(r.word)}</span>` +
     `<span class="km">${r.km == null ? '—' : esc('km ' + r.km)}</span>` +
     // A member whose gauge this app cannot name gets the number and no link: an
@@ -6971,6 +7125,182 @@ function renderRain(vm) {
     key + '</section>';
 }
 
+// ---------- ?rain=<no>: one rain gauge as its own page ----------
+
+// WHICH gauges take this rain gauge into their field, out of the reverse index
+// nrw/precip/used-by/<no>.json. Same shape and same reading order as
+// precipSetViewModel — the two lists are the two directions of ONE relation, and
+// a reader who has learned to read the member list must not have to learn a
+// second order here.
+// `km` is the distance to the gauge the rain is ROUTED TO (`at`), which on a
+// basin membership is usually some other gauge upstream of the one named. Saying
+// "km 0.05" beside a gauge 40 km away would be a measurement about a different
+// pair, so the row says which pair it is about.
+function rainUsedByViewModel(list) {
+  const rows = Array.isArray(list) ? list : [];
+  return rows.map(u => {
+    const no = String(u.no ?? '');
+    const at = typeof u.at === 'string' && u.at ? u.at : null;
+    return {
+      no,
+      name: String(u.name ?? ''),
+      km: typeof u.km === 'number' && Number.isFinite(u.km) ? u.km : null,
+      via: u.via || 'basin',
+      word: viaWord(u.via),
+      // the gauge itself is a station of this app whenever the index names it;
+      // a name WSV owns is never merged under a LANUK id, so this can be null
+      gaugeName: stationNameOfId('lanuk-' + no),
+      at,
+      atSelf: !!at && at === no,
+      atName: at ? stationNameOfId('lanuk-' + at) : null,
+    };
+    // plain code-unit tiebreak, not localeCompare: the browser and the check
+    // that verifies it run in different default locales
+  }).sort((a, b) => viaRank(a.via) - viaRank(b.via) ||
+    (a.km ?? Infinity) - (b.km ?? Infinity) || (a.no < b.no ? -1 : a.no > b.no ? 1 : 0));
+}
+
+function rainGaugeViewModel() {
+  const g = state.rainGauge;
+  if (!g) return null;
+  // the ?rain window is this plate's range too: one mode, one window state, one
+  // chip vocabulary — a second range control here would be a second thing the
+  // reader has to keep in step with the URL
+  const preset = { d: rainDays, label: rainDays + 'D' };
+  const name = rainGaugeName(g.no);
+  if (g.loading) return { no: g.no, loading: true, name, label: preset.label };
+  if (g.reason) return { no: g.no, empty: true, reason: g.reason, name, label: preset.label };
+  const e = g.entry || {};
+  // The right edge is THIS gauge's own newest rain day, capped by the mirror's:
+  // a gauge that fell silent in July must not have three weeks of the mirror's
+  // freshness drawn onto it, and a gauge whose own `to` runs a day past the
+  // collector's last complete rain day must not draw that half day either.
+  const mirrorEdge = newestRainDay();
+  const own = rainDayNum(e.to);
+  const edge = Number.isFinite(own) ? (mirrorEdge == null ? own : Math.min(own, mirrorEdge)) : mirrorEdge;
+  if (edge == null || !Number.isFinite(edge)) {
+    return { no: g.no, empty: true, reason: T.precipNoWindow, name, label: preset.label };
+  }
+  const from = rainDayNum(e.from);
+  const first = Number.isFinite(from) ? Math.min(from, edge) : edge;
+  // A year file that did not arrive is NOT a gauge that reported nothing: drawn
+  // through `at`'s `undefined` it becomes a run of `pr-nd` columns, which say
+  // "this gauge reported nothing on these days" about a failed request of ours.
+  // Only the years the DRAWN window touches matter — an old shard nobody looks
+  // at must not withhold the plate.
+  const drawFrom = preset.d ? Math.max(first, edge - preset.d + 1) : first;
+  for (const y of new Set([rainSlot(drawFrom).y, rainSlot(edge).y])) {
+    if ((g.yearsAsked || []).includes(y) && !g.years[y]) {
+      return { no: g.no, empty: true, name, label: preset.label,
+        reason: `${T.rainGaugeYearMissing} ${y}` };
+    }
+  }
+  const at = (arr, d) => {
+    const { y, i } = rainSlot(d);
+    const s = g.years[y];
+    return s && Array.isArray(s[arr]) ? s[arr][i] : undefined;
+  };
+  const { cols, step, days, sumMm, maxCol } = rainBars({ at, edge, first, preset });
+  const usedBy = g.usedBy == null ? null : rainUsedByViewModel(g.usedBy);
+  return {
+    no: g.no, name, empty: false, loading: false, label: preset.label,
+    cols, step, sumMm: Math.round(sumMm * 10) / 10, maxCol,
+    nd: cols.filter(c => c.mm == null).length,
+    from: cols.length ? cols[0].from : edge, to: edge,
+    // both edges, each against the thing it is supposed to answer to: the
+    // oldest column against the mirror's own first day for this gauge, the
+    // newest against the collector's last complete rain day
+    windowFrom: first, ownTo: Number.isFinite(own) ? own : null, mirrorEdge,
+    // …and the gap between the two, where the gauge fell silent before the
+    // mirror did: the key names the mirror's day as well, so the reader can see
+    // that the short right edge is this gauge's and not the mirror's lateness
+    behindMirror: mirrorEdge != null && edge < mirrorEdge ? mirrorEdge : null,
+    clamped: !!(preset.d && days < preset.d),
+    basin: e.b == null ? null : String(e.b),
+    la: numOrNull(e.la), lo: numOrNull(e.lo),
+    mirrorDays: Number.isFinite(e.days) ? e.days : null,
+    usedBy, noSet: !!g.noSet,
+  };
+}
+
+function renderRainGaugeUsedBy(vm) {
+  // null and [] are different facts: no file on this mirror, against a file that
+  // says nobody uses this gauge. Both are stated; neither is silence.
+  if (vm.usedBy == null) {
+    return `<p class="p-dim">${esc(vm.noSet ? T.rainGaugeNoSet : T.rainGaugeNoUsedBy)}</p>`;
+  }
+  if (!vm.usedBy.length) return `<p class="p-dim">${esc(T.rainGaugeNoUsers)}</p>`;
+  const items = vm.usedBy.map(r => {
+    // a gauge the index cannot name gets the mirror's own name as plain text: a
+    // link to a station nobody has is worse than no link at all
+    const nameCell = r.gaugeName
+      ? `<a class="name"${navAttrs('lanuk-' + r.no)}>${esc(r.name)}</a>`
+      : `<span class="name nolink">${esc(r.name)}</span>`;
+    const atCell = !r.at
+      ? '<span class="at nolink">—</span>'
+      : r.atSelf
+        ? `<span class="at nolink">${esc(T.rainGaugeAtSelf)}</span>`
+        : `<span class="at">${esc(T.rainGaugeAtOther)} ` +
+          (r.atName
+            ? `<a${navAttrs('lanuk-' + r.at)}>${esc(r.atName)}</a>`
+            : `<span class="nolink">${esc(r.at)}</span>`) + '</span>';
+    return '<li>' + nameCell +
+      `<span class="via">${esc(r.word)}</span>` +
+      `<span class="km">${r.km == null ? '—' : esc('km ' + r.km)}</span>` +
+      atCell + '</li>';
+  }).join('');
+  return `<h2 class="p-h2">${esc(T.rainGaugeUsedBy)}</h2>` +
+    `<ol class="pf-list rain-usedby">${items}</ol>`;
+}
+
+function renderRainGauge(vm) {
+  if (!vm) return '';
+  const head = `<section class="plate">` +
+    `<header class="p-head"><h1>${esc(T.rainGaugeTitle)} · ${esc(vm.name)}</h1>` +
+    `<p class="p-sub">${esc(T.rainGaugeSub)}</p></header>`;
+  if (vm.loading) return head + `<p class="p-dim">${esc(T.loadRain)}</p></section>`;
+  if (vm.empty) return head + `<p class="p-dim">${esc(vm.reason)}</p></section>`;
+  const ctl = ctlRow(T.showLabel, RAIN_WINDOWS.map(n => ({
+    t: 'cmd:rw:' + n, label: n + 'D', on: n === rainDays,
+    title: vm.mirrorDays != null && n > vm.mirrorDays
+      ? `${n} ${T.precipDays} — the mirror holds ${vm.mirrorDays}`
+      : `${n} ${T.precipDays}`,
+  })), 'rain range');
+  const chart = precipBarChart(vm.cols, {
+    maxCol: vm.maxCol, cls: 'precip raingauge',
+    aria: `${vm.name}: ${vm.sumMm} mm over ${vm.label}, one rain gauge's own daily rainfall`,
+  });
+  const days = vm.step === 1 ? T.precipDay : `${vm.step} ${T.precipDays}`;
+  const key = plateKey([
+    { sw: keySw('<rect class="pr-bar" x="3" y="0" width="6" height="9"/><line class="pr-base" x1="0" y1="0.5" x2="12" y2="0.5"/>'), label: `${T.rainGaugeBar} (${esc(days)})` },
+    { sw: keySw('<rect class="pr-nd" x="1" y="1" width="10" height="10"/>'), label: T.rainGaugeNd },
+    { sw: keySw('<line class="pr-base" x1="0" y1="6" x2="12" y2="6"/>'), label: T.precipBase },
+    { note: `Σ ${vm.sumMm} mm · max ${vm.maxCol} mm — ${T.precipSameRow}` },
+    vm.nd > 0 && { note: `${vm.nd} ${plural(vm.nd, 'day')} — ${T.rainGaugeNd}` },
+    { note: `${T.rainGaugeUnits} ${vm.step === 1 ? T.rainGaugeUnitsRaw : T.rainGaugeUnitsSum}` },
+    { note: T.rainGaugeDayStart },
+    vm.la != null && vm.lo != null
+      ? { note: `${T.rainGaugeCoords}: ${vm.la.toFixed(4)}, ${vm.lo.toFixed(4)}` }
+      : { note: `${T.rainGaugeCoords}: —` },
+    vm.basin && { note: `${T.rainGaugeBasin} ${vm.basin}` },
+    // the member list on a station plate is the same relation read the other way
+    vm.usedBy && vm.usedBy.length > 0 && { note: T.rainGaugeUsedByOrder },
+    vm.usedBy && vm.usedBy.some(r => r.at && !r.atSelf) && { note: T.rainGaugeAtNote },
+    vm.usedBy && vm.usedBy.length > 0 && { note: T.rainGaugeReach },
+    // this gauge's own edge, never the mirror's — and where the two differ, both
+    { note: `${T.rainGaugeEdge} ${rainDayISO(vm.to)}` },
+    vm.behindMirror != null && { note: `${T.rainGaugeBehindMirror} ${rainDayISO(vm.behindMirror)}`, warn: true },
+    vm.clamped && { note: `${T.precipClamped} ${rainDayISO(vm.windowFrom)}` },
+    { note: `${rainDayISO(vm.from)} → ${rainDayISO(vm.to)}` },
+  ]);
+  // renderPrecip's order, so the two directions of one relation read alike: the
+  // drawing, then the list of what is on the other end of it, then the key
+  return head + ctl + `<div class="precip-wrap">${chart}</div>` +
+    `<div class="pf-flow"><span>${esc(`${vm.cols.length} ${plural(vm.cols.length, 'column')}`)}</span>` +
+    `<span>${esc(T.timeRight)} →</span></div>` +
+    renderRainGaugeUsedBy(vm) + key + '</section>';
+}
+
 // ---------- rivers overview (?rivers — the whole network as a locator map) ----------
 
 // Germany's border as (lon, lat) vertices, walked clockwise from the Ems estuary.
@@ -8136,7 +8466,7 @@ function setView(v, push = true) {
 
 // controls shared by the in-plate targets (nav "cmd:…") and the bar chips
 function runGridCmd(c) {
-  if (c === 'retry') { state.error = null; scheduleRender(); if (mode === 'station') loadData(); else if (mode === 'river') loadRiver(); else if (mode === 'rising') loadRising(); else if (mode === 'total') loadTotal(); else if (mode === 'rain') { state.rain = null; loadRain(); } }
+  if (c === 'retry') { state.error = null; scheduleRender(); if (mode === 'station') loadData(); else if (mode === 'river') loadRiver(); else if (mode === 'rising') loadRising(); else if (mode === 'total') loadTotal(); else if (mode === 'rain') { state.rain = null; state.rainGauge = null; GLOBAL_MODES.rain.enter(); } }
   else if (c === 'live') setView('live');
   else if (c === 'wave') setView('wave');
   else if (c === 'net') setView('net');
@@ -8306,8 +8636,12 @@ const GLOBAL_MODES = {
             enter: () => { loadRising(); refreshTimer = setInterval(loadRising, REFRESH_MS); } },
   total: { chrome: applyTotalChrome, query: totalQuery, again: true,
            enter: loadTotal }, // no refresh interval: the aggregate moves once a day at most
+  // ONE entry for two plates: the basin board (?rain) and one rain gauge's own
+  // page (?rain=<no>). They share the mode, the window chip and the chrome —
+  // only the loader and the drawing differ, so a second GLOBAL_MODES entry
+  // would be two copies of the same twenty lines.
   rain: { chrome: applyRainChrome, query: rainQuery, again: true,
-          enter: loadRain }, // no refresh interval: a daily export has nothing to poll for
+          enter: () => (rainGaugeNo ? loadRainGauge() : loadRain()) }, // no refresh interval: a daily export has nothing to poll for
 };
 
 function switchGlobalMode(name, push = true) {
@@ -8365,6 +8699,125 @@ async function loadRain() {
   }
   scheduleRender();
   setScreenAria();
+}
+
+// ---------- ?rain=<no>: one rain gauge as its own page ----------
+
+// The mirror's rain-gauge index (manifest.rain), the shards under nrw/rain/<no>/
+// and the reverse index the rain-field builder writes. All three are read the
+// way the precip product is: one fetch per file per session, a failure cached as
+// null, so a plate that re-renders never re-fetches.
+const rainShardCache = new Map(); // "<no>/<y>" -> Promise<shard|null>
+const rainUsedByCache = new Map(); // "<no>"    -> Promise<array|null>
+const rainShard = (no, y) => cachedJson(rainShardCache, `${no}/${y}`, `${LANUK_BASE}rain/${no}/${y}.json`);
+// nrw/precip/used-by/<no>.json — WHICH gauges take this rain gauge into their
+// field. Written by scripts/build-nrw-precip.mjs; a mirror collected before it
+// existed simply has none, and the plate says so rather than showing nothing.
+const rainUsedBy = no => cachedJson(rainUsedByCache, no, `${LANUK_BASE}precip/used-by/${no}.json`);
+
+// the mirror's name for a rain gauge, or the number until the index is in. Used
+// by the tab title, which can run before any fetch has landed.
+function rainGaugeName(no) {
+  const e = (lanukRainIndex || {})[no];
+  return (e && e.n) || String(no);
+}
+
+// The years a rain gauge's record spans, from its OWN window in the index — not
+// the mirror's, which is the union over 319 gauges.
+function rainGaugeYears(entry) {
+  const from = yearOf(entry && entry.from), to = yearOf(entry && entry.to);
+  if (!from || !to || to < from) return [];
+  const out = [];
+  for (let y = from; y <= to; y++) out.push(y);
+  return out;
+}
+
+// A shape check, not a presence check: render() runs inside a rAF callback that
+// swallows what it throws, so a truncated or reshaped shard has to become a
+// STATED reason here rather than a plate that silently stops halfway.
+function isRainShard(s, y) {
+  if (!s || typeof s !== 'object' || !Array.isArray(s.mm)) return false;
+  const n = (y % 4 === 0 && (y % 100 !== 0 || y % 400 === 0)) ? 366 : 365;
+  if (s.mm.length !== n) return false;
+  return s.mm.every(v => v === null || Number.isFinite(v));
+}
+
+async function loadRainGauge() {
+  const no = rainGaugeNo;
+  if (!no) return;
+  // the in-flight marker is what makes this idempotent: popstate and the mode
+  // switch can both reach it for the same gauge in one turn
+  if (state.rainGauge && state.rainGauge.no === no) return;
+  state.rainGauge = { no, loading: true };
+  const m = await lanukIndex(); // manifest.rain is the index — no per-gauge meta fetch
+  if (mode !== 'rain' || rainGaugeNo !== no) return; // switched away while fetching
+  const entry = (lanukRainIndex || {})[no];
+  if (!entry) {
+    // an unknown number is not a failed fetch, and saying "did not load" about
+    // one would send the reader looking for a network problem that is not there
+    state.rainGauge = { no, reason: m ? T.rainGaugeUnknown : T.rainGaugeFetchFailed };
+    scheduleRender();
+    setScreenAria();
+    return;
+  }
+  const years = rainGaugeYears(entry);
+  if (entry.noSeries || !years.length) {
+    // The source's own registries are not supersets of each other — 11 rain
+    // gauges exist in only one of them — so a registry entry without a window
+    // is a FINDING, exactly as the 8 WT-only gauges are. It costs no request.
+    state.rainGauge = { no, entry, reason: T.rainGaugeNoSeries };
+    applyRainChrome();
+    scheduleRender();
+    setScreenAria();
+    return;
+  }
+  const [usedBy, ...shards] = await Promise.all([rainUsedBy(no), ...years.map(y => rainShard(no, y))]);
+  if (mode !== 'rain' || rainGaugeNo !== no) return;
+  const have = {};
+  years.forEach((y, i) => { if (isRainShard(shards[i], y)) have[y] = shards[i]; });
+  state.rainGauge = {
+    no, entry, years: have, yearsAsked: years,
+    // Three states, three sentences. `[]` = the reverse index has this gauge and
+    // nobody uses it. `null` on a gauge the collector's own coverage counts as
+    // unassigned = the expected absence. `null` on any other gauge = this mirror
+    // carries no reverse index at all. Collapsing them makes the plate state a
+    // fact about the whole branch out of one 404.
+    usedBy: Array.isArray(usedBy) ? usedBy : null,
+    noSet: !!(lanukNoSetIds && lanukNoSetIds.has(String(no))),
+    reason: Object.keys(have).length ? null
+      : (shards.some(Boolean) ? T.rainGaugeUnreadable : T.rainGaugeFetchFailed),
+  };
+  // the chrome was dressed before the index existed, so the tab title and the
+  // permalink text still say the NUMBER: re-dress them now that the gauge has a
+  // name (measured in the browser 2026-09-10 — "PEGEL://RAIN · 51141131")
+  applyRainChrome();
+  scheduleRender();
+  setScreenAria();
+}
+
+// The board and one gauge are one mode, so switching between them goes through
+// the `again` path of switchGlobalMode — which re-chromes and re-renders but
+// does not push a URL or call enter(). Both are this function's job, exactly as
+// they are rainSetDays's.
+function switchRainGauge(no, push = true) {
+  const next = no || null;
+  if (mode !== 'rain') {
+    rainGaugeNo = next;
+    state.rainGauge = null;
+    return switchRain(push);
+  }
+  // already there: fall through to the `again` branch, which re-chromes and
+  // repaints — that is what `p` and `--rain` did before this function existed
+  if (rainGaugeNo === next) return switchRain(push);
+  dismissHelp();
+  dismissSuggest();
+  rainGaugeNo = next;
+  state.rainGauge = null;
+  if (push) history.pushState(null, '', rainQuery());
+  applyRainChrome();
+  crossFade();
+  setScreenAria();
+  GLOBAL_MODES.rain.enter();
 }
 
 function rainSetDays(n) {
@@ -8480,7 +8933,7 @@ function runCommand(raw) {
   if (cmd.rising) switchRising();
   else if (cmd.rivers) switchRivers();
   else if (cmd.total) switchTotal();
-  else if (cmd.rain) switchRain();
+  else if (cmd.rain) switchRainGauge(null); // --rain is the BOARD, from a gauge page too
   else if (cmd.river !== undefined) switchRiver(cmd.river);
   else if (cmd.station !== undefined) switchStation(cmd.station);
   if (cmd.history !== undefined && HISTORY_PRESETS.some(p => p.k === cmd.history)) setHistory(cmd.history);
@@ -8749,7 +9202,8 @@ function actOnGridTarget(st) {
   else if (st === 'rising') switchRising();
   else if (st === 'rivers') switchRivers();
   else if (st === 'total') switchTotal();
-  else if (st === 'rain') switchRain();
+  else if (st === 'rain') switchRainGauge(null);
+  else if (st.startsWith('rain-')) switchRainGauge(st.slice(5));
   else switchStation(st);
 }
 // Plate targets are real links/buttons: one delegated handler (app bar, crumbs,
@@ -8831,7 +9285,7 @@ document.addEventListener('keydown', e => {
   if (k === 'm') { e.preventDefault(); switchRivers(); return; }
   if (k === 'r') { e.preventDefault(); switchRising(); return; }
   if (k === 't') { e.preventDefault(); switchTotal(); return; }
-  if (k === 'p') { e.preventDefault(); switchRain(); return; }
+  if (k === 'p') { e.preventDefault(); switchRainGauge(null); return; } // the board, from a gauge page too
   if (k === 'a' && viewMode === 'years') { e.preventDefault(); runGridCmd(histMode === 'abs' ? 'anom' : 'abs'); return; }
   if (k === 'w' && mode === 'river') { e.preventDefault(); setView(viewMode === 'wave' ? 'live' : 'wave'); return; }
   if (k === 'd' && mode === 'total') { e.preventDefault(); totalSetDiff(!totalDiff); return; }
@@ -8844,7 +9298,12 @@ window.addEventListener('popstate', () => {
   if (p.has('rising')) { risingSetDays(p.has('d7') ? 7 : 1, false); switchRising(false); }
   else if (p.has('rivers')) switchRivers(false);
   else if (p.has('total')) { totalSyncFromUrl(p); switchTotal(false); }
-  else if (p.has('rain')) { rainSyncFromUrl(p); switchRain(false); }
+  // …and the gauge the popped entry names. switchRain's `again` branch only
+  // re-chromes and re-renders — it never calls enter() — so a Back that moves
+  // between the board and a gauge page (or between two gauge pages) has to ask
+  // for the load itself. Both loaders are idempotent, so the path that DID
+  // enter through switchGlobalMode costs nothing here.
+  else if (p.has('rain')) { rainSyncFromUrl(p); switchRain(false); GLOBAL_MODES.rain.enter(); }
   else if (p.get('river')) switchRiver(p.get('river'), false);
   else switchStation(p.get('station') || 'BONN', false);
   // restore the sub-view AFTER the mode is back, so its mode-guard sees the truth
@@ -8965,6 +9424,10 @@ const wsvWaters = new Set();   // the waters the PEGELONLINE list names
 let lanukManifestInfo = null;  // { generated, sourceExportAt, license, window } of the mirror
 let lanukPrecipIndex = null;   // manifest.precip: <no> -> { n, up, series, why? }
 let lanukTempIndex = null;     // manifest.temp: <no> -> { n, w, b, la, lo, from, to, days } | { empty: true }
+// lanukRainIndex is declared with the ?rain routing near the top of this script,
+// NOT here: applyRainChrome runs at boot, before this block is evaluated, and a
+// `let` down here is in its temporal dead zone — booting straight into
+// ?rain=<no> threw a ReferenceError out of the tab title.
 let lanukPrecipEdge = null;    // manifest.coverage.precip.lastRainDay: the right edge every rain plate hangs on
 let lanukManifestP = null;     // Promise<manifest|null>, one fetch per session (see lanukIndex)
 const numOrNull = v => (typeof v === 'number' && Number.isFinite(v) ? v : null);
@@ -8984,10 +9447,18 @@ function mergeLanukIndex(m) {
   // Read before any /temp/ fetch, for the same reason as the line above: the
   // right edge of that drawing is this entry's own `to`, per station.
   lanukTempIndex = m.temp || null;
+  // the rain gauges themselves. Deliberately NOT merged into knownStations:
+  // they are not stations of this app (no level, no river, no ladder), their
+  // names collide with gauge names, and putting 319 of them into the finder
+  // would bury the gauges a reader is actually looking for. ?rain=<no> is how
+  // they are addressed, and the member list on a station plate is the way in.
+  lanukRainIndex = m.rain || null;
   // the newest rain day with a READING — not window.rain.to, which names the
   // newest day the SOURCE offers and is always half a day short (the export
   // runs mid-afternoon, a rain day starts at 07:00)
   lanukPrecipEdge = (m.coverage && m.coverage.precip && m.coverage.precip.lastRainDay) || null;
+  const inNoSet = m.coverage && m.coverage.precip && m.coverage.precip.stationsInNoSetIds;
+  lanukNoSetIds = Array.isArray(inNoSet) ? new Set(inNoSet.map(String)) : null;
   let added = 0;
   for (const [no, g] of Object.entries(m.gauges)) {
     if (!g || g.noSeries || g.empty) continue; // a temperature-only site, or an advertised series without a value, is not a gauge here
@@ -9752,6 +10223,21 @@ function render() {
     setSourceLine(vm.source);
     return;
   }
+  if (mode === 'rain' && rainGaugeNo) {
+    if (!state.rainGauge) return setScreenLoading(T.loadRain);
+    const vm = rainGaugeViewModel();
+    if (!vm) return setScreenError(T.rainGaugeUnreadable);
+    setScreenHtml(renderRainGauge(vm));
+    // source AND age, as every foot on this page carries: the mirror's own
+    // export stamp, this gauge's newest drawn rain day, and the fact that the
+    // source has no live feed at all
+    const exportAt = (lanukManifestInfo || {}).sourceExportAt || null;
+    setSourceLine(vm.empty || vm.loading
+      ? `${LANUK} · ${T.noLiveFeed}`
+      : `${LANUK} · ${T.rainMirrored} ${exportAt ? String(exportAt).slice(0, 10) : '—'}` +
+        ` · ${T.rainGaugeEdge} ${rainDayISO(vm.to)} · ${T.rainDayStart} · ${T.noLiveFeed}`);
+    return;
+  }
   if (mode === 'rain') {
     if (state.rain && state.rain.error) return setScreenError(state.rain.error);
     if (!state.rain) return setScreenLoading(T.loadRain);
@@ -9895,7 +10381,8 @@ if (mode === 'rivers') {
   applyModeChrome();
   stationInput.value = '';
   setScreenAria();
-  loadRain(); // no refresh interval — a daily export has nothing to poll for
+  GLOBAL_MODES.rain.enter(); // the board, or one gauge's page — no refresh interval either way
+
 } else if (mode === 'river') {
   state.river = new URLSearchParams(location.search).get('river').toUpperCase();
   applyRiverChrome();

@@ -3729,7 +3729,7 @@ const tableAt = (html, cls) => {
 // Not marks: the drawings' own container classes (`hist` is the history
 // chart's), invisible hit targets, and the two boat states the key spells out
 // in words instead.
-const NOT_A_MARK = new Set(['scene', 'chart', 'hist', 'profile', 'precip', 'response', 'wtemp', 'hit', 'stuck', 'aground']);
+const NOT_A_MARK = new Set(['scene', 'chart', 'hist', 'profile', 'precip', 'raingauge', 'response', 'wtemp', 'hit', 'stuck', 'aground']);
 
 // The chip machinery a key is built from — <span class="lg">, the name, the
 // percentage, the swatch <svg> — none of it is a mark.
@@ -4259,6 +4259,29 @@ const NRW_MANIFEST = {
     2741500000100: { n: 'Arloff', w: 'Erft', b: '274', from: '2024-09-04', to: '2026-09-02', days: 729 },
     4711: { n: 'Warmwasser', w: 'Erft', b: '274', noSeries: true },
   },
+  // The RAIN gauges (manifest.rain). They are not stations of this app: no
+  // level, no river, no ladder — `?rain=<no>` addresses them instead, and the
+  // finder never learns their names. HENNEF carries the hostile name because
+  // the ?rain=<no> title block prints it; WILNSDORF's own `to` stops thirteen
+  // days short of the mirror's, which is what makes the right edge PER GAUGE
+  // rather than the mirror's own newest day.
+  rain: {
+    51089370: { n: 'Hennef<script>', b: '272', la: 50.7734, lo: 7.2841, from: '2025-01-01', to: '2026-09-02', days: 610 },
+    51141131: { n: 'Wilnsdorf_KA_NRW', b: '272', la: 50.8630, lo: 8.0794, from: '2025-01-01', to: '2026-08-20', days: 597 },
+    // a rain gauge the collector's own coverage counts as unassigned: no field
+    // reaches it, so a missing used-by file is the EXPECTED state
+    44075066: { n: 'Bottrop-Eigen', b: '2772', la: 51.5372, lo: 6.9281, from: '2025-01-01', to: '2026-09-02', days: 610 },
+    // …against one that is not, where the same 404 means the mirror carries no
+    // reverse index at all. Two facts, two sentences.
+    42170036: { n: 'Paderborn-Kernstadt', b: '4', la: 51.7189, lo: 8.7575, from: '2025-01-01', to: '2026-09-02', days: 610 },
+    // a registry entry with no window at all — the source's two registries are
+    // not supersets of each other, so this is a finding, not a failed fetch
+    43120089: { n: 'Registry only', b: '4' },
+  },
+  // the collector's own words about its coverage. `lastRainDay` is the right
+  // edge every rain drawing hangs on (never window.rain.to), and
+  // `stationsInNoSetIds` names the rain gauges its rule leaves out.
+  coverage: { precip: { lastRainDay: '2026-09-02', stationsInNoSetIds: ['44075066'] } },
 };
 const NRW_META = {
   2729100000100: { id: '2729100000100', name: 'Menden_1', water: 'Sieg', siteNo: '100', lat: 50.7979, lon: 7.1591,
@@ -4336,6 +4359,42 @@ function nrwPrecipShard(no, y) {
   }
   return { id: no, y, mm, n: cnt, med, mx };
 }
+// ONE rain gauge's own daily record (nrw/rain/<no>/<Y>.json). Same shape the
+// mirror writes: a full-length year array whatever the window does, `null` for a
+// day this gauge reported nothing, real zeros for dry days. `lastDay` is the
+// 0-based day-of-year that gauge's own record ends on.
+function nrwRainShard(no, y, lastDay) {
+  const n = y % 4 === 0 ? 366 : 365;
+  const mm = Array(n).fill(null), imax = Array(n).fill(null);
+  for (let d = 0; d < n; d++) {
+    if (y === 2026 && d > lastDay) break;   // this gauge's own right edge
+    if (d % 29 === 0) continue;             // a day it reported nothing at all
+    const v = d % 13 === 0 ? 0 : d % 19 === 0 ? 21.5 : 1.5;
+    mm[d] = v; imax[d] = Math.round(v * 25) / 100;
+  }
+  return { id: no, y, mm, imax, cov: {} };
+}
+// the last day of 2026 each fixture rain gauge holds, as a 0-based day of year:
+// 2026-09-02 is 244, 2026-08-20 is 231
+const NRW_RAIN_LAST = { 51089370: 244, 51141131: 231, 44075066: 244, 42170036: 244 };
+// nrw/precip/used-by/<no>.json — the reverse of a station plate's member list.
+// The first entry's `km` is the distance to the gauge the rain is ROUTED to
+// (Weidenau), not to Menden_1, which is exactly the claim the row has to keep
+// straight; the second is routed to itself. Menden_1 carries the hostile name
+// here, because this list prints the FILE's name, not the index's.
+// DELIBERATELY out of the plate's reading order — the fallback first, the
+// measurement last. A fixture already in order cannot tell a working sort from
+// a missing one (measured: dropping the sort left the suite green).
+const NRW_USED_BY = {
+  51089370: [
+    { no: '9999999', name: 'A gauge this app cannot name', via: 'knn', km: 27.4, at: '9999999' },
+    { no: '2747900000200', name: 'Neubrueck', via: 'local', km: 8.2, at: '2747900000200' },
+    { no: '2729100000100', name: 'Menden_1<img src=x onerror=1>', via: 'basin', km: 3.13, at: '2721390000100' },
+  ],
+  // a gauge nobody uses: the file exists and is empty, which is a different
+  // fact from "this mirror has no used-by/ at all"
+  51141131: [],
+};
 const NRW_PRECIP_META = {
   schema: 1, id: '2729100000100', name: 'Menden_1', water: 'Sieg', basin: '272', km2: 2825,
   unit: 'mm/d', method: 'unweighted mean over the reporting rain gauges of the upstream closure',
@@ -4427,6 +4486,12 @@ const nrwStub = `
     m = /^nrw\\/temp\\/(\\d+)\\/(\\d{4})\\.json$/.exec(url);
     if (m && m[1] === '2729100000100') return (${nrwTempShard.toString()})(m[1], +m[2]);
     if (url === 'nrw/precip/overview.json') return ${JSON.stringify(NRW_RAIN_OVERVIEW)};
+    m = /^nrw\\/precip\\/used-by\\/(\\d+)\\.json$/.exec(url);
+    if (m && ${JSON.stringify(NRW_USED_BY)}[m[1]]) return ${JSON.stringify(NRW_USED_BY)}[m[1]];
+    m = /^nrw\\/rain\\/(\\d+)\\/(\\d{4})\\.json$/.exec(url);
+    if (m && ${JSON.stringify(NRW_RAIN_LAST)}[m[1]] != null) {
+      return (${nrwRainShard.toString()})(m[1], +m[2], ${JSON.stringify(NRW_RAIN_LAST)}[m[1]]);
+    }
     if (url === 'nrw/hourly/lag.json') return ${JSON.stringify(NRW_LAG)};
     const e = new Error('404 ' + url); e.status = 404; throw e;
   };
@@ -5598,7 +5663,8 @@ test('PRECIPITATION: a hostile station name in the rain set never reaches the ma
   // and it is the NAME in that row that has to be escaped, not something else
   // on a 30 kB page that happens to have no <script> in it
   const row = setRowAtKm(html, '3.13');
-  assert.match(row, /<span class="name">Hennef&lt;script&gt;<\/span>/, 'the name arrives escaped');
+  assert.match(row, /<a class="name" href="\?rain=51089370" data-nav="rain-51089370">Hennef&lt;script&gt;<\/a>/,
+    'the name arrives escaped — and, since 2026-09-10, as the link to its own page');
   assert.ok(!row.includes('Hennef<script>'), 'and never raw');
 });
 
@@ -5626,12 +5692,16 @@ test('PRECIPITATION: a mirror without `at` gets an em dash, never a link that go
     ];
     return renderPrecip(precipViewModel());
   })()`);
+  // anchored at the `at` CELL, not at the row: since the member list links its
+  // names to ?rain=<no> the row always carries one <a>, and "no link anywhere in
+  // this row" would now be a check about the wrong link
+  const atCell = r => { const m = /<span class="at[^"]*">[\s\S]*?<\/span>\s*<\/li>|<span class="at nolink">[\s\S]*?<\/span>/.exec(r); assert.ok(m, `no at cell in ${r}`); return m[0]; };
   const noAt = setRowAtKm(html, '4.2');
   assert.match(noAt, /<span class="at nolink">—<\/span>/, 'no `at`, no claim about one');
-  assert.ok(!noAt.includes('<a '), 'and no link');
+  assert.ok(!atCell(noAt).includes('<a '), 'and no link to one');
   const unknown = setRowAtKm(html, '5.5');
   assert.match(unknown, /<span class="nolink">9999999<\/span>/, 'an id the index cannot name stays a number');
-  assert.ok(!unknown.includes('<a '), 'and stays plain text rather than becoming a dead link');
+  assert.ok(!atCell(unknown).includes('<a '), 'and stays plain text rather than becoming a dead link');
 });
 
 test('PRECIPITATION: on a phone the list is cut to 12 rows and the chip says so', async () => {
@@ -5738,6 +5808,372 @@ test('PRECIPITATION: the member list is a mark of the plate, and the key names i
   })()`);
   assert.ok(!none.includes('precip-set'), 'no members, no list');
   assert.ok(!none.includes('listed by how each one got in'), 'and no legend entry for one');
+});
+
+// ---------- ?rain=<no>: one rain gauge as its own page ----------
+
+// The boot ran its own loadRainGauge against the offline stub before nrwStub was
+// installed; awaiting the index drains that attempt, and the reset then makes
+// the load under test the deterministic one.
+const rainGaugeApp = async (search = '?rain=51089370', opts = {}) => {
+  const app = nrwApp({ search, ...opts });
+  await app.run('lanukIndex()');
+  app.run('state.rainGauge = null');
+  await app.run('loadRainGauge()');
+  return app;
+};
+// the used-by <li> that carries a given distance — anchored at THIS list, never
+// at the page and never at the precipitation plate's own member list
+const usedByRows = html => {
+  const a = html.indexOf('<ol class="pf-list rain-usedby">');
+  assert.ok(a > 0, 'the rain-gauge plate carries a used-by list at all');
+  const ol = html.slice(a, html.indexOf('</ol>', a));
+  return [...ol.matchAll(/<li>[\s\S]*?<\/li>/g)].map(m => m[0]);
+};
+const usedByRowAtKm = (html, km) => {
+  const rows = usedByRows(html);
+  const row = rows.find(r => r.includes(`km ${km}<`));
+  assert.ok(row, `no used-by row at km ${km} — ${rows.length} rows drawn`);
+  return row;
+};
+
+test('?rain=<no>: a rain gauge is a MODE, not a station, and the finder never learns its name', async () => {
+  const app = await rainGaugeApp();
+  assert.equal(app.run('mode'), 'rain', 'the URL puts the page in rain mode');
+  assert.equal(app.run('rainGaugeNo'), '51089370', 'kept as a STRING — these numbers carry leading zeros');
+  // Rain-gauge names collide with gauge names exactly as LANUK's collide with
+  // WSV's, and 319 of them would bury the gauges a reader is looking for.
+  assert.equal(app.run(`knownStations.has('HENNEF<SCRIPT>')`), false, 'no rain gauge in the finder');
+  assert.equal(app.run(`[...knownStations].some(n => n.includes('WILNSDORF'))`), false, 'nor the other one');
+  assert.equal(app.run(`Object.keys(lanukRainIndex).length`), 5, 'the index carries them all the same');
+  // the share link is the mode's own query, not ?station=
+  assert.equal(app.run('currentModeQuery()'), '?rain=51089370');
+  assert.equal(app.run(`MODE_CHROME.rain.title()`), 'PEGEL://RAIN · Hennef<script>',
+    'and the tab title carries the gauge, not the window');
+  // …and it is really ON the tab. The chrome is dressed at boot, before the
+  // index exists, so without the loader re-dressing it the title stays the
+  // NUMBER for the rest of the session (measured in Chrome 2026-09-10).
+  assert.equal(app.run('document.title'), 'PEGEL://RAIN · Hennef<script>',
+    'the loader re-dressed the chrome once the gauge had a name');
+});
+
+test('?rain=<no>: a non-numeric or absent gauge leaves the board addressed', () => {
+  const board = loadApp({ now: NRW_NOW, search: '?rain' });
+  assert.equal(board.run('rainGaugeNo'), null);
+  assert.equal(board.run('rainQuery()'), '?rain');
+  const junk = loadApp({ now: NRW_NOW, search: '?rain=SIEG' });
+  assert.equal(junk.run('rainGaugeNo'), null, 'only /^\\d+$/ addresses a gauge');
+  assert.equal(junk.run('mode'), 'rain', 'and the mode is still the board');
+  const windowed = loadApp({ now: NRW_NOW, search: '?rain=51089370&w=90' });
+  assert.equal(windowed.run('rainDays'), 90);
+  assert.equal(windowed.run('rainQuery()'), '?rain=51089370&w=90', 'both halves of the URL survive');
+  assert.equal(windowed.run(`navHref('rain')`), '?rain&w=90', 'the bare word is the BOARD, window and all');
+  assert.equal(windowed.run(`navHref('rain-51141131')`), '?rain=51141131&w=90');
+});
+
+test('?rain=<no>: the member list is the way in, and Back is the way out', async () => {
+  const app = await precipApp();
+  const html = app.run(`(() => { historyKey = '30d'; return renderPrecip(precipViewModel()); })()`);
+  const row = setRowAtKm(html, '3.13');
+  assert.match(row, /<a class="name" href="\?rain=51089370" data-nav="rain-51089370">/,
+    'the member name is the link to its own page');
+  app.run(`navTo('rain-51089370')`);
+  assert.equal(app.run('mode'), 'rain', 'clicking it leaves the station');
+  assert.equal(app.run('rainGaugeNo'), '51089370');
+  // the switch already started the load; the reset makes the awaited one the
+  // deterministic version of the same work (both read the same stub)
+  app.run('state.rainGauge = null');
+  await app.run('loadRainGauge()');
+  assert.equal(app.run('state.rainGauge.entry.n'), 'Hennef<script>', 'and the gauge is loaded');
+  // A popstate from one rain gauge to ANOTHER stays inside the mode, so it
+  // reaches switchGlobalMode's `again` branch — which re-chromes and repaints
+  // and never calls enter(). Without the handler asking for the load itself the
+  // plate would go on drawing gauge A under gauge B's URL. This step has to come
+  // while mode is already 'rain': from station mode the full switch enters for
+  // you, and the assertion proves nothing (measured — deleting the call from the
+  // handler left the whole suite green).
+  assert.equal(app.run('mode'), 'rain', 'still in rain mode, which is what makes the next step a real check');
+  app.location.search = '?rain=51141131';
+  app.fire('popstate');
+  assert.equal(app.run('rainGaugeNo'), '51141131');
+  assert.equal(app.run('state.rainGauge.no'), '51141131',
+    'popstate asked for the load itself — the `again` branch never calls enter()');
+  app.run('state.rainGauge = null');
+  await app.run('loadRainGauge()');
+  assert.equal(app.run('state.rainGauge.entry.n'), 'Wilnsdorf_KA_NRW', 'and it is the gauge the URL named');
+  // …and Back out of the mode altogether
+  app.location.search = '?station=MENDEN_1';
+  app.fire('popstate');
+  assert.equal(app.run('mode'), 'station', 'Back lands on the gauge again');
+  assert.equal(app.run('station'), 'MENDEN_1');
+});
+
+test('?rain=<no>: both edges — the newest column is the GAUGE’s own last rain day', async () => {
+  // The mirror's newest rain day is 2026-09-02; this gauge's own record stops on
+  // 2026-08-20. Hanging the right edge on the mirror would paint thirteen days
+  // of somebody else's freshness onto a gauge that has been silent since August.
+  const app = await rainGaugeApp('?rain=51141131');
+  const vm = app.run('rainGaugeViewModel()');
+  assert.equal(vm.empty, false);
+  assert.equal(app.run(`rainDayISO(rainGaugeViewModel().cols.at(-1).to)`), '2026-08-20',
+    'the newest column drawn IS this gauge’s own last rain day');
+  assert.equal(app.run(`rainDayISO(rainGaugeViewModel().to)`), '2026-08-20', 'and the model agrees with its drawing');
+  assert.equal(app.run(`rainDayISO(newestRainDay())`), '2026-09-02', 'while the mirror itself runs further');
+  // …and the oldest column against the window, not against whatever the shard
+  // happens to start on: 30 days back from the edge, inclusive
+  assert.equal(vm.cols.length, 30, 'the default window is 30 days');
+  assert.equal(app.run(`rainDayISO(rainGaugeViewModel().cols[0].from)`), '2026-07-22');
+  assert.equal(vm.clamped, false, 'the mirror holds more than the chip asks for');
+  // the other gauge runs to the mirror's own edge, so the cap is not a floor
+  const fresh = await rainGaugeApp();
+  assert.equal(fresh.run(`rainDayISO(rainGaugeViewModel().to)`), '2026-09-02');
+});
+
+test('?rain=<no>: the window chips move the drawing and stay shareable', async () => {
+  const app = await rainGaugeApp();
+  assert.equal(app.run('rainGaugeViewModel().cols.length'), 30);
+  assert.equal(app.run(`navHref('cmd:rw:90')`), '?rain=51089370&w=90', 'the chip keeps the gauge');
+  app.run(`runGridCmd('rw:90')`);
+  assert.equal(app.run('rainDays'), 90);
+  assert.equal(app.run('rainGaugeViewModel().cols.length'), 90, 'and the drawing follows');
+  assert.equal(app.run('currentModeQuery()'), '?rain=51089370&w=90');
+});
+
+test('?rain=<no>: the plate names every mark it draws, and its foot names source and age', async () => {
+  const app = await rainGaugeApp();
+  const html = app.run('renderRainGauge(rainGaugeViewModel())');
+  const chart = svgAt(html, html.lastIndexOf('<svg', html.indexOf('class="chart precip raingauge"')));
+  assert.ok(chart.includes('class="pr-bar"'), 'the gauge’s own rainfall is drawn as bars');
+  assert.ok(chart.includes('class="pr-nd"'), 'and a day it reported nothing is a KIND of its own');
+  assertNamed(chart, keyClasses(html), 'the rain-gauge page', true);
+  const key = html.slice(html.indexOf('<dl class="p-key">'));
+  assert.match(key, /a rain day runs \[d 07:00, d\+1 07:00\) MEZ/, 'the key names the clock it is on');
+  assert.match(key, /right edge is this gauge’s own newest rain day, not today: 2026-09-02/,
+    'the edge named is THIS gauge’s, not the mirror’s — the two part on a silent gauge');
+  assert.ok(!key.includes('right edge is the mirror’s newest rain day'),
+    'and the station plate’s wording, which names the mirror’s day, is not reused here');
+  assert.match(key, /coordinates: 50\.7734, 7\.2841/, 'and where the gauge stands');
+  // the foot: source, the mirror's export stamp, the drawn edge, no live feed
+  app.run('renderNow()');
+  const foot = app.run(`document.getElementById('source-line').textContent`);
+  assert.match(foot, /LANUK NRW/);
+  assert.match(foot, /mirrored 2026-09-03/);
+  assert.match(foot, /2026-09-02/);
+  assert.match(foot, /no live feed/);
+});
+
+test('?rain=<no>: the used-by list names the gauges, and says which pair a distance is about', async () => {
+  const app = await rainGaugeApp();
+  const html = app.run('renderRainGauge(rainGaugeViewModel())');
+  assert.equal(usedByRows(html).length, 3, 'one row per gauge in the reverse index');
+  // measurement before fallback, nearest first inside a route — the member
+  // list's own order, read the other way round
+  assert.deepEqual(app.run('rainGaugeViewModel().usedBy.map(r => r.no)'),
+    ['2729100000100', '2747900000200', '9999999']);
+  const routed = usedByRowAtKm(html, '3.13');
+  assert.match(routed, /data-nav="lanuk-2729100000100"/, 'the gauge is a link to its own station page');
+  assert.match(routed, /<span class="via">draining here<\/span>/, 'with the shared word table’s word');
+  assert.match(routed, /<span class="at">routed via <a[^>]*data-nav="lanuk-2721390000100">WEIDENAU<\/a><\/span>/,
+    'and km 3.13 is stated as the distance to Weidenau, which is where the rain is routed');
+  const key = html.slice(html.indexOf('<dl class="p-key">'));
+  assert.match(key, /the km in each row is the distance to the gauge this rain is ROUTED to/,
+    'the label is short because the claim it stands for is one key note — not repeated on every row');
+  // The relation runs the other way here, and the station plate's own reach
+  // sentence ("draining to THIS gauge…") reads backwards on this list.
+  assert.match(key, /a gauge takes this rain gauge in if the rain drains to it or to one gauge upstream of it/);
+  assert.ok(!key.includes('in reach = draining to this gauge'),
+    'the station plate’s wording is not reused — on this plate "this gauge" is the rain gauge');
+  const self = usedByRowAtKm(html, '8.2');
+  assert.match(self, /<span class="at nolink">routed to it directly<\/span>/);
+  // a gauge this app cannot name keeps the file's name and gets no link at all
+  const unknown = usedByRowAtKm(html, '27.4');
+  assert.ok(!unknown.includes('<a '), 'no link to a station nobody has');
+  assert.match(unknown, /<span class="name nolink">A gauge this app cannot name<\/span>/);
+});
+
+test('?rain=<no>: a hostile name never reaches the markup raw, in the title OR in the used-by list', async () => {
+  const app = await rainGaugeApp();
+  const html = app.run('renderRainGauge(rainGaugeViewModel())');
+  assert.ok(!html.includes('<script>'), 'manifest.rain[no].n carries Hennef<script>');
+  assert.ok(!html.includes('<img src=x'), 'and used-by[].name carries an <img> payload');
+  // anchored at the two elements they are about, not at a 30 kB page
+  const h1 = /<h1>([\s\S]*?)<\/h1>/.exec(html);
+  assert.ok(h1, 'the plate has a title block');
+  assert.equal(h1[1], 'rain gauge · Hennef&lt;script&gt;', 'the title block escapes the mirror’s name');
+  const row = usedByRowAtKm(html, '3.13');
+  assert.match(row, /Menden_1&lt;img src=x onerror=1&gt;<\/a>/, 'and so does the row that prints it');
+});
+
+test('?rain=<no>: an unknown number is a STATED failure, not an empty plate', async () => {
+  const app = await rainGaugeApp('?rain=99999999');
+  assert.equal(app.run('state.rainGauge.reason'), app.run('T.rainGaugeUnknown'));
+  const html = app.run('renderRainGauge(rainGaugeViewModel())');
+  assert.match(html, /<p class="p-dim">the mirror carries no rain gauge with this number<\/p>/);
+  assert.ok(!html.includes('<svg'), 'and nothing is drawn for it');
+  // …and it costs no shard request: the index already said no
+  assert.deepEqual(nrwUrls(app).filter(u => u.startsWith('nrw/rain/')), []);
+});
+
+test('?rain=<no>: a mirror without used-by/ says so; an empty one says something else', async () => {
+  // The reverse index is written by the rain-field builder, so a branch
+  // collected before it existed simply has none. "Nobody uses this gauge" and
+  // "this mirror cannot say" are different facts and must not collapse.
+  const none = await rainGaugeApp('?rain=51141131');
+  assert.deepEqual(none.run('rainGaugeViewModel().usedBy'), [], 'the file is there and empty');
+  const emptyHtml = none.run('renderRainGauge(rainGaugeViewModel())');
+  assert.match(emptyHtml, /no gauge on this mirror takes this rain gauge into its field/);
+  assert.ok(!emptyHtml.includes('rain-usedby'), 'and no empty list is drawn');
+
+  const app = await rainGaugeApp();
+  app.run(`state.rainGauge = { ...state.rainGauge, usedBy: null }`);
+  const html = app.run('renderRainGauge(rainGaugeViewModel())');
+  assert.match(html, /this mirror does not carry nrw\/precip\/used-by\//);
+  assert.ok(!html.includes('rain-usedby'), 'no list, and no claim about one');
+});
+
+test('?rain=<no>: a reshaped shard is a stated reason, not a plate that stops halfway', async () => {
+  // render() runs inside a rAF callback that swallows what it throws, so a
+  // truncated or reshaped year file has to be caught at the loader.
+  const app = await rainGaugeApp();
+  assert.equal(app.run(`isRainShard({ id: 'x', mm: Array(365).fill(0) }, 2026)`), true);
+  assert.equal(app.run(`isRainShard({ id: 'x', mm: Array(200).fill(0) }, 2026)`), false, 'a short year is not a year');
+  assert.equal(app.run(`isRainShard({ id: 'x', mm: Array(365).fill('2.5') }, 2026)`), false, 'nor are strings readings');
+  assert.equal(app.run(`isRainShard({ id: 'x' }, 2026)`), false);
+  assert.equal(app.run(`isRainShard(null, 2026)`), false);
+  assert.equal(app.run(`isRainShard({ id: 'x', mm: Array(366).fill(null) }, 2024)`), true, 'a leap year has 366');
+  app.run(`state.rainGauge = { no: '51089370', entry: lanukRainIndex['51089370'], years: {}, usedBy: [], reason: T.rainGaugeUnreadable }`);
+  const html = app.run('renderRainGauge(rainGaugeViewModel())');
+  assert.match(html, /<p class="p-dim">the rainfall of this gauge is mirrored, but not in the shape this page reads<\/p>/);
+  // …and an entry whose window is unreadable has no edge at all. The spoken
+  // summary runs out of setScreenAria, which catches nothing, so it must not
+  // reach rainDayISO(undefined) — that throws a RangeError off the Date.
+  // an entry with no `to` still draws — the mirror's own edge stands in
+  app.run(`state.rainGauge = { no: '51089370', entry: { n: 'X', from: '2025-01-01' }, years: {}, usedBy: [], reason: null }`);
+  assert.equal(app.run(`rainDayISO(rainGaugeViewModel().to)`), '2026-09-02', 'the mirror’s edge stands in for a missing one');
+  // …and with neither, there is no edge at all
+  app.run(`lanukPrecipEdge = null; lanukManifestInfo = { ...lanukManifestInfo, window: null }`);
+  assert.equal(app.run('rainGaugeViewModel().empty'), true, 'no window, no drawing');
+  assert.match(app.run('screenSummary()'), /has no drawing/, 'and the summary says so instead of throwing');
+  assert.match(app.run('renderRainGauge(rainGaugeViewModel())'), /the mirror does not say which day its rain record ends on/);
+});
+
+test('?rain=<no>: the loader ends in scheduleRender, or the page never appears', async () => {
+  // Every loader on this page must; one that forgets simply never draws.
+  const src = loadApp().source;
+  const body = src.slice(src.indexOf('async function loadRainGauge()'));
+  const end = body.indexOf('\nfunction switchRainGauge');
+  assert.ok(end > 0, 'loadRainGauge is followed by switchRainGauge');
+  const fn = body.slice(0, end);
+  assert.equal((fn.match(/scheduleRender\(\)/g) || []).length, 3,
+    'every exit that writes state.rainGauge ends in a render');
+});
+
+test('?rain=<no>: a gauge that fell silent keeps its OWN edge, and the key names the mirror’s too', async () => {
+  // 9 of 319 rain gauges on the real mirror stand behind the collector's own
+  // last rain day, one of them by sixteen months and reachable from 23 station
+  // plates. Naming the mirror's day there is a claim about a gauge that has
+  // reported nothing since.
+  const app = await rainGaugeApp('?rain=51141131');
+  const html = app.run('renderRainGauge(rainGaugeViewModel())');
+  const key = html.slice(html.indexOf('<dl class="p-key">'));
+  assert.match(key, /right edge is this gauge’s own newest rain day, not today: 2026-08-20/);
+  assert.match(key, /it has reported nothing since — the mirror’s own newest rain day is 2026-09-02/,
+    'and the gap is named, so the short edge cannot read as the mirror being late');
+  // …while a gauge level with the mirror says nothing of the kind
+  const fresh = await rainGaugeApp();
+  const freshKey = fresh.run('renderRainGauge(rainGaugeViewModel())');
+  assert.ok(!freshKey.includes('it has reported nothing since'),
+    'no caveat where there is no gap — a note that is always printed says nothing');
+});
+
+test('?rain=<no>: a registry entry with no series is a FINDING, and costs no request', async () => {
+  // The source's two rain registries are not supersets of each other — 11 gauges
+  // exist in only one of them. "did not load" would send the reader after a
+  // network problem that is not there.
+  const app = await rainGaugeApp('?rain=43120089');
+  assert.equal(app.run('state.rainGauge.reason'), app.run('T.rainGaugeNoSeries'));
+  assert.match(app.run('renderRainGauge(rainGaugeViewModel())'),
+    /the mirror carries this rain gauge in its registry but no daily series for it — a finding of the source, not a failed fetch/);
+  assert.deepEqual(app.run(`globalThis.__nrw.filter(u => u.startsWith('nrw/rain/43120089'))`), [],
+    'the index already said so: no shard was fetched');
+  assert.deepEqual(app.run(`globalThis.__nrw.filter(u => u.includes('used-by/43120089'))`), [],
+    'and no reverse entry was asked for either');
+});
+
+test('?rain=<no>: "no field reaches it" and "this mirror has no reverse index" are two sentences', async () => {
+  // One 404 on used-by/<no>.json, two entirely different facts. The collector's
+  // own coverage names the gauges its rule leaves out, so the plate can tell
+  // them apart instead of making a claim about the whole branch.
+  const noSet = await rainGaugeApp('?rain=44075066');
+  assert.equal(noSet.run('state.rainGauge.usedBy'), null);
+  assert.equal(noSet.run('state.rainGauge.noSet'), true, 'the collector’s own coverage names it');
+  const a = noSet.run('renderRainGauge(rainGaugeViewModel())');
+  assert.match(a, /the collector’s own coverage counts this rain gauge as unassigned/);
+  assert.ok(!a.includes('this mirror does not carry nrw/precip/used-by/'),
+    'and it says nothing about the branch, which carries the index perfectly well');
+
+  const noIndex = await rainGaugeApp('?rain=42170036');
+  assert.equal(noIndex.run('state.rainGauge.usedBy'), null);
+  assert.equal(noIndex.run('state.rainGauge.noSet'), false);
+  const b = noIndex.run('renderRainGauge(rainGaugeViewModel())');
+  assert.match(b, /this mirror does not carry nrw\/precip\/used-by\//);
+  assert.ok(!b.includes('counts this rain gauge as unassigned'));
+
+  // …and the loader really is what tells the two absences from the empty file:
+  // `[]` must not be reachable from a 404
+  assert.deepEqual(noSet.run(`Array.isArray(state.rainGauge.usedBy)`), false,
+    'a missing file is null, never an empty list — the plate’s two sentences hang on that');
+});
+
+test('?rain=<no>: a year that did not load is not a gauge that reported nothing', async () => {
+  // Drawn through `at`'s `undefined` a missing shard becomes a run of `pr-nd`
+  // columns, which say "this gauge reported nothing on these days" about a
+  // failed request of ours. precipViewModel guards the analogous case already.
+  const app = await rainGaugeApp();
+  app.run(`(() => { rainDays = 90; const g = state.rainGauge; delete g.years[2026]; })()`);
+  const vm = app.run('rainGaugeViewModel()');
+  assert.equal(vm.empty, true, 'the window touches 2026, which is not there');
+  assert.match(vm.reason, /a year of this gauge’s record did not load/);
+  assert.match(vm.reason, /2026$/, 'and it names the year');
+  const html = app.run('renderRainGauge(rainGaugeViewModel())');
+  assert.ok(!html.includes('pr-nd'), 'nothing is drawn, least of all a no-report column');
+  // …and a year OUTSIDE the drawn window is not withheld: the 30D window never
+  // reaches 2025, so losing that shard must not blank the plate
+  app.run(`(() => { rainDays = 30; const g = state.rainGauge; g.years[2026] = ${JSON.stringify(nrwRainShard('51089370', 2026, 244))}; delete g.years[2025]; })()`);
+  assert.equal(app.run('rainGaugeViewModel().empty'), false, 'an old shard nobody looks at withholds nothing');
+});
+
+test('the precipitation chart keeps its two-row viewBox even with no level line', async () => {
+  // The factoring made the lower row conditional on the level DATA rather than
+  // on the plate's shape. `.precip { height: 7.2rem }` does not move, and
+  // preserveAspectRatio="none", so the bars would silently double in height on
+  // every plate whose archive has not landed yet.
+  const app = await precipApp();
+  const tall = app.run(`(() => { historyKey = '30d'; return renderPrecip(precipViewModel()); })()`);
+  assert.match(tall, /viewBox="0 0 320 132"/, 'the level row is there');
+  const flat = app.run(`(() => {
+    historyKey = '30d'; state.archive = [];
+    return renderPrecip(precipViewModel());
+  })()`);
+  assert.equal(app.run('precipViewModel().level'), null, 'no readings, no line');
+  assert.match(flat, /viewBox="0 0 320 132"/, 'and the viewBox does not move when the line cannot be drawn');
+  assert.match(flat, /the gauge’s own readings are still loading/, 'the key says why it is empty');
+  // the rain-gauge page is the one that really has no lower row
+  const rain = await rainGaugeApp();
+  assert.match(rain.run('renderRainGauge(rainGaugeViewModel())'), /viewBox="0 0 320 56"/);
+});
+
+test('?rain=<no>: on a narrow plate a column is a SUM, and the key stops claiming otherwise', async () => {
+  // 90 days over 60 columns is two rain days a bar — arithmetic of this page's
+  // own, which the wide-plate wording denies.
+  const narrow = await rainGaugeApp('?rain=51089370&w=90', { width: 380 });
+  assert.equal(narrow.run('rainGaugeViewModel().step'), 2);
+  const html = narrow.run('renderRainGauge(rainGaugeViewModel())');
+  assert.match(html, /a column wider than a day is their sum, which is this page’s arithmetic/);
+  assert.ok(!html.includes('no aggregation of this repo’s own'));
+  const wide = await rainGaugeApp('?rain=51089370&w=90', { width: 1200 });
+  assert.equal(wide.run('rainGaugeViewModel().step'), 1);
+  assert.match(wide.run('renderRainGauge(rainGaugeViewModel())'), /mm per rain day, as the source publishes it — no aggregation of this repo’s own/);
 });
 
 test('RESPONSE: the peak is marked, and the sentence names the other estimator', async () => {
