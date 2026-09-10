@@ -130,12 +130,18 @@ const PAGES = [
 // The temperature meta of every page that carries the WATER TEMPERATURE block,
 // read from the TREE — so the operator's note and the unit on the plate are
 // compared against the file rather than against a string this script knows too.
-const tempMetas = {};
+// …and the same station's GAUGE meta beside it, because the note the block may
+// print is only the one the plate does not already carry: measured 2026-09-10,
+// all 20 temperature notes on the branch are byte-identical to the gauge note
+// the scene key prints, and a block repeating it says the same sentence twice.
+const tempMetas = {}, gaugeMetas = {};
+const readMirror = async p => (BASE_URL
+  ? (await fetch(BASE_URL + p)).json()
+  : JSON.parse(readFileSync(join(ROOT, ...p.split('/')), 'utf8')));
 for (const pg of PAGES) {
   if (!pg.temp) continue;
-  tempMetas[pg.temp] = BASE_URL
-    ? await (await fetch(`${BASE_URL}nrw/temp/${pg.temp}/meta.json`)).json()
-    : JSON.parse(readFileSync(join(ROOT, 'nrw', 'temp', pg.temp, 'meta.json'), 'utf8'));
+  tempMetas[pg.temp] = await readMirror(`nrw/temp/${pg.temp}/meta.json`);
+  gaugeMetas[pg.temp] = await readMirror(`nrw/gauges/${pg.temp}/meta.json`).catch(() => null);
 }
 
 // The measurement, in the page. Anchored to the elements it is about — a
@@ -242,9 +248,13 @@ const MEASURE = `(() => {
     // model's own edge beside it, so the two cannot drift apart unseen
     vm: (() => {
       const vm = tempViewModel();
-      return vm && !vm.empty ? { last: rainDayISO(vm.cols.at(-1).to), to: rainDayISO(vm.to), unit: vm.unit, cols: vm.cols.length } : null;
+      return vm && !vm.empty
+        ? { last: rainDayISO(vm.cols.at(-1).to), to: rainDayISO(vm.to), unit: vm.unit, cols: vm.cols.length, hasBand: vm.hasBand }
+        : null;
     })(),
   } : null;
+  // every key row on the WHOLE plate, for the "said once, not twice" check
+  out.allKeyRows = [...document.querySelectorAll('#screen .p-key dd')].map(e => e.textContent);
   out.precipRequests = 'see network';
   // THE PRECIPITATION PLATE'S OWN TEXT, anchored at the section that holds the
   // precip chart — not at #screen and not at a bare .p-key, both of which sweep in
@@ -380,8 +390,17 @@ async function run(cdp, base, vp) {
           }
         } else {
           const tp = m.tempPlate;
-          check(!!tp && tp.band > 0 && tp.mean > 0, `${pg.name}: the temperature band and its mean line are drawn`,
+          // The band is drawn exactly where the model says there IS one — a
+          // station whose maxima all equal their means (or are missing, as at
+          // Bad-Honnef) has no span to draw, and must not get a zero-height
+          // polygon lying on its own line. Both branches are real on this tree.
+          check(!!tp && tp.mean > 0 && (tp.vm && tp.vm.hasBand ? tp.band > 0 : tp.band === 0),
+            `${pg.name}: the mean line is drawn, and the band exactly where there is a span (hasBand=${tp && tp.vm && tp.vm.hasBand})`,
             JSON.stringify(tp && { band: tp.band, mean: tp.mean, nd: tp.nd }));
+          check(!!tp && (tp.vm && tp.vm.hasBand
+            ? tp.key.some(t => /the day’s span/.test(t))
+            : tp.key.some(t => /no band over this window: the daily maxima never rise above the daily means/.test(t))),
+          `${pg.name}: and the key names the band only when one is drawn`, (tp ? tp.key.join(' | ') : '').slice(0, 300));
           if (tp) {
             // every mark the DRAWING carries is named by a swatch in the key —
             // the two anchored at different elements, or the check is circular
@@ -398,10 +417,23 @@ async function run(cdp, base, vp) {
             if (meta) {
               check(tp.key.some(t => t.includes(meta.unit || '°C')), `${pg.name}: the key names the record's own unit (${meta.unit})`,
                 tp.key.join(' | ').slice(0, 300));
-              // the operator's note, word for word off the file, on a WARNING row
-              if (meta.note) {
-                check(tp.warn.some(t => t.includes(meta.note.trim())), `${pg.name}: the operator's note is on the plate, verbatim and as a warning`,
-                  `wanted "${meta.note.trim()}" — warn rows ${JSON.stringify(tp.warn)}`);
+              // The operator's note: on the plate exactly ONCE, and never in
+              // warning ink here. All 20 temperature notes on this branch equal
+              // the gauge note the scene key already prints — this check reads
+              // both files and compares, so a mirror where they differ would
+              // demand the temperature block print its own.
+              const note = (meta.note || '').trim();
+              const gaugeNote = ((gaugeMetas[pg.temp] || {}).note || '').trim();
+              if (note) {
+                const onPlate = m.allKeyRows.filter(t => t.includes(note)).length;
+                check(onPlate === 1, `${pg.name}: the operator's note stands on the plate exactly once`, `${onPlate} rows carry it`);
+                check(note === gaugeNote
+                  ? !tp.key.some(t => t.includes(note))
+                  : tp.key.some(t => t.includes(note)),
+                `${pg.name}: and the temperature key prints it only where the plate does not already carry it`,
+                `temp note "${note}" vs gauge note "${gaugeNote}"`);
+                check(!tp.warn.some(t => t.includes(note)),
+                  `${pg.name}: never in warning ink — 13 of the 20 notes are administrative, not a fault`, JSON.stringify(tp.warn));
               }
             }
             check(tp.key.some(t => /no live feed/.test(t)), `${pg.name}: and says it is not a live temperature`, tp.key.join(' | ').slice(0, 300));

@@ -3474,7 +3474,15 @@ const T = {
   // number off is a picture of a shape. The range comes off the SAME columns
   // the marks are drawn from, so the printed pair and the drawing cannot
   // disagree about the window they describe.
-  tempRange: 'the drawn row runs',
+  // the two numbers are the band's own edges — a mean floor and a MAXIMUM
+  // ceiling. Saying so keeps the low one from being read as a daily minimum,
+  // the one figure this source never publishes.
+  tempRange: 'the drawn row runs, lowest daily mean to highest daily maximum:',
+  // Two stations on the branch reach this: Bad-Honnef, whose 368 days carry no
+  // maximum at all, and Arloff, whose impaired sensor writes the same 0 °C as
+  // mean and as maximum. Both are "no span to draw", and the wording has to
+  // hold for either without claiming which.
+  tempNoBand: 'no band over this window: the daily maxima never rise above the daily means here, so only the mean is drawn',
   // The counterpart of precipTwoClocks, and the reason it is spelled out: the
   // block above this one runs on the RAIN day, this one does not.
   tempSameClock: 'one clock here: a temperature day runs 00:00 → 24:00 MEZ, the same day the level above is read on — unlike the rain day above it',
@@ -4955,8 +4963,8 @@ function renderResponse(r) {
 // The right edge is THIS STATION's own newest temperature day, never the clock
 // and never window.temp.to: the mirror's window is the source's, and a station
 // whose sensor was pulled in November 2025 still sits inside it. Measured
-// 2026-09-10: 5 distinct right edges across the 123 stations with a record,
-// from 2026-07-03 to 2026-09-09.
+// 2026-09-10: 4 distinct right edges across the 123 stations with a record
+// (2026-09-09 on 120 of them, then 2026-07-14, 2026-07-03 and 2025-11-07).
 function tempViewModel() {
   const t = state.temp;
   if (!t) return null;
@@ -5036,9 +5044,16 @@ function tempViewModel() {
     // the temperature record's OWN unit — a gauge's meta says `cm` at the same
     // site, because that is the unit of the level, not of this series
     unit: meta.unit || '°C',
-    note: typeof meta.note === 'string' ? meta.note : '',
+    // …and only when the plate does not already carry it: the scene key prints
+    // state.lanuk.note, and on this branch the two are the same sentence
+    note: typeof meta.note === 'string' && meta.note !== ((state.lanuk && state.lanuk.note) || '') ? meta.note : '',
     partial: drawn.reduce((s, c) => s + c.partial, 0),
     nd: cols.some(c => c.mean == null),
+    // Whether there is a BAND to draw at all. Bad-Honnef (104) has 368 daily
+    // means and not one maximum in the whole mirror, so its polygon would be a
+    // zero-height shape lying on the line — one mark drawn twice, with a key
+    // promising a span that is not there. A mark that is not drawn is not named.
+    hasBand: drawn.some(c => c.hi > c.lo),
     from: cols.length ? cols[0].from : edge, to: edge,
     // the chip asked for more days than this station's record holds
     clamped: !!(preset.d && days < preset.d),
@@ -5072,9 +5087,11 @@ function renderTemp(t) {
     cur.push(i);
   }
   for (const run of runs) {
-    const top = run.map(i => `${X(i).toFixed(1)},${Y(t.cols[i].hi).toFixed(1)}`);
-    const bot = run.map(i => `${X(i).toFixed(1)},${Y(t.cols[i].lo).toFixed(1)}`).reverse();
-    parts.push(`<polygon class="wt-band" points="${top.concat(bot).join(' ')}"/>`);
+    if (t.hasBand) {
+      const top = run.map(i => `${X(i).toFixed(1)},${Y(t.cols[i].hi).toFixed(1)}`);
+      const bot = run.map(i => `${X(i).toFixed(1)},${Y(t.cols[i].lo).toFixed(1)}`).reverse();
+      parts.push(`<polygon class="wt-band" points="${top.concat(bot).join(' ')}"/>`);
+    }
     const pts = run.map(i => `${X(i).toFixed(1)},${Y(t.cols[i].mean).toFixed(1)}`);
     if (pts.length === 1) pts.push(pts[0]);
     parts.push(`<polyline class="wt-mean" points="${pts.join(' ')}"/>`);
@@ -5095,8 +5112,13 @@ function renderTemp(t) {
     // The two marks are separated by KIND — an area against a stroke — never by
     // shade: the band's fill and the line's ink are the same pastel's two
     // halves, and two weights of one hue read as one mark drawn twice.
-    { sw: keySw('<polygon class="wt-band" points="0,2 4,4 8,3 12,6 12,10 8,8 4,9 0,7"/>'), label: `${T.tempBand} (${esc(days)})` },
-    { sw: keySw('<polyline class="wt-mean" points="0,9 4,4 8,6 12,2"/>'), label: T.tempMean },
+    // `days` is not pre-escaped: plateKey runs esc() over the whole label, and
+    // escaping twice turns an & into &amp;amp;
+    t.hasBand && { sw: keySw('<polygon class="wt-band" points="0,2 4,4 8,3 12,6 12,10 8,8 4,9 0,7"/>'), label: `${T.tempBand} (${days})` },
+    { sw: keySw('<polyline class="wt-mean" points="0,9 4,4 8,6 12,2"/>'), label: `${T.tempMean} (${days})` },
+    // the band is the only place the daily maximum is drawn; where the source
+    // publishes none, the plate says so instead of drawing a flat "span"
+    !t.hasBand && { note: T.tempNoBand },
     t.nd && { sw: keySw('<rect class="wt-nd" x="1" y="1" width="10" height="10"/>'), label: T.tempNd },
     t.gaps > 0 && { note: `${t.gaps} ${plural(t.gaps, 'break')} — ${T.tempGap}` },
     // the numbers the drawing has no axis for, read off the drawn columns
@@ -5107,10 +5129,16 @@ function renderTemp(t) {
     t.partial > 0 && { note: `${T.tempPartial} ${t.partial}` },
     { note: `${T.tempEdge} ${rainDayISO(t.to)}` },
     t.clamped && { note: `${T.tempClamped} ${rainDayISO(t.windowFrom)}` },
-    // The operator's own words about this station, verbatim and escaped. It is a
-    // warning row because every one of the 20 that carry it says something is
-    // wrong with the instrument.
-    t.note && { note: `${T.tempOffline} ${t.note}`, warn: true },
+    // The operator's own words about this station, verbatim and escaped —
+    // printed only where they are NOT already on this plate. Measured
+    // 2026-09-10: all 20 temperature notes on the branch are byte-identical to
+    // the same station's gauge note, which the scene key three blocks up
+    // already carries, so printing it here unconditionally says the same
+    // sentence twice. And it is a PLAIN row, not a warning: 13 of those 20 are
+    // "Informationswerte in Abstimmung mit den Bezirksregierungen", an
+    // administrative note about the level's alert values — warning ink there
+    // would tell the reader a healthy station is broken.
+    t.note && { note: `${T.tempOffline} ${t.note}` },
   ]);
   return head + `<div class="temp-wrap">${chart}</div>${key}</section>`;
 }

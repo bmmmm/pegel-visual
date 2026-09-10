@@ -371,14 +371,21 @@ those numerically whatever the insertion order.
 — same site, two parameters (S and WT), all 125 entries are gauge ids, 123 with
 `days > 0`. `topology.*.temp` is the bulk export's own 108 stations, a subset,
 and must never be used as the index. Three more facts the display layer runs on:
-the right edge is **per station** (`manifest.temp[<no>].to`, 5 distinct edges
-across the branch on 2026-09-10, from 2026-07-03 to 2026-09-09) — never the
-clock and never `window.temp.to`, which is the source's rolling window and sits
-ahead of a station whose sensor was pulled; the shard is `{ id, y, mean[],
+the right edge is **per station** (`manifest.temp[<no>].to` — measured
+2026-09-10: **4 distinct edges**, 2026-09-09 on 120 stations and then
+2026-07-14, 2026-07-03 and **2025-11-07**, Arloff, whose sensor was pulled ten
+months ago) — never the clock and never `window.temp.to`, which is the source's
+rolling window and sits ahead of such a station; the shard is `{ id, y, mean[],
 max[], acc{} }` with **no minimum at all** (`acc` is sparse, keyed by day index,
-only the days under 100 %); and the unit comes from `temp/<no>/meta.json`
+only the days under 100 %), and **one station, 104 Bad-Honnef, has 368 means and
+not one maximum** — there the band has no area and the plate draws the line
+alone; and the unit comes from `temp/<no>/meta.json`
 (`°C` on all 125), because the same site's `gauges/<no>/meta.json` says `cm`,
-which is the unit of the LEVEL. `loadTemp` asks only for the years the entry's
+which is the unit of the LEVEL. The 20 `note`s in the temperature metas are
+**byte-identical to the same station's gauge note** (and 13 of them are the
+administrative "Informationswerte in Abstimmung mit den Bezirksregierungen",
+not a fault), so the block prints one only where it differs from the note the
+plate already carries, and never in warning ink. `loadTemp` asks only for the years the entry's
 own `from`…`to` span — those are exactly the shards that exist, so no year is a
 404 — and a gauge the index does not list costs no request at all.
 

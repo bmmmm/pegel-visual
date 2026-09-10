@@ -5574,6 +5574,13 @@ test('WATER TEMPERATURE: both edges — the newest column is this station’s ow
   assert.equal(app.run(`rainDayISO(tempViewModel().cols.at(-1).to)`), '2026-08-20',
     'the newest column drawn IS this station’s newest temperature day');
   assert.equal(app.run(`rainDayISO(tempViewModel().to)`), '2026-08-20', 'and the model agrees with its own drawing');
+  // …and the VALUE in that column is the day the label names, so a shift in the
+  // day index shows up here as a wrong reading rather than as a column count
+  const shard = nrwTempShard('2729100000100', 2026);
+  assert.equal(vm.cols.at(-1).mean, shard.mean[231], 'the newest column carries day 231’s own mean');
+  assert.equal(vm.cols.at(-1).hi, shard.max[231], 'and its band reaches that day’s MAXIMUM, not its mean');
+  assert.ok(shard.max[231] > shard.mean[231], 'which the fixture keeps apart on purpose');
+  assert.equal(vm.cols.at(-1).lo, shard.mean[231], 'while the band’s floor is the mean');
   // LEFT edge: the oldest column may start up to step-1 days early, but never
   // before the station's own record begins by more than that
   assert.equal(vm.cols.length, 30);
@@ -5607,6 +5614,14 @@ test('WATER TEMPERATURE: the unit is the temperature record’s own, not the lev
   assert.equal(app.run('state.lanuk.unit || gaugeUnit()'), 'cm');
   const html = tempSection(app.run('renderTemp(tempViewModel())'));
   assert.match(html, /the unit is the temperature record’s own, not the level’s — °C/);
+  // …and it really is READ, not spelled out: every meta on the branch says °C
+  // today, so an assertion against °C alone passes on a hardcoded fallback too
+  const other = tempSection(app.run(`(() => {
+    state.temp.meta = { ...state.temp.meta, unit: '°F' };
+    return renderTemp(tempViewModel());
+  })()`));
+  assert.match(other, /not the level’s — °F/, 'the unit follows the meta, whatever it says');
+  assert.ok(!other.includes('— °C'), 'and the old one is gone with it');
 });
 
 test('WATER TEMPERATURE: the drawing has no axis, so the key prints the range it drew', async () => {
@@ -5617,7 +5632,10 @@ test('WATER TEMPERATURE: the drawing has no axis, so the key prints the range it
   assert.equal(vm.lo, Math.min(...drawn.map(c => c.lo)));
   assert.equal(vm.hi, Math.max(...drawn.map(c => c.hi)));
   const key = tempSection(app.run('renderTemp(tempViewModel())'));
-  assert.ok(key.includes(`the drawn row runs ${vm.lo.toFixed(1)} … ${vm.hi.toFixed(1)} °C`),
+  // the pair is named for what it IS — a mean floor and a MAXIMUM ceiling — so
+  // the low number cannot be read as a daily minimum, which this source never
+  // publishes at all
+  assert.ok(key.includes(`the drawn row runs, lowest daily mean to highest daily maximum: ${vm.lo.toFixed(1)} … ${vm.hi.toFixed(1)} °C`),
     `the key prints the drawn row's own low and high: ${key.slice(key.indexOf('<dl'), key.indexOf('<dl') + 400)}`);
   // a wider window is a different row, and the printed pair has to follow it
   const year = app.run(`(() => { historyKey = '1y'; return tempViewModel(); })()`);
@@ -5647,7 +5665,10 @@ test('WATER TEMPERATURE: a flat row is drawn in the field, not pinned to its flo
   const ys = line[1].split(' ').map(p => Number(p.split(',')[1]));
   assert.deepEqual([...new Set(ys)].length, 1, 'flat, as the data is');
   assert.ok(ys[0] > 20 && ys[0] < 50, `and inside the 70-unit field rather than on its edge: y=${ys[0]}`);
-  assert.match(tempSection(html), /the drawn row runs 0\.0 … 0\.0 °C/, 'the key says what the flat row is');
+  assert.match(tempSection(html), /lowest daily mean to highest daily maximum: 0\.0 … 0\.0 °C/, 'the key says what the flat row is');
+  // a row where every maximum equals its mean has no band to draw, and the key
+  // stops promising one rather than naming a mark that is not there
+  assert.ok(!tempChart(html).includes('wt-band'), 'and no zero-height band is drawn under the line');
 });
 
 test('WATER TEMPERATURE: a gap breaks band and line together, and both marks are named', async () => {
@@ -5660,6 +5681,31 @@ test('WATER TEMPERATURE: a gap breaks band and line together, and both marks are
   const ysvg = tempChart(year);
   assert.match(svg, /class="wt-band"/, 'the band is drawn');
   assert.match(svg, /class="wt-mean"/, 'and the mean line is');
+  // The break itself, not just "both marks broke equally often" — which is true
+  // by construction (one polygon and one polyline per run) and stayed green
+  // when the renderer was sabotaged to draw straight through every silence.
+  // Blank three days INSIDE the 30-day window and demand two runs of each.
+  const cut = app.run(`(() => {
+    historyKey = '30d';
+    const s = state.temp.years[2026];
+    for (const d of [220, 221, 222]) { s.mean[d] = null; s.max[d] = null; }
+    return renderTemp(tempViewModel());
+  })()`);
+  const csvg = tempChart(cut);
+  assert.equal((csvg.match(/class="wt-band"/g) || []).length, 2, 'the band stops at the silence and starts again after it');
+  assert.equal((csvg.match(/class="wt-mean"/g) || []).length, 2, 'and so does the line — one run each side, never one run across');
+  // …and no run may span the hole: every x in a polyline is on one side of it
+  // the column index of the days blanked just above — not simply the first
+  // empty column, which is the window's own leading silence
+  // day index 220 of 2026 is 2026-08-09; the columns carry absolute day numbers
+  const gapX = app.run(`(() => tempViewModel().cols.findIndex(c => c.mean == null && c.from >= rainDayNum('2026-08-09')))()`);
+  assert.ok(gapX > 0, 'the blanked days really are inside the drawn window');
+  for (const m of csvg.matchAll(/<polyline class="wt-mean" points="([^"]+)"/g)) {
+    const xs = m[1].split(' ').map(p => Number(p.split(',')[0]));
+    const cw = 320 / app.run('tempViewModel().cols.length');
+    const left = xs.every(x => x < gapX * cw), right = xs.every(x => x > (gapX + 3) * cw);
+    assert.ok(left || right, `a run drawn across the silence: ${m[1].slice(0, 80)}`);
+  }
   assert.equal((ysvg.match(/class="wt-band"/g) || []).length, (ysvg.match(/class="wt-mean"/g) || []).length,
     'over a year with a silence in it, band and line break the same number of times');
   assert.ok((ysvg.match(/class="wt-mean"/g) || []).length >= 1);
@@ -5717,18 +5763,73 @@ test('WATER TEMPERATURE: the key names the clock, the partial days and the fact 
   app.run(`historyKey = '30d'`);
 });
 
-test('WATER TEMPERATURE: the operator’s note is a warning row, and arrives as text', async () => {
+test('WATER TEMPERATURE: the operator’s note arrives as text, in plain ink, and only once on the plate', async () => {
   const app = await precipApp();
   const html = app.run(`(() => { historyKey = '30d'; return renderTemp(tempViewModel()); })()`);
   const key = tempSection(html);
-  assert.match(key, /<dd class="warn">the operator’s note on this station: Austausch Messtechnik/,
-    `the note is its own warn row: ${key.slice(key.indexOf('<dl'), key.indexOf('<dl') + 400)}`);
+  assert.match(key, /<dd>the operator’s note on this station: Austausch Messtechnik/,
+    `the note is its own plain row: ${key.slice(key.indexOf('<dl'), key.indexOf('<dl') + 400)}`);
+  // NOT a warning row. Measured on the mirror 2026-09-10: 13 of the 20 notes
+  // are "Informationswerte in Abstimmung mit den Bezirksregierungen", an
+  // administrative note about the LEVEL's alert values — warning ink there
+  // tells the reader a healthy station is broken.
+  assert.ok(!/<dd class="warn">the operator’s note/.test(key), 'and not in warning ink');
+  // …and it is suppressed where the plate already carries it: all 20 temp notes
+  // on the branch are byte-identical to the same station's gauge note, which the
+  // scene key prints. Printing it here too says the same sentence twice.
+  const dup = tempSection(app.run(`(() => {
+    state.lanuk = { ...(state.lanuk || {}), note: state.temp.meta.note };
+    return renderTemp(tempViewModel());
+  })()`));
+  assert.ok(!dup.includes('the operator’s note on this station'), 'the same sentence is not printed a second time');
   assert.ok(key.includes('&lt;img src=x onerror=1&gt;'), 'escaped on its way in');
   assert.ok(!key.includes('<img src=x'), 'and never arrives as markup');
   // the station NAME is not printed by this plate at all, and hostile markup in
   // it must not reach the section by some other route either
   assert.ok(!key.includes('<script'), 'no markup from the meta’s name reaches the section');
   assert.ok(!/Menden_1&lt;script&gt;/.test(key), 'and the temp meta’s name is not printed here at all');
+});
+
+test('WATER TEMPERATURE: a station with no maximum draws no band, and the key stops promising one', async () => {
+  // Measured 2026-09-10: Bad-Honnef (104) has 368 daily means and not one
+  // maximum in the whole mirror. A polygon there is a zero-height shape lying
+  // on the line — one mark drawn twice under a key promising a span.
+  const app = await precipApp();
+  const html = app.run(`(() => {
+    historyKey = '30d';
+    const s = state.temp.years[2026];
+    for (let d = 0; d < s.max.length; d++) s.max[d] = null;
+    return renderTemp(tempViewModel());
+  })()`);
+  const svg = tempChart(html);
+  assert.equal(app.run('tempViewModel().hasBand'), false);
+  assert.ok(!svg.includes('wt-band'), 'no band is drawn');
+  const key = tempSection(html);
+  assert.ok(!key.includes('the day’s span'), 'and the key does not name one');
+  assert.match(key, /no band over this window: the daily maxima never rise above the daily means here/, 'it says why instead');
+  // the reverse direction of the mark rule: nothing named that is not drawn
+  assertNamed(svg, keyClasses(html), 'the water-temperature plate without maxima', true);
+});
+
+test('WATER TEMPERATURE: the loader ends in a repaint, on both its paths', async () => {
+  // No render loop: the page repaints only when data changes. loadPrecip
+  // happens to repaint just before, so a missing scheduleRender here would
+  // simply never show the block for a real reader — and no assertion on the
+  // rendered HTML can see it (this suite calls the renderers directly).
+  const app = await precipApp();
+  const counts = await app.run(`(async () => {
+    const real = scheduleRender;
+    let n = 0;
+    scheduleRender = () => { n++; };
+    await loadTemp(station, '2729100000100', lanukTempIndex['2729100000100']);
+    const withRecord = n;
+    n = 0;
+    await loadTemp(station, '2747900000200', lanukTempIndex['2747900000200']);
+    const without = n;
+    scheduleRender = real;
+    return [withRecord, without];
+  })()`);
+  assert.deepEqual(counts, [1, 1], 'the record path and the reason path each repaint exactly once');
 });
 
 test('WATER TEMPERATURE: a station the mirror has no record for costs no request and says so', async () => {
@@ -5744,9 +5845,13 @@ test('WATER TEMPERATURE: a station the mirror has no record for costs no request
 });
 
 test('WATER TEMPERATURE: a gauge absent from manifest.temp, and a WSV station, ask for nothing', async () => {
-  const arloff = await precipApp('?station=ARLOFF');
-  assert.equal(arloff.run('state.temp.reason'), 'no water temperature for this gauge: the mirror carries no record for this station');
-  assert.deepEqual(nrwUrls(arloff).filter(u => u.startsWith('nrw/temp/')), [],
+  // WEIDENAU, not ARLOFF: on the real mirror ARLOFF is the station that HAS a
+  // temperature record (and it is the browser gate's temperature fixture), so
+  // using it here as "the gauge without one" would leave the two gates meaning
+  // opposite things by the same name.
+  const weidenau = await precipApp('?station=WEIDENAU');
+  assert.equal(weidenau.run('state.temp.reason'), 'no water temperature for this gauge: the mirror carries no record for this station');
+  assert.deepEqual(nrwUrls(weidenau).filter(u => u.startsWith('nrw/temp/')), [],
     'a LANUK gauge the index does not list costs no request');
   const bonn = await precipApp('?station=BONN');
   assert.equal(bonn.run('state.temp'), null, 'a WSV station never reaches the LANUK loader');
