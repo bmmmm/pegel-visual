@@ -4819,6 +4819,188 @@ test('lanuk plates: a hostile gauge or water name never reaches markup unescaped
   assert.ok(!river.includes('<img'), 'river plate: the name is escaped in the trouble list and the index');
 });
 
+// ---------- B2: Meldestufen, the operator's own alert ladder ----------
+
+test('alertStage: how many thresholds are reached, counted in the gauge’s own unit', () => {
+  const app = loadApp({ now: NRW_NOW });
+  const ms = (v, st) => app.run(`alertStage(${JSON.stringify(v)}, ${JSON.stringify(st)})`);
+  const full = [250, 410, 440]; // Menden_1's published ladder
+  assert.equal(ms(44, full), 0, 'a normal day reaches nothing');
+  assert.equal(ms(249.9, full), 0);
+  assert.equal(ms(250, full), 1, 'reaching the threshold IS the stage the operator declares');
+  assert.equal(ms(411, full), 2);
+  assert.equal(ms(9999, full), 3, 'and the count never runs past the ladder');
+  assert.equal(ms(null, full), null, 'no reading, no stage');
+  assert.equal(ms(300, []), null, 'no ladder, no stage — a WSV gauge is not MS0');
+  assert.equal(ms(300, undefined), null);
+  // Neubrueck publishes the first threshold only: [145, null, null]
+  assert.equal(ms(200, [145, null, null]), 1);
+  assert.equal(ms(100, [145, null, null]), 0);
+  // a hole lower down never renumbers the rungs above it under the reader
+  assert.deepEqual(app.run(`alertLadder([null, 410, null]).map(r => r.key)`), ['MS2']);
+  assert.equal(ms(420, [null, 410, null]), 1, 'one rung published, one rung reachable');
+  // the thresholds arrive in the unit the gauge is calibrated in: a gauge that
+  // reports metres above a datum is compared raw, or it reads three stages high
+  assert.equal(ms(4.2, [3.5, 4.1, 4.4]), 2, 'metres against metres');
+  assert.equal(app.run(`/toCm\\(/.test(String(alertStage) + String(alertLadder))`), false,
+    'and no conversion is reachable from either function');
+});
+
+test('Meldestufen: the station plate prints the stage, and the ladder replaces the means on the chart', () => {
+  const app = loadApp({ now: NRW_NOW });
+  const meta = NRW_META['2729100000100'];
+  const plate = (value, stages) => app.run(`(() => {
+    station = 'MENDEN_1';
+    state.info = lanukInfoFrom(${JSON.stringify(meta)}, 'lanuk-2729100000100');
+    state.gauge = lanukGaugeFrom(${JSON.stringify(meta)}, { timestamp: '2026-09-01T23:00:00.000Z', value: ${value} });
+    state.lanuk = { stages: ${JSON.stringify(stages)}, note: null };
+    state.feed = lanukFeed({ isoDay: '2026-09-02', trend: 0.1 });
+    state.neighbors = []; histCache = null;
+    // a window wide enough that every rung of the ladder lands inside the drawing
+    state.archive = [[${NRW_NOW} - 5 * 864e5, 200], [${NRW_NOW} - 864e5, 460], [${NRW_NOW}, ${value}]];
+    const vm = stationViewModel();
+    return { vm, html: renderStation(vm) };
+  })()`);
+
+  const hi = plate(420, [250, 410, 440]);
+  assert.equal(hi.vm.alert, 2, '420 cm has reached two of the three thresholds');
+  assert.equal(hi.vm.alertOf, 3);
+  assert.ok(hi.html.includes('<dt>alert</dt>'), 'the title block carries the stage');
+  assert.ok(hi.html.includes('MS2 of 3'), 'as a word, not as a mark — the head owes no key');
+  assert.deepEqual(hi.vm.history.marks.map(m => m.key), ['MS1', 'MS2', 'MS3'],
+    'the ladder rides the history chart');
+  assert.deepEqual(hi.vm.history.marks.map(m => m.cm), [250, 410, 440]);
+  assert.equal(hi.vm.history.msRefs, true);
+  // one family at a time: MS2 and MHW answer different questions, and a chart
+  // carrying both would invite the reader to compare them
+  assert.deepEqual(hi.vm.history.marks.filter(m => ['MHW', 'MW', 'MNW'].includes(m.key)), []);
+  // …and the scene keeps the means it always drew: only the history swapped
+  assert.deepEqual(hi.vm.scene.marks.map(m => m.key).sort(), ['MHW', 'MNW', 'MW']);
+
+  // anchored at the HISTORY block's own key — the page carries four of them
+  const histBlock = hi.html.slice(hi.html.lastIndexOf('<section class="p-block"',
+    hi.html.indexOf('class="chart hist"')));
+  const histKey = histBlock.slice(histBlock.indexOf('<dl class="p-key">'),
+    histBlock.indexOf('</dl>', histBlock.indexOf('<dl class="p-key">')));
+  assert.ok(histKey.includes('<dl class="p-key">'), 'the history block really has a key');
+  assert.match(histKey, /<b>MS1<\/b>\s*250/, 'the refs row names MS1 and prints its level');
+  assert.match(histKey, /<b>MS3<\/b>/, 'and the top rung too');
+  assert.match(histKey, /alert stages/, 'the key says what MS means — a threshold, not a mean');
+  assert.ok(!/<b>MHW<\/b>/.test(histKey), 'and never promises a mean the chart no longer draws');
+
+  // the control: no ladder → no fact, and the long-term means come back
+  const wsv = plate(420, []);
+  assert.equal(wsv.vm.alert, null, 'a gauge without a ladder gets no stage');
+  assert.ok(!wsv.html.includes('<dt>alert</dt>'), 'and no fact row for it');
+  assert.deepEqual(wsv.vm.history.marks.map(m => m.key), ['MHW'], 'MHW 364 is back inside the window');
+  assert.equal(wsv.vm.history.msRefs, false);
+  const wsvHist = wsv.html.slice(wsv.html.lastIndexOf('<section class="p-block"',
+    wsv.html.indexOf('class="chart hist"')));
+  assert.ok(!/alert stages/.test(wsvHist.slice(0, wsvHist.indexOf('</dl>', wsvHist.indexOf('<dl class="p-key">')))),
+    'and the MS caveat is not printed under a chart that draws no MS line');
+});
+
+// the two gauges the river index is built from: one with a ladder, one without
+const MS_RIVER = `(() => {
+  state.river = 'SIEG';
+  state.feed = { name: 'LANUK NRW', live: false, kmNote: T.lanukKmNote };
+  const mA = ${JSON.stringify(NRW_META['2729100000100'])}, mB = ${JSON.stringify(NRW_META['2721390000100'])};
+  const raw = [
+    { ...lanukInfoFrom(mA, 'lanuk-1'), timeseries: [lanukGaugeFrom(mA, { timestamp: 't', value: 420 })] },
+    { ...lanukInfoFrom(mB, 'lanuk-2'), timeseries: [lanukGaugeFrom(mB, { timestamp: 't', value: 30 })] },
+  ];
+  const vm = riverViewModel(prepareRiverStations(raw, { keepUnplottable: true }));
+  return { vm, html: renderRiver(vm) };
+})()`;
+
+const pfList = html => {
+  const a = html.indexOf('<ol class="pf-list">');
+  return a < 0 ? '' : html.slice(a, html.indexOf('</ol>', a));
+};
+
+test('Meldestufen: the river index draws the stage mark, and the key names every rung', () => {
+  const app = loadApp({ now: NRW_NOW });
+  const { vm, html } = app.run(MS_RIVER);
+  assert.equal(vm.hasStages, true);
+  assert.deepEqual(vm.index.map(s => [s.name, s.stage]),
+    [['Weidenau', null], ['Menden_1', 2]], 'upstream first; only the gauge with a ladder has a stage');
+
+  // anchored at the DRAWING (the flow-ordered index IS the view for a source
+  // with no gauge datum), never at the page: the key's own swatches are the
+  // same call and would make the check circular
+  const list = pfList(html);
+  assert.ok(list, 'the plate really has an index list');
+  assert.match(list, /class="ms-dot k-ms2"/, 'the gauge at two thresholds carries the stage-2 mark');
+  assert.equal((list.match(/class="ms-dot /g) || []).length, 1, 'the gauge without a ladder carries none');
+  // ordinal on three channels, none of them hue: sector, hatch, lightness
+  assert.match(list, /fill="url\(#ms-fslash\)"/, 'stage 2 takes the second rung of the hatch ramp');
+  assert.match(list, /<path class="ms-sec"[^>]*A5\.0 5\.0 0 1 1/, 'and a two-thirds sector, drawn the long way round');
+
+  const drawn = [...classesIn(list)].filter(c => /^(ms-|k-ms)/.test(c));
+  const keyed = keyClasses(html);
+  assert.deepEqual(drawn.sort(), ['k-ms2', 'ms-bg', 'ms-dot', 'ms-ring', 'ms-sec'], 'what the list draws');
+  assert.deepEqual(drawn.filter(c => !keyed.has(c)), [], 'every stage mark drawn is named in the key');
+  // the key spells the VOCABULARY, not the inventory: a reader meeting MS3
+  // tomorrow can read it today
+  assert.deepEqual([0, 1, 2, 3].filter(n => !keyed.has('k-ms' + n)), [], 'all four rungs are named');
+  assert.ok(html.includes('MS3 — third alert stage reached'));
+  assert.ok(html.includes('a gauge can be high and still MS0'),
+    'and the key says the stage is not the statistic beside it');
+  // the fills must resolve: every pattern the marks point at is on this plate
+  for (const id of ['none', 'dots', 'fslash', 'cross']) {
+    assert.ok(html.includes(`id="ms-${id}"`), `the ${id} pattern is defined on the plate`);
+  }
+  assert.ok(html.indexOf('id="ms-none"') > html.indexOf('<ol class="pf-list">'),
+    'the defs sit at the foot, so the plate’s first <svg> is a drawn mark');
+
+  // the control: a river without a ladder anywhere gains neither mark nor defs
+  const plain = app.run(`(() => {
+    state.river = 'RHEIN'; state.feed = null;
+    const vm = riverViewModel([
+      { name: 'A', km: 10, elev: 50, value: 200, unit: 'cm', kind: 'normal', stage: null, stages: null },
+      { name: 'B', km: 5, elev: 40, value: 210, unit: 'cm', kind: 'high', stage: null, stages: null },
+    ]);
+    return { hasStages: vm.hasStages, html: renderRiver(vm) };
+  })()`);
+  assert.equal(plain.hasStages, false);
+  assert.ok(!plain.html.includes('ms-dot'), 'no stage mark on a WSV river');
+  assert.ok(!plain.html.includes('id="ms-none"'), 'and no unused pattern defs either');
+  assert.ok(!plain.html.includes('MS0'), 'nor a key entry for a mark it never draws');
+});
+
+test('Meldestufen: a hostile gauge name never reaches markup unescaped on either plate', () => {
+  const app = loadApp({ now: NRW_NOW });
+  const bad = '<img src=x onerror=alert(1)>&"';
+  const meta = { ...NRW_META['2729100000100'], name: bad, water: 'Sieg' + bad, info: [250, 410, 440] };
+  const station = app.run(`(() => {
+    station = 'X';
+    state.info = lanukInfoFrom(${JSON.stringify(meta)}, 'lanuk-1');
+    state.gauge = lanukGaugeFrom(${JSON.stringify(meta)}, { timestamp: '2026-09-01T23:00:00.000Z', value: 420 });
+    state.lanuk = { stages: [250, 410, 440], note: ${JSON.stringify('note ' + bad)} };
+    state.feed = lanukFeed({ isoDay: '2026-09-02', trend: 0.1 });
+    state.neighbors = []; histCache = null;
+    state.archive = [[${NRW_NOW} - 5 * 864e5, 200], [${NRW_NOW} - 864e5, 460], [${NRW_NOW}, 420]];
+    return renderStation(stationViewModel());
+  })()`);
+  assert.ok(station.includes('MS2 of 3'), 'the stage really is on this plate');
+  assert.ok(station.includes('<b>MS1</b>'), 'and so are the reference lines');
+  assert.ok(!station.includes('<img'), 'station plate with the ladder live: still escaped');
+
+  const river = app.run(`(() => {
+    state.river = 'SIEG';
+    state.feed = { name: 'LANUK NRW', live: false, kmNote: T.lanukKmNote };
+    const vm = riverViewModel([
+      { name: ${JSON.stringify(bad)}, id: 'lanuk-1', km: 10, elev: null, value: 420, unit: 'cm',
+        kind: 'high', stage: 2, stages: [250, 410, 440] },
+      { name: 'B', id: 'lanuk-2', km: 5, elev: null, value: 48, unit: 'cm',
+        kind: 'normal', stage: 0, stages: [250, 410, 440] },
+    ]);
+    return renderRiver(vm);
+  })()`);
+  assert.match(pfList(river), /class="ms-dot k-ms2"/, 'the stage mark really is on this plate');
+  assert.ok(!river.includes('<img'), 'river plate with the ladder live: still escaped');
+});
+
 // ---------- PRECIPITATION and RESPONSE: the rain field on the station plate ----------
 
 const precipApp = async (search = '?station=MENDEN_1') => {

@@ -715,6 +715,22 @@
   .bf-fell { fill: var(--dry); }
   .bh { stroke: color-mix(in oklab, var(--ink) 55%, transparent); }
   .bh-f { fill: color-mix(in oklab, var(--ink) 55%, transparent); }
+  /* alert-stage pattern fills: the same <pattern> mechanics as the band fills
+     above, but a RAMP — the hatch gets denser and the ground steps from --dry
+     to --dry-line as the stage rises, so the mark is ordinal on three channels
+     (sector, texture, lightness) and never on hue alone. */
+  .mf { fill: var(--paper); }
+  .mf-none { fill: var(--paper); }
+  .mf-dots { fill: var(--dry); }
+  .mf-fslash { fill: color-mix(in oklab, var(--dry-line) 55%, var(--dry)); }
+  .mf-cross { fill: var(--dry-line); }
+  .mh { stroke: color-mix(in oklab, var(--ink) 55%, transparent); }
+  .mh-f { fill: color-mix(in oklab, var(--ink) 55%, transparent); }
+  /* the mark itself: an ink hairline ring with a growing filled sector. No
+     ancestor in the selector — the swatch, the river index and the net view
+     all draw the same call, and it must look the same in all three. */
+  .ms-dot .ms-bg, .ms-dot .ms-sec { stroke: none; }
+  .ms-dot .ms-ring { fill: none; stroke: var(--ink); stroke-width: 1.2; }
   .defs-only { position: absolute; width: 0; height: 0; }
   /* ---- station head: the hero reading, the facts, the km sign ---- */
   .station-head {
@@ -2328,6 +2344,11 @@ function lanukInfoFrom(meta, id) {
     km: typeof meta.distToConflKm === 'number' ? meta.distToConflKm : null,
     latitude: typeof meta.lat === 'number' ? meta.lat : null,
     longitude: typeof meta.lon === 'number' ? meta.lon : null,
+    // the operator's alert ladder rides along, so a river plate built out of
+    // these can draw the stage without a second meta fetch per gauge. A WSV
+    // station has no such field, so alertStage() answers null there and the
+    // mark is simply not drawn.
+    stages: Array.isArray(meta.info) ? meta.info : null,
     timeseries: [{ shortname: 'W', unit: meta.unit || 'cm' }],
   };
 }
@@ -2630,6 +2651,41 @@ function troubleKind(stateStr) {
   return 'normal';
 }
 
+// ---------- Meldestufen: the operator's own alert ladder ----------
+
+// A different question from troubleKind(), and deliberately a separate scale.
+// troubleKind answers "where does this gauge stand in its OWN statistics"
+// (MNW/MHW); the alert stage answers "which official threshold is exceeded".
+// A gauge can be statistically `high` and still MS0, so the two never merge —
+// and troubleKind hangs on five legends, which four states would break at once.
+//
+// The thresholds arrive with the gauge (LANUK's `meta.info`), already in the
+// unit that gauge is calibrated in. They are therefore compared RAW, never
+// through toCm(): a gauge reporting metres above a datum would come out three
+// stages high the moment a conversion crept in.
+//
+// `stages` may be absent, shorter than three, or carry nulls where the
+// operator published no threshold — alertLadder() is the one place that knows
+// it, and it keeps the ORIGINAL index, so a gauge with only a first threshold
+// still calls it MS1 rather than renumbering the ladder under the reader.
+function alertLadder(stages) {
+  const out = [];
+  (Array.isArray(stages) ? stages : []).slice(0, 3).forEach((t, i) => {
+    if (typeof t === 'number' && Number.isFinite(t)) out.push({ key: 'MS' + (i + 1), v: t });
+  });
+  return out;
+}
+
+// 0..3 = how many published thresholds the reading has reached; null when the
+// gauge publishes no ladder or has no reading. Reaching a threshold IS the
+// stage (>=), the way the operator declares it.
+function alertStage(v, stages) {
+  if (typeof v !== 'number' || !Number.isFinite(v)) return null;
+  const rungs = alertLadder(stages);
+  if (!rungs.length) return null;
+  return rungs.filter(r => v >= r.v).length;
+}
+
 // turn the raw ?waters= station list into the array the profile renders from.
 // Keeps a station if it has a km AND a W timeseries and either an elevation
 // (gaugeZero + current W) or a non-normal state worth flagging. elev is null when
@@ -2655,6 +2711,9 @@ function prepareRiverStations(raw, { keepUnplottable = false } = {}) {
       unit: gaugeUnit(w),
       elev,
       kind,
+      // null for every WSV gauge — no ladder, no mark
+      stage: alertStage(cur && cur.value != null ? cur.value : null, s.stages),
+      stages: Array.isArray(s.stages) ? s.stages : null,
     });
   }
   return out.sort((a, b) => a.km - b.km);
@@ -3144,6 +3203,12 @@ const T = {
   lanukNoDatum: 'this source publishes no gauge datum, so there is no elevation profile — the river view lists the gauges in flow order',
   lanukThin: 'This source publishes one value per day — pick a window of a week or more.',
   lanukReach: 'the LANUK export reaches back two years',
+  // Meldestufen — the operator's alert ladder, kept apart from the statistics
+  msRefNote: 'MS1–MS3 are the operator’s own alert stages, in this gauge’s unit — an official threshold, not a long-term mean: they replace MNW/MW/MHW on this chart rather than joining them.',
+  msRiverNote: 'The stage mark counts the operator’s alert thresholds this gauge has reached. It is a different question from low / normal / high above, which reads each gauge against its own statistics — a gauge can be high and still MS0.',
+  msKeys: ['MS0 — no alert stage reached', 'MS1 — first alert stage reached',
+    'MS2 — second alert stage reached', 'MS3 — third alert stage reached'],
+  msFactNote: 'Meldestufe: how many of the operator’s own alert thresholds this reading has reached — an official threshold, not a statistic.',
   lanukKmNote: 'km counts DOWN to the mouth here: the source gives each gauge’s distance to the confluence, not a river kilometre.',
   riverNoElev: 'No gauge on this water publishes a gauge datum, so there is no elevation profile to draw. The list below runs in flow order, upstream first.',
   copy: 'copy',
@@ -4151,18 +4216,29 @@ function historyViewModel() {
     windowDays: wd, spanDays, points: arch.length, from: t0, to: t1,
     series: b, banded, ticks, note, stale, seed, gaps: b.gaps,
     marks: historyRefMarks(b.min, b.max),
+    // which family those marks belong to — the key has to say so, or MS2 reads
+    // as one more long-term mean
+    msRefs: alertLadder(state.lanuk && state.lanuk.stages).length > 0,
     insight: unusualNow(),
   };
 }
 
 // the same MNW/MW/MHW the scene draws, as horizontal rules on the history
 // chart — the range chips and the scene finally speak the same language
+// …and for a gauge that publishes an alert ladder, the ladder replaces them:
+// one mark family at a time, never both, because MS2 and MHW answer different
+// questions and a chart carrying both would invite the reader to compare them.
+// No NEW mark either way — the same .href-line, named in the same refs row of
+// the key, which is why this is the cheapest place the stage can appear.
 function historyRefMarks(min, max) {
+  const rungs = alertLadder(state.lanuk && state.lanuk.stages);
+  const src = rungs.length
+    ? rungs.map(r => ({ key: r.key, cm: r.v }))
+    : ['MHW', 'MW', 'MNW'].map(key => ({ key, cm: charValue(key) }));
   const out = [];
-  for (const key of ['MHW', 'MW', 'MNW']) {
-    const cm = charValue(key);
-    if (cm == null || cm < min || cm > max) continue;
-    out.push({ key, cm });
+  for (const m of src) {
+    if (m.cm == null || m.cm < min || m.cm > max) continue;
+    out.push(m);
   }
   return out;
 }
@@ -4291,6 +4367,7 @@ function renderHistory(h) {
     { sw: keySw('<polygon class="h-fill" points="0,9 4,4 8,6 12,2 12,12 0,12"/><polyline class="h-line" points="0,9 4,4 8,6 12,2"/>'), label: T.histDaily },
     h.banded && { sw: keySw('<polygon class="h-band" points="0,3 12,1 12,8 0,10"/>'), label: T.histBand },
     refs && { sw: keySw('<line class="href-line" x1="0" y1="6" x2="12" y2="6"/>'), html: refs },
+    refs && h.msRefs && { note: T.msRefNote },
     h.gaps > 0 && { sw: keySw('<polyline class="h-line" points="0,8 3,5"/><polyline class="h-line" points="9,6 12,3"/>'),
       label: `${h.gaps} ${plural(h.gaps, 'break')} — ${T.histGapKey}` },
     { note: `${h.points} readings` },
@@ -4780,6 +4857,11 @@ function stationViewModel() {
     // "readings below 30 cm are unreliable since a gravel bank formed") — kept
     // verbatim, next to the level it qualifies
     operatorNote: (state.lanuk && state.lanuk.note) || null,
+    // the operator's alert ladder, printed as a WORD next to `state` rather
+    // than as a mark: the title block carries no key of its own, and the one
+    // place the stage gets a mark is a drawing that names it (the river index)
+    alert: alertStage(cur.value, state.lanuk && state.lanuk.stages),
+    alertOf: alertLadder(state.lanuk && state.lanuk.stages).length,
   };
 }
 
@@ -4817,6 +4899,9 @@ function renderStation(vm) {
   // what the hero number is, when it is not a live reading — first, because
   // "a day old" changes how every other fact reads
   if (vm.reading) facts.unshift(['reading', vm.reading.text, vm.reading.note]);
+  // right after `state`, because the two read as one answer and are not:
+  // "HIGH" is this gauge's own statistics, "MS0 of 3" the operator's ladder
+  if (vm.alert != null) facts.push(['alert', `MS${vm.alert} of ${vm.alertOf}`, T.msFactNote]);
   if (vm.wt != null) facts.push(['water', `${vm.wt.toFixed(1)} °C`, '']);
   if (vm.q != null) facts.push(['flow', `${Math.round(vm.q)} m³/s`, '']);
   const head = `<header class="p-head station-head">` +
@@ -4904,7 +4989,11 @@ function riverViewModel(stations) {
     // upstream first, the way the drawing above reads left to right
     index: [...stations].sort((a, b) => (lowKmDown ? -1 : 1) * (a.km - b.km)).map(s => ({
       name: s.name, km: s.km, elev: s.elev, value: s.value, unit: s.unit, kind: s.kind,
+      stage: s.stage != null ? s.stage : null,
     })),
+    // a source that publishes an alert ladder gets the stage mark on every row
+    // that has a reading; a WSV river has no ladder and no such mark
+    hasStages: stations.some(s => s.stage != null),
     gradient: drop != null && kmSpan > 0 ? drop / kmSpan : null,
     troubled: troubled.map(s => ({
       name: s.name, km: s.km, kind: s.kind, value: s.value, unit: s.unit,
@@ -4920,6 +5009,57 @@ function riverViewModel(stations) {
 }
 
 const RIVER_W = 340, RIVER_H = 150;
+
+// ---------- the alert-stage mark ----------
+
+// rvMark's sibling, and the same contract: ONE call feeds the drawing and the
+// legend swatch, so the two cannot drift. Three channels, none of them hue
+// alone — the sector grows with the stage (ordinal by construction, and it
+// survives greyscale), its fill steps through a hatch ramp, and that hatch's
+// ground steps through a lightness ramp from --dry to --dry-line. Stage 0 is
+// the bare ring: nothing exceeded, nothing filled.
+// Small, pure and top-level on purpose — the net view calls it too, so the
+// signature msMark(stage, opts?) -> SVG string is the stable part.
+const MS_HATCH = ['none', 'dots', 'fslash', 'cross'];
+function msMark(stage, opts) {
+  const o = opts || {};
+  const cx = Number.isFinite(o.cx) ? o.cx : 6;
+  const cy = Number.isFinite(o.cy) ? o.cy : 6;
+  const r = Number.isFinite(o.r) ? o.r : 5;
+  const s = Number.isFinite(stage) ? Math.max(0, Math.min(3, Math.round(stage))) : 0;
+  const at = (x, y) => `cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${r.toFixed(1)}"`;
+  // the paper ground is a pattern too, so all four rungs of the hatch ramp are
+  // one mechanism rather than three plus a special case
+  const parts = [`<circle class="ms-bg" ${at(cx, cy)} fill="url(#ms-none)"/>`];
+  if (s >= 3) {
+    parts.push(`<circle class="ms-sec" ${at(cx, cy)} fill="url(#ms-${MS_HATCH[3]})"/>`);
+  } else if (s > 0) {
+    // clockwise from twelve o'clock, so a rising stage reads like a filling dial
+    const a = -Math.PI / 2 + 2 * Math.PI * (s / 3);
+    const x2 = cx + r * Math.cos(a), y2 = cy + r * Math.sin(a);
+    parts.push(`<path class="ms-sec" fill="url(#ms-${MS_HATCH[s]})" d="M${cx.toFixed(1)} ${cy.toFixed(1)}` +
+      `L${cx.toFixed(1)} ${(cy - r).toFixed(1)}A${r.toFixed(1)} ${r.toFixed(1)} 0 ${s / 3 > 0.5 ? 1 : 0} 1 ` +
+      `${x2.toFixed(1)} ${y2.toFixed(1)}Z"/>`);
+  }
+  parts.push(`<circle class="ms-ring" ${at(cx, cy)}/>`);
+  return `<g class="ms-dot k-ms${s}">${parts.join('')}</g>`;
+}
+
+// The hatch ramp's pattern defs, emitted ONCE per plate that draws a stage
+// mark: fill="url(#id)" resolves document-wide, so the drawing and every
+// legend swatch share one set of ids. Same machinery as totalPatternDefs().
+function msPatternDefs() {
+  const p = (id, body) => `<pattern id="ms-${id}" width="7" height="7" patternUnits="userSpaceOnUse">` +
+    `<rect width="7" height="7" class="mf mf-${id}"/>${body}</pattern>`;
+  const hatch = 'stroke-width="1.1" class="mh"';
+  const defs = '<defs>' +
+    p('none', '') +
+    p('dots', '<circle cx="2" cy="2" r="1.1" class="mh-f"/><circle cx="5.5" cy="5.5" r="1.1" class="mh-f"/>') +
+    p('fslash', `<path d="M-1 8 L8 -1" fill="none" ${hatch}/>`) +
+    p('cross', `<path d="M-1 8 L8 -1 M-1 -1 L8 8" fill="none" ${hatch}/>`) +
+    '</defs>';
+  return svgWrap('0 0 0 0', defs, ' class="defs-only" aria-hidden="true" focusable="false"');
+}
 
 // The profile's state mark. Normal is a ring, low a wedge pointing down and high
 // one pointing up: direction survives greyscale, so it never rides on hue alone,
@@ -4990,6 +5130,11 @@ function renderRiver(vm) {
   const key = plateKey([
     ...[['normal', T.kindNormal], ['low', T.kindLow], ['high', T.kindHigh]].map(([k, label]) =>
       ({ sw: keySw(rvMark(k, 6, 6), 'river'), label })),
+    // a VOCABULARY, not an inventory: all four rungs are named so the reader
+    // can read a mark that is not on the plate today (same reason k-low and
+    // k-high are named on a day when no gauge stands low)
+    ...(vm.hasStages ? T.msKeys.map((label, n) => ({ sw: keySw(msMark(n), 'ms'), label })) : []),
+    vm.hasStages && { note: T.msRiverNote },
     plottable && { note: T.riverElevNote },
     vm.kmNote && { note: vm.kmNote },
   ]);
@@ -5000,6 +5145,9 @@ function renderRiver(vm) {
     `<li><a${navAttrs(s.name)}>` +
     // the drawing's own mark, so the key above already names it
     keySw(rvMark(s.kind, 6, 6), 'river') +
+    // the operator's alert stage, beside the statistical state — same call as
+    // the swatch in the key above, so the two cannot drift
+    (s.stage != null ? keySw(msMark(s.stage), 'ms') : '') +
     `<span class="name">${esc(s.name)}</span>` +
     `<span class="elev">${s.value != null ? esc(levelWithUnit(s.value, s.unit)) : '—'}</span>` +
     `<span class="km">km ${esc(fmtKm(s.km))}</span></a></li>`).join('') + '</ol>';
@@ -5012,7 +5160,10 @@ function renderRiver(vm) {
     `<section class="p-block"><h2 class="p-h2">${esc(T.riverProfile)}</h2>` +
     profile +
     `<div class="pf-flow"><span>← ${esc(T.upstream)}</span><span>${esc(T.downstream)} →</span></div>` +
-    index + key + '</section></section>';
+    // the hatch defs ride at the FOOT of the plate: the ids resolve
+    // document-wide wherever they sit, and putting them first would make this
+    // plate's first <svg> a hidden def instead of its first drawn mark
+    index + key + (vm.hasStages ? msPatternDefs() : '') + '</section></section>';
 }
 
 // ---------- the buddy: every empty, loading and error state ----------
