@@ -4821,7 +4821,7 @@ test('lanuk plates: a hostile gauge or water name never reaches markup unescaped
 
 // ---------- B2: Meldestufen, the operator's own alert ladder ----------
 
-test('alertStage: how many thresholds are reached, counted in the gauge’s own unit', () => {
+test('alertStage: the highest rung reached, read in the gauge’s own unit', () => {
   const app = loadApp({ now: NRW_NOW });
   const ms = (v, st) => app.run(`alertStage(${JSON.stringify(v)}, ${JSON.stringify(st)})`);
   const full = [250, 410, 440]; // Menden_1's published ladder
@@ -4829,21 +4829,79 @@ test('alertStage: how many thresholds are reached, counted in the gauge’s own 
   assert.equal(ms(249.9, full), 0);
   assert.equal(ms(250, full), 1, 'reaching the threshold IS the stage the operator declares');
   assert.equal(ms(411, full), 2);
-  assert.equal(ms(9999, full), 3, 'and the count never runs past the ladder');
+  assert.equal(ms(9999, full), 3, 'and it never runs past the ladder');
   assert.equal(ms(null, full), null, 'no reading, no stage');
   assert.equal(ms(300, []), null, 'no ladder, no stage — a WSV gauge is not MS0');
   assert.equal(ms(300, undefined), null);
   // Neubrueck publishes the first threshold only: [145, null, null]
   assert.equal(ms(200, [145, null, null]), 1);
   assert.equal(ms(100, [145, null, null]), 0);
+  assert.equal(app.run(`alertTop([145, null, null])`), 1, 'and its ladder tops out at MS1');
+
+  // A LADDER WITH A HOLE is where "highest rung reached" and "how many rungs
+  // reached" part company, and only the first agrees with what the plate draws
+  // beside the number: at 500 the chart rules a line labelled MS3, so the head
+  // must not print MS2 and the glyph must not be the two-thirds sector.
+  assert.deepEqual(app.run(`alertLadder([250, null, 440]).map(r => r.key)`), ['MS1', 'MS3']);
+  assert.equal(ms(500, [250, null, 440]), 3, 'two thresholds reached, and the top one is MS3');
+  assert.equal(ms(300, [250, null, 440]), 1);
+  assert.equal(app.run(`alertTop([250, null, 440])`), 3);
   // a hole lower down never renumbers the rungs above it under the reader
   assert.deepEqual(app.run(`alertLadder([null, 410, null]).map(r => r.key)`), ['MS2']);
-  assert.equal(ms(420, [null, 410, null]), 1, 'one rung published, one rung reachable');
+  assert.equal(ms(420, [null, 410, null]), 2, 'the only published rung is MS2, so reaching it is MS2');
+
   // the thresholds arrive in the unit the gauge is calibrated in: a gauge that
   // reports metres above a datum is compared raw, or it reads three stages high
   assert.equal(ms(4.2, [3.5, 4.1, 4.4]), 2, 'metres against metres');
   assert.equal(app.run(`/toCm\\(/.test(String(alertStage) + String(alertLadder))`), false,
     'and no conversion is reachable from either function');
+});
+
+test('msMark: the sector is the ordinal channel, and no ladder means no mark', () => {
+  const app = loadApp({ now: NRW_NOW });
+  const mark = (s, o) => app.run(`msMark(${JSON.stringify(s)}${o ? ', ' + JSON.stringify(o) : ''})`);
+  // A count of paths is not a check of geometry: the arc's END POINT is what
+  // says a third from a half. Anchored on the whole `d`, with the endpoints
+  // spelled out — a sweep of s/4 instead of s/3 turns stage 1 into a quarter
+  // and stage 2 into a half, and every softer assertion stays green.
+  assert.equal(mark(1), '<g class="ms-dot k-ms1">' +
+    '<circle class="ms-bg" cx="6.0" cy="6.0" r="5.0" fill="url(#ms-none)"/>' +
+    '<path class="ms-sec" fill="url(#ms-dots)" d="M6.0 6.0L6.0 1.0A5.0 5.0 0 0 1 10.3 8.5Z"/>' +
+    '<circle class="ms-ring" cx="6.0" cy="6.0" r="5.0"/></g>');
+  assert.match(mark(2), /d="M6\.0 6\.0L6\.0 1\.0A5\.0 5\.0 0 1 1 1\.7 8\.5Z"/, 'two thirds, the long way round');
+  assert.match(mark(3), /<circle class="ms-sec" cx="6\.0" cy="6\.0" r="5\.0" fill="url\(#ms-cross\)"\/>/, 'three thirds is the whole disc');
+  assert.ok(!/ms-sec/.test(mark(0)), 'stage 0 is the bare ring — nothing exceeded, nothing filled');
+
+  // each stage takes its OWN rung of the hatch ramp, in order
+  const secHatch = n => {
+    const m = /class="ms-sec"[^>]*fill="url\(#ms-(\w+)\)"/.exec(mark(n));
+    return m ? m[1] : null;
+  };
+  assert.deepEqual([0, 1, 2, 3].map(secHatch), [null, 'dots', 'fslash', 'cross'],
+    'none → dots → fslash → cross, one rung per stage');
+
+  // no ladder is NOT stage 0: a gauge with no thresholds cannot say "the first
+  // one is not reached", so it gets no mark at all
+  assert.equal(mark(null), '', 'null draws nothing');
+  assert.equal(mark(undefined), '', 'and so does a missing argument');
+  // the signature the net view depends on: opts places and sizes it
+  assert.match(mark(2, { cx: 40, cy: 12, r: 8 }), /<circle class="ms-ring" cx="40\.0" cy="12\.0" r="8\.0"\/>/);
+  assert.match(mark(2, { cx: 40, cy: 12, r: 8 }), /M40\.0 12\.0L40\.0 4\.0A8\.0 8\.0 0 1 1/);
+  assert.equal(app.run('typeof msMark'), 'function');
+  assert.equal(app.run('typeof msPatternDefs'), 'function');
+});
+
+test('the alert-stage key labels are the ladder, in order', () => {
+  const app = loadApp({ now: NRW_NOW });
+  const keys = app.run('T.msKeys');
+  assert.equal(keys.length, 4);
+  // every class assertion in this file would survive MS0 and MS1 being swapped;
+  // the labels are the one thing only a string check holds
+  assert.match(keys[0], /^MS0 — no alert stage/);
+  for (const n of [1, 2, 3]) assert.ok(keys[n].startsWith(`MS${n} — `), `${n}: ${keys[n]}`);
+  assert.match(keys[1], /first/);
+  assert.match(keys[2], /second/);
+  assert.match(keys[3], /third/);
 });
 
 test('Meldestufen: the station plate prints the stage, and the ladder replaces the means on the chart', () => {
@@ -4898,6 +4956,49 @@ test('Meldestufen: the station plate prints the stage, and the ladder replaces t
     wsv.html.indexOf('class="chart hist"')));
   assert.ok(!/alert stages/.test(wsvHist.slice(0, wsvHist.indexOf('</dl>', wsvHist.indexOf('<dl class="p-key">')))),
     'and the MS caveat is not printed under a chart that draws no MS line');
+});
+
+test('Meldestufen: a ladder out of range gives the chart back to the means', () => {
+  const app = loadApp({ now: NRW_NOW });
+  const meta = NRW_META['2729100000100']; // mnw 18, mw 66, mhw 364; ladder 250/410/440
+  const marks = (value, lo, hi) => app.run(`(() => {
+    station = 'MENDEN_1';
+    state.info = lanukInfoFrom(${JSON.stringify(meta)}, 'lanuk-2729100000100');
+    state.gauge = lanukGaugeFrom(${JSON.stringify(meta)}, { timestamp: '2026-09-01T23:00:00.000Z', value: ${value} });
+    state.lanuk = { stages: [250, 410, 440], note: null };
+    state.feed = lanukFeed({ isoDay: '2026-09-02', trend: 0.1 });
+    state.neighbors = []; histCache = null;
+    state.archive = [[${NRW_NOW} - 5 * 864e5, ${lo}], [${NRW_NOW} - 864e5, ${hi}], [${NRW_NOW}, ${value}]];
+    const h = historyViewModel();
+    return { keys: h.marks.map(m => m.key), msRefs: h.msRefs, html: renderStation(stationViewModel()) };
+  })()`);
+
+  // An alert threshold sits at flood level by construction, so on an ordinary
+  // day NONE of the rungs is inside the window. A straight swap then left the
+  // chart with no reference line at all — three marks traded for nothing, at
+  // every LANUK gauge, on every normal day (caught in review).
+  const calm = marks(44, 18, 70);
+  assert.deepEqual(calm.keys, ['MW', 'MNW'], 'the means the window does reach are drawn');
+  assert.equal(calm.msRefs, false, 'and the key is told it is looking at means');
+  assert.ok(!calm.html.includes('alert stages, in this gauge'),
+    'so the MS caveat does not explain a family the chart is not showing');
+  assert.ok(calm.html.includes('MS0 of 3'), 'the title block still says where the ladder stands');
+
+  // one rung inside the window is enough to hand the chart to the ladder, and
+  // the means step aside — the reader never meets both families at once
+  const rising = marks(300, 240, 320);
+  assert.deepEqual(rising.keys, ['MS1'], 'only the rung the window reaches');
+  assert.equal(rising.msRefs, true);
+  assert.ok(rising.html.includes('alert stages, in this gauge'), 'and now the caveat is due');
+
+  // a gauge with no ladder is untouched by any of it: the same calm window
+  // that the LANUK gauge above fell back into, reached from the WSV path
+  const wsv = app.run(`(() => {
+    state.lanuk = null; histCache = null;
+    state.archive = [[${NRW_NOW} - 5 * 864e5, 18], [${NRW_NOW} - 864e5, 70], [${NRW_NOW}, 44]];
+    return historyViewModel().marks.map(m => m.key);
+  })()`);
+  assert.deepEqual(wsv, ['MW', 'MNW'], 'the means, in the order the chart has always drawn them');
 });
 
 // the two gauges the river index is built from: one with a ladder, one without

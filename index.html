@@ -2361,8 +2361,10 @@ function lanukState(v, meta) {
   return meta.mnw != null && meta.mhw != null ? 'normal' : 'unknown';
 }
 
-// the W series record: MNW/MW/MHW as characteristic values so charValue(),
-// sceneModel() and historyRefMarks() run unchanged; no gauge zero (the source
+// the W series record: MNW/MW/MHW as characteristic values so charValue() and
+// sceneModel() run unchanged. historyRefMarks() does NOT: it hands a gauge
+// with an alert ladder MS1–MS3 instead, and falls back to these means only
+// when no rung is inside the drawn window. No gauge zero (the source
 // publishes none), so elevOf() answers null and the profiles say so
 function lanukGaugeFrom(meta, reading) {
   const characteristicValues = [['MNW', meta.mnw], ['MW', meta.mw], ['MHW', meta.mhw]]
@@ -2679,11 +2681,26 @@ function alertLadder(stages) {
 // 0..3 = how many published thresholds the reading has reached; null when the
 // gauge publishes no ladder or has no reading. Reaching a threshold IS the
 // stage (>=), the way the operator declares it.
+// The stage is the NUMBER OF THE HIGHEST RUNG REACHED, not the count of rungs
+// reached — the two agree on a complete ladder and part company on one with a
+// hole. [250, null, 440] at 500 cm has reached two thresholds, but the top one
+// is MS3, and counting would print "MS2" beside a reference line the same
+// plate labels MS3 and draw the two-thirds sector for a gauge at its highest
+// declared alert. The ladder is never renumbered under the reader — here
+// least of all. Reaching a threshold IS the stage (>=), the way the operator
+// declares it; 0 when none is reached, null when there is no ladder at all.
 function alertStage(v, stages) {
   if (typeof v !== 'number' || !Number.isFinite(v)) return null;
   const rungs = alertLadder(stages);
   if (!rungs.length) return null;
-  return rungs.filter(r => v >= r.v).length;
+  const reached = rungs.filter(r => v >= r.v);
+  return reached.length ? Math.max(...reached.map(r => +r.key.slice(2))) : 0;
+}
+
+// the top rung the operator published — what a printed stage is "of"
+function alertTop(stages) {
+  const rungs = alertLadder(stages);
+  return rungs.length ? +rungs[rungs.length - 1].key.slice(2) : 0;
 }
 
 // turn the raw ?waters= station list into the array the profile renders from.
@@ -4210,15 +4227,17 @@ function historyViewModel() {
     lastLbl = text;
     ticks.push({ frac, text });
   }
+  const marks = historyRefMarks(b.min, b.max);
   return {
     empty: false,
     label: wd ? preset.label : spanDays > 730 ? (spanDays / 365.25).toFixed(1) + 'Y' : spanDays + 'D',
     windowDays: wd, spanDays, points: arch.length, from: t0, to: t1,
     series: b, banded, ticks, note, stale, seed, gaps: b.gaps,
-    marks: historyRefMarks(b.min, b.max),
-    // which family those marks belong to — the key has to say so, or MS2 reads
-    // as one more long-term mean
-    msRefs: alertLadder(state.lanuk && state.lanuk.stages).length > 0,
+    marks,
+    // read off the marks that were DRAWN, never off the gauge: a LANUK gauge
+    // whose ladder is out of range falls back to the means, and the caveat
+    // must not then explain a family the chart is not showing
+    msRefs: marksAreStages(marks),
     insight: unusualNow(),
   };
 }
@@ -4230,18 +4249,24 @@ function historyViewModel() {
 // questions and a chart carrying both would invite the reader to compare them.
 // No NEW mark either way — the same .href-line, named in the same refs row of
 // the key, which is why this is the cheapest place the stage can appear.
+//
+// The ladder REPLACES the means only when it has something to say. An alert
+// threshold sits at flood level by construction, so on an ordinary day none of
+// its rungs is inside the drawn window — and a straight swap then left the
+// chart with no reference line at all, at every LANUK gauge, on every normal
+// day, trading three marks for nothing (measured in review). So: draw the
+// ladder if any rung is in range, otherwise fall back to the means. The reader
+// still never meets both families at once, which is the rule that mattered.
 function historyRefMarks(min, max) {
-  const rungs = alertLadder(state.lanuk && state.lanuk.stages);
-  const src = rungs.length
-    ? rungs.map(r => ({ key: r.key, cm: r.v }))
-    : ['MHW', 'MW', 'MNW'].map(key => ({ key, cm: charValue(key) }));
-  const out = [];
-  for (const m of src) {
-    if (m.cm == null || m.cm < min || m.cm > max) continue;
-    out.push(m);
-  }
-  return out;
+  const inRange = src => src.filter(m => m.cm != null && m.cm >= min && m.cm <= max);
+  const rungs = inRange(alertLadder(state.lanuk && state.lanuk.stages).map(r => ({ key: r.key, cm: r.v })));
+  if (rungs.length) return rungs;
+  return inRange(['MHW', 'MW', 'MNW'].map(key => ({ key, cm: charValue(key) })));
 }
+
+// which family historyRefMarks() actually drew — the key has to name THAT, not
+// whichever family the gauge could have had
+const marksAreStages = marks => marks.length > 0 && marks.every(m => /^MS[1-3]$/.test(m.key));
 
 // ---------- plate controls ----------
 
@@ -4861,7 +4886,7 @@ function stationViewModel() {
     // than as a mark: the title block carries no key of its own, and the one
     // place the stage gets a mark is a drawing that names it (the river index)
     alert: alertStage(cur.value, state.lanuk && state.lanuk.stages),
-    alertOf: alertLadder(state.lanuk && state.lanuk.stages).length,
+    alertOf: alertTop(state.lanuk && state.lanuk.stages),
   };
 }
 
@@ -5026,7 +5051,10 @@ function msMark(stage, opts) {
   const cx = Number.isFinite(o.cx) ? o.cx : 6;
   const cy = Number.isFinite(o.cy) ? o.cy : 6;
   const r = Number.isFinite(o.r) ? o.r : 5;
-  const s = Number.isFinite(stage) ? Math.max(0, Math.min(3, Math.round(stage))) : 0;
+  // No ladder is NOT stage 0: MS0 means "the operator's first threshold is not
+  // reached", and a gauge with no thresholds cannot say that. It gets no mark.
+  if (!Number.isFinite(stage)) return '';
+  const s = Math.max(0, Math.min(3, Math.round(stage)));
   const at = (x, y) => `cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${r.toFixed(1)}"`;
   // the paper ground is a pattern too, so all four rungs of the hatch ramp are
   // one mechanism rather than three plus a special case
@@ -5048,15 +5076,19 @@ function msMark(stage, opts) {
 // The hatch ramp's pattern defs, emitted ONCE per plate that draws a stage
 // mark: fill="url(#id)" resolves document-wide, so the drawing and every
 // legend swatch share one set of ids. Same machinery as totalPatternDefs().
+// The tile is 4 units, not the band charts' 7. A stage-1 sector is a third of
+// an r=5 disc — about 10 units² — and a 7-unit tile put at most one clipped
+// dot inside it, which is the texture channel collapsing to nothing exactly
+// where the mark is smallest (caught in review, on a magnified swatch).
 function msPatternDefs() {
-  const p = (id, body) => `<pattern id="ms-${id}" width="7" height="7" patternUnits="userSpaceOnUse">` +
-    `<rect width="7" height="7" class="mf mf-${id}"/>${body}</pattern>`;
-  const hatch = 'stroke-width="1.1" class="mh"';
+  const p = (id, body) => `<pattern id="ms-${id}" width="4" height="4" patternUnits="userSpaceOnUse">` +
+    `<rect width="4" height="4" class="mf mf-${id}"/>${body}</pattern>`;
+  const hatch = 'stroke-width="0.9" class="mh"';
   const defs = '<defs>' +
     p('none', '') +
-    p('dots', '<circle cx="2" cy="2" r="1.1" class="mh-f"/><circle cx="5.5" cy="5.5" r="1.1" class="mh-f"/>') +
-    p('fslash', `<path d="M-1 8 L8 -1" fill="none" ${hatch}/>`) +
-    p('cross', `<path d="M-1 8 L8 -1 M-1 -1 L8 8" fill="none" ${hatch}/>`) +
+    p('dots', '<circle cx="1" cy="1" r="0.85" class="mh-f"/><circle cx="3" cy="3" r="0.85" class="mh-f"/>') +
+    p('fslash', `<path d="M-1 5 L5 -1" fill="none" ${hatch}/>`) +
+    p('cross', `<path d="M-1 5 L5 -1 M-1 -1 L5 5" fill="none" ${hatch}/>`) +
     '</defs>';
   return svgWrap('0 0 0 0', defs, ' class="defs-only" aria-hidden="true" focusable="false"');
 }
@@ -5145,9 +5177,19 @@ function renderRiver(vm) {
     `<li><a${navAttrs(s.name)}>` +
     // the drawing's own mark, so the key above already names it
     keySw(rvMark(s.kind, 6, 6), 'river') +
-    // the operator's alert stage, beside the statistical state — same call as
-    // the swatch in the key above, so the two cannot drift
-    (s.stage != null ? keySw(msMark(s.stage), 'ms') : '') +
+    // The operator's alert stage, beside the statistical state — the same call
+    // as the swatch in the key above, so the two cannot drift. A row without a
+    // ladder keeps the COLUMN (an empty swatch of the same size): the list is
+    // a flex row, and without it the names of the gauges that have no ladder
+    // start a swatch-width to the left of the ones that do.
+    // The swatch is aria-hidden, so the stage also goes in as words — the mark
+    // is the only place this plate says it, and a screen reader gets none of it
+    // from an <svg aria-hidden>.
+    (vm.hasStages
+      ? (s.stage != null
+        ? keySw(msMark(s.stage), 'ms') + `<span class="vh">${esc(T.msKeys[s.stage])}</span>`
+        : keySw('', 'ms'))
+      : '') +
     `<span class="name">${esc(s.name)}</span>` +
     `<span class="elev">${s.value != null ? esc(levelWithUnit(s.value, s.unit)) : '—'}</span>` +
     `<span class="km">km ${esc(fmtKm(s.km))}</span></a></li>`).join('') + '</ol>';

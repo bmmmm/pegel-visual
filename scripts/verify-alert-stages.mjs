@@ -177,13 +177,13 @@ async function shoot(s, name) {
 
 // ---------- the station plate ----------
 
-async function station(cdp, base) {
-  console.log('\n?station=MENDEN_1 — the gauge standing at MS2');
+async function station(cdp, base, vp, tag) {
+  console.log(`\n?station=MENDEN_1 (${tag}) — the gauge standing at MS2`);
   // 1Y, not the default 30D: the window has to reach down to 200 cm or MS1
   // (250) is below the drawn minimum and only two rules are on the chart
-  const { s, unexpected } = await open(cdp, base, '?station=MENDEN_1&history=1y', { width: 1240, height: 1600 });
+  const { s, unexpected } = await open(cdp, base, '?station=MENDEN_1&history=1y', vp);
   const p = await painted(s, l => l.hero === '420');
-  check(p.ok, 'the page paints itself (rAF, no renderNow)', p.ok ? '' : JSON.stringify(p.last).slice(0, 200));
+  check(p.ok, `${tag}: the page paints itself (rAF, no renderNow)`, p.ok ? '' : JSON.stringify(p.last).slice(0, 200));
   if (!p.ok) return s;
 
   // 1. the title block. Anchored at the <dl class="facts"> of the head — the
@@ -197,7 +197,7 @@ async function station(cdp, base) {
     }
     return null;
   })()`);
-  check(fact === 'MS2 of 3', 'the title block prints the stage', `alert = ${JSON.stringify(fact)}`);
+  check(fact === 'MS2 of 3', `${tag}: the title block prints the stage`, `alert = ${JSON.stringify(fact)}`);
 
   // 2. the drawing: three reference rules over the history curve. Anchored at
   //    svg.chart.hist, never at the page — the key's own swatch is a
@@ -207,12 +207,12 @@ async function station(cdp, base) {
     if (!c) return null;
     return [...c.querySelectorAll('line.href-line')].map(l => Math.round(+l.getAttribute('y1')));
   })()`);
-  check(Array.isArray(lines) && lines.length === 3, 'three MS rules ride the history drawing', `y = ${JSON.stringify(lines)}`);
+  check(Array.isArray(lines) && lines.length === 3, `${tag}: three MS rules ride the history drawing`, `y = ${JSON.stringify(lines)}`);
   // drawn in ladder order, and a higher threshold sits HIGHER on the page, so
   // the y values must fall strictly. Three identical rules would be a chart
   // that lost its scale and still passed a count.
   check(Array.isArray(lines) && lines.length === 3 && lines[0] > lines[1] && lines[1] > lines[2],
-    'MS1 is the lowest rule and MS3 the highest', JSON.stringify(lines));
+    `${tag}: MS1 is the lowest rule and MS3 the highest`, JSON.stringify(lines));
 
   // 3. the key of the history block — the section the chart itself is in
   const key = await s.evaluate(`(() => {
@@ -230,15 +230,19 @@ async function station(cdp, base) {
   })()`);
   const marks = ((key || {}).marks || []).join(' | ');
   check(/MS1/.test(marks) && /MS2/.test(marks) && /MS3/.test(marks),
-    'the history key names every rule the chart drew', marks.slice(0, 120));
+    `${tag}: the history key names every rule the chart drew`, marks.slice(0, 120));
   check(!/\bMHW\b|\bMNW\b|\bMW\b/.test(marks),
-    'and no mark row promises a mean this chart no longer draws', marks.slice(0, 120));
+    `${tag}: no mark row promises a mean this chart no longer draws`, marks.slice(0, 120));
   check(((key || {}).notes || []).some(n => /alert stage/i.test(n)),
-    'and a note says they are alert stages, not long-term means');
+    `${tag}: a note says they are alert stages, not long-term means`);
 
-  await shoot(s, 'station-menden1-ms2');
-  check(unexpected.length === 0, 'no request escaped to the real network', unexpected.join(' '));
-  check(s.events.exceptions.length === 0, 'no uncaught exception', s.events.exceptions.join(' | ').slice(0, 200));
+  // the alert fact is a fifth field in the head's flex row — a width it has
+  // never been measured at is a width where it can push the km sign off
+  const over = await s.evaluate('document.documentElement.scrollWidth - document.documentElement.clientWidth');
+  check(over <= 0, `${tag}: the station plate does not scroll sideways`, `${over}px`);
+  await shoot(s, `station-menden1-ms2-${tag}`);
+  check(unexpected.length === 0, `${tag}: no request escaped to the real network`, unexpected.join(' '));
+  check(s.events.exceptions.length === 0, `${tag}: no uncaught exception`, s.events.exceptions.join(' | ').slice(0, 200));
   return s;
 }
 
@@ -290,6 +294,30 @@ async function river(cdp, base, vp, tag) {
   check(ramp.every(v => v && v !== 'none'), `${tag}: every rung of the ramp resolves to a real colour`, JSON.stringify(fills.defs));
   check(new Set(ramp).size === 4, `${tag}: and the four rungs are four different colours`, JSON.stringify(ramp));
 
+  // FOUR DIFFERENT COLOURS IS NOT A RAMP. Swapping .mf-dots with .mf-cross
+  // keeps the set of four intact and runs the lightness light→dark→light;
+  // node --test never sees CSS at all, so that sabotage stays green in both
+  // gates unless the luminance itself is measured. Read through a canvas: the
+  // computed value is an unresolved oklab() for the mixed rungs, and only a
+  // painted pixel is the colour the reader actually gets.
+  const lum = await s.evaluate(`(() => {
+    const c = document.createElement('canvas');
+    c.width = c.height = 1;
+    const g = c.getContext('2d', { willReadFrequently: true });
+    return ${JSON.stringify(ramp)}.map(col => {
+      g.clearRect(0, 0, 1, 1);
+      g.fillStyle = col;
+      g.fillRect(0, 0, 1, 1);
+      const [r, gr, b] = g.getImageData(0, 0, 1, 1).data;
+      const f = v => { v /= 255; return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); };
+      return Math.round((0.2126 * f(r) + 0.7152 * f(gr) + 0.0722 * f(b)) * 1000) / 1000;
+    });
+  })()`);
+  const down = lum.every((v, i) => i === 0 || v < lum[i - 1]);
+  const up = lum.every((v, i) => i === 0 || v > lum[i - 1]);
+  check(down || up, `${tag}: the ramp is monotone in lightness, MS0 → MS3`, JSON.stringify(lum));
+  check(Math.abs(lum[3] - lum[0]) > 0.25, `${tag}: and it spans enough of the range to be read`, JSON.stringify(lum));
+
   // The legend gate in its browser form: the DRAWING against the KEY, the two
   // anchored separately (browser-verify.md — they live one node apart, and one
   // selector for both compares the legend with itself).
@@ -321,7 +349,9 @@ const cdp = await chrome({ tag: 'alert-stages', cdp: opt('cdp', null) });
 console.log(`serving ${base}`);
 const sessions = [];
 try {
-  sessions.push(await station(cdp, base));
+  sessions.push(await station(cdp, base, { width: 1240, height: 1600 }, 'desktop'));
+  sessions.push(await station(cdp, base, { width: 390, height: 844, mobile: true }, 'phone'));
+  sessions.push(await station(cdp, base, { width: 1240, height: 1600, scheme: 'light' }, 'light'));
   sessions.push(await river(cdp, base, { width: 1240, height: 1200 }, 'desktop'));
   sessions.push(await river(cdp, base, { width: 390, height: 844, mobile: true }, 'phone'));
   // the ramp is a color-mix() per scheme: the light one has to be measured on
