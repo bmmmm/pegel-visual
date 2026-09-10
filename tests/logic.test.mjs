@@ -5755,6 +5755,27 @@ test('WATER TEMPERATURE: a gauge absent from manifest.temp, and a WSV station, a
   assert.equal(bonn.run('renderTemp(tempViewModel())'), '', 'so it draws no block either');
 });
 
+test('WATER TEMPERATURE: a shapeless shard is a stated reason, never a throw', async () => {
+  // render() runs inside a rAF callback that swallows what it throws, so a
+  // truncated or renamed file must not reach it as an exception: the reader
+  // would sit on the previous frame with no word about why.
+  const app = await precipApp();
+  const shapes = ['"nope"', 'null', '[1, 2, 3]', `{ id: 'x', y: 2026, mean: 'nope', max: 7, acc: 'nope' }`];
+  for (const shard of shapes) {
+    const out = app.run(`(() => {
+      try {
+        historyKey = '30d';
+        state.temp = { no: '1', meta: { unit: null, note: { a: 1 } },
+          entry: { from: '2025-06-15', to: '2026-08-20', days: 428 }, years: { 2026: ${shard} } };
+        const vm = tempViewModel();
+        return vm.empty ? 'reason: ' + vm.reason : 'drew ' + vm.cols.length;
+      } catch (e) { return 'THREW ' + e.message; }
+    })()`);
+    assert.equal(out, 'reason: no daily mean in this window for this station', `shard ${shard}`);
+    assert.match(app.run('renderTemp(tempViewModel())'), /class="p-dim"/, `shard ${shard}: and it renders as a reason`);
+  }
+});
+
 test('WATER TEMPERATURE: a fetch that failed is not a station without a record', async () => {
   const app = await precipApp();
   const failed = await app.run(`(async () => {
