@@ -68,6 +68,44 @@ handful of rules you break without knowing you are in this domain at all.
   (left null, the line breaks) — `windowGapLimit` decides, from the readings'
   own 90th-percentile spacing rather than from the clock, because 24 h is an
   outage at one gauge and the cadence at another.
+- **The stage mark is one vocabulary with document-wide ids.** `msMark(stage,
+  {cx, cy, r})` draws MS0–MS3 as a disc whose SECTOR angle carries the ordinal
+  and whose fill carries a hatch (`ms-none`, `ms-dots`, `ms-fslash`,
+  `ms-cross`), so the claim never rides on hue. It returns `''` for a
+  non-finite stage — no ladder is not stage 0, and a gauge without one gets no
+  mark at all. The four `<pattern>` tiles come from `msPatternDefs()`, emitted
+  ONCE per plate that draws a mark (`vm.hasStages ? msPatternDefs() : ''`, the
+  river plate and the net plate) and sitting at the plate's FOOT, so the
+  plate's first `<svg>` is a drawn mark and not a hidden def. The ids resolve
+  **document-wide**: drawing and key swatches share one set, and a mark on a
+  plate that emitted no defs keeps only its ring. **Known nit:** the tile is 4
+  units, calibrated for r ≈ 4–5; the net view draws nodes down to r = 2.0,
+  where an MS1 sector is ~4 units² against a 16-unit² tile and the texture
+  thins to a fragment. The ordinal still rides on the sector, so that is
+  polish — but a third plate wanting texture below r = 2 needs its own tile,
+  not this one.
+- **A rung key is a VOCABULARY, not an inventory.** All four MS rungs are
+  named even on a day when no gauge stands above MS0, exactly as the river
+  plate names `k-low` and `k-high` on a day with neither. Draw those swatches
+  at the LARGEST radius the plate can draw, never `msMark`'s default 5: on the
+  net view, whose whole size channel means catchment area, an MS0 disc bigger
+  than the "500 km² and up" swatch one row above it makes size read as meaning
+  where that row has none.
+- **The net view: an elbow, and a KIND for the unknown.** Every edge is a
+  three-point `polyline.net-edge` that runs along the gauge's own track to the
+  column of the gauge below and only then drops onto its track — a confluence
+  then reads as a confluence instead of as two lines crossing. Node radius is
+  the `NET_DOT_STEPS` ladder (4.2 for ≥ 500 km², 3.0 for 100–499, 2.0 under
+  100) and its labels are derived from the ladder, never typed. A gauge whose
+  area the file does not carry is drawn at the smallest radius with a dashed
+  outline (`circle.net-dot.no-area`) or, if it also carries a stage, a dashed
+  `net-halo` ring around the stage disc: area unknown is a different KIND of
+  node, never a smaller one, because size already means area.
+- **Two distance estimators on one drawing, and the key says which** — the
+  one-picture-one-estimator rule in its net-view form. A bare `km N.N` is the
+  distance the file delivers for that gauge itself; `≈ km N.N` is one this
+  drawing accumulated across a confluence, a river kilometre nobody surveyed.
+  Only the bare ones are measured, and `netApproxNote` says so.
 - **Sizing:** container queries and SVG `viewBox`es, never a column count.
   `aspect-ratio` plus `min-height` on the same box derives a WIDTH from the
   height and overflows its track — use one or the other.

@@ -3,7 +3,9 @@
 Read this before touching `scripts/fetch-nrw-archive.mjs`,
 `scripts/check-nrw-consistency.mjs`, `.github/workflows/nrw-update.yml`, the
 `nrw`/`nrw-hires` branches, or the LANUK seam in `index.html`
-(`isLanukId`/`seriesBase`/`loadLanukStation`). Everything below was measured
+(`isLanukId`/`seriesBase`/`loadLanukStation`, and since 2026-09-10
+`alertStage`/`msMark` and the net view's `loadNet`/`netViewModel`/`renderNet`).
+Everything below was measured
 on 2026-09-04 against the live portal; the numbers are facts about that day,
 not promises.
 
@@ -141,6 +143,64 @@ from `CATCHMENT_SIZE` (km²) and `DIST_TO_CONFL` (km to the mouth): Weidenau
 Display filter for the two rivers: `catchment_name ∈ {Erft-,
 Siegeinzugsgebiet Östlich/Westlich}` **OR** `station_no` starts with
 `272`/`274` — 41 gauges (14 Erft, 27 Sieg); the OR is what keeps Betzdorf.
+
+## Alert stages and the net view (`alertStage`, `msMark`, `loadNet`, `renderNet`)
+
+The two display stages merged on 2026-09-10. The marks themselves are
+`.claude/domains/display-layer.md`'s business; what belongs here is what the
+SOURCE makes true. Checks: `scripts/verify-alert-stages.mjs`,
+`scripts/verify-net.mjs`, fixture `tests/fixtures/nrw/topology-erft-sieg.json`.
+
+**`alertStage` compares in the gauge's own unit, and never through `toCm()`.**
+The ladder is the gauge's `meta.info` — the `LANUV_Info_1/2/3` of the table
+above, already calibrated in whatever unit that gauge reports. It returns the
+NUMBER of the highest rung reached, not a count of rungs: a ladder
+`[250, null, 440]` whose top is reached prints **MS3** though only two
+thresholds exist. A non-finite reading, or a ladder with no numeric rung,
+returns `null` — and `msMark` draws nothing at all for it.
+
+**`alertStage` and `troubleKind` are two scales and must stay two.**
+`troubleKind` asks where a gauge stands against its OWN MNW/MHW statistics;
+`alertStage` asks which OFFICIAL threshold it has crossed. A gauge can be
+`high` and MS0 at the same time, and that is not a bug: a reading well above a
+gauge's long-run mean can still sit far below the operator's first alert rung.
+Neither may ever be derived from the other.
+
+**On the history chart the stage marks REPLACE the means, they do not join
+them.** `historyRefMarks` draws the ladder rungs that fall inside the drawn
+min/max window; where none does — the ordinary day — it falls back to
+MHW/MW/MNW, so a LANUK gauge still draws the means most days instead of an
+empty chart, and the years overlay is unaffected either way. The two families
+never appear together, and `marksAreStages` tells the key which one was drawn.
+Measured live 2026-09-10: Menden_1 at 16 cm prints `MS0 of 3` in the title
+block and, over a one-year window, a single `MS1 250` line.
+
+**The net view draws the DELIVERED edge and derives no topology of its own.**
+`?river=X&view=net` (or `cmd:net`), valid only on a mirrored river — a
+hand-typed `?view=net` on a WSV river falls back to `live`. Every edge is
+`topo.gauges[id].down` out of `nrw/topology.json`. `down: null` with
+`downSrc: 'mouth'` means nothing below it; `down: null` from any other source
+means the pipeline could not place the gauge, and it is LISTED under the
+drawing rather than drawn into it. Reconstructing the tree from
+`CATCHMENT_SIZE` and `DIST_TO_CONFL` was rejected before it was written: at
+two tributaries with the same mouth distance it is a guess, and this repo does
+not let a guess look like a reading.
+
+**The net view is the BASIN; the profile above it is only the named water.**
+Measured live 2026-09-10: **Erft 14 in the basin, 11 drawn, 3 unplaced, 4
+carrying a delivered river km; Sieg 27 in the basin, 25 drawn, 2 unplaced, 6
+carrying one.** The 14 and the 27 are the display filter's own counts from the
+section above. The gauges "on the water" are exactly the ones whose distance
+prints bare — everything else prints with a `≈`.
+
+**The readings pass is a deliberate SECOND pass, and it costs two requests per
+basin gauge** — `meta.json` plus the newest daily shard, chunked six at a
+time, each gauge in its own try/catch so one broken gauge loses only its own
+mark. Gauges the river plate already fetched are reused. Topology paints
+first; the stage marks arrive afterwards. **A browser check that waits only
+for "a node exists" measures the first pass and counts zero stage marks** —
+that is the two-pass design, not a missing feature (hit 2026-09-10, on the
+live site: 0 marks on the first probe, 13 once settled).
 
 ## The rain field around a gauge (`scripts/build-nrw-precip.mjs`, `nrw/precip/`, gate rule N8)
 

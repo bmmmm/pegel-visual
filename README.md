@@ -326,6 +326,30 @@ flight, and a river with more than 24 gauges is sampled evenly along its
 length (the foot says `N of M gauges sampled`). Every row is a click target
 into that station.
 
+### Net view
+
+Mirrored rivers — the LANUK ones — carry a third chip: `net`, or
+`?river=SIEG&view=net`. Where the profile shows the gauges on the named water,
+the net view draws the whole **basin** as the network it is: every gauge a
+node, every edge the downstream neighbour the mirror itself delivers, drawn as
+an elbow so a confluence reads as a confluence. Node size is the gauge's
+catchment area on a three-step ladder; a gauge whose area the file does not
+carry is drawn at the smallest size with a dashed outline — a different kind
+of node, not a smaller one. Where the mirror names no downstream neighbour at
+all, the gauge is listed under the drawing instead of guessed into it: nothing
+here reconstructs a river tree.
+
+Gauges that publish official alert stages carry them as the mark itself — a
+disc whose sector counts the thresholds reached, MS0 through MS3, every rung
+named in the key. Distances print bare where the file delivers them for that
+gauge and with a `≈` where this drawing had to sum them across a confluence;
+only the bare ones are river kilometres anybody surveyed.
+
+```
+?river=SIEG&view=net
+?river=ERFT&view=net
+```
+
 ## Where the data comes from
 
 Three gauge sources, one weather feed, and no forecast — each named on the
@@ -377,8 +401,11 @@ plate that uses it.
   into two GitHub-only branches: `nrw` (the daily level, mounted under
   `/nrw/`) and `nrw-hires` (the fine resolution, kept but never deployed).
   These stations have no live feed — their plate says *no live feed* and names
-  the export time instead of refreshing. `?station=MENDEN_1`, `?river=SIEG`,
-  `?river=ERFT`.
+  the export time instead of refreshing. The official alert stages ride along:
+  the station plate names the stage the gauge stands at, and where a stage
+  falls inside the drawn history window it takes the place of the MNW/MW/MHW
+  reference lines rather than joining them. `?station=MENDEN_1`,
+  `?river=SIEG`, `?river=ERFT`, `?river=SIEG&view=net`.
 - **Weather** — the scene mirrors the current conditions at the gauge
   (rain, snow, cloud cover, wind) from [open-meteo](https://open-meteo.com),
   refreshed every 15 minutes. It dresses the drawing; it is not a forecast,
