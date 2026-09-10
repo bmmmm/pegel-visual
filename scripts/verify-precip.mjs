@@ -67,6 +67,20 @@ const lag = await (async () => {
     return null;
   }
 })();
+// One gauge's rain-field product, read straight from the tree under test. The
+// member list on the plate is checked against THIS, never against a set of
+// names this script also knows — a fixture like that goes stale the day the
+// rule reshuffles a set and stays green while the plate lists the wrong gauges.
+const precipMetaOf = async no => (BASE_URL
+  ? await (await fetch(`${BASE_URL}nrw/precip/${no}/meta.json`)).json()
+  : JSON.parse(readFileSync(join(ROOT, 'nrw', 'precip', no, 'meta.json'), 'utf8')));
+// the plate's own reading order, restated here so the check compares the drawn
+// list against the RULE rather than against the first row it happens to find
+const VIA_RANK = { basin: 0, orphan: 0, local: 1, knn: 2 };
+const setInOrder = set => [...set].sort((a, b) =>
+  (VIA_RANK[a.via] ?? 0) - (VIA_RANK[b.via] ?? 0) ||
+  (a.km ?? Infinity) - (b.km ?? Infinity) || String(a.no).localeCompare(String(b.no)));
+
 const classHours = ([lo, hi]) => (hi == null ? `${lo}+ h` : `${lo}–${hi} h`);
 let lagSkipped = 0;
 // Which branch of the class check runs is decided by the weather — today three
@@ -216,6 +230,33 @@ const MEASURE = `(() => {
     dim: [...precipSection.querySelectorAll('.p-dim')].map(e => e.textContent),
     text: precipSection.innerText,
   } : null;
+  // THE MEMBER LIST, anchored at the precipitation section's own <ol>. Read
+  // through the DOM, not off innerText: the rows are what has to be counted,
+  // and the whole page carries three other .pf-list lists.
+  out.precipSet = null;
+  if (precipSection) {
+    const ol = precipSection.querySelector('ol.precip-set');
+    // the control, or — for a set that fits on the plate and has nothing to
+    // toggle — the plain readout that stands in its place
+    const chip = precipSection.querySelector('[data-nav="cmd:rset"]')
+      || precipSection.querySelector('.p-tabs-val');
+    if (ol) {
+      const rows = [...ol.querySelectorAll('li')];
+      const cell = (li, sel) => { const e = li.querySelector(sel); return e ? e.textContent.trim() : null; };
+      out.precipSet = {
+        rows: rows.length,
+        vmRows: precipViewModel().set.length,
+        chip: chip ? chip.textContent.trim() : null,
+        chipIsButton: !!chip && chip.tagName === 'BUTTON',
+        names: rows.map(li => cell(li, '.name')),
+        kms: rows.map(li => cell(li, '.km')),
+        vias: rows.map(li => cell(li, '.via')),
+        atNavs: rows.map(li => { const a = li.querySelector('.at a'); return a ? a.getAttribute('data-nav') : null; }),
+        // nothing in a row may be markup the product wrote
+        rawTags: rows.filter(li => /<[a-z]/i.test(cell(li, '.name') || '')).length,
+      };
+    }
+  }
   return out;
 })()`;
 
@@ -270,6 +311,62 @@ async function run(cdp, base, vp) {
           check(p.barHeights.length === 0 || p.barHeights[p.barHeights.length - 1] > 4, `${pg.name}: the tallest bar is visible`, `max ${p.barHeights.at(-1)} px of ${p.chartH}`);
           check(p.levelRuns > 0, `${pg.name}: the level line is drawn`, String(p.levelRuns));
         }
+        // ---- the member list: WHICH rain gauges the field is made of ----
+        // Against the product's own meta.json, on a plate wide enough to draw
+        // the whole set. On the phone pass the list is CUT on purpose, and the
+        // chip has to say by how much — a row count of 12 is the pass there.
+        const set = await precipMetaOf(pg.no).catch(() => null);
+        const ms = m.precipSet;
+        // `detail` is printed whether the check passes or fails, so it carries
+        // the MEASUREMENT — a detail phrased as a failure reads as a broken run
+        // when green (the same trap the lag-branch check names below).
+        check(!!set && !!ms, `${pg.name}: the member list is on the plate`,
+          `meta.json ${set ? 'read' : 'MISSING'}, <ol class="precip-set"> ${ms ? 'drawn' : 'ABSENT'}`);
+        if (set && ms) {
+          const ordered = setInOrder(set.set || []);
+          check(ms.vmRows === ordered.length, `${pg.name}: the view model carries every member`, `${ms.vmRows} vs ${ordered.length}`);
+          const cut = ordered.length > 12 && vp.mobile;
+          const want = cut ? 12 : ordered.length;
+          check(ms.rows === want, `${pg.name}: ${want} rows drawn of ${ordered.length}`, `${ms.rows} drawn`);
+          check(ms.chip === (cut ? `first 12 of ${ordered.length}` : `all ${ordered.length}`),
+            `${pg.name}: the chip states what is on the plate`, String(ms.chip));
+          // A set longer than the cut gets a real control (URL-less, so a
+          // button); one that fits gets a readout, because a chip that cannot
+          // change what is under it is a control the reader learns to distrust.
+          check(ms.chipIsButton === (ordered.length > 12),
+            `${pg.name}: ${ordered.length > 12 ? 'a real button' : 'a plain readout, nothing to toggle'}`,
+            `${ms.chip} (${ms.chipIsButton ? 'button' : 'readout'})`);
+          // the first row is the rule's own first: the route that IS a
+          // measurement, nearest inside it
+          check(ms.names[0] === ordered[0].name, `${pg.name}: the first row is the set's own first`, `${ms.names[0]} vs ${ordered[0].name}`);
+          check(ms.kms[0] === `km ${ordered[0].km}`, `${pg.name}: with its own distance`, `${ms.kms[0]} vs km ${ordered[0].km}`);
+          // …and on this product that first row also carries the SMALLEST
+          // distance in the set (measured on all five station fixtures
+          // 2026-09-10): a basin member sits closer than any 15 km neighbour.
+          // It is implied by the order, not asserted instead of it — if the two
+          // ever part, the check above still pins the rule and this one says so.
+          const minKm = Math.min(...(set.set || []).map(s => s.km));
+          check(ms.kms[0] === `km ${minKm}`, `${pg.name}: which is the smallest km in the product`, `${ms.kms[0]} vs km ${minKm}`);
+          check(ms.rawTags === 0, `${pg.name}: no member name reached the page as markup`, String(ms.rawTags));
+          const wantNavs = ordered.slice(0, ms.rows).map(s => `lanuk-${s.at}`);
+          check(JSON.stringify(ms.atNavs) === JSON.stringify(wantNavs),
+            `${pg.name}: every row links to the gauge its rain is routed to`,
+            `${ms.atNavs.slice(0, 3).join(',')} vs ${wantNavs.slice(0, 3).join(',')}`);
+        }
+        // …and the link is one this app can actually reach. Clicked for real,
+        // once per viewport, on the page that has the biggest set: an href that
+        // resolves to a station nobody has is a dead link a DOM check cannot see.
+        if (pg.name === 'menden' && ms && ms.atNavs[0]) {
+          const before = await s.evaluate('station');
+          await s.evaluate('document.querySelector(\'#screen ol.precip-set li .at a\').click()');
+          await sleep(1200);
+          await s.evaluate('renderNow()');
+          const after = await s.evaluate('JSON.stringify({ station, mode, id: stationId(), err: !!state.error })');
+          const a = JSON.parse(after);
+          check(a.mode === 'station' && !a.err && a.station !== before && a.id === ms.atNavs[0],
+            `${pg.name}: clicking a member's gauge lands on that gauge`, `${before} -> ${JSON.stringify(a)}`);
+        }
+
         const r = m.response;
         check(!!r && r.bars === 8, `${pg.name}: eight response bars, lag 0 through 7`, r ? String(r.bars) : 'no chart');
         check(!!r && r.peak === 1, `${pg.name}: exactly one peak marker`, r ? String(r.peak) : '-');

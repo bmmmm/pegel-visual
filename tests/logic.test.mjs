@@ -4294,9 +4294,10 @@ const NRW_PRECIP_META = {
   schema: 1, id: '2729100000100', name: 'Menden_1', water: 'Sieg', basin: '272', km2: 2825,
   unit: 'mm/d', method: 'unweighted mean over the reporting rain gauges of the upstream closure',
   dayBoundary: '07:00+01:00', levelDayBoundary: '00:00+01:00',
-  // markup in the two fields that DO reach the plate: `align` is printed in the
-  // key verbatim, and the reviewer's red-proof showed `set[].name` never does —
-  // it is read for its length alone, so a hostile name there proves nothing
+  // markup in the two fields that reach the plate: `align` is printed in the key
+  // verbatim, and `set[].name` is printed once per member since the member list
+  // landed (2026-09-10). Until then the set was read for its LENGTH alone and
+  // this name proved nothing — the row it feeds is now the anchor of its own test
   align: 'rain day d = [d 07:00, d+1 07:00) MEZ<img src=x onerror=1>; overlaps level day d 17 h, d+1 7 h',
   minCoveragePct: 50, maxMmPerDay: 400, nRain: 5, nUpstream: 3,
   upstream: ['2721390000100', '2729100000100'],
@@ -5186,8 +5187,8 @@ test('Meldestufen: a hostile gauge name never reaches markup unescaped on either
 
 // ---------- PRECIPITATION and RESPONSE: the rain field on the station plate ----------
 
-const precipApp = async (search = '?station=MENDEN_1') => {
-  const app = nrwApp({ search });
+const precipApp = async (search = '?station=MENDEN_1', opts = {}) => {
+  const app = nrwApp({ search, ...opts });
   await app.run('lanukIndex()');
   await app.run('loadData()');
   return app;
@@ -5459,10 +5460,184 @@ test('PRECIPITATION: a WSV station shows nothing and asks the mirror for nothing
   assert.deepEqual(nrwUrls(app).filter(u => u.includes('/precip/')), [], 'BONN asks the mirror for nothing');
 });
 
+// ---------- the member list: WHICH rain gauges the field is made of ----------
+
+// The <li> of the member list that carries a given distance — never the whole
+// page and never the whole plate. A bare includes() would match the key's own
+// breakdown line three rows up and prove nothing about the row it is about.
+const setRows = html => {
+  const a = html.indexOf('<ol class="pf-list precip-set">');
+  assert.ok(a > 0, 'the precipitation plate carries a member list at all');
+  const ol = html.slice(a, html.indexOf('</ol>', a));
+  return [...ol.matchAll(/<li>[\s\S]*?<\/li>/g)].map(m => m[0]);
+};
+const setRowAtKm = (html, km) => {
+  const rows = setRows(html);
+  const row = rows.find(r => r.includes(`km ${km}<`));
+  assert.ok(row, `no member row at km ${km} — ${rows.length} rows drawn`);
+  return row;
+};
+// a 32-member set the way the real product writes one: MENDEN_1 carries exactly
+// 32 on the mirror, which is what makes "first 12 of 32" the real phone case
+const SET_32 = JSON.stringify(Array.from({ length: 32 }, (_, i) => ({
+  no: `m${i}`, name: `Rain_${i}`, km: 1 + i * 0.5,
+  via: i < 20 ? 'basin' : 'local', at: '2729100000100',
+})));
+
+test('PRECIPITATION: the member list names every gauge in the set, measurement before fallback', async () => {
+  const app = await precipApp();
+  const rows = app.run(`(() => {
+    state.precip.meta.set = [
+      { no: 'k1', name: 'Far', km: 29.05, via: 'knn', at: '2729100000100' },
+      { no: 'l1', name: 'Near', km: 12.1, via: 'local', at: '2729100000100' },
+      { no: 'b2', name: 'Up', km: 8.4, via: 'basin', at: '2729100000100' },
+      { no: 'b1', name: 'Mouth', km: 0.5, via: 'orphan', at: '2729100000100' },
+      { no: 'l2', name: 'Beside', km: 3.2, via: 'local', at: '2729100000100' },
+    ];
+    return precipViewModel().set;
+  })()`);
+  assert.equal(rows.length, 5, 'one row per member of the set, none dropped');
+  // basin and orphan are one route to a reader; inside a route, the nearest first
+  assert.deepEqual(rows.map(r => r.no), ['b1', 'b2', 'l2', 'l1', 'k1'],
+    'via-rank first, then distance — a fallback never opens the list');
+  assert.deepEqual(rows.map(r => r.word),
+    ['draining here', 'draining here', 'within 15 km', 'within 15 km', 'standing in']);
+});
+
+test('PRECIPITATION: the key’s breakdown and the member rows read from ONE word table', async () => {
+  // Two copies of this vocabulary is how a key ends up promising a route the
+  // list below it contradicts. Move the table and BOTH have to move with it.
+  const app = await precipApp();
+  const html = app.run(`(() => {
+    historyKey = '30d';
+    state.precip.meta.set = [
+      { no: 'a', name: 'A', km: 17.75, via: 'knn', at: '2729100000100' },
+      { no: 'b', name: 'B', km: 29.05, via: 'knn', at: '2729100000100' },
+      { no: 'c', name: 'C', km: 12.1, via: 'knn', at: '2729100000100' },
+    ];
+    state.precip.n = 3;
+    return renderPrecip(precipViewModel());
+  })()`);
+  assert.match(html, /3 gauges \(0 draining here, 0 within 15 km, 3 standing in\)/, 'the key says the route');
+  const rows = setRows(html);
+  assert.equal(rows.length, 3);
+  for (const r of rows) assert.match(r, /<span class="via">standing in<\/span>/, 'and every row says the same one');
+  const words = app.run('[VIA_WORD.basin, VIA_WORD.orphan, VIA_WORD.local, VIA_WORD.knn]');
+  assert.deepEqual(words, ['draining here', 'draining here', 'within 15 km', 'standing in'],
+    'one table, and both readers above are quoting it');
+});
+
 test('PRECIPITATION: a hostile station name in the rain set never reaches the markup raw', async () => {
   const app = await precipApp();
   const html = app.run(`(() => { historyKey = '30d'; return renderPrecip(precipViewModel()); })()`);
   assert.ok(!html.includes('<script>'), 'the set carries Hennef<script> — it must arrive escaped or not at all');
+  // …anchored at the row it is about: the fixture's one member sits at km 3.13,
+  // and it is the NAME in that row that has to be escaped, not something else
+  // on a 30 kB page that happens to have no <script> in it
+  const row = setRowAtKm(html, '3.13');
+  assert.match(row, /<span class="name">Hennef&lt;script&gt;<\/span>/, 'the name arrives escaped');
+  assert.ok(!row.includes('Hennef<script>'), 'and never raw');
+});
+
+test('PRECIPITATION: every member row links to the gauge its rain is routed to', async () => {
+  const app = await precipApp();
+  const html = app.run(`(() => { historyKey = '30d'; return renderPrecip(precipViewModel()); })()`);
+  const row = setRowAtKm(html, '3.13');
+  assert.match(row, /drains to <a href="\?station=lanuk-2729100000100" data-nav="lanuk-2729100000100">MENDEN_1<\/a>/,
+    'the mirror id is the target, never the display name — LANUK names collide with WSV’s');
+  // …and the target is one this app can actually reach. Until 2026-09-10 every
+  // such link resolved to the literal "LANUK-2729100000100", a station nobody
+  // has, and landed on the did-you-mean screen.
+  app.run(`station = 'BONN'; navTo('lanuk-2729100000100')`);
+  assert.equal(app.run('station'), 'MENDEN_1', 'clicking it lands on the gauge');
+  assert.equal(app.run('stationId()'), 'lanuk-2729100000100', 'with the id its loader fetches by');
+});
+
+test('PRECIPITATION: a mirror without `at` gets an em dash, never a link that goes nowhere', async () => {
+  const app = await precipApp();
+  const html = app.run(`(() => {
+    historyKey = '30d';
+    state.precip.meta.set = [
+      { no: 'old', name: 'Written before the field existed', km: 4.2, via: 'basin' },
+      { no: 'gone', name: 'Routed to a gauge this app cannot name', km: 5.5, via: 'basin', at: '9999999' },
+    ];
+    return renderPrecip(precipViewModel());
+  })()`);
+  const noAt = setRowAtKm(html, '4.2');
+  assert.match(noAt, /<span class="at nolink">—<\/span>/, 'no `at`, no claim about one');
+  assert.ok(!noAt.includes('<a '), 'and no link');
+  const unknown = setRowAtKm(html, '5.5');
+  assert.match(unknown, /<span class="nolink">9999999<\/span>/, 'an id the index cannot name stays a number');
+  assert.ok(!unknown.includes('<a '), 'and stays plain text rather than becoming a dead link');
+});
+
+test('PRECIPITATION: on a phone the list is cut to 12 rows and the chip says so', async () => {
+  const narrow = await precipApp('?station=MENDEN_1', { width: 380 });
+  const html = k => narrow.run(`(() => {
+    historyKey = '30d';
+    state.precip.meta.set = ${SET_32}; state.precip.n = 32;
+    return renderPrecip(precipViewModel());
+  })()`);
+  const cut = html();
+  assert.equal(setRows(cut).length, 12, 'twelve rows, not thirty-two — there is no <details> on a plate');
+  assert.match(cut, /<button type="button" data-nav="cmd:rset"[^>]*>first 12 of 32<\/button>/,
+    'and the chip states what is on the plate, counting the rows it is NOT showing');
+
+  // the chip is a real control, not a label: it opens the list and closes it again
+  narrow.run(`runGridCmd('rset')`);
+  const open = html();
+  assert.equal(setRows(open).length, 32, 'opened, every member is on the plate');
+  assert.match(open, /data-nav="cmd:rset"[^>]*>all 32<\/button>/, 'and the chip says so');
+  narrow.run(`runGridCmd('rset')`);
+  assert.equal(setRows(html()).length, 12, 'and it closes again');
+
+  // on a desktop plate the default is the other way round: nothing is hidden
+  const wide = await precipApp('?station=MENDEN_1', { width: 1200 });
+  const wideHtml = wide.run(`(() => {
+    historyKey = '30d';
+    state.precip.meta.set = ${SET_32}; state.precip.n = 32;
+    return renderPrecip(precipViewModel());
+  })()`);
+  assert.equal(setRows(wideHtml).length, 32, 'a wide plate has room for all of them');
+  assert.match(wideHtml, /data-nav="cmd:rset"[^>]*>all 32<\/button>/);
+});
+
+test('a shared link that carries the mirror id lands on the gauge, not on did-you-mean', async () => {
+  // Every in-plate link to a mirrored gauge emits `?station=lanuk-<no>`, so the
+  // URL it produces has to come back COLD as the same view. Before 2026-09-10 it
+  // did not: resolveStation uppercased the id into "LANUK-2729100000100", the
+  // live API 404ed on it, and the index could not name it either.
+  const app = nrwApp({ search: '?station=lanuk-2729100000100' });
+  assert.equal(app.run('station'), 'LANUK-2729100000100', 'nothing can resolve it before the index is in');
+  await app.run('loadData()');
+  assert.equal(app.run('station'), 'MENDEN_1', 'the index names it and the address bar follows');
+  assert.equal(app.run('stationId()'), 'lanuk-2729100000100', 'with the id its loader fetches by');
+  assert.equal(app.run('state.error'), null, 'and no error plate on the way');
+});
+
+test('PRECIPITATION: a set that fits gets a readout, not a chip that changes nothing', async () => {
+  // The fixture set is one member — there is nothing to cut, on any width. A
+  // control that cannot change what is under it is a control the reader learns
+  // to distrust, so it is ctlRow's plain readout instead.
+  const narrow = await precipApp('?station=MENDEN_1', { width: 380 });
+  const html = narrow.run(`(() => { historyKey = '30d'; return renderPrecip(precipViewModel()); })()`);
+  assert.equal(setRows(html).length, 1, 'the one member is on the plate');
+  assert.match(html, /<span class="p-tabs-val">all 1<\/span>/, 'the count is stated…');
+  assert.ok(!html.includes('data-nav="cmd:rset"'), '…and no chip pretends it could hide it');
+});
+
+test('PRECIPITATION: the member list is a mark of the plate, and the key names its order', async () => {
+  const app = await precipApp();
+  const html = app.run(`(() => { historyKey = '30d'; return renderPrecip(precipViewModel()); })()`);
+  const key = html.slice(html.indexOf('<dl class="p-key">'));
+  assert.match(key, /listed by how each one got in — draining here first, then within 15 km, then standing in — and by distance inside each group/,
+    'the one thing about the list a reader cannot see by looking at it');
+  // …and a plate with no set at all draws no list and promises no order
+  const none = app.run(`(() => {
+    historyKey = '30d'; state.precip.meta.set = []; return renderPrecip(precipViewModel());
+  })()`);
+  assert.ok(!none.includes('precip-set'), 'no members, no list');
+  assert.ok(!none.includes('listed by how each one got in'), 'and no legend entry for one');
 });
 
 test('RESPONSE: the peak is marked, and the sentence names the other estimator', async () => {
