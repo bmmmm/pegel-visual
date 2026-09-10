@@ -52,7 +52,7 @@ the exception. Zero requires no attribution; we attribute anyway.
 | **No registry is a superset of another** | 11 rain gauges exist only in `nieder_stationen.txt`, 6 only in `stations.json`. The truth is the **union**, keyed on `station_no`. |
 | **`LANUV_Info_1/2/3` in `stations.json` ARE the alert stages** (Menden_1: 250/410/440, identical to `alarmlevel.json`) | The 310 per-station `alarmlevel.json` calls are redundant and are not made. |
 | **`catchment_name` can be `"---"`** — three stations: Betzdorf and Heimborn (upper Sieg, RLP) and WSV_Andernach (`27100400`) | Selection must be a **union** of basin name and GKZ prefix, or Betzdorf, the uppermost Sieg gauge, is lost. |
-| **The source delivers daily mean and daily max, no minimum** — but the 15-minute series yields it: own aggregation reproduces `mean` to **0.003 cm** and `max` **exactly** | `min` is **computed**, not invented, from pipeline day 1 for every day; seeded history carries `min: null`. The same computation proves the MEZ day boundary. |
+| **The source delivers daily mean and daily max, no minimum** — but the 15-minute series yields it: own aggregation reproduces `mean` to **0.003 cm** and `max` **exactly** | `min` is **computed**, not invented, for every day the fine series COVERS (see the sample floor below); seeded history and partial days carry `min: null`. The same computation proves the MEZ day boundary. |
 | **A fourth bulk product**: `temperaturdaten.zip` (1.46 MB, 108 water-temperature stations) | Rolls the same way, same license, mirrored too. Its `temp_stationen.txt` has **64 columns** vs 16/13 — the best metadata row of the source. |
 
 **Stock:** 617 stations — 310 `Oberflächengewässer`, 308 `Klimastation` in
@@ -75,6 +75,43 @@ undeclared); 2-field block terminators; empty value OR `acc === 0` is a
 non-measurement, not 0 cm; negative stages are real (−97.55 … 679.50 cm);
 `.` decimals in data, `,` in metadata (`"2825,00 km²"`); ZIPs carry neither
 `etag` nor `last-modified` but `max-age=2592000` — cache-busting is mandatory.
+
+**A day that SPANS the window is not a day that COVERS it (2026-09-10).**
+`condenseHires` marked a day `full` — and therefore let its `min` ship — when
+the first sample sat within one `step` of the day boundary and the last within
+one `step` of the next. A hole in the MIDDLE is invisible to that test, which
+sees only the two outer samples. Measured over the whole hires window: **4 of
+17 688 gauge-days** span their day on under 90 % of its samples (2768898001
+07-15 at 249/260, 2782330000100 08-05 at 84/87, 2824450000100 07-28 at 83/87,
+4568900000100 08-27 at 255/260). `full` now demands
+`FULL_DAY_SAMPLE_SHARE = 0.9` of the samples the step implies, as well as the
+span; `n` is written either way, honestly partial. Three things to carry:
+**no gate ever caught this** — N5 sweeps `min > mean` and `min > max`, and a
+dropout pushes the min DOWN, so N5 is green over all 17 173 stored minima
+today; the repair is **forward-only**, because `mergeDaily` never lets a fresh
+null overwrite a stored value, so those four days keep their minima
+(2824450000100 day 208: `min -14.2` against `mean 17.52`) until the branch is
+reseeded; and the constant is pinned from BOTH sides by two tests, to
+**(0.8333, 0.9166]** — widening re-admits two-hour holes, narrowing throws
+away days the source may legitimately deliver.
+
+**The wave's right edge, and why the manifest alone does not give it.** A
+mirrored river has no live feed, so hanging the station × day grid on the clock
+paints the export lag as empty columns: `waveRightEdge()` reads
+`window.gauges.to` (falling back to `sourceExportAt`), capped by the clock, and
+takes the DAY LABEL (`String(x).slice(0, 10)`) — a gauge day is stamped
+`T00:00+01:00`, whose UTC instant falls in the day before the one it names.
+That is still one day too far: measured 2026-09-10, `window.gauges.to` is
+09-10 while the newest daily MEAN is 09-09, because the export's own partial
+last day carries a maximum and no mean at all (the same asymmetry
+`check-nrw-consistency` already tolerates in N5). So `cropWaveTail()` trims
+trailing days fewer than half the rows cover — **capped at one day**
+(`WAVE_MIRROR_TAIL_MAX`), and the cap is the whole point: uncapped, a mirrored
+river whose gauges fall silent for a month keeps a fresh `window.gauges.to`
+and the crop would walk back thirty columns and draw a healthy-looking plate.
+Anything emptier than the export's own partial day is a gap in the mirror and
+stays visible as no-data columns. A LIVE river is never cropped at all — there
+an empty newest column means the feed is down, which is worth seeing.
 
 ## Topology — the assignment rule (stage 1 implements it, stage 3 must not overturn it)
 
