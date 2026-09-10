@@ -5558,6 +5558,21 @@ function foldYearsIntoWindow(years, vals, day0) {
   }
 }
 
+// The right edge of the grid. A live-fed river reaches today; a MIRRORED river
+// has no live feed at all (LANUK is a daily export, ~24 h old), so its newest
+// day is the mirror's own edge — hanging the grid on the clock there paints the
+// export lag as empty columns nobody can fill.
+function waveRightEdge() {
+  const clock = epochDay(Date.now());
+  if (!(state.feed && !state.feed.live)) return clock;
+  const w = (lanukManifestInfo && lanukManifestInfo.window) || null;
+  const edge = (w && w.gauges && w.gauges.to) || (lanukManifestInfo && lanukManifestInfo.sourceExportAt) || null;
+  // the day LABEL, not the instant: a gauge day is stamped T00:00+01:00, whose
+  // UTC instant falls into the day BEFORE the one it names
+  const t = edge ? Date.parse(String(edge).slice(0, 10)) : NaN;
+  return Number.isFinite(t) ? Math.min(clock, epochDay(t)) : clock;
+}
+
 async function loadWave() {
   const forRiver = state.river;
   const prepared = state.riverStations;
@@ -5585,7 +5600,7 @@ async function loadWave() {
     // cap the rows by sampling evenly along the river, so both ends survive
     const picks = cands.length <= WAVE_MAX_ROWS ? cands
       : Array.from({ length: WAVE_MAX_ROWS }, (_, i) => cands[Math.round(i * (cands.length - 1) / (WAVE_MAX_ROWS - 1))]);
-    const today = epochDay(Date.now());
+    const today = waveRightEdge();
     const day0 = today - (WAVE_FETCH_DAYS - 1);
     const rows = [];
     // the hosted archive gives the long tail (refreshed weekly), the live API

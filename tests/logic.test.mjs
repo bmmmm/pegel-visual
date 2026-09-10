@@ -4224,6 +4224,9 @@ const NRW_NOW = Date.UTC(2026, 8, 4, 12);
 const NRW_MANIFEST = {
   schema: 1, generated: '2026-09-03T17:41:00Z', sourceExportAt: '2026-09-03T14:11:00Z',
   license: 'dl-de/zero-2.0', window: { from: '2024-09-04', to: '2026-09-02',
+    // the collector's own per-product spans: the wave hangs its right edge on
+    // `gauges.to`, the areal plate on `rain`'s — never on the clock
+    gauges: { from: '2024-09-04T00:00:00.000+01:00', to: '2026-09-02T00:00:00.000+01:00' },
     // the areal plate reads THIS window's right edge, not the clock
     rain: { from: '2024-09-04T07:00:00.000+01:00', to: '2026-09-02T07:00:00.000+01:00' } },
   // which gauges have a baked areal-rain product, and why the others do not
@@ -4740,6 +4743,28 @@ test('?river=ERFT: the LANUK river plate lists every gauge in flow order, mouth 
   assert.ok(present.length >= 40, 'the window is filled from the shards');
   assert.ok(Math.abs(present[present.length - 1] - 64.4) < 1e-9, 'the newest cell is the daily MEAN of Sep 2, not a min/max mid');
   assert.equal(app.run('waveViewModel(waveData)').source, 'LANUK NRW daily archive · no live feed');
+});
+
+test('a mirrored wave ends at the mirror\'s own edge, not at the clock', async () => {
+  // the export is ~24 h old and the workflow runs daily, so the clock leaves
+  // days on the right that no mirrored gauge can ever fill
+  const later = Date.UTC(2026, 8, 8, 12); // six days past the newest mirrored gauge day
+  const app = nrwApp({ search: '?river=ERFT', now: later });
+  app.run(`lanukWaters.clear(); wsvWaters.clear(); wsvWaters.add('RHEIN')`);
+  await app.run('lanukIndex()');
+  await app.run('loadRiver()');
+  app.run(`viewMode = 'wave'; waveData = null`);
+  await app.run('loadWave()');
+  const vm = app.run('waveViewModel(waveData)');
+  assert.equal(vm.to, '2026-09-02', "the right edge is the mirror window's own newest gauge day");
+  for (const r of vm.rows) {
+    const last = r.cells[r.cells.length - 1];
+    assert.ok(last.v != null, `${r.name}: the newest column carries a reading, not the export lag`);
+  }
+  // and a live feed still reaches today, with the same mirror index loaded
+  assert.equal(app.run(`(() => { const f = state.feed; state.feed = { name: 'WSV', live: true }; ` +
+    `const d = waveRightEdge(); state.feed = f; return d; })()`),
+    Math.floor(later / 864e5), 'a live-fed river keeps the clock as its right edge');
 });
 
 test('?river=SIEG on a cold cache: the live API is asked first, the mirror is the fallback', async () => {
