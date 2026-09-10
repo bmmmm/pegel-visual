@@ -5053,8 +5053,14 @@ function renderTemp(t) {
   const W = 320, H = 70;
   const n = t.cols.length;
   const cw = W / Math.max(1, n);
-  const span = Math.max(t.hi - t.lo, 1);
-  const Y = v => 2 + (1 - (v - t.lo) / span) * (H - 4);
+  // A FLAT row would sit on the floor of the field, where a reader takes the
+  // position for a value — measured at Arloff, whose impaired sensor writes a
+  // real 0 °C for its last four days (the source publishes it, so it is drawn;
+  // the operator's note below says what it is worth). Pad the scale on both
+  // sides, so a series with no spread is centred and every band has headroom.
+  const pad = Math.max((t.hi - t.lo) * 0.08, 0.25);
+  const y0 = t.lo - pad, span = (t.hi + pad) - y0;
+  const Y = v => 2 + (1 - (v - y0) / span) * (H - 4);
   const X = i => i * cw + cw / 2;
   const parts = [];
   // a run is a stretch of columns that all carry a mean: the band and the line

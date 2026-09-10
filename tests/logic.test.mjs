@@ -5627,6 +5627,29 @@ test('WATER TEMPERATURE: the drawing has no axis, so the key prints the range it
   app.run(`historyKey = '30d'`);
 });
 
+test('WATER TEMPERATURE: a flat row is drawn in the field, not pinned to its floor', async () => {
+  // Measured on the mirror 2026-09-10: Arloff's impaired sensor writes a real
+  // 0 °C for its last four days. The source publishes it, so it is drawn — but
+  // a row with no spread at all must not land on the edge of the field, where
+  // the position reads as a value.
+  const app = await precipApp();
+  const html = app.run(`(() => {
+    historyKey = '30d';
+    const s = state.temp.years[2026];
+    for (let d = 0; d < s.mean.length; d++) if (s.mean[d] != null) { s.mean[d] = 0; s.max[d] = 0; }
+    return renderTemp(tempViewModel());
+  })()`);
+  const vm = app.run('tempViewModel()');
+  assert.equal(vm.lo, 0);
+  assert.equal(vm.hi, 0, 'the whole drawn row is one value');
+  const line = /<polyline class="wt-mean" points="([^"]+)"/.exec(tempChart(html));
+  assert.ok(line, 'the mean line is still drawn');
+  const ys = line[1].split(' ').map(p => Number(p.split(',')[1]));
+  assert.deepEqual([...new Set(ys)].length, 1, 'flat, as the data is');
+  assert.ok(ys[0] > 20 && ys[0] < 50, `and inside the 70-unit field rather than on its edge: y=${ys[0]}`);
+  assert.match(tempSection(html), /the drawn row runs 0\.0 … 0\.0 °C/, 'the key says what the flat row is');
+});
+
 test('WATER TEMPERATURE: a gap breaks band and line together, and both marks are named', async () => {
   const app = await precipApp();
   const html = app.run(`(() => { historyKey = '30d'; return renderTemp(tempViewModel()); })()`);
