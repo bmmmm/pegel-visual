@@ -6163,3 +6163,146 @@ test('net: a WSV river never draws the mirror’s basin under its own name', () 
   assert.ok(!out.html.includes('chart net'), 'and no network is drawn');
   assert.ok(!out.html.includes('cmd:net'), 'nor is the chip offered');
 });
+
+// ---------- the seam: stage 10's alert mark on stage 11's network ----------
+
+// The same fixture with loadNet's SECOND pass attached: id -> the mirror's
+// newest daily value and the operator's own ladder. Written out here rather
+// than fetched, so the tests below are about the drawing and not about the
+// loader — `net: loadNet gives the drawing real readings` covers that seam.
+const NET_LADDER = [250, 410, 440];
+const NET_READINGS = {
+  '2747900000200': { value: 500, stages: NET_LADDER },  // Neubrueck, past the top rung
+  '2747390000100': { value: 300, stages: NET_LADDER },  // Glesch, the first rung reached
+  '2743000000100': { value: 100, stages: NET_LADDER },  // Bliesheim, none of them
+  '2741500000100': { value: 200, stages: null },        // Arloff: a reading, no ladder
+  '2742510000100': { value: null, stages: NET_LADDER }, // Morenhoven: a ladder, no reading
+};
+const netReadApp = (river, readings, readingsAt) => {
+  const app = loadApp({ search: `?river=${river}&view=net` });
+  app.run(`netData = { river: '${river}', topo: ${NET_TOPO}, readings: ${JSON.stringify(readings)}` +
+    (readingsAt ? `, readingsAt: '${readingsAt}'` : '') + ' }');
+  return app;
+};
+
+test('net: a stage mark lands on exactly the gauges with a reading AND a ladder', () => {
+  const app = netReadApp('ERFT', NET_READINGS);
+  const vm = app.run('netViewModel(netData)');
+  const at = n => vm.nodes.find(x => x.name === n);
+  assert.equal(at('Neubrueck').stage, 3, 'the highest published rung is reached');
+  assert.equal(at('Glesch').stage, 1);
+  assert.equal(at('Bliesheim').stage, 0, 'a reading below every rung IS a reading: MS0');
+  assert.equal(at('Arloff').stage, null, 'a reading without a ladder cannot claim MS0');
+  assert.equal(at('Morenhoven').stage, null, 'and a ladder without a reading cannot either');
+  assert.equal(vm.hasStages, true);
+  const draw = svgAt(app.run('renderNet(netViewModel(netData))'));
+  assert.equal([...draw.matchAll(/<g class="ms-dot k-ms\d"/g)].length, 3,
+    'three discs on the drawing — one per gauge that can really say a stage');
+  assert.equal([...draw.matchAll(/<circle class="net-dot/g)].length, vm.nodes.length - 3,
+    'and every other node keeps the plain circle');
+  assert.equal([...draw.matchAll(/<rect class="hit"/g)].length, vm.nodes.length,
+    'the swap costs no node its touch target');
+});
+
+test('net: a stage disc is drawn at its node, not at msMark’s default origin', () => {
+  const app = netReadApp('ERFT', NET_READINGS);
+  const vm = app.run('netViewModel(netData)');
+  const draw = svgAt(app.run('renderNet(netViewModel(netData))'));
+  // where renderNetChart really puts that node — derived, never typed twice
+  const mouth = vm.nodes.find(n => n.name === 'Neubrueck');
+  const wantX = Number((10 + mouth.x * (320 - 10 - 10)).toFixed(1));
+  // msMark reads cx/cy/r; fed x/y it silently falls back to (6, 6) and r 5, and
+  // every disc on the drawing would pile up in the top-left corner
+  const m = draw.match(/<g class="ms-dot k-ms3"><circle class="ms-bg" cx="([\d.]+)" cy="([\d.]+)" r="([\d.]+)"/);
+  assert.ok(m, 'the MS3 disc is on the drawing at all');
+  assert.equal(Number(m[1]), wantX, 'the disc sits where the chart puts its node, not at x = 6');
+  assert.ok(wantX > 200, 'and that node really is far from msMark’s default origin');
+  assert.equal(Number(m[3]), 4.2, 'and at the radius its catchment area earns, not msMark’s default 5');
+  // the ring, the ground and the sector all share that centre, or the mark is
+  // three marks at two places
+  const centres = [...draw.matchAll(/class="ms-(?:bg|ring)" cx="([\d.]+)" cy="([\d.]+)"/g)]
+    .map(x => `${x[1]},${x[2]}`);
+  assert.equal(new Set(centres).size, 3, 'three discs, each drawn at one centre of its own');
+});
+
+test('net: with stages the key names all four rungs and the plate carries the hatch defs', () => {
+  const staged = netReadApp('ERFT', NET_READINGS).run('renderNet(netViewModel(netData))');
+  for (const n of [0, 1, 2, 3]) {
+    assert.match(staged, new RegExp(`MS${n} — `), `the key names MS${n}, drawn today or not`);
+  }
+  assert.match(staged, /id="ms-cross"/, 'the hatch ramp’s defs are on the plate');
+  assert.equal([...staged.matchAll(/class="defs-only"/g)].length, 1, 'emitted once, not per mark');
+  assert.match(staged, /counts the operator’s alert thresholds/, 'and a note says what the mark counts');
+  assertNamed(svgAt(staged), keyClasses(staged), 'ERFT net with stages');
+  // without readings none of it may appear — a plate that promises a stage
+  // vocabulary it cannot draw is a plate lying about its own marks
+  const plain = netRun('ERFT', 'renderNet(netViewModel(netData))');
+  assert.ok(!/MS0 — /.test(plain), 'no readings, no stage vocabulary');
+  assert.ok(!/ms-dot/.test(plain), 'no disc anywhere on the plate');
+  assert.ok(!/defs-only/.test(plain), 'and no hatch defs to resolve');
+});
+
+test('net: an unknown catchment area survives the swap to a disc, as a dashed halo', () => {
+  // Betzdorf and Heimborn are the two Sieg gauges the file gives no km²; only
+  // one of them gets a reading here, so BOTH carriers are on the same plate
+  const app = netReadApp('SIEG', { 27200500: { value: 300, stages: NET_LADDER } });
+  const vm = app.run('netViewModel(netData)');
+  assert.equal(vm.anyNoAreaStaged, true, 'Betzdorf: no area, and now a stage');
+  assert.equal(vm.anyNoAreaPlain, true, 'Heimborn: no area and no stage');
+  const html = app.run('renderNet(netViewModel(netData))');
+  const draw = svgAt(html);
+  assert.match(draw, /<circle class="net-halo" cx="[\d.]+" cy="[\d.]+" r="3\.6"\/><g class="ms-dot/,
+    'the halo is concentric with the disc it rings, one radius further out');
+  assert.equal([...draw.matchAll(/class="net-halo"/g)].length, 1, 'and only on the node that has one');
+  assert.match(draw, /class="net-dot no-area"/, 'the gauge without a stage keeps the hollow dot');
+  // two carriers of one fact, and they look different — so the key names both
+  assert.match(html, /the dashed ring around the disc/);
+  assert.match(html, /catchment area not in the file — drawn at the smallest size/);
+  assertNamed(draw, keyClasses(html), 'SIEG net with a staged arealess node');
+});
+
+test('net: the foot names the readings’ own age only when it differs from the topology’s', () => {
+  const same = netReadApp('ERFT', NET_READINGS, '2026-09-10').run('netViewModel(netData)');
+  const later = netReadApp('ERFT', NET_READINGS, '2026-09-11').run('netViewModel(netData)');
+  assert.match(same.source, /topology 2026-09-10 · no live feed$/, 'one clock, named once');
+  assert.match(later.source, /topology 2026-09-10 · readings 2026-09-11 · no live feed$/,
+    'two clocks in one plate, both named');
+});
+
+test('net: loadNet gives the drawing real readings, and one broken gauge costs only its own stage', () => {
+  const app = loadApp({ search: '?river=ERFT&view=net' });
+  const r = app.run(`(async () => {
+    const fetched = [];
+    getJson = async url => {
+      fetched.push(url);
+      if (url === 'nrw/topology.json') return (${NET_TOPO});
+      if (url === 'archive/manifest.json') return { stations: {} };
+      const meta = url.match(/^nrw\\/gauges\\/(\\d+)\\/meta\\.json$/);
+      if (meta) {
+        if (meta[1] === '2747390000100') throw new Error('meta 500');
+        return { name: 'g', water: 'Erft', unit: 'cm', info: [250, 410, 440] };
+      }
+      const shard = url.match(/^nrw\\/gauges\\/(\\d+)\\/\\d+\\.json$/);
+      if (shard) return { max: [shard[1] === '2747900000200' ? 500 : 300] };
+      throw new Error('unexpected ' + url);
+    };
+    state.river = 'ERFT';
+    netData = null;
+    await loadNet();
+    const vm = netViewModel(netData);
+    return {
+      stages: Object.fromEntries(vm.nodes.map(n => [n.name, n.stage])),
+      metaCalls: fetched.filter(u => /meta\\.json$/.test(u)).length,
+      hasStages: vm.hasStages,
+      readingsAt: netData.readingsAt,
+    };
+  })()`);
+  return r.then(v => {
+    assert.equal(v.hasStages, true, 'the second pass really reached the drawing');
+    assert.equal(v.stages.Neubrueck, 3, '500 cm stands above the top rung');
+    assert.equal(v.stages.Bliesheim, 1, '300 cm has reached the first');
+    assert.equal(v.stages.Glesch, null, 'the gauge whose meta threw keeps the plain node');
+    assert.equal(v.metaCalls, 14, 'one meta per gauge in the BASIN — 14, not the 11 drawn');
+    assert.equal('readingsAt' in { readingsAt: v.readingsAt }, true);
+  });
+});

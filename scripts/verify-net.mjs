@@ -129,8 +129,24 @@ const MEASURE = `(() => {
     foot: (document.getElementById('source-line') || {}).textContent || null,
     hasDraw: !!draw,
     drawBox: draw ? box(draw) : null,
-    nodes: draw ? draw.querySelectorAll('circle.net-dot').length : -1,
-    noArea: draw ? draw.querySelectorAll('.net-dot.no-area').length : -1,
+    // TWO forms of node since the seam: a plain circle where the mirror gives
+    // the gauge no reading or the operator no ladder, the alert disc where it
+    // gives both. Counting only one of them would report half a network.
+    nodes: draw ? draw.querySelectorAll('circle.net-dot').length + draw.querySelectorAll('g.ms-dot').length : -1,
+    plainNodes: draw ? draw.querySelectorAll('circle.net-dot').length : -1,
+    stageNodes: draw ? draw.querySelectorAll('g.ms-dot').length : -1,
+    // every disc's own centre, in DOCUMENT coordinates: msMark fed the wrong
+    // option names draws every one of them at its default origin, and a pile of
+    // discs in the top-left corner is invisible to a count
+    stageCentres: draw ? [...draw.querySelectorAll('g.ms-dot circle.ms-ring')]
+      .map(c => { const r = c.getBoundingClientRect(); return r.x.toFixed(1) + ',' + r.y.toFixed(1); }) : [],
+    // the hatch ramp resolves through url(#ms-…), which is silent when the defs
+    // are missing: the sector then paints as nothing at all
+    msDefs: document.querySelectorAll('#screen svg.defs-only pattern[id^="ms-"]').length,
+    msKeyRows: key ? [...key.querySelectorAll('dd')].filter(d => /^MS\\d/.test(d.textContent.trim())).length : -1,
+    // area unknown has two carriers now — the hollow dot and the halo ring
+    noArea: draw ? draw.querySelectorAll('.net-dot.no-area').length + draw.querySelectorAll('circle.net-halo').length : -1,
+    halos: draw ? draw.querySelectorAll('circle.net-halo').length : -1,
     edges: draw ? draw.querySelectorAll('polyline.net-edge').length : -1,
     hits: draw ? draw.querySelectorAll('rect.hit').length : -1,
     // an elbow is three points; a diagonal is two
@@ -226,10 +242,23 @@ try {
         renderErr = String(err.message || err);
       }
       check(!renderErr, `${tag}: render() does not throw`, renderErr || '');
+      // The readings are loadNet's SECOND pass — the chart is on the page before
+      // they land, so waiting on the chart alone measures the plate one repaint
+      // too early and reports "no stage anywhere" for a seam that works. Poll
+      // through renderNow(), because scheduleRender() rides rAF.
+      if (!noBasin) {
+        for (let i = 0; i < 60; i++) {
+          await s.evaluate('typeof renderNow === "function" && renderNow()');
+          const n = await s.evaluate('document.querySelectorAll("#screen svg.chart.net g.ms-dot").length');
+          if (n > 0) break;
+          await sleep(200);
+        }
+      }
       await sleep(200);
       const m = await s.evaluate(MEASURE).catch(() => ({
         text: '', h1: null, sub: null, foot: null, hasDraw: false, drawBox: null,
-        nodes: -1, noArea: -1, edges: -1, hits: -1, edgePts: [], rows: -1, rowLinks: -1,
+        nodes: -1, plainNodes: -1, stageNodes: -1, stageCentres: [], msDefs: -1, msKeyRows: -1,
+        noArea: -1, halos: -1, edges: -1, hits: -1, edgePts: [], rows: -1, rowLinks: -1,
         offRows: -1, keyEntries: -1, swatches: [], emptySwatches: [], tabs: [], tabOn: [],
         wide: [], scroll: { w: 0, inner: 1 },
       }));
@@ -281,6 +310,39 @@ try {
       }).length;
       check(m.noArea > 0 === noArea > 0, `${tag}: the unknown-area mark appears exactly where the file has one`,
         `${m.noArea} drawn, ${noArea} in the file`);
+
+      // ---- the seam: stage 10's alert mark on stage 11's network ----
+      // The readings come off the SAME mounted tree, two files per gauge. That
+      // they are local is not a detail: `unexpected` above is the assertion that
+      // nothing left for the real portal, and these two say the requests were
+      // really made rather than quietly skipped.
+      // NOT anchored at the start: the served base already ends in a slash, so
+      // every recorded pathname here begins `//` — an anchored `^/nrw/` matches
+      // nothing and the ledger silently reports zero requests (measured).
+      const metaReqs = local.filter(p => /\/nrw\/gauges\/\d+\/meta\.json$/.test(p));
+      const shardReqs = local.filter(p => /\/nrw\/gauges\/\d+\/\d{4}\.json$/.test(p));
+      check(metaReqs.length > 0 && shardReqs.length > 0,
+        `${tag}: the readings came off the mounted tree`, `${metaReqs.length} meta, ${shardReqs.length} shard`);
+      check(new Set(metaReqs).size === metaReqs.length,
+        `${tag}: no gauge's meta is fetched twice`, `${metaReqs.length} requests, ${new Set(metaReqs).size} gauges`);
+      check(m.plainNodes + m.stageNodes === m.nodes && m.nodes === e.placed,
+        `${tag}: every placed gauge carries exactly one node, plain or staged`,
+        `${m.plainNodes} plain + ${m.stageNodes} staged vs ${e.placed} placed`);
+      check(m.stageNodes > 0, `${tag}: the mirror's readings really reach the drawing as stage marks`,
+        `no alert disc on ${e.placed} placed gauges — the seam is dead`);
+      if (m.stageNodes > 0) {
+        // the defect this seam started from: msMark fed x/y instead of cx/cy
+        // draws every disc at its own default origin, one on top of the other
+        check(new Set(m.stageCentres).size === m.stageNodes,
+          `${tag}: each disc sits at its own node, not piled on one origin`,
+          `${new Set(m.stageCentres).size} distinct centres for ${m.stageNodes} discs`);
+        check(m.msKeyRows === 4, `${tag}: the key names all four rungs MS0–MS3`, String(m.msKeyRows));
+        check(m.msDefs === 4, `${tag}: the hatch ramp's defs are on the plate`, String(m.msDefs));
+        check(/MS0|alert/.test(m.text), `${tag}: and the plate says in words what the mark counts`,
+          m.text.slice(0, 160));
+      }
+      check(m.halos === 0 || m.stageNodes > 0,
+        `${tag}: a halo only ever rings a disc`, `${m.halos} halos, ${m.stageNodes} discs`);
 
       // The view has to be REACHABLE, not only addressable. Every check above
       // landed straight on ?view=net, which would pass just as well if the chip

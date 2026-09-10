@@ -948,6 +948,10 @@
   /* area unknown is a different KIND of mark, not a smaller one: hollow, so it
      survives greyscale and does not read as "a small catchment" */
   .net .net-dot.no-area { fill: var(--paper); stroke: var(--ink); stroke-width: 1.2; stroke-dasharray: 1.4 1.2; }
+  /* …and where the node is an alert disc, the disc's own fill is already spoken
+     for by the stage ramp, so "area unknown" moves OUT to a dashed halo ring.
+     Same dash as the hollow dot above: one vocabulary, two carriers. */
+  .net .net-halo { fill: none; stroke: var(--ink); stroke-width: 1; stroke-dasharray: 1.4 1.2; }
   .net a:hover .net-dot { fill: var(--water-line); }
   .pf-list.net-list .off .name { color: var(--mid); font-style: italic; }
   .pf-flow {
@@ -3457,6 +3461,9 @@ const T = {
   netNoPlaced: 'the mirrored topology gives no gauge in this basin a downstream chain to draw',
   netEdge: 'flows into',
   netNoArea: 'catchment area not in the file — drawn at the smallest size',
+  netNoAreaStage: 'catchment area not in the file, on a gauge with a stage — the dashed ring around the disc',
+  netReadingsAt: 'readings',
+  msNetNote: 'The stage mark counts the operator’s alert thresholds a gauge has reached, from the mirror’s newest daily value — the node’s SIZE stays its catchment area. A gauge the mirror gives no reading or no ladder keeps the plain node; that is not MS0, which is itself a reading.',
   netUnplaced: 'gauges the file gives no downstream neighbour for — listed below, not drawn',
   netDrawn: 'on the drawn network',
   netInBasin: 'in the basin',
@@ -6035,6 +6042,54 @@ let netData = null; // { river, topo } | { river, error } | { river, loading: tr
 const topologyCache = new Map();
 const netTopology = () => cachedJson(topologyCache, 'topology', `${LANUK_BASE}topology.json`);
 
+// The basin a water belongs to, matched on the file's OWN two keys (a basin
+// carries a name and, sometimes, the river it is named after). One helper for
+// the loader and for netViewModel: if the two picked the basin apart, the
+// readings would belong to a different set of gauges than the drawing, and
+// nothing on the plate would say so.
+function netBasinEntry(topo, river) {
+  const want = String(river || '').toUpperCase();
+  return Object.entries((topo && topo.basins) || {}).find(([, b]) =>
+    String(b.name || '').toUpperCase() === want || String(b.river || '').toUpperCase() === want) || null;
+}
+// a basin entry may carry ids or objects carrying an id — normalised once, here
+const netBasinIds = basin => ((basin && basin.gauges) || [])
+  .map(g => (g && typeof g === 'object' ? g.id : g)).filter(Boolean);
+
+// The net view's own readings: the mirror's newest daily value per gauge and
+// the operator's alert ladder out of its meta — exactly what loadLanukRiver
+// fetches for the river plate, for the whole BASIN instead of the one water.
+// Two requests per gauge (meta + newest shard), in chunks of six, each gauge in
+// its own try: one broken gauge costs its own stage and never the drawing.
+// The river plate has usually already paid for the gauges on the water itself
+// (`state.riverStations`), so those are reused rather than fetched twice.
+// Answers null when the reader has moved on — the caller must not install it.
+async function netReadings(ids, forRiver) {
+  const manifest = await loadRepoManifest() || {};
+  const have = new Map();
+  for (const s of state.riverStations || []) {
+    if (s.id) have.set(lanukNo(s.id) || s.id, s);
+  }
+  const out = {};
+  const chunk = 6;
+  for (let i = 0; i < ids.length; i += chunk) {
+    await Promise.all(ids.slice(i, i + chunk).map(async id => { try {
+      const no = lanukNo(id) || id;
+      const seen = have.get(no);
+      if (seen) { out[id] = { value: seen.value, stages: seen.stages }; return; }
+      const meta = await lanukMeta(no);
+      if (!meta) return;
+      const latest = await lanukLatest(no, manifest['lanuk-' + no]);
+      out[id] = {
+        value: latest && latest.value != null ? latest.value : null,
+        stages: Array.isArray(meta.info) ? meta.info : null,
+      };
+    } catch { /* this gauge keeps the plain node, the rest of the basin does not care */ } }));
+    if (mode !== 'river' || state.river !== forRiver) return null; // switched away mid-fetch
+  }
+  return out;
+}
+
 async function loadNet() {
   const forRiver = state.river; // guard against a mid-flight river switch
   if (netData && netData.river === forRiver && !netData.loading) return;
@@ -6047,9 +6102,31 @@ async function loadNet() {
     if (netData && netData.river === forRiver && netData.loading) netData = null;
     return;
   }
-  netData = topo && topo.gauges && topo.basins
-    ? { river: forRiver, topo }
-    : { river: forRiver, error: T.netNoTopology };
+  if (!(topo && topo.gauges && topo.basins)) {
+    netData = { river: forRiver, error: T.netNoTopology };
+    scheduleRender();
+    setScreenAria();
+    return;
+  }
+  netData = { river: forRiver, topo };
+  scheduleRender();
+  setScreenAria();
+  // The readings are a SECOND pass on purpose. The drawing is complete without
+  // them — a gauge with no ladder and no reading keeps the plain node, which is
+  // a first-class mark the key names — and 2 requests per gauge (54 for the
+  // Sieg) must not hold the plate on "loading…" before the network appears.
+  const entry = netBasinEntry(topo, forRiver);
+  if (!entry) return; // no basin, no gauges to read: the empty plate stands as it is
+  const readings = await netReadings(netBasinIds(entry[1]), forRiver);
+  // Three ways to have been overtaken: the readings walk said so, the reader
+  // switched river or view, or another loadNet already installed a newer topo.
+  if (!readings || mode !== 'river' || state.river !== forRiver) return;
+  if (!netData || netData.river !== forRiver || netData.topo !== topo) return;
+  netData = {
+    river: forRiver, topo, readings,
+    // the readings' age is the MIRROR's, not the topology file's
+    readingsAt: (lanukManifestInfo || {}).generated || null,
+  };
   scheduleRender();
   setScreenAria();
 }
@@ -6076,22 +6153,32 @@ const netDot = km2 => NET_DOT_STEPS.find(s => km2 >= s.min) || NET_DOT_STEPS[NET
 // the radius the key's own "drawn at the smallest size" sentence promises
 const netSmallestR = () => NET_DOT_STEPS[NET_DOT_STEPS.length - 1].r;
 
-// The one glyph the drawing and the key share. Stage 10 ships `msMark(stage,
-// opts)` (the alert-stage disc); until a stage is known for a gauge there is
-// nothing ordinal to draw and this stays a plain circle. Written as a lookup so
-// the integrator swaps nothing: the day msMark and a stage both exist, the
-// drawing AND its swatch change together.
-// cx/cy/r reach msMark as NUMBERS. They used to arrive already run through
-// toFixed(1), so arithmetic on the other side ("10.0" + 4.2) would have
-// concatenated instead of added — invisible here, because the msMark branch is
-// unreachable until a stage exists (review, 2026-09-10).
+// The one glyph the drawing and the key share. Stage 10's `msMark(stage, opts)`
+// (the alert-stage disc) takes the node over wherever the mirror gave the gauge
+// a reading AND the operator a ladder; without one of those there is nothing
+// ordinal to draw and the node stays a plain circle. Both forms are drawn at the
+// SAME radius, so the catchment-size ladder survives the swap.
+// cx/cy/r reach msMark as NUMBERS, under the names msMark actually reads
+// (`cx`/`cy`/`r` — `x`/`y` would silently land every disc at its default 6,6).
+// `Number.isFinite`, not `!= null`: msMark answers '' for anything else, and a
+// mark is only ever asked for where one would really be drawn.
+//
+// Area unknown is a different KIND of node, never a smaller one, and it has to
+// survive the swap too: as a plain node it stays the hollow dashed circle, and
+// under a stage disc — whose own fill is already carrying the stage ramp — it
+// becomes a dashed HALO ring around that disc. Both are the same dash, and both
+// come out of THIS call, so each one's legend swatch is the drawing itself.
+const NET_HALO_GAP = 1.6;
 function netNodeGlyph(n) {
-  const cls = 'net-dot' + (n.km2 == null ? ' no-area' : '');
   const cx = Number(n.cx), cy = Number(n.cy), r = Number(n.r);
-  if (n.stage != null && typeof msMark === 'function') {
-    return msMark(n.stage, { x: cx, y: cy, r, cls });
+  const noArea = n.km2 == null;
+  if (Number.isFinite(n.stage)) {
+    const halo = noArea
+      ? `<circle class="net-halo" cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="${(r + NET_HALO_GAP).toFixed(1)}"/>`
+      : '';
+    return halo + msMark(n.stage, { cx, cy, r });
   }
-  return `<circle class="${cls}" cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="${r}"/>`;
+  return `<circle class="net-dot${noArea ? ' no-area' : ''}" cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="${r}"/>`;
 }
 
 // distance to the basin mouth, accumulated along the DELIVERED chain. `distKm`
@@ -6130,23 +6217,36 @@ function netDistances(ids, gauges) {
 // a first-class state carrying everything renderNet reads — a `summary` left
 // undefined here threw out of render() and froze the plate for the rest of the
 // session (review, 2026-09-10).
+// TWO clocks stand behind this plate: the topology file's own stamp and the
+// mirror run that produced the readings drawn on it. The foot names the second
+// only when it differs from the first — an age printed twice, identically, reads
+// as two facts and is one.
+function netSource(topo, readingsAt) {
+  const gen = (topo && topo.generated) || null;
+  return `${LANUK} · topology ${gen || '—'}` +
+    (readingsAt && readingsAt !== gen ? ` · ${T.netReadingsAt} ${readingsAt}` : '') +
+    ` · ${T.noLiveFeed}`;
+}
+
 function netEmpty(d, text, topo) {
   return {
     kind: 'net', river: d.river, empty: true, text,
     summary: `${d.river}: ${text}`,
-    source: `${LANUK} · topology ${(topo && topo.generated) || '—'} · ${T.noLiveFeed}`,
+    source: netSource(topo, null),
   };
 }
 
 function netViewModel(d) {
   const topo = d.topo;
-  const river = (d.river || '').toUpperCase();
-  const entry = Object.entries(topo.basins).find(([, b]) =>
-    String(b.name || '').toUpperCase() === river || String(b.river || '').toUpperCase() === river);
+  const entry = netBasinEntry(topo, d.river);
   if (!entry) return netEmpty(d, T.netNoBasin, topo);
   const [code, basin] = entry;
-  // a basin entry may carry ids or objects carrying an id — the gate accepts both
-  const ids = (basin.gauges || []).map(g => (g && typeof g === 'object' ? g.id : g)).filter(Boolean);
+  const ids = netBasinIds(basin);
+  // id -> { value, stages }, from loadNet's second pass. Absent on a cold plate
+  // and absent for a gauge whose meta or shard did not come back: the node then
+  // keeps its plain circle rather than claiming MS0, which is a READING ("the
+  // first threshold is not reached") and not the absence of one.
+  const readings = d.readings || {};
   const dists = netDistances(ids, topo.gauges);
   const all = ids.map(id => {
     const g = topo.gauges[id] || { id };
@@ -6157,8 +6257,11 @@ function netViewModel(d) {
       // apart from one this drawing accumulated
       own: Number.isFinite(g.distKm) ? g.distKm : null,
       down: g.down || null, dist: dists.get(id),
-      // stage 10's alert stage, when it lands; null keeps the plain circle
-      stage: null,
+      // stage 10's alert stage, read off the mirror's newest daily value against
+      // the operator's own ladder; null (no reading, or no ladder) keeps the
+      // plain circle. alertStage answers null for both, which is the point.
+      stage: alertStage(readings[id] ? readings[id].value : null,
+        readings[id] ? readings[id].stages : null),
     };
   });
   const placed = all.filter(n => n.dist != null).sort((a, b) => b.dist - a.dist);
@@ -6197,10 +6300,20 @@ function netViewModel(d) {
     kind: 'net', empty: false, river: d.river, basin: basin.name || code, code,
     nodes: placed, unplaced, edges, tracks: tracks.length,
     total: ids.length, maxDist,
+    // The key is built from what the drawing REALLY contains, mark by mark: the
+    // two carriers of "area unknown" are named separately because they look
+    // different, and `anyPlain` decides which form the size ladder's own
+    // swatches take — a ladder drawn as plain circles on a plate where every
+    // node is a disc would be the key promising a mark nobody drew.
     anyNoArea: placed.some(n => n.km2 == null),
+    anyNoAreaPlain: placed.some(n => n.km2 == null && !Number.isFinite(n.stage)),
+    anyNoAreaStaged: placed.some(n => n.km2 == null && Number.isFinite(n.stage)),
+    anyPlain: placed.some(n => !Number.isFinite(n.stage)),
+    hasStages: placed.some(n => Number.isFinite(n.stage)),
     generated: topo.generated || null,
+    readingsAt: d.readingsAt || null,
     summary: screenSummary(),
-    source: `${LANUK} · topology ${topo.generated || '—'} · ${T.noLiveFeed}`,
+    source: netSource(topo, d.readingsAt || null),
   };
 }
 
@@ -6224,7 +6337,10 @@ function renderNetChart(vm) {
   const nodes = vm.nodes.map(n => {
     const cx = +X(n.x), cy = +Y(n.track);
     const g = { ...n, cx, cy, r: n.step.r };
-    const label = `${n.name} (${n.water}): ${n.km2 == null ? T.netNoArea : n.km2 + ' km²'}, ${netKm(n)} ${T.netToMouth}`;
+    // the mark is the only place the drawing says the stage, and an <svg> in an
+    // <a> gives a screen reader none of it — so the tooltip says it in words
+    const label = `${n.name} (${n.water}): ${n.km2 == null ? T.netNoArea : n.km2 + ' km²'}, ${netKm(n)} ${T.netToMouth}` +
+      (Number.isFinite(n.stage) ? `, ${T.msKeys[n.stage]}` : '');
     return `<a${navAttrs('lanuk-' + n.id)}><title>${esc(label)}</title>` +
       netNodeGlyph(g) +
       `<rect class="hit" x="${(cx - 7).toFixed(1)}" y="${(cy - 6).toFixed(1)}" width="14" height="12"/></a>`;
@@ -6255,13 +6371,22 @@ function renderNet(vm) {
       `<span class="name">${esc(n.name)}</span>` +
       `<span class="elev">${esc(n.water)}</span>` +
       `<span class="km">${placed ? esc(netKm(n)) : '—'}</span></a></li>`).join('');
+  // the size ladder is drawn in whichever form this plate's nodes really take:
+  // plain circles while any node is plain, the MS0 disc once every node is one
+  const ladderStage = vm.anyPlain ? null : 0;
   const key = plateKey([
     ...NET_DOT_STEPS.map((s, i) =>
-      ({ sw: keySw(netNodeGlyph({ cx: 6, cy: 6, r: s.r, km2: s.min, stage: null }), 'net'), label: netStepLabel(i) })),
-    vm.anyNoArea && { sw: keySw(netNodeGlyph({ cx: 6, cy: 6, r: netSmallestR(), km2: null, stage: null }), 'net'), label: T.netNoArea },
+      ({ sw: keySw(netNodeGlyph({ cx: 6, cy: 6, r: s.r, km2: s.min, stage: ladderStage }), 'net'), label: netStepLabel(i) })),
+    vm.anyNoAreaPlain && { sw: keySw(netNodeGlyph({ cx: 6, cy: 6, r: netSmallestR(), km2: null, stage: null }), 'net'), label: T.netNoArea },
+    vm.anyNoAreaStaged && { sw: keySw(netNodeGlyph({ cx: 6, cy: 6, r: netSmallestR(), km2: null, stage: 0 }), 'net'), label: T.netNoAreaStage },
+    // a VOCABULARY, not an inventory — all four rungs are named so a mark that
+    // is not on the plate today is still readable, exactly as the river plate
+    // names k-low and k-high on a day when no gauge stands low
+    ...(vm.hasStages ? T.msKeys.map((label, n) => ({ sw: keySw(msMark(n), 'ms'), label })) : []),
     { sw: keySw('<polyline class="net-edge" points="1,3 7,3 7,9 11,9"/>', 'net'), label: T.netEdge },
     { note: T.netDelivered },
     { note: T.netDistNote },
+    vm.hasStages && { note: T.msNetNote },
     vm.nodes.some(n => !n.exact) && { note: T.netApproxNote },
     vm.unplaced.length && { note: `${vm.unplaced.length} ${plural(vm.unplaced.length, 'gauge')} — ${T.netUnplaced}`, warn: true },
   ]);
@@ -6270,7 +6395,11 @@ function renderNet(vm) {
     `<p class="p-sub2">${esc(T.netAxis)}</p>` +
     `<div class="net-wrap">${renderNetChart(vm)}</div>` +
     `<div class="pf-flow"><span>← ${esc(T.upstream)}</span><span>${esc(T.downstream)} →</span></div>` +
-    `<ol class="pf-list net-list">${rows}</ol>${key}</section></section>`;
+    // the hatch defs ride at the FOOT, as on the river plate: the ids resolve
+    // document-wide wherever they sit, and putting them first would make this
+    // plate's first <svg> a hidden def instead of its first drawn mark
+    `<ol class="pf-list net-list">${rows}</ol>${key}` +
+    (vm.hasStages ? msPatternDefs() : '') + '</section></section>';
 }
 
 // ---------- ?rain: rainfall per basin, day by day ----------
