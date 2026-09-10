@@ -365,6 +365,23 @@ live, `verify-precip` green against the page. The manifest did NOT reorder
 with the sorted `listDirs` — its keys are numeric strings, and JS orders
 those numerically whatever the insertion order.
 
+## Water temperature (`nrw/temp/`, the WATER TEMPERATURE block, shipped 2026-09-10)
+
+**The index is `manifest.temp`, and it is keyed by the GAUGE's own `station_no`**
+— same site, two parameters (S and WT), all 125 entries are gauge ids, 123 with
+`days > 0`. `topology.*.temp` is the bulk export's own 108 stations, a subset,
+and must never be used as the index. Three more facts the display layer runs on:
+the right edge is **per station** (`manifest.temp[<no>].to`, 5 distinct edges
+across the branch on 2026-09-10, from 2026-07-03 to 2026-09-09) — never the
+clock and never `window.temp.to`, which is the source's rolling window and sits
+ahead of a station whose sensor was pulled; the shard is `{ id, y, mean[],
+max[], acc{} }` with **no minimum at all** (`acc` is sparse, keyed by day index,
+only the days under 100 %); and the unit comes from `temp/<no>/meta.json`
+(`°C` on all 125), because the same site's `gauges/<no>/meta.json` says `cm`,
+which is the unit of the LEVEL. `loadTemp` asks only for the years the entry's
+own `from`…`to` span — those are exactly the shards that exist, so no year is a
+404 — and a gauge the index does not list costs no request at all.
+
 ## The hourly response class (`scripts/build-nrw-hourly-lag.mjs`, `nrw/hourly/lag.json`, gate rule N9)
 
 **Shipped 2026-09-08.** The one piece of hydrology the daily product cannot see:

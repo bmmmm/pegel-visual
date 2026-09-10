@@ -921,6 +921,16 @@
     color: var(--mid);
     text-align: center;
   }
+  /* ---- water temperature (nrw/temp/) ---- */
+  .temp-wrap { margin-left: var(--axis-gutter); }
+  .wtemp { height: 5.2rem; border-bottom: 1px solid var(--ink); }
+  /* an AREA: the pastel fill, bounded by the ink hairline every area on this
+     page is bounded by */
+  .wt-band { fill: color-mix(in oklab, var(--dry) 62%, transparent); stroke: var(--ink); stroke-width: 0.4; vector-effect: non-scaling-stroke; }
+  /* a LINE, so it takes the -line sibling of the same pastel: what separates
+     the two marks is the KIND, area against stroke, never the shade */
+  .wt-mean { fill: none; stroke: var(--dry-line); stroke-width: 1.6; vector-effect: non-scaling-stroke; }
+  .wt-nd { fill: none; stroke: var(--mid); stroke-width: 0.7; stroke-dasharray: 2 2; vector-effect: non-scaling-stroke; }
   .p-key .warn { color: var(--dry-line); }
   /* ---- readout: the spelled-out sentence, then the terse line ---- */
   .readout .say { margin: 0; font-size: 1.02em; max-width: 62ch; text-wrap: pretty; }
@@ -2154,6 +2164,12 @@ const state = {
   // `reason` is why there is no series (fewer than three rain gauges in reach) —
   // the plate prints it rather than drawing nothing.
   precip: null,
+  // the mirrored daily WATER TEMPERATURE record of this gauge, LANUK only
+  // (nrw/temp/, keyed by the gauge's own station_no — same site, S and WT):
+  // { no, meta, years, entry } | { no, reason } | null.
+  // Never state.wt, which is WSV's live spot temperature from a different feed
+  // on a different clock — the key says so.
+  temp: null,
   neighborsNote: null, // why the neighbour profile is empty, when the loader knows (null = still locating)
   // newest day (ms) whose stored low is the daily MEAN, not a minimum — the seed
   // rows of a source that publishes no minimum; the history key says so while
@@ -2299,6 +2315,54 @@ async function loadPrecip(forStation, no, entry) {
     // nRain is the product's own count of the set; `set` is the same list, but
     // the count is what the legend prints and what the collector guarantees
     state.precip = { no, meta, response, lag, years, n: meta.nRain ?? (meta.set || []).length, reason: null };
+  }
+  scheduleRender();
+}
+
+// ---------- the water-temperature record (nrw/temp/) ----------
+
+// A second parameter of the SAME site, not a second station: every one of the
+// 125 ids in manifest.temp is a gauge id (S + WT at one place). The bulk
+// export's `topology.*.temp` lists only its own 108 and is NOT this index —
+// manifest.temp is.
+const tempShardCache = new Map(); // "<no>/<y>" -> Promise<shard|null>
+const tempMetaCache = new Map();  // "<no>" -> Promise<meta|null>
+const tempShard = (no, y) => cachedJson(tempShardCache, `${no}/${y}`, `${LANUK_BASE}temp/${no}/${y}.json`);
+const tempMeta = no => cachedJson(tempMetaCache, no, `${LANUK_BASE}temp/${no}/meta.json`);
+
+// The years to ask for come from the STATION's own span, not from the mirror's
+// window: a station whose record stopped in 2025 has no 2026 file, and asking
+// for one is a 404 the page swallows in a .catch while the browser gate counts
+// it as a failed request. Measured 2026-09-10 over the whole branch: for all
+// 123 stations with a record, the years spanned by `from`…`to` are exactly the
+// shards that exist.
+function tempYears(entry) {
+  const from = yearOf(entry && entry.from), to = yearOf(entry && entry.to);
+  if (!from || !to || to < from) return [];
+  const out = [];
+  for (let y = from; y <= to; y++) out.push(y);
+  return out;
+}
+
+// Called only from loadLanukStation. The manifest says whether this gauge has a
+// temperature record before a byte of it is fetched, so a gauge without one
+// costs no request and the plate names the reason instead of drawing nothing.
+async function loadTemp(forStation, no, entry) {
+  if (!entry || !entry.days || !entry.to) {
+    state.temp = { no, reason: T.tempNoStation };
+    scheduleRender();
+    return;
+  }
+  const years = tempYears(entry);
+  const [meta, ...shards] = await Promise.all([tempMeta(no), ...years.map(y => tempShard(no, y))]);
+  if (station !== forStation || mode !== 'station') return; // switched away while fetching
+  if (!meta) {
+    // a fetch that failed is not a gauge without a temperature record: say which
+    state.temp = { no, reason: T.tempFetchFailed };
+  } else {
+    const got = {};
+    years.forEach((y, i) => { if (shards[i]) got[y] = shards[i]; });
+    state.temp = { no, meta, years: got, entry };
   }
   scheduleRender();
 }
@@ -2490,6 +2554,9 @@ async function loadLanukStation(signal = { aborted: false }) {
     // is from. The manifest says whether there is a product before a byte of it
     // is fetched, so a gauge without one costs no request.
     loadPrecip(forStation, no, (lanukPrecipIndex || {})[no]);
+    // …and the same site's water temperature, where the mirror carries one. Same
+    // contract: the manifest decides, so a gauge without a record costs no fetch.
+    loadTemp(forStation, no, (lanukTempIndex || {})[no]);
   } catch (e) {
     if (station !== forStation || mode !== 'station') return; // stale error from a station we left
     state.error = `station "${forStation}" failed: ${e.message}\n` +
@@ -3392,6 +3459,35 @@ const T = {
   respPeakAt: 'peaking at lag',
   respNoSlope: 'too few rain events to state a rise per 10 mm',
   respMissing: 'no response statistic for this gauge',
+  // WATER TEMPERATURE (nrw/temp/): the mirror's own daily record for the same
+  // SITE as the level above — one station, two parameters. It is not state.wt,
+  // the live spot temperature PEGELONLINE serves for WSV gauges: this source
+  // has no live feed at all, and tempNotLive is on the plate so the two can
+  // never be read as the same number.
+  temp: 'WATER TEMPERATURE',
+  tempBand: 'the day’s span: from the lowest daily mean to the highest daily maximum in each column — the source publishes no minimum',
+  tempMean: 'the mean of the daily means over the same columns',
+  tempNd: 'no daily mean stood behind this column — not a cold day',
+  tempGap: 'the station reported nothing here, so the line stops rather than guess across it',
+  tempUnit: 'the unit is the temperature record’s own, not the level’s',
+  // The drawing carries no value axis, and a temperature nobody can read a
+  // number off is a picture of a shape. The range comes off the SAME columns
+  // the marks are drawn from, so the printed pair and the drawing cannot
+  // disagree about the window they describe.
+  tempRange: 'the drawn row runs',
+  // The counterpart of precipTwoClocks, and the reason it is spelled out: the
+  // block above this one runs on the RAIN day, this one does not.
+  tempSameClock: 'one clock here: a temperature day runs 00:00 → 24:00 MEZ, the same day the level above is read on — unlike the rain day above it',
+  tempEdge: 'right edge is this station’s newest temperature day, not today:',
+  tempClamped: 'the window is shorter than the chip asks: this station’s temperature record starts',
+  // counted in DAYS, not in columns: a column is `step` days wide, and saying
+  // "columns" while counting days is a lie the moment a window is bucketed
+  tempPartial: 'days in this window the source aggregated from less than a full day of samples:',
+  tempOffline: 'the operator’s note on this station:',
+  tempNotLive: 'a mirrored daily record from a once-a-day export, not a live water temperature — this source has no live feed',
+  tempNoStation: 'no water temperature for this gauge: the mirror carries no record for this station',
+  tempNoDays: 'no daily mean in this window for this station',
+  tempFetchFailed: 'the water-temperature record for this gauge did not load',
   neighbours: 'NEIGHBOURS',
   neighboursSub: 'water surface elevation between the gauges up- and downstream, in metres above sea level (m NHN)',
   neighboursAria: 'elevation profile of the neighbouring gauges',
@@ -4854,6 +4950,165 @@ function renderResponse(r) {
   return head + `<div class="resp-wrap">${chart}${axis}</div>${say}${hourlyClassSay(r.hourly)}${key}</section>`;
 }
 
+// ---------- WATER TEMPERATURE: the mirror's daily record for the same site ----------
+
+// The right edge is THIS STATION's own newest temperature day, never the clock
+// and never window.temp.to: the mirror's window is the source's, and a station
+// whose sensor was pulled in November 2025 still sits inside it. Measured
+// 2026-09-10: 5 distinct right edges across the 123 stations with a record,
+// from 2026-07-03 to 2026-09-09.
+function tempViewModel() {
+  const t = state.temp;
+  if (!t) return null;
+  const preset = historyPreset();
+  if (t.reason) return { empty: true, reason: t.reason, label: preset.label };
+  const entry = t.entry || {};
+  const edge = rainDayNum(entry.to);
+  if (!Number.isFinite(edge)) return { empty: true, reason: T.tempNoStation, label: preset.label };
+
+  const meta = t.meta || {};
+  const at = (arr, d) => {
+    const { y, i } = rainSlot(d);
+    const s = t.years[y];
+    return s && Array.isArray(s[arr]) ? s[arr][i] : undefined;
+  };
+  // `acc` is the source's own aggregation accuracy in percent, sparse: only the
+  // days below 100 are written, keyed by the day index of the arrays beside it.
+  const accAt = d => {
+    const { y, i } = rainSlot(d);
+    const s = t.years[y];
+    // named, not read inline off `.acc`: that field ends in a c, and the
+    // dead-cmd guard greps `c === '<word>'` out of the source, so a typeof
+    // against it reads to that guard as a dispatcher branch for a dead command
+    // (same trap as NET_MOUTH_SRC below)
+    const map = s && s.acc;
+    return map && typeof map === 'object' ? map[i] : undefined;
+  };
+  // The oldest day the MIRROR holds FOR THIS STATION, not the mirror's rolling
+  // window: the stored record reaches back past it (the window is what the
+  // source offers today, the shards are what was collected), so a clamped note
+  // hung on window.temp.from would name a day the reader can see data before.
+  const winFrom = lanukManifestInfo && lanukManifestInfo.window && lanukManifestInfo.window.temp;
+  const first = rainDayNum(entry.from) || (winFrom && winFrom.from ? rainDayNum(winFrom.from) : edge);
+  const days = preset.d ? Math.min(preset.d, edge - first + 1) : (edge - first + 1);
+  // whole days per column, so no day is counted twice and none is dropped
+  const step = Math.max(1, Math.ceil(days / (plateDensity() === 'narrow' ? 60 : 120)));
+  const nCols = Math.ceil(days / step);
+  // built from the right edge inwards: the newest day must land ON the edge
+  const cols = [];
+  for (let c = nCols - 1; c >= 0; c--) {
+    const to = edge - (nCols - 1 - c) * step, from = to - step + 1;
+    let sum = 0, n = 0, lo = null, hi = null, partial = 0;
+    for (let d = from; d <= to; d++) {
+      const mv = at('mean', d), xv = at('max', d), a = accAt(d);
+      if (typeof mv === 'number') {
+        sum += mv; n++;
+        lo = lo == null ? mv : Math.min(lo, mv);
+        hi = hi == null ? mv : Math.max(hi, mv);
+      }
+      if (typeof xv === 'number') hi = hi == null ? xv : Math.max(hi, xv);
+      if (typeof a === 'number' && a < 100) partial++;
+    }
+    // A column with a maximum but no mean is NOT a reading: the export's own
+    // partial last day carries a maximum and no mean at all, and drawing it
+    // would put a band with no line under it at the right edge.
+    cols.unshift(n
+      ? { from, to, mean: Math.round(sum / n * 100) / 100, lo, hi, days: n, partial }
+      : { from, to, mean: null, lo: null, hi: null, days: 0, partial });
+  }
+  const drawn = cols.filter(c => c.mean != null);
+  if (!drawn.length) return { empty: true, reason: T.tempNoDays, label: preset.label };
+  // scale and band come off the SAME columns the marks are drawn from
+  const lo = Math.min(...drawn.map(c => c.lo)), hi = Math.max(...drawn.map(c => c.hi));
+  // A break is a break IN a line — a silence with a drawn column on BOTH sides.
+  // A window that opens or closes on empty columns has no line to stop there,
+  // and counting those made the key blame the station for the chip's reach.
+  // They are not invisible: every empty column still gets its own wt-nd mark.
+  let gaps = 0;
+  const firstDrawn = cols.findIndex(c => c.mean != null);
+  const lastDrawn = cols.length - 1 - [...cols].reverse().findIndex(c => c.mean != null);
+  for (let c = firstDrawn, inGap = false; c <= lastDrawn; c++) {
+    if (cols[c].mean != null) { inGap = false; continue; }
+    if (!inGap) { gaps++; inGap = true; }
+  }
+  return {
+    empty: false, label: preset.label, step, cols, gaps, lo, hi,
+    // the temperature record's OWN unit — a gauge's meta says `cm` at the same
+    // site, because that is the unit of the level, not of this series
+    unit: meta.unit || '°C',
+    note: typeof meta.note === 'string' ? meta.note : '',
+    partial: drawn.reduce((s, c) => s + c.partial, 0),
+    nd: cols.some(c => c.mean == null),
+    from: cols.length ? cols[0].from : edge, to: edge,
+    // the chip asked for more days than this station's record holds
+    clamped: !!(preset.d && days < preset.d),
+    windowFrom: first,
+  };
+}
+
+function renderTemp(t) {
+  if (!t) return '';
+  const head = `<section class="p-block"><h2 class="p-h2">${esc(T.temp)} · ${esc(t.label)}</h2>`;
+  if (t.empty) return head + `<p class="p-dim">${esc(t.reason)}</p></section>`;
+  const W = 320, H = 70;
+  const n = t.cols.length;
+  const cw = W / Math.max(1, n);
+  const span = Math.max(t.hi - t.lo, 1);
+  const Y = v => 2 + (1 - (v - t.lo) / span) * (H - 4);
+  const X = i => i * cw + cw / 2;
+  const parts = [];
+  // a run is a stretch of columns that all carry a mean: the band and the line
+  // break together, so neither is ever drawn across a silence
+  const runs = [];
+  for (let i = 0, cur = null; i < n; i++) {
+    if (t.cols[i].mean == null) { cur = null; continue; }
+    if (!cur) runs.push(cur = []);
+    cur.push(i);
+  }
+  for (const run of runs) {
+    const top = run.map(i => `${X(i).toFixed(1)},${Y(t.cols[i].hi).toFixed(1)}`);
+    const bot = run.map(i => `${X(i).toFixed(1)},${Y(t.cols[i].lo).toFixed(1)}`).reverse();
+    parts.push(`<polygon class="wt-band" points="${top.concat(bot).join(' ')}"/>`);
+    const pts = run.map(i => `${X(i).toFixed(1)},${Y(t.cols[i].mean).toFixed(1)}`);
+    if (pts.length === 1) pts.push(pts[0]);
+    parts.push(`<polyline class="wt-mean" points="${pts.join(' ')}"/>`);
+  }
+  // no-data is a KIND apart, not a shade: an outline over the full field, so it
+  // can never be read as a cold day (the pr-nd idiom)
+  t.cols.forEach((c, i) => {
+    if (c.mean != null) return;
+    const w = Math.max(0.8, cw - (cw > 3 ? 0.8 : 0.15));
+    parts.push(`<rect class="wt-nd" x="${(i * cw).toFixed(2)}" y="0.5" width="${w.toFixed(2)}" height="${(H - 1).toFixed(1)}"/>`);
+  });
+  const chart = svgWrap(`0 0 ${W} ${H}`, parts.join(''),
+    ' class="chart wtemp" preserveAspectRatio="none" role="img"' +
+    attr('aria-label', `${T.temp}: ${t.lo.toFixed(1)} to ${t.hi.toFixed(1)} ${t.unit} over ${t.label}, `
+      + `ending ${rainDayISO(t.to)}`));
+  const days = t.step === 1 ? T.precipDay : `${t.step} ${T.precipDays}`;
+  const key = plateKey([
+    // The two marks are separated by KIND — an area against a stroke — never by
+    // shade: the band's fill and the line's ink are the same pastel's two
+    // halves, and two weights of one hue read as one mark drawn twice.
+    { sw: keySw('<polygon class="wt-band" points="0,2 4,4 8,3 12,6 12,10 8,8 4,9 0,7"/>'), label: `${T.tempBand} (${esc(days)})` },
+    { sw: keySw('<polyline class="wt-mean" points="0,9 4,4 8,6 12,2"/>'), label: T.tempMean },
+    t.nd && { sw: keySw('<rect class="wt-nd" x="1" y="1" width="10" height="10"/>'), label: T.tempNd },
+    t.gaps > 0 && { note: `${t.gaps} ${plural(t.gaps, 'break')} — ${T.tempGap}` },
+    // the numbers the drawing has no axis for, read off the drawn columns
+    { note: `${T.tempRange} ${t.lo.toFixed(1)} … ${t.hi.toFixed(1)} ${t.unit}` },
+    { note: `${T.tempUnit} — ${t.unit}` },
+    { note: T.tempSameClock },
+    { note: T.tempNotLive },
+    t.partial > 0 && { note: `${T.tempPartial} ${t.partial}` },
+    { note: `${T.tempEdge} ${rainDayISO(t.to)}` },
+    t.clamped && { note: `${T.tempClamped} ${rainDayISO(t.windowFrom)}` },
+    // The operator's own words about this station, verbatim and escaped. It is a
+    // warning row because every one of the 20 that carry it says something is
+    // wrong with the instrument.
+    t.note && { note: `${T.tempOffline} ${t.note}`, warn: true },
+  ]);
+  return head + `<div class="temp-wrap">${chart}</div>${key}</section>`;
+}
+
 // ---------- neighbours ----------
 
 function profileViewModel() {
@@ -5005,7 +5260,8 @@ function renderStation(vm) {
   // rain first, then what it did: the reader has just been told what the level
   // is doing, and PRECIPITATION is the only block on the plate that answers why
   return `<section class="plate">${vh}${head}${scene}${renderHistory(vm.history)}${readout}` +
-    `${renderPrecip(precipViewModel())}${renderResponse(responseViewModel())}${renderProfile(vm.profile)}</section>`;
+    `${renderPrecip(precipViewModel())}${renderResponse(responseViewModel())}` +
+    `${renderTemp(tempViewModel())}${renderProfile(vm.profile)}</section>`;
 }
 
 // ---------- river profile renderer ----------
@@ -7788,6 +8044,7 @@ function switchStation(name, push = true) {
   state.feed = null;        // the loader that answers says what fed it
   state.lanuk = null;
   state.precip = null;      // the rain field belongs to the gauge that was left
+  state.temp = null;        // …and so does its water-temperature record
   state.neighborsNote = null;
   state.lowIsMeanUntil = null;
   state.archive = loadArchive(station);
@@ -8522,6 +8779,7 @@ const lanukWaters = new Map(); // UPPERCASE water -> [lanuk ids on it]
 const wsvWaters = new Set();   // the waters the PEGELONLINE list names
 let lanukManifestInfo = null;  // { generated, sourceExportAt, license, window } of the mirror
 let lanukPrecipIndex = null;   // manifest.precip: <no> -> { n, up, series, why? }
+let lanukTempIndex = null;     // manifest.temp: <no> -> { n, w, b, la, lo, from, to, days } | { empty: true }
 let lanukPrecipEdge = null;    // manifest.coverage.precip.lastRainDay: the right edge every rain plate hangs on
 let lanukManifestP = null;     // Promise<manifest|null>, one fetch per session (see lanukIndex)
 const numOrNull = v => (typeof v === 'number' && Number.isFinite(v) ? v : null);
@@ -8536,6 +8794,10 @@ function mergeLanukIndex(m) {
   // Read before any /precip/ fetch, so a gauge without one costs no request and
   // the plate can name the reason instead of showing an empty box.
   lanukPrecipIndex = m.precip || null;
+  // which gauges have a mirrored water-temperature record, and how far it runs.
+  // Read before any /temp/ fetch, for the same reason as the line above: the
+  // right edge of that drawing is this entry's own `to`, per station.
+  lanukTempIndex = m.temp || null;
   // the newest rain day with a READING — not window.rain.to, which names the
   // newest day the SOURCE offers and is always half a day short (the export
   // runs mid-afternoon, a rain day starts at 07:00)

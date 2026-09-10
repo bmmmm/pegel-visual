@@ -1,5 +1,6 @@
 #!/usr/bin/env node
-// Drives the two new plates (PRECIPITATION/RESPONSE on a station, and ?rain) in
+// Drives the station plate's mirror-fed blocks (PRECIPITATION/RESPONSE and
+// WATER TEMPERATURE, the last of which reads nrw/temp/) and ?rain in
 // a real headless Chrome over CDP — the recipe of .claude/domains/browser-verify.md:
 // serve the worktree, Runtime + Log + Network enabled BEFORE navigating, wait
 // for the loader, renderNow(), screenshot, then MEASURE through Runtime.evaluate.
@@ -112,10 +113,30 @@ const PAGES = [
   //               the SOURCE starts publishing hourly data for it.
   { q: '?station=BETZDORF', ready: STATION_READY, name: 'betzdorf-nohires', kind: 'station', no: '27200500' },
   { q: '?station=LINNENKAMP', ready: STATION_READY, name: 'linnenkamp-none', kind: 'station', noProduct: true, no: '3215510000100' },
+  //   ARLOFF      the WATER TEMPERATURE fixture, and deliberately not a healthy
+  //               one: its temperature record stops on 2025-11-07 (ten months
+  //               before the clock) and its meta carries an operator note. A
+  //               station whose record ends TODAY would let a drawing hung on
+  //               the clock pass, which is the one thing this page has to prove
+  //               it does not do. The date is not pinned here — the check reads
+  //               manifest.temp[no].to, so a station that starts reporting again
+  //               stays a valid fixture.
+  { q: '?station=ARLOFF', ready: STATION_READY + ' && state.temp', name: 'arloff-temp', kind: 'station', temp: '2741500000100', no: '2741500000100' },
   { q: '?station=BONN', ready: 'state.gauge && state.gauge.currentMeasurement', name: 'bonn-wsv', kind: 'wsv' },
   { q: '?rain', ready: 'state.rain && state.rain.data', name: 'rain-30', kind: 'rain' },
   { q: '?rain&w=90', ready: 'state.rain && state.rain.data', name: 'rain-90', kind: 'rain' },
 ];
+
+// The temperature meta of every page that carries the WATER TEMPERATURE block,
+// read from the TREE — so the operator's note and the unit on the plate are
+// compared against the file rather than against a string this script knows too.
+const tempMetas = {};
+for (const pg of PAGES) {
+  if (!pg.temp) continue;
+  tempMetas[pg.temp] = BASE_URL
+    ? await (await fetch(`${BASE_URL}nrw/temp/${pg.temp}/meta.json`)).json()
+    : JSON.parse(readFileSync(join(ROOT, 'nrw', 'temp', pg.temp, 'meta.json'), 'utf8'));
+}
 
 // The measurement, in the page. Anchored to the elements it is about — a
 // class-name grep over the whole document would match the legend's own swatches.
@@ -199,6 +220,31 @@ const MEASURE = `(() => {
       stickyName: rows[0] ? getComputedStyle(rows[0].querySelector('th')).position : null,
     };
   }
+  // THE WATER-TEMPERATURE PLATE, anchored at its own section. The drawing is
+  // .chart.wtemp and the key is .p-key .sw inside the same section: a
+  // swatch reuses the drawing's classes, so a sweep over the section as a whole
+  // would compare the legend against itself and pass by construction.
+  const tempSection = [...document.querySelectorAll('#screen section.p-block')]
+    .find(s => s.querySelector('.chart.wtemp') || /^WATER TEMPERATURE/.test((s.querySelector('.p-h2') || {}).textContent || ''));
+  const cls = els => [...new Set(els.map(e => e.getAttribute('class')).filter(Boolean)
+    .flatMap(c => c.split(/\\s+/)))];
+  out.tempPlate = tempSection ? {
+    band: tempSection.querySelectorAll('.chart.wtemp .wt-band').length,
+    mean: tempSection.querySelectorAll('.chart.wtemp .wt-mean').length,
+    nd: tempSection.querySelectorAll('.chart.wtemp .wt-nd').length,
+    drawn: cls([...tempSection.querySelectorAll('.chart.wtemp *')]),
+    named: cls([...tempSection.querySelectorAll('.p-key .sw *')]),
+    key: [...tempSection.querySelectorAll('.p-key dd')].map(e => e.textContent),
+    warn: [...tempSection.querySelectorAll('.p-key dd.warn')].map(e => e.textContent),
+    dim: [...tempSection.querySelectorAll('.p-dim')].map(e => e.textContent),
+    edgePrinted: (tempSection.innerText.match(/newest temperature day, not today: (\\d{4}-\\d{2}-\\d{2})/) || [])[1],
+    // the edge of the DRAWING, off the model the marks are built from — and the
+    // model's own edge beside it, so the two cannot drift apart unseen
+    vm: (() => {
+      const vm = tempViewModel();
+      return vm && !vm.empty ? { last: rainDayISO(vm.cols.at(-1).to), to: rainDayISO(vm.to), unit: vm.unit, cols: vm.cols.length } : null;
+    })(),
+  } : null;
   out.precipRequests = 'see network';
   // THE PRECIPITATION PLATE'S OWN TEXT, anchored at the section that holds the
   // precip chart — not at #screen and not at a bare .p-key, both of which sweep in
@@ -315,6 +361,51 @@ async function run(cdp, base, vp) {
           check(joined.includes(`${c.weak} rain explains too little`) && joined.includes(`${c.notInHires} no hourly series`),
             `${pg.name}: and names the fleet split with lag.json's own counts`, joined.slice(0, 400));
         }
+        }
+      }
+      // ---- WATER TEMPERATURE, and the request a gauge without a record must not make ----
+      if (pg.kind === 'station' || pg.kind === 'wsv') {
+        const tempReqs = s.events.responses.filter(r => r.url.includes('/nrw/temp/'));
+        const entry = (manifest.temp || {})[pg.no] || null;
+        const hasTemp = !!(entry && entry.days && entry.to);
+        if (!hasTemp) {
+          // the same "costs no request" property the precip shards have: the
+          // manifest is read before a byte of /temp/ is fetched
+          check(tempReqs.length === 0, `${pg.name}: not in manifest.temp, so no /nrw/temp/ request`, tempReqs.map(r => r.url).join(', '));
+          if (pg.kind === 'station') {
+            check(!!m.tempPlate && m.tempPlate.dim.some(t => /carries no record for this station/.test(t)),
+              `${pg.name}: and the block says so instead of drawing nothing`, JSON.stringify(m.tempPlate && m.tempPlate.dim));
+          } else {
+            check(!m.tempPlate, 'BONN draws no temperature block either');
+          }
+        } else {
+          const tp = m.tempPlate;
+          check(!!tp && tp.band > 0 && tp.mean > 0, `${pg.name}: the temperature band and its mean line are drawn`,
+            JSON.stringify(tp && { band: tp.band, mean: tp.mean, nd: tp.nd }));
+          if (tp) {
+            // every mark the DRAWING carries is named by a swatch in the key —
+            // the two anchored at different elements, or the check is circular
+            const unnamed = tp.drawn.filter(c => !tp.named.includes(c));
+            check(unnamed.length === 0, `${pg.name}: every temperature mark is named in this plate's own key`,
+              `${unnamed.join(', ')} — key has ${tp.named.join(', ')}`);
+            // the right edge is THIS station's own last day, from the manifest —
+            // not the clock, not window.temp.to, and not a date this file knows
+            check(!!tp.vm && tp.vm.last === entry.to, `${pg.name}: the drawn right edge is manifest.temp.to (${entry.to})`,
+              `${tp.vm && tp.vm.last} vs ${entry.to}`);
+            check(!!tp.vm && tp.vm.to === entry.to, `${pg.name}: and the model agrees with its own drawing`, `${tp.vm && tp.vm.to}`);
+            check(tp.edgePrinted === entry.to, `${pg.name}: and the key prints that same day`, `${tp.edgePrinted} vs ${entry.to}`);
+            const meta = tempMetas[pg.temp] || null;
+            if (meta) {
+              check(tp.key.some(t => t.includes(meta.unit || '°C')), `${pg.name}: the key names the record's own unit (${meta.unit})`,
+                tp.key.join(' | ').slice(0, 300));
+              // the operator's note, word for word off the file, on a WARNING row
+              if (meta.note) {
+                check(tp.warn.some(t => t.includes(meta.note.trim())), `${pg.name}: the operator's note is on the plate, verbatim and as a warning`,
+                  `wanted "${meta.note.trim()}" — warn rows ${JSON.stringify(tp.warn)}`);
+              }
+            }
+            check(tp.key.some(t => /no live feed/.test(t)), `${pg.name}: and says it is not a live temperature`, tp.key.join(' | ').slice(0, 300));
+          }
         }
       }
       if (pg.noProduct) {
