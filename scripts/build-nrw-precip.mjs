@@ -13,6 +13,9 @@
 //   nrw/precip/<no>/<YYYY>.json    { id, y, mm[], n[], med[], mx[] }, daysInYear long
 //   nrw/precip/<no>/response.json  lag correlation rain -> level change, always written
 //                                  (its event rise: scripts/probe-response-null.mjs is the null bench)
+//   nrw/precip/used-by/<rainNo>.json  the reverse of the sets: [{ no, name, via, km }],
+//                                  the gauges this rain gauge feeds — one fetch instead
+//                                  of the 276 meta.json files that hold it forward
 //   nrw/precip/basins/<b>/…        the same two files per basin (overview rows)
 //   nrw/precip/overview.json       the last 90 rain days per basin, for the ?rain plate
 //
@@ -725,12 +728,31 @@ export function build({ tree, out, check = false, generated }) {
   // can read.
   const memberships = { basin: 0, orphan: 0, local: 0, knn: 0 };
   const covered = new Set();
+  // The REVERSE index, one file per rain gauge that lands in at least one set:
+  // `used-by/<rainNo>.json` names the gauges that gauge feeds. The forward
+  // direction lives in 276 per-gauge meta.json files, so a page that asks "who
+  // uses this rain gauge?" would otherwise have to fetch all of them. Written
+  // out of the SAME loop that counts the memberships, and out of nothing else,
+  // so the two cannot drift apart — the gate asserts exactly that equality in
+  // both directions (N8c4). A rain gauge in no set gets no file at all rather
+  // than an empty array: absence is the same answer and costs no byte.
+  const usedBy = new Map();
   for (const [no, entry] of Object.entries(gauges)) {
     if (!entry.series) continue;
     for (const s of perGaugeSet.get(no) || []) {
       if (memberships[s.via] != null) memberships[s.via]++;
       covered.add(s.no);
+      if (!usedBy.has(s.no)) usedBy.set(s.no, []);
+      usedBy.get(s.no).push({ no, name: nodes[no].name, via: s.via ?? null, km: s.km ?? null });
     }
+  }
+  // Sorted by the receiving gauge's id. `a.recv` is already in that order today,
+  // so this sort changes no byte of the current mirror — it is here because the
+  // FILE's order must be a property of the file, not inherited from a loop three
+  // hundred lines up: the day recv is iterated differently, N8(e) would rewrite
+  // 314 files for a run that changed nothing.
+  for (const [rainNo, rows] of usedBy) {
+    o.put(join('used-by', `${rainNo}.json`), rows.sort((x, y) => cmpNo(x.no, y.no)));
   }
   const inNoSet = Object.keys(rain).filter(r => !covered.has(r)).sort(cmpNo);
 

@@ -77,7 +77,13 @@
 //                     and a `via` the rule does not enable is a violation;
 //                     (c3) the HYDROLOGICAL origin is still a partition: a
 //                     basin/orphan member names the same owning node `at` in
-//                     every set it appears in. (d) references
+//                     every set it appears in; (c4) the REVERSE INDEX
+//                     `precip/used-by/<rainNo>.json` is the same relation read
+//                     backwards, so it is compared against the forward sets as
+//                     a set, in BOTH directions and including each entry's
+//                     `via`/`km` — a second copy of a relation is a second
+//                     chance to be wrong, and every other clause here reads
+//                     only the forward side. (d) references
 //                     resolve — every product gauge is in topology.json, every
 //                     `set[].no` exists under `nrw/rain/`; (e) the committed
 //                     bytes ARE what the rule produces, proven by running the
@@ -990,13 +996,79 @@ export function readPrecip(precipDir) {
   const out = new Map();
   if (!existsSync(precipDir)) return out;
   for (const ent of readdirSync(precipDir, { withFileTypes: true })) {
-    if (!ent.isDirectory() || ent.name === 'basins') continue;
+    // `basins` and `used-by` are the two directories under precip/ that are not
+    // a gauge product; read as one, they would be a gauge with no meta.json and
+    // no entry in topology.json — two violations invented by the reader.
+    if (!ent.isDirectory() || ent.name === 'basins' || ent.name === 'used-by') continue;
     const dir = join(precipDir, ent.name);
     const shards = new Map();
     for (const f of readdirSync(dir)) if (isYearShard(f)) shards.set(Number(f.slice(0, 4)), readJson(join(dir, f)));
     out.set(ent.name, { meta: readJson(join(dir, 'meta.json')), shards, response: readJson(join(dir, 'response.json')) });
   }
   return out;
+}
+
+// (c4) THE REVERSE INDEX. `precip/used-by/<rainNo>.json` is the same membership
+// relation read the other way round, and a second copy of a relation is a second
+// chance to be wrong: the page that draws it would show a rain gauge feeding a
+// gauge whose own meta.json never named it, and every other N8 clause would stay
+// green, because they all read the forward side. So the two are compared as SETS,
+// in BOTH directions — a membership with no entry and an entry with no membership
+// are two different bugs and get two different lines — and each entry has to
+// carry the same `via`/`km` the set does.
+export function readUsedBy(precipDir) {
+  const out = new Map();
+  const dir = join(precipDir, 'used-by');
+  if (!existsSync(dir)) return out;
+  for (const f of readdirSync(dir)) {
+    if (!f.endsWith('.json')) continue;
+    out.set(f.slice(0, -5), readJson(join(dir, f)));
+  }
+  return out;
+}
+
+const usedByKey = e => `${e.via ?? null}|${e.km ?? null}`;
+
+export function checkPrecipUsedBy(usedBy, products, rainIds, { maxList = 5 } = {}) {
+  const v = [];
+  // What the forward side says, keyed rain station -> gauge. Only the gauges
+  // that SHIPPED a product have a directory to be read here, which is the same
+  // universe the builder counts memberships over.
+  const forward = new Map();
+  for (const [no, p] of products) {
+    for (const s of ((p.meta || {}).set || [])) {
+      const r = String(s.no);
+      if (!forward.has(r)) forward.set(r, new Map());
+      forward.get(r).set(String(no), s);
+    }
+  }
+  const missingFiles = [], extraFiles = [];
+  for (const r of forward.keys()) if (!usedBy.has(r)) missingFiles.push(r);
+  for (const [r, rows] of usedBy) {
+    if (rainIds && !rainIds.has(r)) v.push(`N8: precip/used-by/${r}.json: ${r} has no nrw/rain/ directory`);
+    if (!Array.isArray(rows)) { v.push(`N8: precip/used-by/${r}.json: not an array of memberships`); continue; }
+    if (!rows.length) v.push(`N8: precip/used-by/${r}.json: empty — a rain gauge in no set carries no file at all`);
+    const want = forward.get(r);
+    if (!want) { extraFiles.push(r); continue; }
+    const seen = new Set();
+    for (const e of rows) {
+      const g = String(e.no);
+      if (seen.has(g)) { v.push(`N8: precip/used-by/${r}.json: gauge ${g} listed twice`); continue; }
+      seen.add(g);
+      const s = want.get(g);
+      if (!s) { v.push(`N8: precip/used-by/${r}.json: names gauge ${g}, whose own meta.json does not hold ${r} in its set`); continue; }
+      if (usedByKey(e) !== usedByKey(s)) {
+        v.push(`N8: precip/used-by/${r}.json: gauge ${g} carries via/km ${usedByKey(e)}, the set says ${usedByKey(s)}`);
+      }
+    }
+    for (const g of want.keys()) {
+      if (!seen.has(g)) v.push(`N8: precip/used-by/${r}.json: precip/${g}/meta.json holds ${r} in its set, but the reverse index does not name ${g}`);
+    }
+  }
+  const lst = a => a.slice(0, maxList).join(', ') + (a.length > maxList ? `, … and ${a.length - maxList} more` : '');
+  if (missingFiles.length) v.push(`N8: precip/used-by/: ${missingFiles.length} rain station(s) are in a set but have no file: ${lst(missingFiles.sort())}`);
+  if (extraFiles.length) v.push(`N8: precip/used-by/: ${extraFiles.length} file(s) for a rain station no set holds: ${lst(extraFiles.sort())}`);
+  return v;
 }
 
 // ---------- N9 hourly response class ----------
@@ -1318,7 +1390,9 @@ async function main() {
     } else {
       const index = readJson(join(precipDir, 'index.json'));
       const rainIds = new Set(fleet.rain.keys());
-      violations.push(...checkPrecipShape(index, readPrecip(precipDir), rainIds, topology && topology.gauges));
+      const products = readPrecip(precipDir);
+      violations.push(...checkPrecipShape(index, products, rainIds, topology && topology.gauges));
+      violations.push(...checkPrecipUsedBy(readUsedBy(precipDir), products, rainIds));
       violations.push(...checkPrecipDrift(index, readHead(gitDir, `${prefix}/precip/index.json`)));
       violations.push(...checkImplausibleRainStock(fleet.rain));
       // (e) the committed bytes ARE the rule's output. A tree that merely looks

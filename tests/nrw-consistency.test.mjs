@@ -820,7 +820,7 @@ test('CLI: readProduct attaches manifest entries and stored days', () => {
 // HEAD to drift against; the shape rules stand on their own.
 
 const {
-  checkPrecipShape, checkPrecipDrift, checkImplausibleRainStock,
+  checkPrecipShape, checkPrecipDrift, checkPrecipUsedBy, checkImplausibleRainStock,
   MIN_PRECIP_SERIES, MIN_RECEIVING_NODES, MAX_MM_DAY_RAW,
 } = await import('../scripts/check-nrw-consistency.mjs');
 
@@ -854,9 +854,64 @@ const precipProduct = (over = {}) => new Map([['g1', {
 const RAIN_IDS = new Set(['r1', 'r2']);
 const TOPO_GAUGES = { g1: {} };
 
+// the reverse index the collector writes beside the sets: the SAME two
+// memberships, read from the rain gauge's side
+const usedByOf = (over = {}) => new Map([
+  ['r1', [{ no: 'g1', name: 'G1', via: 'basin', km: 4 }]],
+  ['r2', [{ no: 'g1', name: 'G1', via: 'basin', km: 9 }]],
+  ...Object.entries(over),
+]);
+
 test('N8: the healthy product is green', () => {
   assert.deepEqual(checkPrecipShape(HEALTHY_INDEX, precipProduct(), RAIN_IDS, TOPO_GAUGES), []);
+  assert.deepEqual(checkPrecipUsedBy(usedByOf(), precipProduct(), RAIN_IDS), []);
   assert.deepEqual(checkPrecipDrift(HEALTHY_INDEX, HEALTHY_INDEX), []);
+});
+
+// ---------- N8c4: the reverse index, compared in BOTH directions ----------
+// A second copy of a relation is a second chance to be wrong, and every other
+// N8 clause reads only the forward side — so each direction is broken by hand
+// here and watched go red.
+
+test('N8c4: a membership with no entry in the reverse index', () => {
+  const short = usedByOf({ r2: [] });
+  const v = checkPrecipUsedBy(short, precipProduct(), RAIN_IDS).join('\n');
+  assert.match(v, /precip\/used-by\/r2\.json: precip\/g1\/meta\.json holds r2 in its set, but the reverse index does not name g1/);
+  // …and a whole missing FILE is its own line, not silence
+  const gone = usedByOf(); gone.delete('r2');
+  assert.match(checkPrecipUsedBy(gone, precipProduct(), RAIN_IDS).join('\n'),
+    /1 rain station\(s\) are in a set but have no file: r2/);
+});
+
+test('N8c4: an entry no meta.json holds, and a file for a station in no set at all', () => {
+  const ghost = usedByOf({ r1: [{ no: 'g1', name: 'G1', via: 'basin', km: 4 }, { no: 'g9', name: 'G9', via: 'local', km: 1 }] });
+  assert.match(checkPrecipUsedBy(ghost, precipProduct(), RAIN_IDS).join('\n'),
+    /precip\/used-by\/r1\.json: names gauge g9, whose own meta\.json does not hold r1 in its set/);
+  const extra = usedByOf({ r3: [{ no: 'g1', name: 'G1', via: 'local', km: 2 }] });
+  const v = checkPrecipUsedBy(extra, new Map([...precipProduct()]), new Set(['r1', 'r2', 'r3'])).join('\n');
+  assert.match(v, /1 file\(s\) for a rain station no set holds: r3/);
+});
+
+test('N8c4: the entry carries the set\'s own via and km, and its id is a rain directory', () => {
+  const skew = usedByOf({ r1: [{ no: 'g1', name: 'G1', via: 'local', km: 4 }] });
+  assert.match(checkPrecipUsedBy(skew, precipProduct(), RAIN_IDS).join('\n'),
+    /precip\/used-by\/r1\.json: gauge g1 carries via\/km local\|4, the set says basin\|4/);
+  const alien = usedByOf({ ghost: [] });
+  assert.match(checkPrecipUsedBy(alien, precipProduct(), RAIN_IDS).join('\n'),
+    /precip\/used-by\/ghost\.json: ghost has no nrw\/rain\/ directory/);
+});
+
+test('N8c4: an unparseable or duplicated reverse index is not read as an empty one', () => {
+  assert.match(checkPrecipUsedBy(usedByOf({ r1: null }), precipProduct(), RAIN_IDS).join('\n'),
+    /precip\/used-by\/r1\.json: not an array of memberships/);
+  const twice = usedByOf({ r1: [{ no: 'g1', name: 'G1', via: 'basin', km: 4 }, { no: 'g1', name: 'G1', via: 'basin', km: 4 }] });
+  assert.match(checkPrecipUsedBy(twice, precipProduct(), RAIN_IDS).join('\n'),
+    /precip\/used-by\/r1\.json: gauge g1 listed twice/);
+});
+
+test('N8c4: a precip/ tree with no used-by at all is red, not vacuously green', () => {
+  const v = checkPrecipUsedBy(new Map(), precipProduct(), RAIN_IDS).join('\n');
+  assert.match(v, /2 rain station\(s\) are in a set but have no file: r1, r2/);
 });
 
 test('N8a: an mm value over the areal bound, and an n over the set size', () => {
