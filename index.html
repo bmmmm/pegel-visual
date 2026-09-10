@@ -994,11 +994,9 @@
   .pf-list.precip-set .at a { display: inline; border: 0; padding: 0; color: var(--ink); }
   .pf-list.precip-set .at .nolink { color: var(--mid); }
   @container plate (min-width: 34rem) {
-    /* wide enough for one row per member: the gauge it drains to moves back up
-       onto the same line, after the distance */
-    /* one row per member: the distance and the gauge it drains to become two
-       right-hand columns, so the numbers line up under each other instead of
-       hanging off names of every length */
+    /* wide enough for one row per member: the distance and the gauge it drains
+       to become two right-hand columns, so the numbers line up under each other
+       instead of hanging off names of every length */
     .pf-list.precip-set .at { flex-basis: auto; min-width: 22ch; text-align: right; }
     .pf-list.precip-set .km { margin-left: auto; min-width: 9ch; text-align: right; }
   }
