@@ -3358,8 +3358,15 @@ const T = {
   netTabTitle: 'the basin’s gauges and how they drain into one another',
   netSub: 'every gauge in the BASIN — the profile above lists only the gauges on the river itself',
   netAxis: 'x = distance to the basin mouth, mouth on the right · y = one track per watercourse',
-  netDelivered: 'The mirror delivers the downstream neighbour of each gauge; this drawing joins those edges and derives nothing. An elbow is a confluence.',
-  netDistNote: 'Distance is accumulated along the delivered chain: a tributary hangs at the gauge below its mouth, not at a surveyed river km.',
+  // "derives nothing" was false and sat 40 characters from the sentence that
+  // contradicted it: the EDGES are delivered, the x positions are this
+  // drawing's own sum along them (review, 2026-09-10)
+  netDelivered: 'The mirror delivers the downstream neighbour of each gauge; this drawing joins those edges and invents none of its own. An elbow is a confluence.',
+  netDistNote: 'Distance is accumulated along that delivered chain: a tributary hangs at the gauge below its mouth, not at a surveyed river km.',
+  netApproxNote: 'A distance the file delivers for the gauge itself prints bare; one this drawing summed across a confluence prints with a ≈. Only the bare ones are river kilometres anybody measured.',
+  netToMouth: 'to the mouth',
+  netSubEmpty: 'the mirror groups its gauges into basins — most waters are a tributary inside one, and carry no network of their own',
+  netNoPlaced: 'the mirrored topology gives no gauge in this basin a downstream chain to draw',
   netEdge: 'flows into',
   netNoArea: 'catchment area not in the file — drawn at the smallest size',
   netUnplaced: 'gauges the file gives no downstream neighbour for — listed below, not drawn',
@@ -5793,7 +5800,13 @@ async function loadNet() {
   if (netData && netData.river === forRiver && !netData.loading) return;
   netData = { river: forRiver, loading: true };
   const topo = await netTopology();
-  if (mode !== 'river' || state.river !== forRiver) return; // switched away — discard
+  if (mode !== 'river' || state.river !== forRiver) {
+    // Switched away mid-flight: drop the answer AND the "loading" marker left
+    // behind, or the next river inherits a spinner belonging to the one we left
+    // and render()'s `if (!netData) loadNet()` never fires again.
+    if (netData && netData.river === forRiver && netData.loading) netData = null;
+    return;
+  }
   netData = topo && topo.gauges && topo.basins
     ? { river: forRiver, topo }
     : { river: forRiver, error: T.netNoTopology };
@@ -5805,24 +5818,40 @@ async function loadNet() {
 // (the ?rivers map's dot ladder), in km² instead of gauge counts. A gauge whose
 // area the file does not carry is NOT quietly filed under "small": it gets the
 // smallest radius and its own mark, which the key names.
+// The label is DERIVED from the threshold, never typed beside it: two literals
+// drift, and a key reading "500 km² and up" over a ladder that really breaks at
+// 200 is a plate lying about its own mark with every test green (review,
+// 2026-09-10).
 const NET_DOT_STEPS = [
-  { min: 500, r: 4.2, label: '500 km² and up' },
-  { min: 100, r: 3.0, label: '100–499 km²' },
-  { min: 0, r: 2.0, label: 'under 100 km²' },
+  { min: 500, r: 4.2 },
+  { min: 100, r: 3.0 },
+  { min: 0, r: 2.0 },
 ];
+const netStepLabel = i => {
+  const s = NET_DOT_STEPS[i], above = NET_DOT_STEPS[i - 1];
+  if (!above) return `${s.min} km² and up`;
+  return s.min === 0 ? `under ${above.min} km²` : `${s.min}–${above.min - 1} km²`;
+};
 const netDot = km2 => NET_DOT_STEPS.find(s => km2 >= s.min) || NET_DOT_STEPS[NET_DOT_STEPS.length - 1];
+// the radius the key's own "drawn at the smallest size" sentence promises
+const netSmallestR = () => NET_DOT_STEPS[NET_DOT_STEPS.length - 1].r;
 
 // The one glyph the drawing and the key share. Stage 10 ships `msMark(stage,
 // opts)` (the alert-stage disc); until a stage is known for a gauge there is
 // nothing ordinal to draw and this stays a plain circle. Written as a lookup so
 // the integrator swaps nothing: the day msMark and a stage both exist, the
 // drawing AND its swatch change together.
+// cx/cy/r reach msMark as NUMBERS. They used to arrive already run through
+// toFixed(1), so arithmetic on the other side ("10.0" + 4.2) would have
+// concatenated instead of added — invisible here, because the msMark branch is
+// unreachable until a stage exists (review, 2026-09-10).
 function netNodeGlyph(n) {
   const cls = 'net-dot' + (n.km2 == null ? ' no-area' : '');
+  const cx = Number(n.cx), cy = Number(n.cy), r = Number(n.r);
   if (n.stage != null && typeof msMark === 'function') {
-    return msMark(n.stage, { x: n.cx, y: n.cy, r: n.r, cls });
+    return msMark(n.stage, { x: cx, y: cy, r, cls });
   }
-  return `<circle class="${cls}" cx="${n.cx}" cy="${n.cy}" r="${n.r}"/>`;
+  return `<circle class="${cls}" cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="${r}"/>`;
 }
 
 // distance to the basin mouth, accumulated along the DELIVERED chain. `distKm`
@@ -5855,12 +5884,26 @@ function netDistances(ids, gauges) {
   return out;
 }
 
+// An empty net view is the COMMON case, not an exotic one: the mirror carries
+// 165 waters and only 16 basins, so most mirrored rivers are a tributary inside
+// somebody else's basin and have no network of their own. It must therefore be
+// a first-class state carrying everything renderNet reads — a `summary` left
+// undefined here threw out of render() and froze the plate for the rest of the
+// session (review, 2026-09-10).
+function netEmpty(d, text, topo) {
+  return {
+    kind: 'net', river: d.river, empty: true, text,
+    summary: `${d.river}: ${text}`,
+    source: `${LANUK} · topology ${(topo && topo.generated) || '—'} · ${T.noLiveFeed}`,
+  };
+}
+
 function netViewModel(d) {
   const topo = d.topo;
   const river = (d.river || '').toUpperCase();
   const entry = Object.entries(topo.basins).find(([, b]) =>
     String(b.name || '').toUpperCase() === river || String(b.river || '').toUpperCase() === river);
-  if (!entry) return { kind: 'net', river: d.river, empty: true, text: T.netNoBasin };
+  if (!entry) return netEmpty(d, T.netNoBasin, topo);
   const [code, basin] = entry;
   // a basin entry may carry ids or objects carrying an id — the gate accepts both
   const ids = (basin.gauges || []).map(g => (g && typeof g === 'object' ? g.id : g)).filter(Boolean);
@@ -5870,6 +5913,9 @@ function netViewModel(d) {
     return {
       id, name: g.name || id, water: g.water || '—',
       km2: Number.isFinite(g.km2) ? g.km2 : null,
+      // the file's OWN distKm, kept so the plate can tell a delivered distance
+      // apart from one this drawing accumulated
+      own: Number.isFinite(g.distKm) ? g.distKm : null,
       down: g.down || null, dist: dists.get(id),
       // stage 10's alert stage, when it lands; null keeps the plain circle
       stage: null,
@@ -5877,7 +5923,7 @@ function netViewModel(d) {
   });
   const placed = all.filter(n => n.dist != null).sort((a, b) => b.dist - a.dist);
   const unplaced = all.filter(n => n.dist == null).sort((a, b) => a.name.localeCompare(b.name));
-  if (!placed.length) return { kind: 'net', river: d.river, empty: true, text: T.netNoBasin };
+  if (!placed.length) return netEmpty(d, T.netNoPlaced, topo);
 
   // one track per watercourse, the basin's own river on top, the rest in the
   // order the flow-ordered list first meets them — so a tributary's track sits
@@ -5897,6 +5943,12 @@ function netViewModel(d) {
     n.track = trackOf(n.water);
     n.x = 1 - n.dist / span; // mouth (dist 0) on the RIGHT, like the pf-flow strip
     n.step = netDot(n.km2 == null ? 0 : n.km2);
+    // TWO ESTIMATORS live in this column, and the plate has to say which is
+    // which: a gauge whose whole chain runs down its own water keeps the file's
+    // delivered distKm, a tributary's is this drawing's own sum (its distance to
+    // its own confluence plus wherever the gauge below it sits). The second
+    // approximates a river km nobody surveyed — it prints with a ≈.
+    n.exact = n.own != null && Math.abs(n.dist - n.own) < 1e-9;
   }
   const byId = new Map(placed.map(n => [n.id, n]));
   const edges = placed.filter(n => n.down && byId.has(n.down))
@@ -5912,6 +5964,13 @@ function netViewModel(d) {
   };
 }
 
+// One column, two estimators — so the mark that separates them rides on the
+// value itself, not only in a caveat at the foot of the plate. A delivered
+// river km prints bare; one this drawing summed prints with a ≈.
+function netKm(n) {
+  return `${n.exact ? '' : '≈ '}km ${n.dist.toFixed(1)}`;
+}
+
 function renderNetChart(vm) {
   const W = 320, padL = 10, padR = 10, padT = 9, rowH = 13;
   const H = padT * 2 + Math.max(vm.tracks - 1, 0) * rowH;
@@ -5923,23 +5982,29 @@ function renderNetChart(vm) {
   const edges = vm.edges.map(e =>
     `<polyline class="net-edge" points="${X(e.from.x)},${Y(e.from.track)} ${X(e.to.x)},${Y(e.from.track)} ${X(e.to.x)},${Y(e.to.track)}"/>`).join('');
   const nodes = vm.nodes.map(n => {
-    const g = { ...n, cx: X(n.x), cy: Y(n.track), r: n.step.r };
-    const label = `${n.name} (${n.water}): ${n.km2 == null ? T.netNoArea : n.km2 + ' km²'}, ${n.dist.toFixed(1)} km to the mouth`;
+    const cx = +X(n.x), cy = +Y(n.track);
+    const g = { ...n, cx, cy, r: n.step.r };
+    const label = `${n.name} (${n.water}): ${n.km2 == null ? T.netNoArea : n.km2 + ' km²'}, ${netKm(n)} ${T.netToMouth}`;
     return `<a${navAttrs('lanuk-' + n.id)}><title>${esc(label)}</title>` +
       netNodeGlyph(g) +
-      `<rect class="hit" x="${(+g.cx - 7).toFixed(1)}" y="${(+g.cy - 6).toFixed(1)}" width="14" height="12"/></a>`;
+      `<rect class="hit" x="${(cx - 7).toFixed(1)}" y="${(cy - 6).toFixed(1)}" width="14" height="12"/></a>`;
   }).join('');
   return svgWrap(`0 0 ${W} ${H}`, edges + nodes,
-    ' class="chart net" role="group"' + attr('aria-label', `${vm.basin}: ${vm.nodes.length} gauges and the edges between them`));
+    ' class="chart net" role="group"' +
+    attr('aria-label', `${vm.basin}: ${vm.nodes.length} ${plural(vm.nodes.length, 'gauge')} and the edges between them`));
 }
 
 function renderNet(vm) {
   const vh = `<p class="vh">${esc(vm.summary)}</p>`;
-  const tabs = riverTabs('net', true);
+  const tabs = riverTabs('net', riverIsMirrored());
+  // an empty net view is still a PLATE: it says what it is, why there is
+  // nothing to draw, and the foot below it still names source and age
   if (vm.empty) {
     return `<section class="plate">${vh}` +
-      `<header class="p-head"><h1>${esc(waterLabel(vm.river))} · ${esc(T.netTitle)}</h1></header>${tabs}` +
-      `<p class="p-dim">${esc(vm.text)}</p></section>`;
+      `<header class="p-head"><h1>${esc(waterLabel(vm.river))} · ${esc(T.netTitle)}</h1>` +
+      `<p class="p-sub">${esc(T.netSubEmpty)}</p></header>${tabs}` +
+      `<section class="p-block"><h2 class="p-h2">${esc(T.netTitle)}</h2>` +
+      `<p class="p-dim">${esc(vm.text)}</p></section></section>`;
   }
   const head = `<header class="p-head"><h1>${esc(waterLabel(vm.river))} · ${esc(T.netTitle)}</h1>` +
     `<p class="p-sub">${vm.total} ${esc(plural(vm.total, 'gauge'))} ${esc(T.netInBasin)} · ` +
@@ -5949,14 +6014,15 @@ function renderNet(vm) {
       `<li${placed ? '' : ' class="off"'}><a${navAttrs('lanuk-' + n.id)}>` +
       `<span class="name">${esc(n.name)}</span>` +
       `<span class="elev">${esc(n.water)}</span>` +
-      `<span class="km">${placed ? 'km ' + n.dist.toFixed(1) : '—'}</span></a></li>`).join('');
+      `<span class="km">${placed ? esc(netKm(n)) : '—'}</span></a></li>`).join('');
   const key = plateKey([
-    ...NET_DOT_STEPS.map(s =>
-      ({ sw: keySw(netNodeGlyph({ cx: 6, cy: 6, r: s.r, km2: s.min, stage: null }), 'net'), label: s.label })),
-    vm.anyNoArea && { sw: keySw(netNodeGlyph({ cx: 6, cy: 6, r: 2, km2: null, stage: null }), 'net'), label: T.netNoArea },
+    ...NET_DOT_STEPS.map((s, i) =>
+      ({ sw: keySw(netNodeGlyph({ cx: 6, cy: 6, r: s.r, km2: s.min, stage: null }), 'net'), label: netStepLabel(i) })),
+    vm.anyNoArea && { sw: keySw(netNodeGlyph({ cx: 6, cy: 6, r: netSmallestR(), km2: null, stage: null }), 'net'), label: T.netNoArea },
     { sw: keySw('<polyline class="net-edge" points="1,3 7,3 7,9 11,9"/>', 'net'), label: T.netEdge },
     { note: T.netDelivered },
     { note: T.netDistNote },
+    vm.nodes.some(n => !n.exact) && { note: T.netApproxNote },
     vm.unplaced.length && { note: `${vm.unplaced.length} ${plural(vm.unplaced.length, 'gauge')} — ${T.netUnplaced}`, warn: true },
   ]);
   return `<section class="plate">${vh}${head}${tabs}` +
@@ -7366,6 +7432,7 @@ function switchRiver(name, push = true) {
   state.feed = null;  // per-river too: the loader that answers says what fed it
   state.archiveSource = null;
   waveData = null; // the wave heatmap is per-river
+  netData = null;  // and so is the network — leaving it showed the Erft under a SIEG crumb
 
   if (push) history[push === 'replace' ? 'replaceState' : 'pushState'](null, '', '?river=' + encodeURIComponent(next) + viewSuffix());
   applyRiverChrome();
@@ -7421,6 +7488,7 @@ function switchGlobalMode(name, push = true) {
   state.error = null;
   if (m.reset) m.reset();
   waveData = null;
+  netData = null;
 
   if (push) history[push === 'replace' ? 'replaceState' : 'pushState'](null, '', m.query());
   m.chrome();
@@ -8855,6 +8923,12 @@ function render() {
       setSourceLine(vm.source);
       return;
     }
+    // The topology file covers the LANUK basins and nothing else. On a WSV
+    // water it would draw the mirror's few NRW gauges on that river under a
+    // crumb whose profile view shows PEGELONLINE's whole fleet — two fleets
+    // under one name. The chip is already withheld there; a hand-typed
+    // ?view=net falls back to the profile instead of half-answering.
+    if (viewMode === 'net' && !riverIsMirrored()) viewMode = 'live';
     if (viewMode === 'net') {
       if (netData && netData.error) return setScreenError(`${T.netFailed} ${state.river}: ${netData.error}`);
       if (!netData || netData.loading) {

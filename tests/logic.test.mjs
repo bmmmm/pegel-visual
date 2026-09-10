@@ -5628,3 +5628,173 @@ test('net: the list is the view on a phone — every gauge tappable, unplaced on
     'a gauge the file cannot place is still a row, marked as off the drawing');
   assert.match(list, /data-nav="lanuk-2747900000200"/, 'the mirror id is the target, never the display name');
 });
+
+// ---------- net, round two: the holes a fresh reviewer walked through ----------
+
+test('net: a mirrored water with no basin of its own is a PLATE, not a crash', () => {
+  // 150 of the mirror's 165 waters are a tributary inside somebody else's
+  // basin. The empty view model used to carry no `summary`, so renderNet threw
+  // out of render() and froze the plate for the rest of the session.
+  const app = loadApp({ search: '?river=LENNE&view=net' });
+  const vm = app.run(`(() => { netData = { river: 'LENNE', topo: ${NET_TOPO} }; return netViewModel(netData); })()`);
+  assert.equal(vm.empty, true, 'the Lenne is in no basin of this fixture');
+  assert.equal(typeof vm.summary, 'string', 'an empty view model still carries a summary');
+  assert.match(vm.source, /topology 2026-09-10/, 'and still names source and age');
+  const html = app.run('renderNet(netViewModel(netData))');
+  assert.match(html, /LENNE · NETWORK/, 'it is still a titled plate');
+  assert.match(html, /carry no network of their own/, 'that says why there is nothing to draw');
+  assert.ok(!html.includes('svg class="chart net"'), 'and draws nothing');
+
+  // and the whole way through the real render(), which is where it threw
+  const live = loadApp({ search: '?river=LENNE&view=net' });
+  const out = live.run(`(() => {
+    state.river = 'LENNE';
+    state.riverStations = [{ name: 'X', km: 1, elev: null, value: 10, kind: 'normal' }];
+    state.feed = { live: false };
+    netData = { river: 'LENNE', topo: ${NET_TOPO} };
+    try { render(); return { ok: true, html: document.getElementById('screen').innerHTML }; }
+    catch (e) { return { ok: false, err: String(e) }; }
+  })()`);
+  assert.equal(out.ok, true, `render() must not throw: ${out.err || ''}`);
+  assert.match(out.html, /NETWORK/, 'and it really painted the empty plate');
+});
+
+test('net: switching river drops the old basin instead of showing it under the new name', () => {
+  const app = loadApp({ search: '?river=ERFT&view=net' });
+  const after = app.run(`(() => {
+    netData = { river: 'ERFT', topo: ${NET_TOPO} };
+    switchRiver('SIEG');
+    return { river: state.river, net: netData };
+  })()`);
+  assert.equal(after.river, 'SIEG', 'the reader asked for the Sieg');
+  assert.equal(after.net, null, 'so the Erft topology must not survive the switch');
+});
+
+test('net: the size ladder cannot drift away from the labels the key prints', () => {
+  const app = loadApp({ search: '?river=ERFT&view=net' });
+  const steps = app.run('NET_DOT_STEPS.map((s, i) => ({ min: s.min, r: s.r, label: netStepLabel(i) }))');
+  // radius must fall as the catchment falls — an ordinal claim, checked as one
+  for (let i = 1; i < steps.length; i++) {
+    assert.ok(steps[i].r < steps[i - 1].r, `step ${i} must be smaller than step ${i - 1}`);
+    assert.ok(steps[i].min < steps[i - 1].min, `and cover a smaller catchment`);
+  }
+  // every label must contain its OWN threshold, so a moved threshold moves the
+  // words with it instead of leaving the key stating a number that is not true
+  for (const s of steps) assert.ok(s.label.includes(String(s.min === 0 ? steps[steps.length - 2].min : s.min)),
+    `"${s.label}" must name its own threshold ${s.min}`);
+  // and the drawing must really use the radius the ladder names
+  const drawn = app.run(`(() => {
+    netData = { river: 'ERFT', topo: ${NET_TOPO} };
+    const vm = netViewModel(netData);
+    return vm.nodes.map(n => ({ km2: n.km2, r: n.step.r }));
+  })()`);
+  for (const n of drawn) {
+    const want = steps.find(s => (n.km2 == null ? 0 : n.km2) >= s.min);
+    assert.equal(n.r, want.r, `a ${n.km2} km² gauge must be drawn at ${want.r}`);
+  }
+});
+
+test('net: the unknown-area node is drawn at the size its own legend promises', () => {
+  const app = loadApp({ search: '?river=SIEG&view=net' });
+  const html = app.run(`(() => { netData = { river: 'SIEG', topo: ${NET_TOPO} }; return renderNet(netViewModel(netData)); })()`);
+  const small = app.run('netSmallestR()');
+  const draw = svgAt(html);
+  const radii = [...draw.matchAll(/<circle class="net-dot no-area"[^>]*r="([\d.]+)"/g)].map(m => +m[1]);
+  assert.ok(radii.length > 0, 'the Sieg really has gauges without a catchment area');
+  // the key says "drawn at the smallest size" — so it must BE the smallest
+  assert.deepEqual([...new Set(radii)], [small], `the hollow nodes must all be r=${small}`);
+  assert.match(html, /drawn at the smallest size/, 'and the key is what makes that a promise');
+  const biggest = app.run('NET_DOT_STEPS[0].r');
+  assert.ok(small < biggest, 'sanity: the smallest step really is smaller than the largest');
+});
+
+test('net: loadNet ends in scheduleRender, or the view never appears', () => {
+  const app = loadApp({ search: '?river=ERFT&view=net' });
+  const r = app.run(`(async () => {
+    let renders = 0;
+    const realSchedule = scheduleRender;
+    scheduleRender = () => { renders++; };
+    getJson = async () => (${NET_TOPO});
+    state.river = 'ERFT';
+    netData = null;
+    await loadNet();
+    scheduleRender = realSchedule;
+    return { renders, basins: netData && netData.topo ? Object.keys(netData.topo.basins).length : 0 };
+  })()`);
+  return r.then(v => {
+    assert.equal(v.basins, 2, 'the loader really parsed the topology');
+    assert.ok(v.renders > 0, 'and asked for a repaint — without this the plate never appears');
+  });
+});
+
+test('net: loadNet discards a topology the reader has already navigated away from', () => {
+  const app = loadApp({ search: '?river=ERFT&view=net' });
+  const r = app.run(`(async () => {
+    getJson = async () => { state.river = 'SIEG'; return (${NET_TOPO}); };
+    state.river = 'ERFT';
+    netData = null;
+    await loadNet();
+    return netData && netData.river;
+  })()`);
+  return r.then(v => {
+    // not merely "not installed": the loading marker must go too, or the river
+    // we switched TO inherits a spinner and render() never retries
+    assert.equal(v, null, 'the discarded load leaves no state behind at all');
+  });
+});
+
+test('net: a cycle in the delivered chain is unplaced, never an infinite walk', () => {
+  const app = loadApp({ search: '?river=ERFT&view=net' });
+  const out = app.run(`(() => {
+    const gauges = {
+      A: { id: 'A', name: 'A', water: 'W', distKm: 10, km2: 5, down: 'B' },
+      B: { id: 'B', name: 'B', water: 'W', distKm: 5, km2: 5, down: 'A' },
+      C: { id: 'C', name: 'C', water: 'W', distKm: 2, km2: 5, down: null, downSrc: 'mouth' },
+    };
+    const d = netDistances(['A', 'B', 'C'], gauges);
+    return { a: d.get('A'), b: d.get('B'), c: d.get('C') };
+  })()`);
+  assert.equal(out.a, null, 'a gauge in a cycle reaches no mouth');
+  assert.equal(out.b, null);
+  assert.equal(out.c, 2, 'and the gauge that does is unaffected');
+});
+
+test('net: the km column marks which numbers the file delivered and which it summed', () => {
+  const app = loadApp({ search: '?river=ERFT&view=net' });
+  const { vm, html } = app.run(`(() => {
+    netData = { river: 'ERFT', topo: ${NET_TOPO} };
+    const vm = netViewModel(netData);
+    return { vm, html: renderNet(vm) };
+  })()`);
+  const at = n => vm.nodes.find(x => x.name === n);
+  // Glesch is on the Erft the whole way down: its distKm IS the answer
+  assert.equal(at('Glesch').exact, true, 'a main-stem gauge keeps a delivered river km');
+  // Weilerswist is on the Swistbach: 1.45 to its own mouth + 62.53 for Bliesheim
+  assert.equal(at('Weilerswist').exact, false, 'a tributary gauge is a sum across a confluence');
+  const list = html.slice(html.indexOf('<ol class="pf-list net-list">'), html.indexOf('</ol>'));
+  assert.match(list, /Glesch<\/span><span class="elev">Erft<\/span><span class="km">km 33\.9</,
+    'the delivered one prints bare');
+  assert.match(list, /Weilerswist<\/span><span class="elev">Swistbach<\/span><span class="km">≈ km 64\.0</,
+    'the summed one prints with a ≈');
+  assert.match(html, /prints with a ≈/, 'and the key says which is which');
+  // the claim that used to sit in the key was false and must not come back
+  assert.ok(!html.includes('derives nothing'), 'the plate must not claim it derives nothing');
+});
+
+test('net: a WSV river never draws the mirror’s basin under its own name', () => {
+  const app = loadApp({ search: '?river=RHEIN&view=net' });
+  const out = app.run(`(() => {
+    state.river = 'RHEIN';
+    state.riverStations = [
+      { name: 'BASEL', km: 164, elev: 245, value: 489, kind: 'normal' },
+      { name: 'BONN', km: 654, elev: 44, value: 122, kind: 'normal' },
+    ];
+    state.feed = { live: true };  // PEGELONLINE: not a mirrored water
+    netData = { river: 'RHEIN', topo: ${NET_TOPO} };
+    render();
+    return { view: viewMode, html: document.getElementById('screen').innerHTML };
+  })()`);
+  assert.equal(out.view, 'live', 'net is normalized away on a WSV water');
+  assert.ok(!out.html.includes('chart net'), 'and no network is drawn');
+  assert.ok(!out.html.includes('cmd:net'), 'nor is the chip offered');
+});
