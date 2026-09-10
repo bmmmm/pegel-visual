@@ -184,6 +184,12 @@
 // and the last up to the export hour: on the seed the first day's 35-sample
 // "min" sat above the source's day mean at 9 of 252 gauges (condenseHires
 // `full`, dayMin). `n` is written for such days regardless, honestly partial.
+// Since 2026-09-10 `full` also demands 90 % of the samples the step implies:
+// spanning a day is not covering it, and a day whose samples run from 00:00
+// to 23:45 around a hole in the middle passed the span test and shipped its
+// min anyway — 4 of 15 411 days on the 2026-09-06 mirror. The failure mode is
+// N5 (a min above the source's own day mean) going red on a run nobody
+// touched, so the floor sits at the point the min is derived, not at the gate.
 //
 // ---- Usage ----
 //   node scripts/fetch-nrw-archive.mjs --out nrw-branch/nrw --out-hires nrw-hires-branch/nrw-hires
@@ -615,13 +621,17 @@ export function foldDaily(rows, { boundaryHour = 0, field, reduce = 'last', plau
 
 // the day extremes of a fine series: min/max/mean/n per MEZ day — min and n
 // are what the source does not deliver, mean and max are the cross-check.
-// `full[d]` says whether the kept samples span the whole day: first sample
-// within one `step` of the day boundary, last within one `step` of the next.
-// Only then is the day's min a day minimum. The window's edge days are partial
+// `full[d]` says whether the kept samples COVER the whole day: first sample
+// within one `step` of the day boundary, last within one `step` of the next,
+// AND at least FULL_DAY_SAMPLE_SHARE of the samples the step implies. Only
+// then is the day's min a day minimum. The window's edge days are partial
 // by construction (the 2026-09-04 seed starts 15:15, an export ends ~15:05),
 // and on that seed the first day's "min" sat ABOVE the source's own day mean
 // at 9 of 252 gauges — 35 afternoon samples of 96 — which is exactly what the
-// gate's N5 refuses. A gap inside the day is the source's, not the edge's.
+// gate's N5 refuses. A gap INSIDE the day is the source's, not the edge's —
+// but it hides from the span test, which sees only the two outer samples, so
+// the count floor is what catches it.
+const FULL_DAY_SAMPLE_SHARE = 0.9;
 export function condenseHires(rows, { boundaryHour = 0, plausible = null, step = null } = {}) {
   const years = new Map();
   const DAY_S = 86400;
@@ -646,7 +656,12 @@ export function condenseHires(rows, { boundaryHour = 0, plausible = null, step =
   }
   for (const yr of years.values()) {
     yr.mean = yr.sum.map((s, d) => (yr.n[d] ? Math.round((s / yr.n[d]) * 1000) / 1000 : null));
-    yr.full = yr.n.map((n, d) => n != null && yr.first[d] <= step && yr.last[d] >= DAY_S - step);
+    // spanning the day is not covering it: the first and the last sample say
+    // nothing about a hole between them, so a count floor has to stand beside
+    // the span (measured 2026-09-06: 4 of 15 411 days span the day on under
+    // 90 % of its samples, and each of them shipped a `min` off a partial day)
+    const floor = Math.ceil((DAY_S / step) * FULL_DAY_SAMPLE_SHARE);
+    yr.full = yr.n.map((n, d) => n != null && n >= floor && yr.first[d] <= step && yr.last[d] >= DAY_S - step);
     delete yr.sum; delete yr.first; delete yr.last;
   }
   return years;

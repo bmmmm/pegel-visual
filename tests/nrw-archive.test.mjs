@@ -65,6 +65,22 @@ test('condenseHires: a gap inside the day is the source\'s, the day stays full',
   assert.equal(dayMin(yr)[D4], 100);
 });
 
+test('condenseHires: a hole big enough to hide the day\'s minimum takes the day\'s min away', () => {
+  // the span test sees only the two outer samples, so a day can run 00:00 →
+  // 23:45 around a hole of hours and still look complete. Four hours out of
+  // 96 samples: 80 left, under the 87 the 90 % floor demands.
+  const holed = series(4, 0, 23 * 60 + 45, 15, m => m >= 10 * 60 && m < 14 * 60);
+  const yr = condenseHires(holed).get(2026);
+  assert.equal(yr.n[D4], 96 - 16, 'n is written regardless — honestly partial');
+  assert.equal(yr.full[D4], false, 'a day covered to 83 % is not a full day');
+  assert.equal(dayMin(yr)[D4], null, 'and it ships no minimum');
+  // the same day without the hole is untouched
+  const whole = condenseHires(series(4, 0, 23 * 60 + 45, 15)).get(2026);
+  assert.equal(whole.n[D4], 96);
+  assert.equal(whole.full[D4], true);
+  assert.equal(dayMin(whole)[D4], 100);
+});
+
 test('condenseHires: the last sample closes the day only within one step, at 5 minutes too', () => {
   const closed = condenseHires(series(4, 0, 23 * 60 + 55, 5)).get(2026);
   assert.equal(stepOf(series(4, 0, 23 * 60 + 55, 5)), 300);
