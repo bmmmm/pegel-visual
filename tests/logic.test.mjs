@@ -6261,6 +6261,30 @@ test('net: an unknown catchment area survives the swap to a disc, as a dashed ha
   assertNamed(draw, keyClasses(html), 'SIEG net with a staged arealess node');
 });
 
+test('net: once every node is a disc, the size ladder’s own swatches become discs too', () => {
+  // The key must show the form the plate REALLY draws. While one node is still
+  // plain the ladder is drawn as plain circles; the day the mirror answers for
+  // every gauge, a ladder of plain circles would be the key promising a mark
+  // that is nowhere on the drawing — the direction of assertNamed that caught a
+  // band left in a key after it fell out of the chart.
+  const all = {};
+  for (const id of ['2741490000200', '2741500000100', '2741870000100', '2742510000100',
+    '2742990000200', '2743000000100', '2744910000100', '2746310000100', '2746790000100',
+    '2747390000100', '2747900000200']) all[id] = { value: 300, stages: NET_LADDER };
+  const app = netReadApp('ERFT', all);
+  const vm = app.run('netViewModel(netData)');
+  assert.equal(vm.anyPlain, false, 'every placed gauge can say a stage');
+  assert.equal(vm.nodes.every(n => n.stage === 1), true);
+  const html = app.run('renderNet(netViewModel(netData))');
+  const draw = svgAt(html);
+  assert.equal([...draw.matchAll(/<circle class="net-dot/g)].length, 0, 'no plain node is drawn…');
+  assert.ok(!/net-dot/.test(html), '…so the key must not name one either');
+  // and the ladder still says the sizes it is there to say
+  assert.match(html, /500 km² and up/);
+  assert.match(html, /under 100 km²/);
+  assertNamed(draw, keyClasses(html), 'ERFT net, every node staged');
+});
+
 test('net: the foot names the readings’ own age only when it differs from the topology’s', () => {
   const same = netReadApp('ERFT', NET_READINGS, '2026-09-10').run('netViewModel(netData)');
   const later = netReadApp('ERFT', NET_READINGS, '2026-09-11').run('netViewModel(netData)');
@@ -6295,6 +6319,7 @@ test('net: loadNet gives the drawing real readings, and one broken gauge costs o
       metaCalls: fetched.filter(u => /meta\\.json$/.test(u)).length,
       hasStages: vm.hasStages,
       readingsAt: netData.readingsAt,
+      read: Object.keys(netData.readings).length,
     };
   })()`);
   return r.then(v => {
@@ -6303,6 +6328,9 @@ test('net: loadNet gives the drawing real readings, and one broken gauge costs o
     assert.equal(v.stages.Bliesheim, 1, '300 cm has reached the first');
     assert.equal(v.stages.Glesch, null, 'the gauge whose meta threw keeps the plain node');
     assert.equal(v.metaCalls, 14, 'one meta per gauge in the BASIN — 14, not the 11 drawn');
-    assert.equal('readingsAt' in { readingsAt: v.readingsAt }, true);
+    assert.equal(v.read, 13, 'thirteen gauges answered; the one whose meta threw is simply absent');
+    // no mirror manifest in this stub, so there is no readings age to name —
+    // and netSource must then print the topology's date alone, not "undefined"
+    assert.equal(v.readingsAt, null);
   });
 });
