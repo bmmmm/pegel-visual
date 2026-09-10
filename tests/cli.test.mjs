@@ -152,6 +152,9 @@ test('every collector and builder main() gets past its argument parsing', () => 
     [['probe-precip-rule.mjs', '--tree', missing], 1, /no topology\.json under/],
     [['probe-hourly-lag.mjs', '--tree', missing, '--hires', missing], 1, /no topology\.json under|no hourly rain/],
     [['fetch-nrw-archive.mjs', '--dry-run', '--out', missing, '--raw', missing], 1, /ENOENT.*stations\.json/],
+    // a browser check is a main() too: it must refuse a missing tree loudly
+    // rather than spend two minutes in Chrome to find out
+    [['verify-net.mjs', '--tree', missing], 1, /no topology\.json under/],
     [['snapshot-wsv.mjs', '--nope'], 2, /unknown flag --nope/],
     [['fetch-rws-archive.mjs', '--nope'], 2, /unknown flag --nope/],
   ];
