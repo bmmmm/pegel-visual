@@ -222,6 +222,35 @@ try {
       }).length;
       check(m.noArea > 0 === noArea > 0, `${tag}: the unknown-area mark appears exactly where the file has one`,
         `${m.noArea} drawn, ${noArea} in the file`);
+
+      // The view has to be REACHABLE, not only addressable. Every check above
+      // landed straight on ?view=net, which would pass just as well if the chip
+      // never appeared on the plate a reader actually starts from — so go to
+      // the profile, find the chip there, and press it.
+      await s.send('Page.navigate', { url: `${base}/?river=${river}` });
+      let onProfile = false;
+      for (let i = 0; i < 80 && !onProfile; i++) {
+        onProfile = await s.evaluate('!!document.querySelector("#screen .p-tabs")');
+        if (!onProfile) await sleep(150);
+      }
+      await s.evaluate('typeof renderNow === "function" && renderNow()');
+      const chip = await s.evaluate(`(() => {
+        const a = document.querySelector('#screen .p-tabs [data-nav="cmd:net"]');
+        return a ? { href: a.getAttribute('href'), text: a.textContent.trim() } : null;
+      })()`);
+      check(!!chip, `${tag}: the profile plate offers the net chip`, JSON.stringify(chip));
+      check(!!chip && /view=net/.test(chip.href || ''), `${tag}: and the chip is a real, shareable link`, chip ? chip.href : '-');
+      if (chip) {
+        await s.evaluate('document.querySelector(\'#screen .p-tabs [data-nav="cmd:net"]\').click()');
+        await sleep(600);
+        await s.evaluate('typeof renderNow === "function" && renderNow()');
+        const after = await s.evaluate(`(() => ({
+          drawn: !!document.querySelector('#screen svg.chart.net'),
+          search: location.search,
+        }))()`);
+        check(after.drawn, `${tag}: pressing it really draws the network`, JSON.stringify(after));
+        check(/view=net/.test(after.search), `${tag}: and the address bar followed the press`, after.search);
+      }
       await s.close();
     }
   }
