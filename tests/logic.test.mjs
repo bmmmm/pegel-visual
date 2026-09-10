@@ -4786,10 +4786,42 @@ test('a mirrored wave ends at the mirror\'s own edge, not at the clock', async (
     const last = r.cells[r.cells.length - 1];
     assert.ok(last.v != null, `${r.name}: the newest column carries a reading, not the export lag`);
   }
-  // and a live feed still reaches today, with the same mirror index loaded
-  assert.equal(app.run(`(() => { const f = state.feed; state.feed = { name: 'WSV', live: true }; ` +
-    `const d = waveRightEdge(); state.feed = f; return d; })()`),
-    Math.floor(later / 864e5), 'a live-fed river keeps the clock as its right edge');
+  // A live feed still reaches today, and it KEEPS its empty newest column: a
+  // gap there means the feed is down. Its own clock, one day past the data, so
+  // the crop that trims the mirror's partial day WOULD reach it.
+  const day = Date.UTC(2026, 8, 3, 12);
+  const wsv = nrwApp({ search: '?river=ERFT', now: day });
+  wsv.run(`lanukWaters.clear(); wsvWaters.clear(); wsvWaters.add('RHEIN')`);
+  await wsv.run('lanukIndex()');
+  await wsv.run('loadRiver()');
+  wsv.run(`state.feed = { name: 'WSV', live: true }; viewMode = 'wave'; waveData = null`);
+  await wsv.run('loadWave()');
+  const live = wsv.run('waveViewModel(waveData)');
+  assert.equal(wsv.run('waveRightEdge()'), Math.floor(day / 864e5), 'a live-fed river keeps the clock as its right edge');
+  assert.equal(live.to, '2026-09-03', 'and draws every day up to it');
+  assert.equal(live.rows[0].cells[live.rows[0].cells.length - 1].v, null,
+    'a dead live feed stays visible as a no-data column, uncropped');
+
+  // a manifest edge AHEAD of the reader's clock (a device clock running behind)
+  // may not push the grid into the future
+  assert.equal(app.run(`(() => { const w = lanukManifestInfo.window.gauges.to; ` +
+    `lanukManifestInfo.window.gauges.to = '2027-01-01T00:00:00.000+01:00'; state.feed = { live: false }; ` +
+    `const d = waveRightEdge(); lanukManifestInfo.window.gauges.to = w; return d; })()`),
+    Math.floor(later / 864e5), 'the clock still caps the mirror edge');
+});
+
+test('cropWaveTail: it takes the export\'s own partial day and never a real outage', () => {
+  const app = loadApp({ search: '?river=ERFT' });
+  // rows as loadWave leaves them: one `vals` array per gauge, newest day last
+  const crop = rows => app.run(`cropWaveTail(${JSON.stringify(rows.map(vals => ({ vals })))}, ${rows[0].length})`);
+  const N = null;
+  assert.equal(crop([[1, 1, 1], [1, 1, 1]]), 0, 'a complete newest day is not cropped');
+  assert.equal(crop([[1, 1, N], [1, 1, N]]), 1, 'the export\'s partial last day is');
+  assert.equal(crop([[1, N, N], [1, N, N]]), 0,
+    'two empty days are not an export lag but a gap in the mirror — the reader has to see it');
+  assert.equal(crop([[1, 1, 1], [1, 1, N], [1, 1, N], [1, 1, N]]), 1, 'one row of four covering the day is not coverage');
+  assert.equal(crop([[1, 1, 1], [1, 1, 1], [1, 1, N], [1, 1, N]]), 0, 'half of them is');
+  assert.equal(crop([[N, N, N]]), 0, 'a river with nothing in it is drawn empty, not cropped away');
 });
 
 test('?river=SIEG on a cold cache: the live API is asked first, the mirror is the fallback', async () => {

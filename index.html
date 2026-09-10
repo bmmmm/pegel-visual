@@ -2430,7 +2430,7 @@ async function loadLanukStation(signal = { aborted: false }) {
     riverInput.value = state.info.water.shortname;
     state.archive = loadArchive(forStation);
     updateLocalBar();
-    applyModeChrome(); // the WSV archive link goes away now that the feed is known
+    applyModeChrome(); // the WSV archive link and the --refresh promise go away now that the feed is known
     if (isNewStation) {
       pushRecent(forStation);
       renderRecent();
@@ -5548,10 +5548,18 @@ function cropWaveWindow(rows, nDays) {
 // DRAW (measured 2026-09-10: window.gauges.to 09-10, newest mean 09-09). Only
 // the folded rows know where the drawing really ends. A live river keeps its
 // empty newest column: there it means the feed is down, which is worth seeing.
+//
+// CAPPED, and the cap is the point: an unbounded crop erases exactly the signal
+// this rule claims to protect. A mirrored river whose gauges fall silent for a
+// month keeps a fresh `window.gauges.to`, and a greedy crop would walk back
+// thirty columns and draw a perfectly healthy-looking plate. The export is
+// short by its own partial day — ONE day, measured — and anything emptier than
+// that is a gap in the mirror, which the reader has to see as no-data columns.
+const WAVE_MIRROR_TAIL_MAX = 1;
 function cropWaveTail(rows, nDays) {
   if (!rows.length) return 0;
   const half = Math.ceil(rows.length / 2);
-  for (let i = nDays - 1; i >= 0; i--) {
+  for (let i = nDays - 1; i >= nDays - WAVE_MIRROR_TAIL_MAX - 1 && i >= 0; i--) {
     if (rows.filter(r => r.vals[i] != null).length >= half) return nDays - 1 - i;
   }
   return 0;

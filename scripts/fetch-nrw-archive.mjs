@@ -187,9 +187,18 @@
 // Since 2026-09-10 `full` also demands 90 % of the samples the step implies:
 // spanning a day is not covering it, and a day whose samples run from 00:00
 // to 23:45 around a hole in the middle passed the span test and shipped its
-// min anyway — 4 of 15 411 days on the 2026-09-06 mirror. The failure mode is
-// N5 (a min above the source's own day mean) going red on a run nobody
-// touched, so the floor sits at the point the min is derived, not at the gate.
+// min anyway — 4 of 15 411 days on the 2026-09-06 mirror, 4 of 17 688 when it
+// was re-measured on 2026-09-10 (2768898001/07-15, 2782330000100/08-05,
+// 2824450000100/07-28, 4568900000100/08-27).
+// Two things not to misread. **No gate catches this**: N5 sweeps min > mean
+// and min > max, and a dropout inside the day pushes the min DOWN, so N5 is
+// green over every stored minimum today. Only the seed-day case (a partial day
+// whose min sits ABOVE the mean) reaches it. And the repair is **forward-only**
+// — mergeDaily never lets a fresh null overwrite a stored value, so the four
+// days above keep the minima they were given (2824450000100 day 208 carries
+// min -14.2 against mean 17.52) until someone reseeds the branch.
+// The floor sits where the min is DERIVED, not at the gate, because that is
+// the only place that can still see how many samples stood behind it.
 //
 // ---- Usage ----
 //   node scripts/fetch-nrw-archive.mjs --out nrw-branch/nrw --out-hires nrw-hires-branch/nrw-hires
@@ -631,6 +640,11 @@ export function foldDaily(rows, { boundaryHour = 0, field, reduce = 'last', plau
 // gate's N5 refuses. A gap INSIDE the day is the source's, not the edge's —
 // but it hides from the span test, which sees only the two outer samples, so
 // the count floor is what catches it.
+// Pinned from BOTH sides, and the band is narrow on purpose: the 80/96 day of
+// the "a hole big enough to hide the minimum" test sets the lower bound and the
+// 88/96 day of "a gap inside the day is the source's" the upper, so only
+// (0.8333, 0.9166] is green. Widening it re-admits two-hour holes; narrowing it
+// throws away days the source is entitled to deliver.
 const FULL_DAY_SAMPLE_SHARE = 0.9;
 export function condenseHires(rows, { boundaryHour = 0, plausible = null, step = null } = {}) {
   const years = new Map();
