@@ -74,6 +74,12 @@ const lag = await (async () => {
 const precipMetaOf = async no => (BASE_URL
   ? await (await fetch(`${BASE_URL}nrw/precip/${no}/meta.json`)).json()
   : JSON.parse(readFileSync(join(ROOT, 'nrw', 'precip', no, 'meta.json'), 'utf8')));
+// the reverse index behind the ?rain=<no> page's "in the rain field of" list —
+// read from the tree under test for the same reason: a list of names this
+// script also knows goes stale the day the rule reshuffles a set.
+const usedByOf = async no => (BASE_URL
+  ? await (await fetch(`${BASE_URL}nrw/precip/used-by/${no}.json`)).json()
+  : JSON.parse(readFileSync(join(ROOT, 'nrw', 'precip', 'used-by', `${no}.json`), 'utf8')));
 // the plate's own reading order, restated here so the check compares the drawn
 // list against the RULE rather than against the first row it happens to find
 const VIA_RANK = { basin: 0, orphan: 0, local: 1, knn: 2 };
@@ -132,6 +138,22 @@ const PAGES = [
   { q: '?station=BONN', ready: 'state.gauge && state.gauge.currentMeasurement', name: 'bonn-wsv', kind: 'wsv' },
   { q: '?rain', ready: 'state.rain && state.rain.data', name: 'rain-30', kind: 'rain' },
   { q: '?rain&w=90', ready: 'state.rain && state.rain.data', name: 'rain-90', kind: 'rain' },
+  // ONE rain gauge as its own page. 51141131 is MENDEN_1's nearest member
+  // (km 0.05, via basin) — the row the member-list click below lands on, so the
+  // page under test and the navigation into it are the same gauge.
+  { q: '?rain=51141131', ready: 'state.rainGauge && state.rainGauge.entry', name: 'raingauge', kind: 'raingauge', no: '51141131' },
+  // A gauge that fell SILENT sixteen months before the mirror did (2025-05-16
+  // against 2026-09-09) and is reachable from 23 station plates. Its right edge
+  // is the one place the per-gauge clamp is visible at all — 51141131's own `to`
+  // happens to equal lastRainDay, so that page never exercises it.
+  { q: '?rain=42180046', ready: 'state.rainGauge && state.rainGauge.entry', name: 'raingauge-silent', kind: 'raingauge', no: '42180046' },
+  // One of the five rain gauges the collector's own coverage counts as
+  // unassigned: it has no used-by file, on a mirror that has 314 of them. Its
+  // own `to` also runs a day PAST lastRainDay, so the mirror cap is live here.
+  { q: '?rain=44075066', ready: 'state.rainGauge && state.rainGauge.entry', name: 'raingauge-noset', kind: 'raingauge', no: '44075066', noSet: true },
+  // A registry entry with no window at all: a finding of the source, and it must
+  // cost no shard request and no reverse-index request.
+  { q: '?rain=43120089', ready: 'state.rainGauge && state.rainGauge.reason', name: 'raingauge-noseries', kind: 'raingauge-none', no: '43120089' },
 ];
 
 // The measurement, in the page. Anchored to the elements it is about — a
@@ -162,7 +184,10 @@ const MEASURE = `(() => {
         && e.getBoundingClientRect().right > window.innerWidth + 1)
       .map(e => (e.getAttribute('class') || e.tagName) + '@' + Math.round(e.getBoundingClientRect().right)).slice(0, 6),
   };
-  const chart = el('.chart.precip');
+  // the STATION plate's chart. ?rain=<no> draws the same marks through the same
+  // renderer (class="chart precip raingauge"), so the selector has to exclude it
+  // — otherwise precipViewModel() is called on a page that has no state.precip.
+  const chart = el('.chart.precip:not(.raingauge)');
   if (chart) {
     const vm = precipViewModel();
     out.precip = {
@@ -200,6 +225,47 @@ const MEASURE = `(() => {
     clsIsDim: !!respSection.querySelector('.p-dim.rs-class'),
     text: respSection.innerText,
   } : null;
+  // ---- ?rain=<no>: one rain gauge's own page ----
+  // Anchored at ITS chart and ITS own <ol>, never at #screen: the used-by list
+  // and the station plate's member list are the two directions of one relation
+  // and would otherwise be read for each other.
+  const rgChart = el('.chart.precip.raingauge');
+  if (rgChart) {
+    const vm = rainGaugeViewModel();
+    const plate = rgChart.closest('section.plate');
+    const ol = plate && plate.querySelector('ol.rain-usedby');
+    const rows = ol ? [...ol.querySelectorAll('li')] : [];
+    const cell = (li, sel) => { const e = li.querySelector(sel); return e ? e.textContent.trim() : null; };
+    out.rainGauge = {
+      name: vm.name, no: vm.no, window: rainDays,
+      cols: vm.cols.length,
+      bars: rgChart.querySelectorAll('.pr-bar').length,
+      expectBars: vm.cols.filter(c => c.mm != null && c.mm > 0).length,
+      nd: rgChart.querySelectorAll('.pr-nd').length,
+      expectNd: vm.cols.filter(c => c.mm == null).length,
+      newest: rainDayISO(vm.cols[vm.cols.length - 1].to),
+      oldest: rainDayISO(vm.cols[0].from),
+      barHeights: [...rgChart.querySelectorAll('.pr-bar')].map(r => r.getBoundingClientRect().height).sort((a, b) => a - b),
+      chartH: rgChart.getBoundingClientRect().height,
+      usedByRows: rows.length,
+      usedByVm: vm.usedBy == null ? null : vm.usedBy.length,
+      usedByNavs: rows.map(li => { const a = li.querySelector('a.name'); return a ? a.getAttribute('data-nav') : null; }),
+      names: rows.map(li => cell(li, '.name')),
+      rawTags: rows.filter(li => /<[a-z]/i.test(cell(li, '.name') || '')).length,
+      key: plate ? [...plate.querySelectorAll('.p-key dd')].map(e => e.textContent) : [],
+      title: plate && plate.querySelector('h1') ? plate.querySelector('h1').textContent : null,
+      plateText: plate ? plate.innerText : '',
+    };
+  }
+  // the plate that draws NOTHING: a registry entry with no series. Anchored at
+  // the rain-gauge title block, not at #screen, which carries the app bar too.
+  const rgHead = [...document.querySelectorAll('#screen section.plate')]
+    .find(s => /^rain gauge · /.test(((s.querySelector('h1') || {}).textContent) || ''));
+  out.rainGaugeReason = rgHead
+    ? { title: rgHead.querySelector('h1').textContent,
+      dim: [...rgHead.querySelectorAll('.p-dim')].map(e => e.textContent.trim()),
+      svgs: rgHead.querySelectorAll('svg').length }
+    : null;
   const table = el('table.heat.rain');
   if (table) {
     const vm = rainViewModel();
@@ -297,7 +363,13 @@ async function run(cdp, base, vp) {
       // Narrow on purpose: any other 404 still fails, and once the file exists
       // `lag` is non-null and a 404 on it fails again.
       const lagAbsent = r => lag === null && r.url.includes('/nrw/hourly/lag.json');
-      const bad = s.events.responses.filter(r => r.url.includes('/nrw/') && r.status >= 400 && !lagAbsent(r));
+      // A rain gauge the collector's own coverage counts as unassigned has no
+      // reverse-index entry, by construction — the 404 IS the fact this page
+      // tests, and the plate turns it into the collector's own sentence. Narrow
+      // on purpose: a 404 on used-by/ for any OTHER gauge still fails.
+      const noSetAbsent = r => pg.noSet && r.url.endsWith(`/nrw/precip/used-by/${pg.no}.json`);
+      const bad = s.events.responses.filter(r => r.url.includes('/nrw/') && r.status >= 400
+        && !lagAbsent(r) && !noSetAbsent(r));
       console.log(`-- ${pg.name}: ${JSON.stringify({ mode: m.mode, error: m.error, title: m.title })}`);
 
       check(!m.error, `${pg.name}: no page error`, m.error || '');
@@ -478,6 +550,105 @@ async function run(cdp, base, vp) {
           `${pg.name}: the catchment area is not glued onto the sentence denying it`, k.join(' | ').slice(0, 500));
         check(!k.some(t => /areal rain per column|of the upstream catchment/.test(t)),
           `${pg.name}: and the retired wording is gone from it`, k.join(' | ').slice(0, 400));
+      }
+      if (pg.kind === 'raingauge') {
+        const g = m.rainGauge;
+        check(!!g, `${pg.name}: the rain gauge's own chart is drawn`);
+        if (g) {
+          const entry = (manifest.rain || {})[pg.no] || {};
+          const file = await usedByOf(pg.no).catch(() => null);
+          check(g.bars === g.expectBars, `${pg.name}: one bar per day with rain`, `${g.bars} drawn, ${g.expectBars} in the model`);
+          check(g.nd === g.expectNd, `${pg.name}: one outline per day it reported nothing`, `${g.nd} vs ${g.expectNd}`);
+          // the drawn column count IS the window the chip asks for — the mirror
+          // holds two years, so nothing is clamped at 30/60/90 days
+          check(g.cols === g.window, `${pg.name}: ${g.window} columns for the ${g.window}D window`, String(g.cols));
+          // BOTH edges. The newest against the collector's own last complete
+          // rain day (capped by this gauge's own `to`, which is what makes a
+          // silent gauge stop where it fell silent); the oldest against the
+          // window, counted inclusively from that edge.
+          const edge = [entry.to, manifest.coverage.precip.lastRainDay].filter(Boolean).sort()[0];
+          check(g.newest === edge, `${pg.name}: the newest column is the gauge's own last rain day`,
+            `${g.newest} vs ${edge} (gauge ${entry.to}, mirror ${manifest.coverage.precip.lastRainDay})`);
+          const wantOldest = new Date(Date.parse(edge + 'T00:00:00Z') - (g.window - 1) * 864e5).toISOString().slice(0, 10);
+          check(g.oldest === wantOldest, `${pg.name}: and the oldest is ${g.window} days back, inclusive`, `${g.oldest} vs ${wantOldest}`);
+          // THIS gauge's edge, in its own words: 9 of 319 rain gauges stand
+          // behind the collector's last rain day, and the station plate's
+          // wording ("the mirror's newest rain day") is false on those.
+          check(g.key.some(t => t.includes(`right edge is this gauge’s own newest rain day, not today: ${edge}`)),
+            `${pg.name}: the key names that edge too, as the GAUGE's`, g.key.join(' | ').slice(0, 300));
+          const behind = entry.to && entry.to < manifest.coverage.precip.lastRainDay;
+          check(g.key.some(t => /it has reported nothing since — the mirror’s own newest rain day is/.test(t)) === !!behind,
+            `${pg.name}: the gap to the mirror is named exactly when there is one`,
+            `gauge ${entry.to}, mirror ${manifest.coverage.precip.lastRainDay}`);
+          check(g.barHeights.length === 0 || g.barHeights[g.barHeights.length - 1] > 4,
+            `${pg.name}: the tallest bar is visible`, `max ${g.barHeights[g.barHeights.length - 1]} px of ${g.chartH}`);
+          check(g.title === `rain gauge · ${entry.n}`, `${pg.name}: the title block names the gauge`, `${g.title} vs ${entry.n}`);
+          // …and so does the TAB. The chrome is dressed before the index lands,
+          // so this said "PEGEL://RAIN · 51141131" until the loader re-dressed it.
+          check(m.title === `PEGEL://RAIN · ${entry.n}`, `${pg.name}: and so does the tab title`, m.title);
+          // ---- the reverse index, against the FILE ----
+          // A gauge the collector counts as unassigned has none, on purpose, and
+          // the plate has to say THAT rather than "this mirror carries no
+          // reverse index" — one 404, two entirely different facts.
+          if (pg.noSet) {
+            check(file === null, `${pg.name}: has no used-by file, as its coverage entry says`, file ? `${file.length} entries` : 'MISSING');
+            check(g.usedByVm === null, `${pg.name}: and the view model carries no list`, String(g.usedByVm));
+            check((m.rainGauge.plateText || '').includes('counts this rain gauge as unassigned'),
+              `${pg.name}: the plate names the collector's own reason`, (m.rainGauge.plateText || '').slice(0, 200));
+            check(!(m.rainGauge.plateText || '').includes('this mirror does not carry'),
+              `${pg.name}: and makes no claim about the branch, which carries 314 of them`, '');
+          }
+          check(pg.noSet || !!file, `${pg.name}: nrw/precip/used-by/${pg.no}.json is in the tree`, file ? `${file.length} entries` : 'MISSING');
+          if (file && !pg.noSet) {
+            check(g.usedByVm === file.length, `${pg.name}: the view model carries every user`, `${g.usedByVm} vs ${file.length}`);
+            check(g.usedByRows === file.length, `${pg.name}: and every one is drawn`, `${g.usedByRows} vs ${file.length}`);
+            const ordered = setInOrder(file);
+            check(g.names[0] === ordered[0].name, `${pg.name}: the first row is the rule's own first`, `${g.names[0]} vs ${ordered[0].name}`);
+            check(g.rawTags === 0, `${pg.name}: no gauge name reached the page as markup`, String(g.rawTags));
+          }
+          check(/no live feed/.test(m.sourceLine), `${pg.name}: the foot says there is no live feed`, m.sourceLine);
+          // ---- and back OUT of the rain page, onto a gauge ----
+          const target = pg.noSet ? null : g.usedByNavs.find(Boolean);
+          check(pg.noSet || !!target, `${pg.name}: there is a gauge link to click at all`,
+            `${g.usedByNavs.filter(Boolean).length} of ${g.usedByRows} rows link out`);
+          if (target) {
+            await s.evaluate('document.querySelector(\'#screen ol.rain-usedby li a.name\').click()');
+            await sleep(1500);
+            await s.evaluate('renderNow()');
+            const a = JSON.parse(await s.evaluate('JSON.stringify({ station, mode, id: stationId(), err: !!state.error })'));
+            check(a.mode === 'station' && !a.err && a.id === target,
+              `${pg.name}: clicking a user lands on that gauge`, `${JSON.stringify(a)} wanted ${target}`);
+          }
+        }
+      }
+      if (pg.kind === 'raingauge-none') {
+        // A registry entry the source carries without a series. It is a FINDING,
+        // not a failed fetch, and it must cost no request at all — the index
+        // already said so.
+        const r = m.rainGaugeReason;
+        check(!!r, `${pg.name}: the title block is there`, r ? r.title : 'no plate');
+        check(!!r && r.dim.some(t => /a finding of the source, not a failed fetch/.test(t)),
+          `${pg.name}: and states the finding rather than blaming the network`, r ? r.dim.join(' | ') : '-');
+        check(!!r && !r.dim.some(t => /did not load/.test(t)), `${pg.name}: never "did not load"`, r ? r.dim.join(' | ') : '-');
+        check(!!r && r.svgs === 0, `${pg.name}: nothing is drawn for it`, r ? String(r.svgs) : '-');
+        const asked = s.events.responses.filter(rr => rr.url.includes(`/nrw/rain/${pg.no}/`) || rr.url.includes(`used-by/${pg.no}.json`));
+        check(asked.length === 0, `${pg.name}: and no shard or reverse entry was fetched for it`,
+          asked.map(rr => rr.url).join(', '));
+      }
+      // ---- INTO the rain page, from the station plate's member list ----
+      if (pg.name === 'menden-1y') {
+        const first = m.precipSet && m.precipSet.names[0];
+        const nav = await s.evaluate('(() => { const a = document.querySelector(\'#screen ol.precip-set li a.name\'); return a ? a.getAttribute("data-nav") : null; })()');
+        check(!!nav && /^rain-\d+$/.test(nav), `${pg.name}: the member name is a link to its own ?rain page`, String(nav));
+        if (nav) {
+          await s.evaluate('document.querySelector(\'#screen ol.precip-set li a.name\').click()');
+          await sleep(1500);
+          await s.evaluate('renderNow()');
+          const a = JSON.parse(await s.evaluate(
+            'JSON.stringify({ mode, no: rainGaugeNo, err: !!state.error, name: state.rainGauge && state.rainGauge.entry && state.rainGauge.entry.n, plate: !!document.querySelector(".chart.precip.raingauge") })'));
+          check(a.mode === 'rain' && a.no === nav.slice(5) && !a.err && a.plate,
+            `${pg.name}: clicking "${first}" opens that rain gauge's own page`, JSON.stringify(a));
+        }
       }
       if (pg.kind === 'wsv') {
         check(precipReqs.length === 0, 'BONN asks the mirror for nothing', precipReqs.map(r => r.url).join(', '));
