@@ -977,6 +977,29 @@
   .pf-list .elev { margin-left: auto; font-variant-numeric: tabular-nums; }
   .pf-list .km { color: var(--mid); min-width: 9ch; text-align: right; }
   .pf-list a:hover .km { color: var(--paper); }
+  /* The rain set's rows are not one link each: the name is the member (a rain
+     gauge, not a station of this app) and only the gauge it drains to is. So
+     the row itself carries the layout the other lists put on their <a>. */
+  .pf-list.precip-set li {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0 1ch;
+    align-items: baseline;
+    padding: 0.25em 0.2ch;
+    border-bottom: 1px solid var(--rule);
+  }
+  .pf-list.precip-set .via { color: var(--mid); }
+  .pf-list.precip-set .km { margin-left: auto; font-variant-numeric: tabular-nums; }
+  .pf-list.precip-set .at { color: var(--dim); flex-basis: 100%; }
+  .pf-list.precip-set .at a { display: inline; border: 0; padding: 0; color: var(--ink); }
+  .pf-list.precip-set .at .nolink { color: var(--mid); }
+  @container plate (min-width: 34rem) {
+    /* wide enough for one row per member: the distance and the gauge it drains
+       to become two right-hand columns, so the numbers line up under each other
+       instead of hanging off names of every length */
+    .pf-list.precip-set .at { flex-basis: auto; min-width: 22ch; text-align: right; }
+    .pf-list.precip-set .km { margin-left: auto; min-width: 9ch; text-align: right; }
+  }
   /* ---- motion: transform/opacity only, and never under reduced motion ---- */
   @media (prefers-reduced-motion: no-preference) {
     /* One drift cycle carries the surface a full scene width (320 units). At 7s
@@ -1715,6 +1738,20 @@ const seriesBase = id => (isLanukId(id) ? `${LANUK_BASE}gauges/${lanukNo(id)}/` 
 // the current station's id as the loaders know it: a LANUK id from the merged
 // station index, or null for a PEGELONLINE gauge (which is addressed by name)
 const stationId = () => (stationMeta.get(station) || {}).id || null;
+// …and the way back: a `lanuk-<no>` id to the name every other layer addresses
+// a station by. Every in-plate link to a mirrored gauge carries the ID rather
+// than the name, because LANUK names collide with WSV's (WESEL, BRAKE), so the
+// resolver needs this too. Built lazily and thrown away whenever the index that
+// feeds it is written to, so it can never answer with a name that has moved.
+let nameByIdCache = null;
+function stationNameOfId(id) {
+  if (!id) return null;
+  if (!nameByIdCache) {
+    nameByIdCache = new Map();
+    for (const [name, md] of stationMeta) if (md.id) nameByIdCache.set(md.id, name);
+  }
+  return nameByIdCache.get(id) || null;
+}
 // sed-replaced with the deployed commit sha by .github/workflows/pages.yml;
 // stays 'dev' locally and whenever the placeholder wasn't replaced
 const APP_COMMIT = '__COMMIT__';
@@ -3354,6 +3391,15 @@ const T = {
   precipEdge: 'right edge is the mirror’s newest rain day, not today:',
   precipClamped: 'the window is shorter than the chip asks: the mirror’s rain record starts',
   precipNoProduct: 'no rain field for this gauge: fewer than three rain gauges are in reach of it',
+  // The member list. The counts above it were the only thing the plate ever
+  // said about the set; a reader who wants to know WHICH rain gauges the mean
+  // was taken over had to open the JSON. `set` reaches the browser anyway.
+  precipSetTitle: 'the rain gauges this field is made of',
+  precipSetLabel: 'members',
+  precipSetShowAll: 'all',
+  precipSetCollapsed: 'first',
+  precipSetOrder: 'listed by how each one got in — draining here first, then within 15 km, then standing in — and by distance inside each group',
+  precipSetAt: 'drains to',
   precipNoWindow: 'the mirror does not say which day its rain record ends on',
   // rain -> level response
   response: 'RESPONSE · rain → level',
@@ -4587,12 +4633,29 @@ function precipViewModel() {
     // reaching to 29 km on 28 gauges. A field the display never reads is not a
     // safeguard, it is a comment in a JSON file.
     ...viaSummary(meta.set),
+    // …and WHICH gauges they are. Same list, same words, one row each.
+    set: precipSetViewModel(meta.set),
   };
 }
 
+// HOW a member got into the set, in words, in ONE place. The key's breakdown
+// line and the member list below it both name the three routes, and two copies
+// of that vocabulary is exactly how a key ends up promising something the list
+// contradicts. `basin` and `orphan` are the same route to a reader — both mean
+// the rain drains to this gauge — so both carry the hydrological word.
+// Null-prototype, both of them: these are looked up with a value the MIRROR
+// wrote, and on a plain literal `via: "constructor"` would answer with a
+// Function that esc() then throws on — inside the rAF that swallows it, so the
+// plate would simply stop instead of saying anything.
+const VIA_WORD = { __proto__: null, basin: 'draining here', orphan: 'draining here', local: 'within 15 km', knn: 'standing in' };
+// the reading order of the list: a measurement before a fallback
+const VIA_RANK = { __proto__: null, basin: 0, orphan: 0, local: 1, knn: 2 };
+const viaWord = via => VIA_WORD[via] || VIA_WORD.basin;
+const viaRank = via => (VIA_RANK[via] ?? 0);
+
 // { nLocal, nHydro, nKnn, knnMaxKm } over a product's member list. Members
 // written before the rule carried `via` count as hydrological, which is what
-// they were.
+// they were. `breakdown` is the same three words the rows carry.
 function viaSummary(set) {
   const list = Array.isArray(set) ? set : [];
   let nHydro = 0, nLocal = 0, nKnn = 0, knnMaxKm = null;
@@ -4603,8 +4666,46 @@ function viaSummary(set) {
       if (typeof s.km === 'number' && (knnMaxKm == null || s.km > knnMaxKm)) knnMaxKm = s.km;
     } else nHydro++;
   }
-  return { nHydro, nLocal, nKnn, knnMaxKm };
+  const breakdown = `${nHydro} ${viaWord('basin')}, ${nLocal} ${viaWord('local')}` +
+    (nKnn ? `, ${nKnn} ${viaWord('knn')}` : '');
+  return { nHydro, nLocal, nKnn, knnMaxKm, breakdown };
 }
+
+// The member list itself: one row per rain gauge in the product's `set`, in the
+// order a reader should read them — the route that IS a measurement first, the
+// fallback last, and inside a route the nearest first.
+// `at` is the gauge the member's rain is routed to; it is a station of this app,
+// so the row links to it. An old mirror may not carry it (and a name WSV owns is
+// never merged under a LANUK id), and then the row says so instead of offering a
+// link that goes nowhere.
+function precipSetViewModel(set) {
+  const list = Array.isArray(set) ? set : [];
+  return list.map(s => {
+    const at = typeof s.at === 'string' && s.at ? s.at : null;
+    return {
+      no: String(s.no ?? ''),
+      name: String(s.name ?? ''),
+      km: typeof s.km === 'number' && Number.isFinite(s.km) ? s.km : null,
+      via: s.via || 'basin',
+      word: viaWord(s.via),
+      at,
+      atName: at ? stationNameOfId('lanuk-' + at) : null,
+    };
+    // the tiebreak is a plain code-unit compare, not localeCompare: the browser
+    // and the check that verifies it run in different default locales, and two
+    // members at the same route and the same distance must not sort one way
+    // here and another way there
+  }).sort((a, b) => viaRank(a.via) - viaRank(b.via) ||
+    (a.km ?? Infinity) - (b.km ?? Infinity) || (a.no < b.no ? -1 : a.no > b.no ? 1 : 0));
+}
+
+// How many rows a collapsed list shows. A phone plate has no <details>, so the
+// list is cut and the chip above it says by how much.
+const PRECIP_SET_ROWS = 12;
+// null = follow the plate's own density (cut on a phone, whole on a desktop),
+// true/false once the reader has said. URL-less, like cmd:abs.
+let precipSetOpen = null;
+const precipSetIsOpen = () => (precipSetOpen == null ? plateDensity() !== 'narrow' : precipSetOpen);
 
 function renderPrecip(p) {
   if (!p) return '';
@@ -4658,9 +4759,10 @@ function renderPrecip(p) {
     // older builder can carry one without the other, and "5 gauges (1 draining
     // here, 0 within 15 km)" is a worse legend than no breakdown at all.
     { note: `${T.precipMean}: ${p.n} ${plural(p.n, 'gauge')}` +
-      (p.nHydro + p.nLocal + p.nKnn === p.n
-        ? ` (${p.nHydro} draining here, ${p.nLocal} within 15 km${p.nKnn ? `, ${p.nKnn} standing in` : ''})`
-        : '') },
+      (p.nHydro + p.nLocal + p.nKnn === p.n ? ` (${p.breakdown})` : '') },
+    // the list below the chart is a mark of this plate too, and its order is
+    // the only thing about it a reader cannot see by looking
+    p.set.length > 0 && { note: T.precipSetOrder },
     { note: T.precipReach },
     // The floor's own line, only where it fired. It carries the real distance:
     // the line above says 15 km and these members are not inside it.
@@ -4682,7 +4784,46 @@ function renderPrecip(p) {
     { note: `${T.precipEdge} ${rainDayISO(p.to)}` },
     p.clamped && { note: `${T.precipClamped} ${rainDayISO(p.windowFrom)}` },
   ]);
-  return head + `<div class="precip-wrap">${chart}</div>${key}</section>`;
+  return head + `<div class="precip-wrap">${chart}</div>${renderPrecipSet(p.set)}${key}</section>`;
+}
+
+// The set, named. renderNet's order: the drawing, then the list of what is in
+// it, then the key. The control that cuts the list sits directly above it —
+// a chip a screen away from the thing it steers is a chip nobody connects to it.
+function renderPrecipSet(rows) {
+  if (!rows || !rows.length) return '';
+  const open = precipSetIsOpen();
+  const shown = open ? rows : rows.slice(0, PRECIP_SET_ROWS);
+  const cut = rows.length > shown.length;
+  // The label states what is on the plate right now, not what the click would
+  // do — the reader is looking at the list, and "all 32" against 12 visible
+  // rows is the kind of lie a chip label is easiest to tell.
+  const label = cut
+    ? `${T.precipSetCollapsed} ${shown.length} of ${rows.length}`
+    : `${T.precipSetShowAll} ${rows.length}`;
+  // A set that fits on the plate has nothing to toggle, and a chip that cannot
+  // change what is under it is a control the reader learns to distrust. It
+  // becomes ctlRow's plain readout instead — the count is still stated.
+  const ctl = ctlRow(T.precipSetLabel, [
+    rows.length > PRECIP_SET_ROWS
+      ? { t: 'cmd:rset', label, on: !cut,
+        title: cut ? `show all ${rows.length}` : `show the first ${PRECIP_SET_ROWS}` }
+      : { val: label },
+  ], T.precipSetTitle);
+  const items = shown.map(r =>
+    '<li><span class="name">' + esc(r.name) + '</span>' +
+    `<span class="via">${esc(r.word)}</span>` +
+    `<span class="km">${r.km == null ? '—' : esc('km ' + r.km)}</span>` +
+    // A member whose gauge this app cannot name gets the number and no link: an
+    // <a> that lands on a station nobody has is worse than plain text. And a
+    // mirror written before `at` existed gets an em dash, never a broken link.
+    (r.at && r.atName
+      ? `<span class="at">${esc(T.precipSetAt)} <a${navAttrs('lanuk-' + r.at)}>${esc(r.atName)}</a></span>`
+      : r.at
+        ? `<span class="at">${esc(T.precipSetAt)} <span class="nolink">${esc(r.at)}</span></span>`
+        : '<span class="at nolink">—</span>') +
+    '</li>').join('');
+  return ctl + `<ol class="pf-list precip-set">${items}</ol>`;
 }
 
 // RESPONSE: what the rain did to the level, as the mirror's own record says.
@@ -7715,6 +7856,8 @@ function runGridCmd(c) {
   else if (c.startsWith('h:')) setHistory(c.slice(2));
   else if (c.startsWith('rd:')) risingSetDays(+c.slice(3));
   else if (c === 'abs' || c === 'anom') { histMode = c; scheduleRender(); }
+  // the rain set's cut/whole toggle: no URL of its own, so it stays a button
+  else if (c === 'rset') { precipSetOpen = !precipSetIsOpen(); scheduleRender(); }
   else if (c.startsWith('hm:')) {
     const [y, m] = c.slice(3).split(':').map(Number);
     histFocus = { y, m };
@@ -8465,7 +8608,14 @@ function foldRank(q, name) {
 
 // resolve user input to a real shortname, tolerating ASCII spellings of umlauts
 function resolveStation(raw) {
-  const up = (raw || '').trim().toUpperCase();
+  const trimmed = (raw || '').trim();
+  // A `lanuk-<no>` target is an ID, not a name — the net view, the river index
+  // and the rain set all link by id, because LANUK names collide with WSV's.
+  // Uppercasing one turned it into "LANUK-2729100000100", a station nobody has,
+  // and every such link landed on the did-you-mean screen (measured 2026-09-10).
+  const byId = stationNameOfId('lanuk-' + (lanukNo(trimmed.toLowerCase()) || ''));
+  if (byId) return byId;
+  const up = trimmed.toUpperCase();
   if (!up || knownStations.has(up)) return up;
   return normMap.get(foldAe(up)) || normMap.get(foldStrip(up)) || up;
 }
@@ -8501,6 +8651,7 @@ function fillWaters(list, labels) {
 let wsvNamesResolve = () => {};
 const wsvNamesP = new Promise(r => { wsvNamesResolve = r; });
 function fillDatalist(list) {
+  nameByIdCache = null; // the WSV list overwrites entries; the reverse map goes with them
   for (const s of list) {
     const up = s.n.toUpperCase();
     knownStations.add(up);
@@ -8528,6 +8679,7 @@ const numOrNull = v => (typeof v === 'number' && Number.isFinite(v) ? v : null);
 
 function mergeLanukIndex(m) {
   if (!m || typeof m.gauges !== 'object' || !m.gauges) return 0;
+  nameByIdCache = null; // every id this merge adds has to be findable afterwards
   lanukManifestInfo = {
     generated: m.generated || null, sourceExportAt: m.sourceExportAt || null,
     license: m.license || null, window: m.window || null,
