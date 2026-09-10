@@ -242,6 +242,11 @@ written by the old maximum and the plate keeps its old sentence for it.
 `RULE_VERSION` did NOT move: it versions the MEMBERSHIP with N8's
 baselines, and the sets are untouched. The bench PASSes at 43 % and keeps
 `max` and `peak` as the reference the decision was measured against.
+Arrived in the `nrw` branch on 2026-09-10 (dispatched run 34420261629): all
+275 `response.json` carry `lagDays: 1`, Menden_1 reads 12.22 over 52 events
+live, `verify-precip` green against the page. The manifest did NOT reorder
+with the sorted `listDirs` — its keys are numeric strings, and JS orders
+those numerically whatever the insertion order.
 
 ## The hourly response class (`scripts/build-nrw-hourly-lag.mjs`, `nrw/hourly/lag.json`, gate rule N9)
 
