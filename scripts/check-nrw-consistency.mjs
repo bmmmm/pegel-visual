@@ -80,8 +80,11 @@
 //                     every set it appears in; (c4) the REVERSE INDEX
 //                     `precip/used-by/<rainNo>.json` is the same relation read
 //                     backwards, so it is compared against the forward sets as
-//                     a set, in BOTH directions and including each entry's
-//                     `via`/`km` — a second copy of a relation is a second
+//                     a set, in BOTH directions and field for field
+//                     (`name`/`via`/`km`/`at`; `at` is what makes `km`
+//                     readable, since on a basin/orphan member it is the
+//                     distance to the OWNING NODE and not to the gauge the
+//                     entry names) — a second copy of a relation is a second
 //                     chance to be wrong, and every other clause here reads
 //                     only the forward side. (d) references
 //                     resolve — every product gauge is in topology.json, every
@@ -1015,7 +1018,7 @@ export function readPrecip(precipDir) {
 // green, because they all read the forward side. So the two are compared as SETS,
 // in BOTH directions — a membership with no entry and an entry with no membership
 // are two different bugs and get two different lines — and each entry has to
-// carry the same `via`/`km` the set does.
+// carry the same `name`/`via`/`km`/`at` the set does.
 export function readUsedBy(precipDir) {
   const out = new Map();
   const dir = join(precipDir, 'used-by');
@@ -1027,7 +1030,18 @@ export function readUsedBy(precipDir) {
   return out;
 }
 
-const usedByKey = e => `${e.via ?? null}|${e.km ?? null}`;
+// The membership fields, copied from the forward set entry for entry. `at` is in
+// here for the reason `km` cannot be read without it: on a basin/orphan member
+// `km` is the distance to the OWNING NODE, not to the gauge the entry names, so
+// an entry that kept `km` and dropped `at` would state a distance between two
+// things that never stood that far apart.
+//
+// `name` is NOT one of them, and that is the trap: the two files use the field
+// for two different subjects. In `precip/<no>/meta.json` the set's `name` is the
+// RAIN station's; in the reverse index it is the receiving GAUGE's, because that
+// is the one the reader of a rain page does not otherwise have. It is checked —
+// against the gauge product's own `meta.json` name, one line below.
+const USED_BY_FIELDS = ['via', 'km', 'at'];
 
 export function checkPrecipUsedBy(usedBy, products, rainIds, { maxList = 5 } = {}) {
   const v = [];
@@ -1035,7 +1049,11 @@ export function checkPrecipUsedBy(usedBy, products, rainIds, { maxList = 5 } = {
   // that SHIPPED a product have a directory to be read here, which is the same
   // universe the builder counts memberships over.
   const forward = new Map();
+  // the gauge's OWN name, which is what an entry's `name` states — not the rain
+  // station's name the forward set carries under the same key
+  const gaugeName = new Map();
   for (const [no, p] of products) {
+    gaugeName.set(String(no), (p.meta || {}).name ?? null);
     for (const s of ((p.meta || {}).set || [])) {
       const r = String(s.no);
       if (!forward.has(r)) forward.set(r, new Map());
@@ -1057,8 +1075,17 @@ export function checkPrecipUsedBy(usedBy, products, rainIds, { maxList = 5 } = {
       seen.add(g);
       const s = want.get(g);
       if (!s) { v.push(`N8: precip/used-by/${r}.json: names gauge ${g}, whose own meta.json does not hold ${r} in its set`); continue; }
-      if (usedByKey(e) !== usedByKey(s)) {
-        v.push(`N8: precip/used-by/${r}.json: gauge ${g} carries via/km ${usedByKey(e)}, the set says ${usedByKey(s)}`);
+      const bad = USED_BY_FIELDS.filter(k => (e[k] ?? null) !== (s[k] ?? null));
+      if (bad.length) {
+        v.push(`N8: precip/used-by/${r}.json: gauge ${g} disagrees with the set on `
+          + bad.map(k => `${k} (${JSON.stringify(e[k] ?? null)} vs ${JSON.stringify(s[k] ?? null)})`).join(', '));
+      }
+      // the entry's own added field: the receiving gauge's name, which the page
+      // prints without a second fetch and so must be the gauge's own
+      const gn = gaugeName.get(g) ?? null;
+      if ((e.name ?? null) !== gn) {
+        v.push(`N8: precip/used-by/${r}.json: gauge ${g} is named ${JSON.stringify(e.name ?? null)} here `
+          + `and ${JSON.stringify(gn)} in precip/${g}/meta.json`);
       }
     }
     for (const g of want.keys()) {

@@ -857,8 +857,8 @@ const TOPO_GAUGES = { g1: {} };
 // the reverse index the collector writes beside the sets: the SAME two
 // memberships, read from the rain gauge's side
 const usedByOf = (over = {}) => new Map([
-  ['r1', [{ no: 'g1', name: 'G1', via: 'basin', km: 4 }]],
-  ['r2', [{ no: 'g1', name: 'G1', via: 'basin', km: 9 }]],
+  ['r1', [{ no: 'g1', via: 'basin', km: 4, at: 'g1' }]],
+  ['r2', [{ no: 'g1', via: 'basin', km: 9, at: 'g1' }]],
   ...Object.entries(over),
 ]);
 
@@ -884,18 +884,30 @@ test('N8c4: a membership with no entry in the reverse index', () => {
 });
 
 test('N8c4: an entry no meta.json holds, and a file for a station in no set at all', () => {
-  const ghost = usedByOf({ r1: [{ no: 'g1', name: 'G1', via: 'basin', km: 4 }, { no: 'g9', name: 'G9', via: 'local', km: 1 }] });
+  const ghost = usedByOf({ r1: [{ no: 'g1', via: 'basin', km: 4, at: 'g1' }, { no: 'g9', via: 'local', km: 1, at: 'g9' }] });
   assert.match(checkPrecipUsedBy(ghost, precipProduct(), RAIN_IDS).join('\n'),
     /precip\/used-by\/r1\.json: names gauge g9, whose own meta\.json does not hold r1 in its set/);
-  const extra = usedByOf({ r3: [{ no: 'g1', name: 'G1', via: 'local', km: 2 }] });
+  const extra = usedByOf({ r3: [{ no: 'g1', via: 'local', km: 2, at: 'g1' }] });
   const v = checkPrecipUsedBy(extra, new Map([...precipProduct()]), new Set(['r1', 'r2', 'r3'])).join('\n');
   assert.match(v, /1 file\(s\) for a rain station no set holds: r3/);
 });
 
-test('N8c4: the entry carries the set\'s own via and km, and its id is a rain directory', () => {
-  const skew = usedByOf({ r1: [{ no: 'g1', name: 'G1', via: 'local', km: 4 }] });
+test('N8c4: every field of the entry is the set\'s own — name, via, km and at', () => {
+  const skew = usedByOf({ r1: [{ no: 'g1', via: 'local', km: 4, at: 'g1' }] });
   assert.match(checkPrecipUsedBy(skew, precipProduct(), RAIN_IDS).join('\n'),
-    /precip\/used-by\/r1\.json: gauge g1 carries via\/km local\|4, the set says basin\|4/);
+    /precip\/used-by\/r1\.json: gauge g1 disagrees with the set on via \("local" vs "basin"\)/);
+  // `at` is the one that makes `km` readable: on a basin member the distance is
+  // to the OWNING NODE, so an entry that keeps km and moves at states a span
+  // between two gauges that never stood that far apart
+  const moved = usedByOf({ r1: [{ no: 'g1', via: 'basin', km: 4, at: 'g7' }] });
+  assert.match(checkPrecipUsedBy(moved, precipProduct(), RAIN_IDS).join('\n'),
+    /gauge g1 disagrees with the set on at \("g7" vs "g1"\)/);
+  // `name` is the one field that is NOT the set's: the set's name is the RAIN
+  // station's, the entry's is the receiving GAUGE's, so it is checked against
+  // the gauge product's own meta.json instead
+  const named = usedByOf({ r1: [{ no: 'g1', name: 'Wesel', via: 'basin', km: 4, at: 'g1' }] });
+  assert.match(checkPrecipUsedBy(named, precipProduct({ meta: { name: 'Menden' } }), RAIN_IDS).join('\n'),
+    /gauge g1 is named "Wesel" here and "Menden" in precip\/g1\/meta\.json/);
   const alien = usedByOf({ ghost: [] });
   assert.match(checkPrecipUsedBy(alien, precipProduct(), RAIN_IDS).join('\n'),
     /precip\/used-by\/ghost\.json: ghost has no nrw\/rain\/ directory/);
@@ -904,7 +916,7 @@ test('N8c4: the entry carries the set\'s own via and km, and its id is a rain di
 test('N8c4: an unparseable or duplicated reverse index is not read as an empty one', () => {
   assert.match(checkPrecipUsedBy(usedByOf({ r1: null }), precipProduct(), RAIN_IDS).join('\n'),
     /precip\/used-by\/r1\.json: not an array of memberships/);
-  const twice = usedByOf({ r1: [{ no: 'g1', name: 'G1', via: 'basin', km: 4 }, { no: 'g1', name: 'G1', via: 'basin', km: 4 }] });
+  const twice = usedByOf({ r1: [{ no: 'g1', via: 'basin', km: 4, at: 'g1' }, { no: 'g1', via: 'basin', km: 4, at: 'g1' }] });
   assert.match(checkPrecipUsedBy(twice, precipProduct(), RAIN_IDS).join('\n'),
     /precip\/used-by\/r1\.json: gauge g1 listed twice/);
 });
@@ -1257,6 +1269,23 @@ test('CLI: N8(e) alone catches a stale product the shape rules would pass', () =
   assert.equal(code, 1);
   assert.match(stdout, /::error::N8: precip is not what the rule produces — differs: g0\/2026\.json/);
   assert.doesNotMatch(stdout, /mm null <=>/, 'the shape rules are green — only (e) can see this');
+});
+
+// The c4 dispatch, which nothing else reaches: the clause's own unit tests call
+// checkPrecipUsedBy directly, so deleting its line in main() left the suite
+// green — measured. This runs the real binary over a real tree.
+test('CLI: N8c4 runs — a reverse index that contradicts the sets is red through the dispatcher', () => {
+  const repo = cloneSeed();
+  const dir = join(repo, 'nrw', 'precip', 'used-by');
+  const f = readdirSync(dir)[0];
+  const p = join(dir, f);
+  const rows = JSON.parse(readFileSync(p, 'utf8'));
+  rows.push({ no: 'ghost', name: 'Ghost', via: 'local', km: 1, at: 'ghost' });
+  writeFileSync(p, JSON.stringify(rows));
+  const { code, stdout } = runChecker(repo);
+  assert.equal(code, 1);
+  assert.match(stdout, new RegExp(`::error::N8: precip/used-by/${f.replace('.json', '')}\\.json: names gauge ghost, `
+    + 'whose own meta\\.json does not hold'));
 });
 
 test('CLI: a precip tree that was never built is red, not silently skipped', () => {

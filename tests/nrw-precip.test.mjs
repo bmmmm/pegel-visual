@@ -616,11 +616,10 @@ test('a second run writes nothing and --check exits clean; a hand-edit makes it 
 
 // ---------- the reverse index ----------
 // The same relation the per-gauge meta.json holds forward, one file per rain
-// gauge. Two gauges, deliberately declared g2-before-g1 in the topology, so a
-// writer that took the order it was handed comes out wrong here. It does NOT
-// prove the sort line itself: `assignRain` already returns recv in cmpNo order,
-// so today the two agree — what this pins is the file's contract, not the path
-// the current builder takes to it.
+// gauge. Two gauges, so a membership shared by both is visible as such; the
+// order assertion pins the file's contract, not the builder's path to it
+// (`assignRain` already returns recv in cmpNo order, so removing the sort line
+// changes nothing today — measured).
 function twoGaugeTree(tmp) {
   const Y = 2025, n = daysInYear(Y);
   const mm = Array(n).fill(3);
@@ -659,8 +658,13 @@ test('used-by is the sets read backwards: every membership, no other, and in gau
   for (const r of ['r1', 'r2', 'r3']) for (const e of ub(r)) back.set(`${r}|${e.no}`, e);
   assert.deepEqual([...back.keys()].sort(), [...fwd.keys()].sort(), 'the two directions name the same memberships');
   for (const [k, e] of back) {
-    assert.deepEqual([e.via, e.km], [fwd.get(k).via, fwd.get(k).km], `${k}: via and km are the set's own, not re-derived`);
+    const s = fwd.get(k);
+    // `at` above all: on a basin member `km` is the distance to the OWNING NODE,
+    // so an entry that carried km without at would state a span between two
+    // gauges that never stood that far apart
+    assert.deepEqual([e.via, e.km, e.at], [s.via, s.km, s.at], `${k}: via, km and at are the set's own, not re-derived`);
   }
+  assert.ok(ub('r1').every(e => e.at != null), 'every entry names the node its km is measured to');
 
   // the union is exactly what index.json counted — the reverse index and the
   // counter come out of one loop and may not drift apart
