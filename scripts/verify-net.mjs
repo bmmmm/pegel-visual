@@ -64,6 +64,17 @@ const placedCount = basin => {
   return [...ids].filter(ok).length;
 };
 
+// The plate's foot carries TWO clocks: the topology file's own stamp and the
+// mirror run that produced the readings drawn on it, named only when they
+// differ. Both are read from the mounted tree, so this is the file's word
+// against the page's — not a date-shaped regex, which the wrong date passes.
+const MIRROR_PATH = join(TREE, 'manifest.json');
+const mirrorGen = existsSync(MIRROR_PATH)
+  ? (JSON.parse(readFileSync(MIRROR_PATH, 'utf8')).generated || null) : null;
+const wantFoot = `LANUK NRW · topology ${topo.generated || '—'}` +
+  (mirrorGen && mirrorGen !== topo.generated ? ` · readings ${mirrorGen}` : '') +
+  ' · no live feed';
+
 const RIVERS = ['ERFT', 'SIEG'];
 const EXPECT = Object.fromEntries(RIVERS.map(r => {
   const b = basinOf(r);
@@ -144,6 +155,11 @@ const MEASURE = `(() => {
     // are missing: the sector then paints as nothing at all
     msDefs: document.querySelectorAll('#screen svg.defs-only pattern[id^="ms-"]').length,
     msKeyRows: key ? [...key.querySelectorAll('dd')].filter(d => /^MS\\d/.test(d.textContent.trim())).length : -1,
+    // anchored at the NOTE, not at the page: a /MS0|alert/ sweep over #screen's
+    // text is already satisfied by the MS0 key row three checks above it, so the
+    // note could be deleted outright and the check would still pass (review)
+    msNote: key ? [...key.querySelectorAll('dd')]
+      .some(d => /counts the operator.s alert thresholds/.test(d.textContent)) : false,
     // area unknown has two carriers now — the hollow dot and the halo ring
     noArea: draw ? draw.querySelectorAll('.net-dot.no-area').length + draw.querySelectorAll('circle.net-halo').length : -1,
     halos: draw ? draw.querySelectorAll('circle.net-halo').length : -1,
@@ -338,8 +354,14 @@ try {
           `${new Set(m.stageCentres).size} distinct centres for ${m.stageNodes} discs`);
         check(m.msKeyRows === 4, `${tag}: the key names all four rungs MS0–MS3`, String(m.msKeyRows));
         check(m.msDefs === 4, `${tag}: the hatch ramp's defs are on the plate`, String(m.msDefs));
-        check(/MS0|alert/.test(m.text), `${tag}: and the plate says in words what the mark counts`,
-          m.text.slice(0, 160));
+        check(m.msNote, `${tag}: and the key's own note says what the mark counts`,
+          'the msNetNote is not in the key — the disc is drawn with nothing explaining it');
+        // The readings' age is the MIRROR's, the topology's is the file's, and
+        // the two are read HERE from the mounted tree rather than pattern-matched
+        // out of the foot: a foot that printed the export stamp under the label
+        // "readings" matches /readings 20\d\d-\d\d-\d\d/ just as well.
+        check(m.foot === wantFoot, `${tag}: the foot names both clocks, and the right ones`,
+          `got "${m.foot}", want "${wantFoot}"`);
       }
       check(m.halos === 0 || m.stageNodes > 0,
         `${tag}: a halo only ever rings a disc`, `${m.halos} halos, ${m.stageNodes} discs`);

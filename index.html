@@ -5135,6 +5135,12 @@ function msMark(stage, opts) {
 // an r=5 disc — about 10 units² — and a 7-unit tile put at most one clipped
 // dot inside it, which is the texture channel collapsing to nothing exactly
 // where the mark is smallest (caught in review, on a magnified swatch).
+// THE TILE IS CALIBRATED FOR r ≈ 4–5, in the user space of the plate that draws
+// it. The net view draws nodes down to r = 2.0 (NET_DOT_STEPS), where an MS1
+// sector is ~4 units² against this 16-unit² tile and the texture thins to a
+// fragment — the ordinal claim still rides on the SECTOR, which is why that is
+// polish and not a defect, but a third plate wanting texture below r = 2 needs
+// its own tile rather than this one (review, 2026-09-10).
 function msPatternDefs() {
   const p = (id, body) => `<pattern id="ms-${id}" width="4" height="4" patternUnits="userSpaceOnUse">` +
     `<rect width="4" height="4" class="mf mf-${id}"/>${body}</pattern>`;
@@ -6085,7 +6091,11 @@ async function netReadings(ids, forRiver) {
         stages: Array.isArray(meta.info) ? meta.info : null,
       };
     } catch { /* this gauge keeps the plain node, the rest of the basin does not care */ } }));
-    if (mode !== 'river' || state.river !== forRiver) return null; // switched away mid-fetch
+    // switched away mid-fetch — river, mode OR sub-view. The sub-view belongs in
+    // here too: ~50 requests must not keep running for a drawing the reader left
+    // two seconds ago. The caller then drops the half-filled netData, or coming
+    // back to the view would find a "finished" load with no readings in it.
+    if (mode !== 'river' || state.river !== forRiver || viewMode !== 'net') return null;
   }
   return out;
 }
@@ -6119,8 +6129,17 @@ async function loadNet() {
   if (!entry) return; // no basin, no gauges to read: the empty plate stands as it is
   const readings = await netReadings(netBasinIds(entry[1]), forRiver);
   // Three ways to have been overtaken: the readings walk said so, the reader
-  // switched river or view, or another loadNet already installed a newer topo.
-  if (!readings || mode !== 'river' || state.river !== forRiver) return;
+  // switched river or mode, or another loadNet already installed a newer topo.
+  if (!readings) {
+    // Abandoned. The topology-only netData left behind is NOT a finished load —
+    // the early return at the top of loadNet reads exactly that shape as "done"
+    // and the plate would keep its plain nodes for the rest of the session. Drop
+    // it (only ever our own), and the next visit runs both passes again; the
+    // shard and meta caches make the second run free.
+    if (netData && netData.river === forRiver && netData.topo === topo && !netData.readings) netData = null;
+    return;
+  }
+  if (mode !== 'river' || state.river !== forRiver) return;
   if (!netData || netData.river !== forRiver || netData.topo !== topo) return;
   netData = {
     river: forRiver, topo, readings,
@@ -6178,7 +6197,7 @@ function netNodeGlyph(n) {
       : '';
     return halo + msMark(n.stage, { cx, cy, r });
   }
-  return `<circle class="net-dot${noArea ? ' no-area' : ''}" cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="${r}"/>`;
+  return `<circle class="net-dot${noArea ? ' no-area' : ''}" cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="${r.toFixed(1)}"/>`;
 }
 
 // distance to the basin mouth, accumulated along the DELIVERED chain. `distKm`
@@ -6296,6 +6315,18 @@ function netViewModel(d) {
   const byId = new Map(placed.map(n => [n.id, n]));
   const edges = placed.filter(n => n.down && byId.has(n.down))
     .map(n => ({ from: n, to: byId.get(n.down) }));
+  // The spoken headline has to name the drawing's loudest fact, the way the
+  // river profile names its low and high counts. Ten discs at MS3 on the plate
+  // and a headline that says only "every gauge in the basin" is a plate that
+  // does not name itself to the one reader who cannot see it.
+  const withStage = placed.filter(n => Number.isFinite(n.stage));
+  const alerted = withStage.filter(n => n.stage > 0);
+  const topStage = alerted.length ? Math.max(...alerted.map(n => n.stage)) : 0;
+  const stageSummary = !withStage.length ? ''
+    : alerted.length
+      ? ` ${alerted.length} of ${withStage.length} ${plural(withStage.length, 'gauge')} with an alert ladder ` +
+        `${plural(alerted.length, 'stands', 'stand')} at an alert stage, the highest MS${topStage}.`
+      : ` ${withStage.length} ${plural(withStage.length, 'gauge')} carry an alert ladder; none has reached its first stage.`;
   return {
     kind: 'net', empty: false, river: d.river, basin: basin.name || code, code,
     nodes: placed, unplaced, edges, tracks: tracks.length,
@@ -6305,14 +6336,14 @@ function netViewModel(d) {
     // different, and `anyPlain` decides which form the size ladder's own
     // swatches take — a ladder drawn as plain circles on a plate where every
     // node is a disc would be the key promising a mark nobody drew.
-    anyNoArea: placed.some(n => n.km2 == null),
     anyNoAreaPlain: placed.some(n => n.km2 == null && !Number.isFinite(n.stage)),
     anyNoAreaStaged: placed.some(n => n.km2 == null && Number.isFinite(n.stage)),
     anyPlain: placed.some(n => !Number.isFinite(n.stage)),
     hasStages: placed.some(n => Number.isFinite(n.stage)),
     generated: topo.generated || null,
     readingsAt: d.readingsAt || null,
-    summary: screenSummary(),
+    alerted: alerted.length, withStage: withStage.length, topStage,
+    summary: screenSummary() + stageSummary,
     source: netSource(topo, d.readingsAt || null),
   };
 }
@@ -6382,7 +6413,13 @@ function renderNet(vm) {
     // a VOCABULARY, not an inventory — all four rungs are named so a mark that
     // is not on the plate today is still readable, exactly as the river plate
     // names k-low and k-high on a day when no gauge stands low
-    ...(vm.hasStages ? T.msKeys.map((label, n) => ({ sw: keySw(msMark(n), 'ms'), label })) : []),
+    // …at the LARGEST radius the drawing can draw, never msMark's default 5. On
+    // a plate whose whole size channel means catchment area, an MS0 disc bigger
+    // than the "500 km² and up" swatch one row above it makes size read as
+    // meaning where this row has none (review, 2026-09-10).
+    ...(vm.hasStages
+      ? T.msKeys.map((label, n) => ({ sw: keySw(msMark(n, { cx: 6, cy: 6, r: NET_DOT_STEPS[0].r }), 'ms'), label }))
+      : []),
     { sw: keySw('<polyline class="net-edge" points="1,3 7,3 7,9 11,9"/>', 'net'), label: T.netEdge },
     { note: T.netDelivered },
     { note: T.netDistNote },

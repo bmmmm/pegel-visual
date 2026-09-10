@@ -6285,6 +6285,28 @@ test('net: once every node is a disc, the size ladder’s own swatches become di
   assertNamed(draw, keyClasses(html), 'ERFT net, every node staged');
 });
 
+test('net: the second pass stops when the reader leaves the view, and leaves no half-filled plate', () => {
+  const app = loadApp({ search: '?river=ERFT&view=net' });
+  const r = app.run(`(async () => {
+    getJson = async url => {
+      if (url === 'nrw/topology.json') return (${NET_TOPO});
+      if (url === 'archive/manifest.json') return { stations: {} };
+      viewMode = 'live';  // the reader taps the profile chip mid-fetch
+      return { name: 'g', water: 'Erft', unit: 'cm', info: [250, 410, 440] };
+    };
+    state.river = 'ERFT';
+    netData = null;
+    await loadNet();
+    return netData;
+  })()`);
+  return r.then(v => {
+    // NOT merely "no readings installed": a topology-only netData is exactly the
+    // shape loadNet's own early return reads as a finished load, so leaving it
+    // would keep the plate on plain nodes for the rest of the session
+    assert.equal(v, null, 'the abandoned pass leaves nothing behind at all');
+  });
+});
+
 test('net: the foot names the readings’ own age only when it differs from the topology’s', () => {
   const same = netReadApp('ERFT', NET_READINGS, '2026-09-10').run('netViewModel(netData)');
   const later = netReadApp('ERFT', NET_READINGS, '2026-09-11').run('netViewModel(netData)');
@@ -6312,6 +6334,9 @@ test('net: loadNet gives the drawing real readings, and one broken gauge costs o
     };
     state.river = 'ERFT';
     netData = null;
+    // the MIRROR's own run stamp — the readings' age, and a different clock
+    // from the topology file's 2026-09-10
+    lanukManifestInfo = { generated: '2026-09-11' };
     await loadNet();
     const vm = netViewModel(netData);
     return {
@@ -6319,6 +6344,8 @@ test('net: loadNet gives the drawing real readings, and one broken gauge costs o
       metaCalls: fetched.filter(u => /meta\\.json$/.test(u)).length,
       hasStages: vm.hasStages,
       readingsAt: netData.readingsAt,
+      source: vm.source,
+      summary: vm.summary,
       read: Object.keys(netData.readings).length,
     };
   })()`);
@@ -6329,8 +6356,14 @@ test('net: loadNet gives the drawing real readings, and one broken gauge costs o
     assert.equal(v.stages.Glesch, null, 'the gauge whose meta threw keeps the plain node');
     assert.equal(v.metaCalls, 14, 'one meta per gauge in the BASIN — 14, not the 11 drawn');
     assert.equal(v.read, 13, 'thirteen gauges answered; the one whose meta threw is simply absent');
-    // no mirror manifest in this stub, so there is no readings age to name —
-    // and netSource must then print the topology's date alone, not "undefined"
-    assert.equal(v.readingsAt, null);
+    // the readings' age is the MIRROR's run stamp, not the topology file's and
+    // not the source's export stamp — and the foot has to print that one
+    assert.equal(v.readingsAt, '2026-09-11');
+    assert.match(v.source, /topology 2026-09-10 · readings 2026-09-11 · no live feed$/,
+      'two clocks stand behind this plate and the foot names both');
+    // the spoken headline names the drawing's loudest fact, as the profile does
+    // …over the DRAWN nodes, not over the readings map: 13 gauges answered, but
+    // three of them are unplaced and are not on the drawing this sentence names
+    assert.match(v.summary, /10 of 10 gauges with an alert ladder stand at an alert stage, the highest MS3\./);
   });
 });
