@@ -5525,6 +5525,19 @@ test('PRECIPITATION: the key’s breakdown and the member rows read from ONE wor
   const words = app.run('[VIA_WORD.basin, VIA_WORD.orphan, VIA_WORD.local, VIA_WORD.knn]');
   assert.deepEqual(words, ['draining here', 'draining here', 'within 15 km', 'standing in'],
     'one table, and both readers above are quoting it');
+  // Pinning both literals only catches drift BETWEEN them; a second hardcoded
+  // copy in the key would keep this test green while the table stopped being
+  // the source. So move the table and watch both readers move with it.
+  const moved = app.run(`(() => {
+    const was = VIA_WORD.knn;
+    VIA_WORD.knn = 'a gauge standing in';
+    try { return renderPrecip(precipViewModel()); } finally { VIA_WORD.knn = was; }
+  })()`);
+  assert.match(moved, /3 gauges \(0 draining here, 0 within 15 km, 3 a gauge standing in\)/,
+    'the key reads the table, it does not keep a copy');
+  for (const r of setRows(moved)) {
+    assert.match(r, /<span class="via">a gauge standing in<\/span>/, 'and so does every row');
+  }
 });
 
 test('PRECIPITATION: a hostile station name in the rain set never reaches the markup raw', async () => {
@@ -5613,6 +5626,43 @@ test('a shared link that carries the mirror id lands on the gauge, not on did-yo
   assert.equal(app.run('station'), 'MENDEN_1', 'the index names it and the address bar follows');
   assert.equal(app.run('stationId()'), 'lanuk-2729100000100', 'with the id its loader fetches by');
   assert.equal(app.run('state.error'), null, 'and no error plate on the way');
+});
+
+test('the id→name map is a CACHE, and both writers of stationMeta drop it', async () => {
+  // `stationNameOfId` is what makes every `lanuk-<no>` link in the app work,
+  // and it is memoised. Nothing else pins the two invalidations: remove both
+  // and the whole suite stays green (measured 2026-09-10), while a reader who
+  // types into the finder during the one second nrw/manifest.json is in flight
+  // freezes a map built before the mirror existed — for the rest of the session.
+  const app = nrwApp({ search: '?station=BONN' });
+  assert.equal(app.run(`resolveStation('lanuk-2729100000100')`), 'LANUK-2729100000100',
+    'nothing to resolve it against yet — and this call is what builds the map');
+  await app.run('lanukIndex()');
+  assert.equal(app.run(`resolveStation('lanuk-2729100000100')`), 'MENDEN_1',
+    'mergeLanukIndex threw the stale map away');
+  // …and when the WSV list later claims that very name, the id must STOP
+  // resolving: stationMeta's entry no longer carries one, and a map that
+  // survived would go on pointing at a station the loaders cannot fetch.
+  app.run(`fillDatalist([{ n: 'MENDEN_1', w: 'RHEIN', km: 1 }])`);
+  assert.equal(app.run(`stationMeta.get('MENDEN_1').id`), undefined, 'the WSV list overwrote the entry');
+  assert.equal(app.run(`resolveStation('lanuk-2729100000100')`), 'LANUK-2729100000100',
+    'so fillDatalist threw the map away too');
+});
+
+test('PRECIPITATION: a hostile `via` cannot reach the word table through its prototype', async () => {
+  // The value comes from the mirror. On a plain object literal `via:
+  // "constructor"` would answer with a Function, esc() would throw on it, and
+  // the throw lands in the rAF that swallows it — the plate stops with no word.
+  const app = await precipApp();
+  const html = app.run(`(() => {
+    historyKey = '30d';
+    state.precip.meta.set = [{ no: 'x', name: 'X', km: 1, via: 'constructor', at: '2729100000100' }];
+    state.precip.n = 1;
+    return renderPrecip(precipViewModel());
+  })()`);
+  const row = setRowAtKm(html, '1');
+  assert.match(row, /<span class="via">draining here<\/span>/, 'an unknown route falls back to the hydrological word');
+  assert.ok(!row.includes('function'), 'and never to something off Object.prototype');
 });
 
 test('PRECIPITATION: a set that fits gets a readout, not a chip that changes nothing', async () => {

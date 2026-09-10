@@ -79,7 +79,10 @@ const precipMetaOf = async no => (BASE_URL
 const VIA_RANK = { basin: 0, orphan: 0, local: 1, knn: 2 };
 const setInOrder = set => [...set].sort((a, b) =>
   (VIA_RANK[a.via] ?? 0) - (VIA_RANK[b.via] ?? 0) ||
-  (a.km ?? Infinity) - (b.km ?? Infinity) || String(a.no).localeCompare(String(b.no)));
+  // plain code-unit compare, exactly as the page does it: localeCompare would
+  // put Node's default locale against the browser's on a tie
+  (a.km ?? Infinity) - (b.km ?? Infinity) ||
+  (String(a.no) < String(b.no) ? -1 : String(a.no) > String(b.no) ? 1 : 0));
 
 const classHours = ([lo, hi]) => (hi == null ? `${lo}+ h` : `${lo}–${hi} h`);
 let lagSkipped = 0;
@@ -236,10 +239,14 @@ const MEASURE = `(() => {
   out.precipSet = null;
   if (precipSection) {
     const ol = precipSection.querySelector('ol.precip-set');
-    // the control, or — for a set that fits on the plate and has nothing to
-    // toggle — the plain readout that stands in its place
-    const chip = precipSection.querySelector('[data-nav="cmd:rset"]')
-      || precipSection.querySelector('.p-tabs-val');
+    // The control, or — for a set that fits on the plate and has nothing to
+    // toggle — the plain readout that stands in its place. Both are read out of
+    // the member list's OWN ctlRow (the <nav> immediately before the <ol>), not
+    // by class name across the block: a second ctlRow on this plate would
+    // otherwise silently become the thing measured.
+    const ctl = ol && ol.previousElementSibling && ol.previousElementSibling.matches('nav.p-tabs')
+      ? ol.previousElementSibling : null;
+    const chip = ctl && (ctl.querySelector('[data-nav="cmd:rset"]') || ctl.querySelector('.p-tabs-val'));
     if (ol) {
       const rows = [...ol.querySelectorAll('li')];
       const cell = (li, sel) => { const e = li.querySelector(sel); return e ? e.textContent.trim() : null; };
@@ -339,16 +346,24 @@ async function run(cdp, base, vp) {
           // the first row is the rule's own first: the route that IS a
           // measurement, nearest inside it
           check(ms.names[0] === ordered[0].name, `${pg.name}: the first row is the set's own first`, `${ms.names[0]} vs ${ordered[0].name}`);
-          check(ms.kms[0] === `km ${ordered[0].km}`, `${pg.name}: with its own distance`, `${ms.kms[0]} vs km ${ordered[0].km}`);
+          // …and the expectations tolerate exactly what the renderer tolerates:
+          // a member without `km` or without `at` draws an em dash, so a mirror
+          // that carries neither must not be reported as a broken plate.
+          const wantKm = s => (typeof s.km === 'number' && Number.isFinite(s.km) ? `km ${s.km}` : '—');
+          check(ms.kms[0] === wantKm(ordered[0]), `${pg.name}: with its own distance`, `${ms.kms[0]} vs ${wantKm(ordered[0])}`);
           // …and on this product that first row also carries the SMALLEST
           // distance in the set (measured on all five station fixtures
           // 2026-09-10): a basin member sits closer than any 15 km neighbour.
           // It is implied by the order, not asserted instead of it — if the two
           // ever part, the check above still pins the rule and this one says so.
-          const minKm = Math.min(...(set.set || []).map(s => s.km));
-          check(ms.kms[0] === `km ${minKm}`, `${pg.name}: which is the smallest km in the product`, `${ms.kms[0]} vs km ${minKm}`);
+          const withKm = (set.set || []).filter(s => typeof s.km === 'number' && Number.isFinite(s.km));
+          const minKm = withKm.length ? Math.min(...withKm.map(s => s.km)) : null;
+          check(minKm == null || ms.kms[0] === `km ${minKm}`, `${pg.name}: which is the smallest km in the product`,
+            minKm == null ? 'no member carries a distance' : `${ms.kms[0]} vs km ${minKm}`);
           check(ms.rawTags === 0, `${pg.name}: no member name reached the page as markup`, String(ms.rawTags));
-          const wantNavs = ordered.slice(0, ms.rows).map(s => `lanuk-${s.at}`);
+          // a member the mirror routed nowhere gets no link at all, and the
+          // expectation says so rather than asking for "lanuk-undefined"
+          const wantNavs = ordered.slice(0, ms.rows).map(s => (s.at ? `lanuk-${s.at}` : null));
           check(JSON.stringify(ms.atNavs) === JSON.stringify(wantNavs),
             `${pg.name}: every row links to the gauge its rain is routed to`,
             `${ms.atNavs.slice(0, 3).join(',')} vs ${wantNavs.slice(0, 3).join(',')}`);
@@ -356,15 +371,24 @@ async function run(cdp, base, vp) {
         // …and the link is one this app can actually reach. Clicked for real,
         // once per viewport, on the page that has the biggest set: an href that
         // resolves to a station nobody has is a dead link a DOM check cannot see.
-        if (pg.name === 'menden' && ms && ms.atNavs[0]) {
+        if (pg.name === 'menden') {
+          // An input set that can be empty is exactly what a gate may not have.
+          // The first member could carry no `at` (the renderer handles it), and
+          // then this check would vanish without a word — the run would go
+          // green having never clicked the link it exists to click.
+          const target = ms && ms.atNavs.find(Boolean);
+          check(!!target, `${pg.name}: there is a member gauge link to click at all`,
+            ms ? `${ms.atNavs.filter(Boolean).length} of ${ms.rows} rows link out` : 'no member list');
+          if (target) {
           const before = await s.evaluate('station');
           await s.evaluate('document.querySelector(\'#screen ol.precip-set li .at a\').click()');
           await sleep(1200);
           await s.evaluate('renderNow()');
           const after = await s.evaluate('JSON.stringify({ station, mode, id: stationId(), err: !!state.error })');
           const a = JSON.parse(after);
-          check(a.mode === 'station' && !a.err && a.station !== before && a.id === ms.atNavs[0],
+          check(a.mode === 'station' && !a.err && a.station !== before && a.id === target,
             `${pg.name}: clicking a member's gauge lands on that gauge`, `${before} -> ${JSON.stringify(a)}`);
+          }
         }
 
         const r = m.response;

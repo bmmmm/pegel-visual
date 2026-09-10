@@ -4643,9 +4643,13 @@ function precipViewModel() {
 // of that vocabulary is exactly how a key ends up promising something the list
 // contradicts. `basin` and `orphan` are the same route to a reader — both mean
 // the rain drains to this gauge — so both carry the hydrological word.
-const VIA_WORD = { basin: 'draining here', orphan: 'draining here', local: 'within 15 km', knn: 'standing in' };
+// Null-prototype, both of them: these are looked up with a value the MIRROR
+// wrote, and on a plain literal `via: "constructor"` would answer with a
+// Function that esc() then throws on — inside the rAF that swallows it, so the
+// plate would simply stop instead of saying anything.
+const VIA_WORD = { __proto__: null, basin: 'draining here', orphan: 'draining here', local: 'within 15 km', knn: 'standing in' };
 // the reading order of the list: a measurement before a fallback
-const VIA_RANK = { basin: 0, orphan: 0, local: 1, knn: 2 };
+const VIA_RANK = { __proto__: null, basin: 0, orphan: 0, local: 1, knn: 2 };
 const viaWord = via => VIA_WORD[via] || VIA_WORD.basin;
 const viaRank = via => (VIA_RANK[via] ?? 0);
 
@@ -4687,8 +4691,12 @@ function precipSetViewModel(set) {
       at,
       atName: at ? stationNameOfId('lanuk-' + at) : null,
     };
+    // the tiebreak is a plain code-unit compare, not localeCompare: the browser
+    // and the check that verifies it run in different default locales, and two
+    // members at the same route and the same distance must not sort one way
+    // here and another way there
   }).sort((a, b) => viaRank(a.via) - viaRank(b.via) ||
-    (a.km ?? Infinity) - (b.km ?? Infinity) || a.no.localeCompare(b.no));
+    (a.km ?? Infinity) - (b.km ?? Infinity) || (a.no < b.no ? -1 : a.no > b.no ? 1 : 0));
 }
 
 // How many rows a collapsed list shows. A phone plate has no <details>, so the
