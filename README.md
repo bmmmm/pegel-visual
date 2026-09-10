@@ -282,6 +282,11 @@ the gauge it drains to as a link. A **WATER TEMPERATURE** block follows where
 the mirror carries a record for the station: the daily mean as a line inside
 the band from the mean to the day's maximum, with the record's own last day
 as the right edge, which for a pulled sensor can be months behind the level.
+Every rain gauge in that list is a link to its own page (`?rain=<number>`):
+its daily rain over the last 30, 60 or 90 days with its own last reading as
+the right edge, and the list of gauges whose field it stands in, each a link
+back. Rain gauges are not in the station finder — the member list is the way
+in.
 
 The aggregate is baked on the `nrw` branch by `scripts/build-nrw-precip.mjs`
 (`nrw/precip/`), which is a pure function of the mirror: any checkout can

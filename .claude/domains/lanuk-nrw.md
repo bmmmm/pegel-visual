@@ -280,6 +280,29 @@ holds the two directions equal entry by entry, and an absent `used-by/` on an
 old mirror is red, not a skip. Basin products' sets are deliberately not
 reversed.
 
+**A rain gauge has its own page since 2026-09-10: `?rain=<no>`, a MODE, not a
+station.** Rain gauges never enter `knownStations` or the finder — they have no
+level, no river, no ladder, and their names collide with gauge names (the
+WESEL/BRAKE precedent) — so the number is kept as a string (leading zeros) in
+`rainGaugeNo`, `rainSyncFromUrl` accepts `/^\d+$/`, `navHref` knows
+`rain-<no>`, and `GLOBAL_MODES.rain.enter` dispatches `loadRain()` or
+`loadRainGauge()`. The member list on a station plate is the way in; the
+`used-by` list is the way back out. Data: `manifest.rain[no]` (`lanukRainIndex`,
+declared with the routing near the top because `applyRainChrome` runs at boot,
+before the LANUK block — booting straight into `?rain=` threw a ReferenceError
+from the tab title) and `nrw/rain/<no>/<Y>.json` through `rainShardCache` with
+an `isRainShard` shape guard. The bars are `rainBars()` and `precipBarChart()`,
+factored out of the station plate's PRECIPITATION block and reused, so the two
+drawings cannot drift; the range is the `?rain` board's own 30/60/90 window,
+not `historyPreset()`, because a range with no chip on the plate breaks the
+controls-on-the-plate rule. The right edge is THIS gauge's newest reading — 9 of
+319 stand behind the mirror's `lastRainDay`, one reachable from 23 plates — with
+the mirror's day as a warn row where they part. A registry entry without a
+window (4 of them, in 26 member rows) is stated as a finding of the source; a
+gauge in `stationsInNoSetIds` says so instead of claiming the branch has no
+index. Known P2: a failed shard is cached `null` for the session with no retry
+affordance, like every other `p-dim` reason on the page.
+
 **What was measured before a line of it was written** (all on the real mirror,
 `scripts/probe-precip-rule.mjs`, whose `identity` variant reproduces the old
 rule at delta exactly 0 on all 92 comparable gauges — that self-test is the
