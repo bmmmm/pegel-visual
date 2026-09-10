@@ -4226,7 +4226,10 @@ const NRW_MANIFEST = {
   license: 'dl-de/zero-2.0', window: { from: '2024-09-04', to: '2026-09-02',
     // the collector's own per-product spans: the wave hangs its right edge on
     // `gauges.to`, the areal plate on `rain`'s — never on the clock
-    gauges: { from: '2024-09-04T00:00:00.000+01:00', to: '2026-09-02T00:00:00.000+01:00' },
+    // ...and `gauges.to` is one day past the newest DRAWABLE day, exactly as
+    // the real manifest is: the export's own partial last day comes with a
+    // maximum and no mean at all
+    gauges: { from: '2024-09-04T00:00:00.000+01:00', to: '2026-09-03T00:00:00.000+01:00' },
     // the areal plate reads THIS window's right edge, not the clock
     rain: { from: '2024-09-04T07:00:00.000+01:00', to: '2026-09-02T07:00:00.000+01:00' } },
   // which gauges have a baked areal-rain product, and why the others do not
@@ -4776,7 +4779,9 @@ test('a mirrored wave ends at the mirror\'s own edge, not at the clock', async (
   app.run(`viewMode = 'wave'; waveData = null`);
   await app.run('loadWave()');
   const vm = app.run('waveViewModel(waveData)');
-  assert.equal(vm.to, '2026-09-02', "the right edge is the mirror window's own newest gauge day");
+  assert.equal(app.run('waveRightEdge()'), Math.floor(Date.UTC(2026, 8, 3) / 864e5),
+    "the window stops at the mirror's stated edge rather than the clock");
+  assert.equal(vm.to, '2026-09-02', 'and the DRAWING stops one day earlier still, where the means end');
   for (const r of vm.rows) {
     const last = r.cells[r.cells.length - 1];
     assert.ok(last.v != null, `${r.name}: the newest column carries a reading, not the export lag`);

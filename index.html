@@ -5542,6 +5542,21 @@ function cropWaveWindow(rows, nDays) {
   return 0;
 }
 
+// the same crop at the other end, and MIRRORED rivers only: the manifest's own
+// window ends on the export's partial last day, which carries a maximum and no
+// mean at all — so the stated edge is one day past the last day the wave can
+// DRAW (measured 2026-09-10: window.gauges.to 09-10, newest mean 09-09). Only
+// the folded rows know where the drawing really ends. A live river keeps its
+// empty newest column: there it means the feed is down, which is worth seeing.
+function cropWaveTail(rows, nDays) {
+  if (!rows.length) return 0;
+  const half = Math.ceil(rows.length / 2);
+  for (let i = nDays - 1; i >= 0; i--) {
+    if (rows.filter(r => r.vals[i] != null).length >= half) return nDays - 1 - i;
+  }
+  return 0;
+}
+
 // fold hosted-archive year objects (y, min[], max[]) into a day-window array.
 // Defensive against malformed files: a missing/short max array must skip that
 // day, not throw (which would take the whole river's wave view down) or store
@@ -5659,7 +5674,10 @@ async function loadWave() {
     if (usable.length >= 2 && downstreamIsLowKm(usable)) rows.reverse();
     const cut = cropWaveWindow(rows, WAVE_FETCH_DAYS);
     if (cut) for (const r of rows) r.vals = r.vals.slice(cut);
-    waveData = { river: forRiver, rows, day0: day0 + cut, nDays: WAVE_FETCH_DAYS - cut, shown: rows.length, total: cands.length };
+    let nDays = WAVE_FETCH_DAYS - cut;
+    const tail = state.feed && !state.feed.live ? cropWaveTail(rows, nDays) : 0;
+    if (tail) { for (const r of rows) r.vals = r.vals.slice(0, nDays - tail); nDays -= tail; }
+    waveData = { river: forRiver, rows, day0: day0 + cut, nDays, shown: rows.length, total: cands.length };
   } catch (e) {
     if (mode !== 'river' || state.river !== forRiver) return;
     waveData = { river: forRiver, error: e.message };
