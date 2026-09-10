@@ -40,11 +40,17 @@ mkdirSync(SHOTS, { recursive: true });
 // typed into this script, which goes stale the day the mirror gains a gauge.
 const topo = JSON.parse(readFileSync(TOPO_PATH, 'utf8'));
 const MOUTH = 'mouth';
-const basinOf = name => Object.values(topo.basins).find(b => String(b.name || '').toUpperCase() === name);
+// the same two-key match the app makes (name OR river), or this script and the
+// page can disagree about which basin a water belongs to without either failing
+const basinOf = name => Object.values(topo.basins).find(b =>
+  String(b.name || '').toUpperCase() === name || String(b.river || '').toUpperCase() === name);
+// a basin entry may carry ids or objects carrying an id — normalise once, here,
+// so no call site indexes topo.gauges with an object and silently reads nothing
+const gaugeIds = basin => (basin.gauges || []).map(g => (g && typeof g === 'object' ? g.id : g)).filter(Boolean);
 // the same walk the page does, done independently here: a gauge is DRAWN only
 // if its chain of `down` pointers ends at a gauge the file marks as the mouth
 const placedCount = basin => {
-  const ids = new Set(basin.gauges.map(g => (g && typeof g === 'object' ? g.id : g)));
+  const ids = new Set(gaugeIds(basin));
   const ok = id => {
     let n = topo.gauges[id], seen = new Set();
     while (n && !seen.has(n.id)) {
@@ -61,10 +67,29 @@ const placedCount = basin => {
 const RIVERS = ['ERFT', 'SIEG'];
 const EXPECT = Object.fromEntries(RIVERS.map(r => {
   const b = basinOf(r);
-  return [r, { total: b.gauges.length, placed: placedCount(b) }];
+  return [r, { total: gaugeIds(b).length, placed: placedCount(b) }];
 }));
+// The mirror carries far more WATERS than basins, so most mirrored rivers have
+// no network of their own — and that path, not the two happy ones, is where the
+// view crashed render() and froze the plate. Pick such a water from the file
+// itself rather than naming one here, so this keeps checking the real majority
+// case as the mirror changes.
+// Take the BUSIEST such water, not the first: the first is a one-gauge water
+// that the river loader cannot draw at all, so the run would measure "no river"
+// instead of "a river with no basin" — measured 2026-09-10, SOESTBACH (a single
+// placeholder-id gauge) reported "No reading" and never reached the net view.
+const NO_BASIN = process.env.NET_NO_BASIN_RIVER || (() => {
+  const byWater = new Map();
+  for (const g of Object.values(topo.gauges)) {
+    const w = String(g.water || '').toUpperCase();
+    if (w) byWater.set(w, (byWater.get(w) || 0) + 1);
+  }
+  const cands = [...byWater].filter(([w]) => !basinOf(w)).sort((a, b) => b[1] - a[1]);
+  return cands.length ? cands[0][0] : null;
+})();
 console.log(`topology ${topo.generated}: ` +
-  RIVERS.map(r => `${r} ${EXPECT[r].total} in basin / ${EXPECT[r].placed} placed`).join(', '));
+  RIVERS.map(r => `${r} ${EXPECT[r].total} in basin / ${EXPECT[r].placed} placed`).join(', ') +
+  `; no-basin water: ${NO_BASIN || 'NONE FOUND'}`);
 
 // A water list the PEGELONLINE API really could answer with — and deliberately
 // WITHOUT the NRW basins, because `wsvWaters.size && !wsvWaters.has(river)` is
@@ -130,7 +155,7 @@ try {
   const base = await serve({ root: ROOT });
   const cdp = await chrome({ tag: 'net-check' });
   for (const vp of VIEWPORTS) {
-    for (const river of RIVERS) {
+    for (const river of [...RIVERS, NO_BASIN].filter(Boolean)) {
       const s = await session(cdp);
       const local = [], unexpected = [], answered = [];
       await s.send('Runtime.enable');
@@ -177,19 +202,53 @@ try {
       const url = `${base}/?river=${river}&view=net`;
       await s.send('Page.navigate', { url });
       // wait for the loader, not for a fixed sleep: a blind wait reads as
-      // "the page never painted" on a loaded machine
+      // "the page never painted" on a loaded machine. A water with no basin
+      // never grows a chart, so the plate's own heading is the ready signal
+      // for it — waiting on the chart there would just time out and report
+      // "the page never painted" for a view that rendered correctly.
+      const noBasin = river === NO_BASIN;
+      const readyExpr = noBasin
+        ? '!!(document.querySelector("#screen .p-head h1") && /NETWORK/.test(document.querySelector("#screen .p-head h1").innerText))'
+        : '!!(document.querySelector("#screen svg.chart.net"))';
       let ready = false;
       for (let i = 0; i < 80 && !ready; i++) {
-        ready = await s.evaluate('!!(document.querySelector("#screen svg.chart.net"))');
+        ready = await s.evaluate(readyExpr);
         if (!ready) await sleep(150);
       }
-      await s.evaluate('typeof renderNow === "function" && renderNow()');
-      await sleep(200);
-      const m = await s.evaluate(MEASURE);
       const tag = `${river.toLowerCase()}-${vp.name}`;
+      // A throw out of render() is the failure this view actually had, so it is
+      // a FAILED CHECK, not a dead run: let it be reported and let the other
+      // rivers still be measured.
+      let renderErr = null;
+      try {
+        await s.evaluate('typeof renderNow === "function" && renderNow()');
+      } catch (err) {
+        renderErr = String(err.message || err);
+      }
+      check(!renderErr, `${tag}: render() does not throw`, renderErr || '');
+      await sleep(200);
+      const m = await s.evaluate(MEASURE).catch(() => ({
+        text: '', h1: null, sub: null, foot: null, hasDraw: false, drawBox: null,
+        nodes: -1, noArea: -1, edges: -1, hits: -1, edgePts: [], rows: -1, rowLinks: -1,
+        offRows: -1, keyEntries: -1, swatches: [], emptySwatches: [], tabs: [], tabOn: [],
+        wide: [], scroll: { w: 0, inner: 1 },
+      }));
 
       const shot = await s.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: true });
       writeFileSync(join(SHOTS, `net-${tag}.png`), Buffer.from(shot.data, 'base64'));
+
+      if (noBasin) {
+        // the case that used to throw out of render() and freeze the plate
+        check(ready, `${tag}: a water with no basin still renders a titled plate`, m.text.slice(0, 160));
+        check(s.events.exceptions.length === 0, `${tag}: no uncaught exception`, s.events.exceptions.join(' | '));
+        check(!m.hasDraw, `${tag}: it draws no network`, 'a chart appeared where the file has no basin');
+        check(/carry no network of their own|no gauge in this basin/.test(m.text),
+          `${tag}: and it says WHY there is nothing to draw`, m.text.slice(0, 200));
+        check(/topology 20\d\d-\d\d-\d\d/.test(m.foot || ''), `${tag}: the foot still names source and age`, m.foot || '-');
+        check(m.scroll.w <= m.scroll.inner + 1, `${tag}: the page does not scroll sideways`, `${m.scroll.w} > ${m.scroll.inner}`);
+        await s.close();
+        continue;
+      }
 
       const e = EXPECT[river];
       check(ready, `${tag}: the network drawing is on the page`, m.text.slice(0, 120));
@@ -216,7 +275,7 @@ try {
       // the Sieg carries two gauges without a catchment area, the Erft none —
       // the hollow mark is an inventory entry, so it must appear on one and not
       // on the other
-      const noArea = [...new Set(basinOf(river).gauges)].filter(id => {
+      const noArea = [...new Set(gaugeIds(basinOf(river)))].filter(id => {
         const g = topo.gauges[id];
         return g && Number.isFinite(g.distKm) && !Number.isFinite(g.km2);
       }).length;
