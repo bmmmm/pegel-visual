@@ -258,6 +258,28 @@ never look like a measurement. Result: **93 → 275 of 276** receiving gauges
 carry a series; memberships 949 basin / 45 orphan / 1406 local / 42 knn; the
 floor fires on 28 gauges and reaches at most 29.05 km.
 
+**The plate names the members (2026-09-10), and the mirror carries the index
+read backwards.** The PRECIPITATION block lists every member of the set under
+its chart — name, `via` word, `km`, and the owning node `at` as a `lanuk-<no>`
+link — sorted by via rank (basin/orphan, local, knn) and then distance, from ONE
+`VIA_WORD` table the key line reads too, so the key and the list cannot drift.
+On a narrow plate the list cuts at 12 rows behind a `cmd:rset` chip that names
+the cut ("first 12 of 32"); a set of 12 or fewer gets a plain readout, not a
+control that changes nothing. The same day fixed `resolveStation`: every
+`data-nav="lanuk-<no>"` in the app had landed on did-you-mean, because the id
+was never mapped to a name. `nrw/precip/used-by/<rainNo>.json` =
+`[{ no, name, via, km, at }]` is the same memberships from the rain gauge's
+side, written by `build-nrw-precip.mjs` in the memberships loop (314 files for
+the 319 rain dirs; the 5 missing are exactly `stationsInNoSet`), pruned with the
+rest of `precip/`, and it carries `at` because `km` is the distance to the
+OWNING node, not to the gauge named in the entry — 681 of the 994 basin/orphan
+entries name a node other than themselves. `name` there is the receiving
+GAUGE's, not the rain station's as in the forward set. N8 clause **c4**
+(`checkPrecipUsedBy`, dispatched from `main()` and tested through the CLI)
+holds the two directions equal entry by entry, and an absent `used-by/` on an
+old mirror is red, not a skip. Basin products' sets are deliberately not
+reversed.
+
 **What was measured before a line of it was written** (all on the real mirror,
 `scripts/probe-precip-rule.mjs`, whose `identity` variant reproduces the old
 rule at delta exactly 0 on all 92 comparable gauges — that self-test is the

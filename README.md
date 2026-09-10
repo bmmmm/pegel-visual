@@ -271,11 +271,17 @@ a day short. There is no live feed for this source at all, and the foot says so.
 A basin whose name is not a link has no gauged river of its own (the Emscher).
 
 Each LANUK station page carries the same data for its own catchment — a
-**PRECIPITATION** block with the areal rain over every rain gauge that drains
-into that gauge, drawn against the gauge's own level in the same columns, and a
+**PRECIPITATION** block with the rain field around the gauge — every rain gauge
+that drains into it or stands nearby — drawn against the gauge's own level in the same columns, and a
 **RESPONSE** block with the measured correlation between the two at lags 0 to 7
 days plus the rise per 10 mm. A gauge with fewer than three rain gauges upstream
 says so instead of drawing a thin mean.
+Below the chart the block names every rain gauge in that field — how it got
+there (draining here, within 15 km, or the nearest three), its distance, and
+the gauge it drains to as a link. A **WATER TEMPERATURE** block follows where
+the mirror carries a record for the station: the daily mean as a line inside
+the band from the mean to the day's maximum, with the record's own last day
+as the right edge, which for a pulled sensor can be months behind the level.
 
 The aggregate is baked on the `nrw` branch by `scripts/build-nrw-precip.mjs`
 (`nrw/precip/`), which is a pure function of the mirror: any checkout can
