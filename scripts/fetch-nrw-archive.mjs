@@ -1145,7 +1145,9 @@ deleted by the workflow; the pruning levers exist and are never passed.
 \`scripts/build-nrw-precip.mjs\` in the same run, right after this collector
 and before the gate. It holds the areal daily rainfall over each gauge's
 upstream catchment (\`precip/<station_no>/{meta.json,<YYYY>.json,response.json}\`),
-the same per basin (\`precip/basins/<no>/…\`), and \`precip/{index.json,overview.json}\`.
+the same per basin (\`precip/basins/<no>/…\`), \`precip/{index.json,overview.json}\`
+and \`precip/used-by/<rain station_no>.json\` — the reverse of the sets, naming
+the gauges one rain gauge feeds.
 It is a pure function of the rest of this branch: \`--check\` recomputes it and
 exits 1 with a list of what differs, and gate rule N8 runs exactly that before
 every push. Unlike the mirrored trees it may SHRINK — a gauge that drops below

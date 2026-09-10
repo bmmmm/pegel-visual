@@ -5,7 +5,7 @@
 // synthetic trees under a temp dir — no network, no mirror, no clock.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, existsSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -611,6 +611,70 @@ test('a second run writes nothing and --check exits clean; a hand-edit makes it 
   const dirty = build({ tree, out, check: true, generated: '2026-09-06' });
   assert.deepEqual(dirty.out.diffs, [`differs: g1/${Y}.json`]);
   assert.equal(JSON.parse(readFileSync(p, 'utf8')).mm[3], 999, '--check wrote nothing back');
+  rmSync(tmp, { recursive: true, force: true });
+});
+
+// ---------- the reverse index ----------
+// The same relation the per-gauge meta.json holds forward, one file per rain
+// gauge. Two gauges, so a membership shared by both is visible as such; the
+// order assertion pins the file's contract, not the builder's path to it
+// (`assignRain` already returns recv in cmpNo order, so removing the sort line
+// changes nothing today — measured).
+function twoGaugeTree(tmp) {
+  const Y = 2025, n = daysInYear(Y);
+  const mm = Array(n).fill(3);
+  const rain = {};
+  for (let i = 1; i <= 3; i++) rain[`r${i}`] = { name: `R${i}`, basin: '1', ...northOf(BASE, i), years: { [Y]: { mm } } };
+  return writeTree(join(tmp, 'nrw'), {
+    gauges: {
+      g2: { name: 'Down', ...BASE, basin: '1', km2: 200, years: { [Y]: { mean: Array(n).fill(50) } } },
+      g1: { name: 'Up', ...northOf(BASE, 4), basin: '1', km2: 100, down: 'g2', years: { [Y]: { mean: Array(n).fill(50) } } },
+    },
+    rain,
+    basins: { 1: { name: 'B', river: 'B', gauges: ['g1', 'g2'], noLevel: [], rain: Object.keys(rain), temp: [], mouth: 'g2' } },
+  });
+}
+
+test('used-by is the sets read backwards: every membership, no other, and in gauge order', () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'precip-usedby-'));
+  const tree = twoGaugeTree(tmp);
+  const out = join(tree, 'precip');
+  build({ tree, out, generated: '2026-09-06' });
+
+  const dir = join(out, 'used-by');
+  assert.deepEqual(readdirSync(dir).sort(), ['r1.json', 'r2.json', 'r3.json'],
+    'one file per rain gauge that lands in a set, and none for anything else');
+
+  const ub = no => JSON.parse(readFileSync(join(dir, `${no}.json`), 'utf8'));
+  assert.deepEqual(ub('r1').map(e => e.no), ['g1', 'g2'],
+    'sorted by the receiving gauge, not by the order the topology declared them');
+  assert.deepEqual(ub('r1').map(e => e.name), ['Up', 'Down'], 'the gauge NAME rides along, so one fetch answers the page');
+
+  // both directions against the forward side, entry for entry
+  const setOf = no => JSON.parse(readFileSync(join(out, no, 'meta.json'), 'utf8')).set;
+  const fwd = new Map();
+  for (const g of ['g1', 'g2']) for (const s of setOf(g)) fwd.set(`${s.no}|${g}`, s);
+  const back = new Map();
+  for (const r of ['r1', 'r2', 'r3']) for (const e of ub(r)) back.set(`${r}|${e.no}`, e);
+  assert.deepEqual([...back.keys()].sort(), [...fwd.keys()].sort(), 'the two directions name the same memberships');
+  for (const [k, e] of back) {
+    const s = fwd.get(k);
+    // `at` above all: on a basin member `km` is the distance to the OWNING NODE,
+    // so an entry that carried km without at would state a span between two
+    // gauges that never stood that far apart
+    assert.deepEqual([e.via, e.km, e.at], [s.via, s.km, s.at], `${k}: via, km and at are the set's own, not re-derived`);
+  }
+  assert.ok(ub('r1').every(e => e.at != null), 'every entry names the node its km is measured to');
+
+  // the union is exactly what index.json counted — the reverse index and the
+  // counter come out of one loop and may not drift apart
+  const ix = JSON.parse(readFileSync(join(out, 'index.json'), 'utf8'));
+  assert.equal(back.size, Object.values(ix.counts.memberships).reduce((a, b) => a + b, 0));
+
+  // a stale file is removed by the same prune that removes a stale shard
+  writeFileSync(join(dir, 'r9.json'), '[]');
+  build({ tree, out, generated: '2026-09-06' });
+  assert.equal(existsSync(join(dir, 'r9.json')), false, 'a rain gauge that left the sets loses its file');
   rmSync(tmp, { recursive: true, force: true });
 });
 
