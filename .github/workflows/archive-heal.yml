@@ -1,0 +1,106 @@
+name: archive-heal
+
+# One-off repair of the `archive` data branch (issue #17), manual only — it is
+# a throttled job against the WSV ZIP endpoint, so it runs in a window someone
+# chose, never on a schedule:
+#
+#  - dec31: scripts/heal-dec31.mjs re-reads the Dec 31 that every ZIP request
+#    ending at `Y-12-31` flattened to its midnight reading (2143 closed years
+#    across 613 stations, measured 2026-09-24). One small request per year;
+#    resumable — a healed year no longer matches, so a re-run continues.
+#  - running: the monthly --running heal on demand, which re-reads the whole
+#    running year from the ZIP (this is what fills Jan..May 2026 wherever WSV
+#    has it; archive-update.yml already does it on every first Monday).
+#
+# The rest mirrors archive-update.yml: totals rebuilt (R2 of the consistency
+# gate demands a fresh overview), the gate, one commit, the explicit pages
+# dispatch a data-branch push cannot trigger itself.
+on:
+  workflow_dispatch:
+    inputs:
+      dec31:
+        description: 'Heal the flattened Dec 31 in closed.json (scripts/heal-dec31.mjs)'
+        type: boolean
+        default: true
+      running:
+        description: 'Also re-read the running year from the ZIP (fills Jan–May 2026; fetch-wsv-archive.mjs --running, ~17 min)'
+        type: boolean
+        default: false
+      station:
+        description: 'Dec-31 heal for ONE station only (name or uuid) — a probe run; empty = all'
+        type: string
+        default: ''
+      parallel:
+        description: 'Dec-31 heal workers (each throttled to one request per ~1.5 s)'
+        type: string
+        default: '2'
+      budget_minutes:
+        description: 'Dec-31 heal stops starting requests after this many minutes; what is healed by then is committed'
+        type: string
+        default: '240'
+
+permissions:
+  contents: write
+  actions: write # to dispatch the pages deploy afterwards
+
+# the same group as archive-update.yml and snapshot-update.yml: every writer of
+# the `archive` branch serializes (no cancel-in-progress — a queued data commit
+# must never be dropped)
+concurrency:
+  group: archive-branch-write
+
+jobs:
+  heal:
+    runs-on: ubuntu-latest
+    # budget_minutes (240) + the optional --running pass (~17) + totals + gate
+    timeout-minutes: 330
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7
+        with:
+          ref: archive
+          path: archive-branch
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - name: Heal the flattened Dec 31 (WSV ZIP)
+        if: inputs.dec31
+        env:
+          STATION: ${{ inputs.station }}
+          PARALLEL: ${{ inputs.parallel }}
+          BUDGET: ${{ inputs.budget_minutes }}
+        run: |
+          set -- --out archive-branch/archive --parallel "$PARALLEL" --budget-minutes "$BUDGET"
+          if [ -n "$STATION" ]; then set -- "$@" --station "$STATION"; fi
+          node scripts/heal-dec31.mjs "$@"
+      - name: Heal the running year from the WSV ZIP archive
+        if: inputs.running
+        run: node scripts/fetch-wsv-archive.mjs --running --parallel 2 --out archive-branch/archive
+      - name: Rebuild river totals (?total view)
+        run: node scripts/build-river-totals.mjs --rebuild --archive archive-branch/archive --out archive-branch/archive/totals --fetch-units
+      - name: Consistency gate
+        run: node scripts/check-archive-consistency.mjs --tree archive-branch/archive --git archive-branch
+      - name: Commit and push
+        id: push
+        env:
+          DEC31: ${{ inputs.dec31 }}
+          RUNNING: ${{ inputs.running }}
+        run: |
+          cd archive-branch
+          git config user.name 'github-actions[bot]'
+          git config user.email 'github-actions[bot]@users.noreply.github.com'
+          git add archive
+          git diff --cached --quiet && { echo 'no changes'; exit 0; }
+          what=""
+          [ "$DEC31" = "true" ] && what="flattened Dec 31"
+          [ "$RUNNING" = "true" ] && what="${what:+$what + }running year"
+          git commit -m "Heal archive data: $what"
+          git push
+          echo "pushed=true" >> "$GITHUB_OUTPUT"
+      - name: Redeploy pages
+        # a push to the archive branch cannot trigger pages.yml itself — the
+        # orphan data branch carries no workflow files — so dispatch it here
+        if: steps.push.outputs.pushed == 'true'
+        run: gh workflow run pages.yml --ref main
+        env:
+          GH_TOKEN: ${{ github.token }}

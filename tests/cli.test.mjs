@@ -157,6 +157,8 @@ test('every collector and builder main() gets past its argument parsing', () => 
     [['verify-net.mjs', '--tree', missing], 1, /no topology\.json under/],
     [['snapshot-wsv.mjs', '--nope'], 2, /unknown flag --nope/],
     [['fetch-rws-archive.mjs', '--nope'], 2, /unknown flag --nope/],
+    [['heal-dec31.mjs', '--nope'], 2, /unknown flag --nope/],
+    [['heal-dec31.mjs', '--out', missing, '--dry-run'], 1, /no station directories under/],
   ];
   for (const [argv, code, expect] of cases) {
     const r = spawnSync(process.execPath, [join(SCRIPTS, argv[0]), ...argv.slice(1)], { encoding: 'utf8', timeout: 20000 });
