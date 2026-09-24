@@ -41,7 +41,8 @@
 //   the requested years failed — see reportRunOutcome — while every year healed
 //   before that is already written)
 //
-// Runs in CI via .github/workflows/archive-heal.yml (workflow_dispatch only).
+// Runs in CI via .github/workflows/archive-heal.yml (workflow_dispatch only);
+// dispatch, wait and verify with `node scripts/heal-dec31-run.mjs probe|full`.
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import {

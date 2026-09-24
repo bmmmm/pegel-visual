@@ -161,6 +161,10 @@ test('every collector and builder main() gets past its argument parsing', () => 
     [['heal-dec31.mjs', '--out', missing, '--dry-run'], 1, /no station directories under/],
     // a mistyped worker count used to become NaN — zero workers, a green no-op
     [['heal-dec31.mjs', '--parallel', 'two', '--out', missing], 2, /--parallel two: want an integer/],
+    // heal-dec31-run.mjs is deliberately NOT spawned here: it dispatches a real
+    // workflow, and a broken argument check would reach GitHub from a test
+    // (2026-09-24, a mutant did). Its parsing is a pure function, tested in
+    // heal-dec31-run.test.mjs.
   ];
   for (const [argv, code, expect] of cases) {
     const r = spawnSync(process.execPath, [join(SCRIPTS, argv[0]), ...argv.slice(1)], { encoding: 'utf8', timeout: 20000 });
