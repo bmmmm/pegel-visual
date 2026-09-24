@@ -120,8 +120,22 @@ const PAGES = [
   // with no product, and version 2 gave it one (its 15 km ring holds nine).
   // A fixture that quietly starts testing the ordinary case is worse than no
   // fixture: it stays green and covers nothing.
-  //   LINNENKAMP  the ONE receiving gauge still without a product: three rain
-  //               gauges in reach, one of which reports nothing at all
+  //   RUENDEROTH  a NOT-ROUTED gauge: build-nrw-precip.mjs's assignRain() puts
+  //               it in badCoord (its source record carries Gauss-Krueger
+  //               easting/northing as lat/lon, unusable), so it never becomes a
+  //               receiving node and gets no manifest.precip entry at all —
+  //               structurally different from a receiving node whose set is too
+  //               thin. Measured 2026-09-24: LINNENKAMP stood here until the
+  //               2026-09-10 export gave it a fourth rain gauge and a real
+  //               series (manifest.precip now reads {n:4,up:2,series:true} for
+  //               it), and it was the last receiving gauge without a product —
+  //               today 0 of 276 receiving gauges lack one, so no thin-set "why"
+  //               fixture is available. RUENDEROTH is not the only gauge with no
+  //               manifest.precip entry (12 non-routing gauges outside
+  //               topology.json have none either, e.g. Dedenborn), but it is the
+  //               only ROUTING node with a loadable level series left in that
+  //               state — the others carry no series at all and could never
+  //               satisfy STATION_READY.
   //   OEDT        a set the knn floor built (local/knn/knn at 12.3/16.2/16.9
   //               km) — the thin-set caveat has to be on the plate, and the
   //               chart has to be there too
@@ -135,7 +149,7 @@ const PAGES = [
   //               fixture the plan itself forbade; this one cannot move unless
   //               the SOURCE starts publishing hourly data for it.
   { q: '?station=BETZDORF', ready: STATION_READY, name: 'betzdorf-nohires', kind: 'station', no: '27200500' },
-  { q: '?station=LINNENKAMP', ready: STATION_READY, name: 'linnenkamp-none', kind: 'station', noProduct: true, no: '3215510000100' },
+  { q: `?station=${encodeURIComponent('RUENDEROTH (AGGER VERBAND)')}`, ready: STATION_READY, name: 'ruenderoth-none', kind: 'station', noProduct: true, no: '2728510000200' },
   //   ARLOFF      the WATER TEMPERATURE fixture, and deliberately not a healthy
   //               one: its temperature record stops on 2025-11-07 (ten months
   //               before the clock) and its meta carries an operator note. A
@@ -355,6 +369,11 @@ const MEASURE = `(() => {
     dim: [...precipSection.querySelectorAll('.p-dim')].map(e => e.textContent),
     text: precipSection.innerText,
   } : null;
+  // The app's OWN wording for a gauge that is not a receiving node at all (a
+  // federal relay, or a gauge whose coordinates the source has wrong) — read
+  // off T, never restated here, so a wording change in index.html cannot leave
+  // this script asserting a sentence the page no longer prints.
+  out.precipNotRoutedText = (typeof T !== 'undefined' && T.precipNotRouted) || null;
   // THE MEMBER LIST, anchored at the precipitation section's own <ol>. Read
   // through the DOM, not off innerText: the rows are what has to be counted,
   // and the whole page carries three other .pf-list lists.
@@ -643,14 +662,33 @@ async function run(cdp, base, vp) {
           s.events.responses.filter(r => r.url.includes('/nrw/hourly/')).map(r => r.url).join(', '));
         check(precipReqs.filter(r => !r.url.endsWith('overview.json')).length === 0,
           `${pg.name}: the manifest said no, so no /precip/ shard was fetched`, precipReqs.map(r => r.url).join(', '));
-        // The COLLECTOR's own words, compared against the collector's own file —
-        // not against a string this script also knows. A plate that invented a
-        // plausible reason would pass a `/no product/` regex.
-        const why = ((manifest.precip || {})[pg.no] || {}).why || '';
-        check(!!why, `${pg.name}: the manifest carries a reason at all`, JSON.stringify((manifest.precip || {})[pg.no]));
-        check(!!m.precipPlate && m.precipPlate.dim.some(t => t.trim() === why.trim()),
-          `${pg.name}: the plate prints the collector's own reason, word for word`,
-          `wanted "${why}" — plate has ${JSON.stringify(m.precipPlate && m.precipPlate.dim)}`);
+        // Two structurally different reasons share `noProduct`, and the manifest
+        // itself says which one applies: a RECEIVING node that assignRain() kept
+        // gets an entry with the collector's own `.why` (too few rain gauges in
+        // reach, or none of them reporting); a node assignRain() never made
+        // receiving at all (a federal relay, or — like RUENDEROTH — one whose
+        // coordinates the source has wrong) gets no entry, and the plate then
+        // prints the app's fixed T.precipNotRouted sentence instead. Comparing
+        // against a string this script also knows would pass on an invented
+        // reason, so both branches read the fact from its own source: the
+        // collector's file for one, the app's own T object for the other.
+        const entry = (manifest.precip || {})[pg.no] || null;
+        if (entry) {
+          // Dead on this tree today (0 of 276 receiving gauges carry a `.why` —
+          // this is what LINNENKAMP exercised until 2026-09-10). Kept live for
+          // the day a receiving gauge's set goes thin again; offline coverage of
+          // the render path meanwhile sits in tests/logic.test.mjs.
+          const why = entry.why || '';
+          check(!!why, `${pg.name}: the manifest carries a reason at all`, JSON.stringify(entry));
+          check(!!m.precipPlate && m.precipPlate.dim.some(t => t.trim() === why.trim()),
+            `${pg.name}: the plate prints the collector's own reason, word for word`,
+            `wanted "${why}" — plate has ${JSON.stringify(m.precipPlate && m.precipPlate.dim)}`);
+        } else {
+          check(!!m.precipNotRoutedText, `${pg.name}: the app carries T.precipNotRouted at all`, String(m.precipNotRoutedText));
+          check(!!m.precipPlate && m.precipPlate.dim.some(t => t.trim() === (m.precipNotRoutedText || '').trim()),
+            `${pg.name}: the plate prints the app's not-routed sentence, word for word`,
+            `wanted "${m.precipNotRoutedText}" — plate has ${JSON.stringify(m.precipPlate && m.precipPlate.dim)}`);
+        }
       }
       if (pg.thin) {
         // A set the knn floor had to build is the weakest thing this product
