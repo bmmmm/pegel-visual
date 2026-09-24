@@ -3,9 +3,10 @@
 // the Dec 31 that every ZIP request ending at `Y-12-31` flattened to its 00:00
 // reading (min == max). requestEnd in fetch-wsv-archive.mjs stops NEW damage
 // since 2026-08-21; this script repairs what was committed before. Measured on
-// the branch 2026-09-24: 2148 closed years with a flat Dec 31 across 614
-// stations — every third year (the old 3-year chunk boundaries of the coastal
-// gauges) plus 612 stations' 2025 (BONN 2025: 172/172).
+// the branch 2026-09-24: 2143 selected closed years across 613 stations (2148
+// flat Dec 31 in total; the other 5 are coarse gauges, see below) — every third
+// year (the old 3-year chunk boundaries of the coastal gauges) plus nearly every
+// station's 2025 (BONN 2025: 172/172).
 //
 // Per affected year ONE small ZIP request: Dec 30 through Jan 1 of the next
 // year. Not the whole year, for two reasons:
@@ -25,7 +26,10 @@
 // year is not flattened by the request window, and refetching it would change
 // nothing. Resumable by construction: a healed year no longer matches, so a
 // re-run (or a run stopped by --budget-minutes) continues where it left off,
-// and an already-good year is never requested, let alone rewritten. Stations
+// and an already-good year is never requested, let alone rewritten. The one
+// exception: a year whose Dec 31 really WAS flat (~59 of the 2143 sit in a
+// mostly flat December) stays selected and is asked again on every re-run —
+// a few dozen wasted requests, not a loop. Stations
 // written by a sibling adapter (meta.source, e.g. Rijkswaterstaat) are skipped:
 // their uuid means nothing to the WSV endpoint.
 //
@@ -33,6 +37,9 @@
 //   node scripts/heal-dec31.mjs --out archive-branch/archive --dry-run   # count, no network
 //   node scripts/heal-dec31.mjs --out archive-branch/archive --station BONN
 //   node scripts/heal-dec31.mjs --out archive-branch/archive --parallel 2 --budget-minutes 240
+//   (--budget-minutes 0 or absent = no deadline; the run exits 1 when >= 10% of
+//   the requested years failed — see reportRunOutcome — while every year healed
+//   before that is already written)
 //
 // Runs in CI via .github/workflows/archive-heal.yml (workflow_dispatch only).
 import { join } from 'node:path';
@@ -120,8 +127,15 @@ async function main() {
   }
   const OUT = opt('out', 'archive');
   const ONLY = (opt('station', '') || '').toUpperCase();
-  const PARALLEL = Math.max(1, Number(opt('parallel', 1)));
-  const budget = Number(opt('budget-minutes', 0));
+  // validated, not coerced: `--parallel two` used to become NaN, i.e. ZERO
+  // workers and a green run that healed nothing (reviewer, reproduced)
+  const PARALLEL = Number(opt('parallel', 1));
+  const budget = Number(opt('budget-minutes', 0)); // 0 = no deadline
+  const bad = [];
+  if (!Number.isInteger(PARALLEL) || PARALLEL < 1) bad.push(`--parallel ${opt('parallel', '')}: want an integer >= 1`);
+  if (!Number.isFinite(budget) || budget < 0) bad.push(`--budget-minutes ${opt('budget-minutes', '')}: want minutes >= 0`);
+  if (has('station') && !ONLY) bad.push('--station needs a name or uuid');
+  if (bad.length) { console.error(bad.join('\n')); process.exit(2); }
   const deadline = budget > 0 ? Date.now() + budget * 6e4 : Infinity;
 
   const dirs = listDirs(OUT);
@@ -130,12 +144,19 @@ async function main() {
     process.exit(1);
   }
   const stations = [];
+  let matched = 0;
   for (const uuid of dirs) {
     const meta = readJson(join(OUT, uuid, 'meta.json')) || {};
     if (meta.source) continue; // not a WSV gauge
     if (ONLY && (meta.name || '').toUpperCase() !== ONLY && uuid !== ONLY.toLowerCase()) continue;
+    matched++;
     const n = flattenedYears(readJson(join(OUT, uuid, 'closed.json'))).length;
     if (n) stations.push({ uuid, name: meta.name || uuid, n });
+  }
+  // a typo in a probe run must not read like "nothing left to heal"
+  if (ONLY && !matched) {
+    console.error(`--station ${ONLY}: no WSV station of that name or uuid under ${OUT}`);
+    process.exit(1);
   }
   const total = stations.reduce((s, x) => s + x.n, 0);
   console.log(`${total} flattened Dec 31 across ${stations.length} station(s) · out: ${OUT}/ · ${PARALLEL} worker(s)`
@@ -160,5 +181,6 @@ async function main() {
   await Promise.all(Array.from({ length: PARALLEL }, (_, w) => worker(w)));
   console.log(`done · ${healed} Dec 31 healed · ${fetched} fetched · ${failed} failed`
     + (stopped ? ` · stopped at the ${budget}-minute budget — re-run to continue` : ''));
-  reportRunOutcome('Dec-31 heal', fetched, failed);
+  // counted per requested YEAR, not per station
+  reportRunOutcome('Dec-31 heal (years)', fetched, failed);
 }

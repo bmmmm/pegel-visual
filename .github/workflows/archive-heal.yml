@@ -9,12 +9,21 @@ name: archive-heal
 #    across 613 stations, measured 2026-09-24). One small request per year;
 #    resumable — a healed year no longer matches, so a re-run continues.
 #  - running: the monthly --running heal on demand, which re-reads the whole
-#    running year from the ZIP (this is what fills Jan..May 2026 wherever WSV
-#    has it; archive-update.yml already does it on every first Monday).
+#    running year from the ZIP. It fills whatever of Jan..May 2026 WSV holds
+#    and the file still lacks — measured 2026-09-24 that is little: the
+#    first-Monday runs of archive-update.yml already did it for nearly every
+#    archived gauge; the remaining holes are mostly gauges with no WSV archive.
 #
 # The rest mirrors archive-update.yml: totals rebuilt (R2 of the consistency
 # gate demands a fresh overview), the gate, one commit, the explicit pages
 # dispatch a data-branch push cannot trigger itself.
+#
+# WHEN to dispatch: this job holds the archive-branch-write group for ~1 h
+# (up to budget_minutes). GitHub keeps only ONE pending run per group and
+# cancels it silently when another arrives, so a run of snapshot-update.yml
+# (05:17 and 15:17 UTC daily) or archive-update.yml (Mon 04:23 UTC) queued
+# behind this one can be dropped. Dispatch right after a snapshot run, not on a
+# Monday morning — e.g. 06:00 UTC Tue..Sun leaves ~9 h clear.
 on:
   workflow_dispatch:
     inputs:
@@ -23,7 +32,7 @@ on:
         type: boolean
         default: true
       running:
-        description: 'Also re-read the running year from the ZIP (fills Jan–May 2026; fetch-wsv-archive.mjs --running, ~17 min)'
+        description: 'Also re-read the running year from the ZIP (fetch-wsv-archive.mjs --running, ~17 min)'
         type: boolean
         default: false
       station:
@@ -35,7 +44,7 @@ on:
         type: string
         default: '2'
       budget_minutes:
-        description: 'Dec-31 heal stops starting requests after this many minutes; what is healed by then is committed'
+        description: 'Dec-31 heal stops starting requests after this many minutes (max 280); what is healed by then is committed'
         type: string
         default: '240'
 
@@ -44,17 +53,36 @@ permissions:
   actions: write # to dispatch the pages deploy afterwards
 
 # the same group as archive-update.yml and snapshot-update.yml: every writer of
-# the `archive` branch serializes (no cancel-in-progress — a queued data commit
-# must never be dropped)
+# the `archive` branch serializes instead of racing (see WHEN above for the
+# pending-run caveat)
 concurrency:
   group: archive-branch-write
 
 jobs:
   heal:
     runs-on: ubuntu-latest
-    # budget_minutes (240) + the optional --running pass (~17) + totals + gate
+    # budget_minutes (<= 280) + the optional --running pass (~17) + totals + gate
     timeout-minutes: 330
     steps:
+      - name: Check the inputs
+        # before anything runs: a dispatch with both boxes unticked, or a heal
+        # that dies on a mistyped number, would still rebuild the totals and
+        # push them as a "heal"; a budget past the job timeout would be cut off
+        # before the commit step and lose everything it healed
+        env:
+          DEC31: ${{ inputs.dec31 }}
+          RUNNING: ${{ inputs.running }}
+          BUDGET: ${{ inputs.budget_minutes }}
+          PARALLEL: ${{ inputs.parallel }}
+        run: |
+          if [ "$DEC31" != "true" ] && [ "$RUNNING" != "true" ]; then
+            echo "::error::nothing to do — tick dec31 and/or running"; exit 1
+          fi
+          case "$PARALLEL" in ''|*[!0-9]*|0) echo "::error::parallel must be a whole number >= 1"; exit 1 ;; esac
+          case "$BUDGET" in ''|*[!0-9]*) echo "::error::budget_minutes must be whole minutes"; exit 1 ;; esac
+          if [ "$BUDGET" -lt 1 ] || [ "$BUDGET" -gt 280 ]; then
+            echo "::error::budget_minutes must be 1..280 (the job times out at 330)"; exit 1
+          fi
       - uses: actions/checkout@v7
       - uses: actions/checkout@v7
         with:
@@ -64,7 +92,12 @@ jobs:
         with:
           node-version: 24
       - name: Heal the flattened Dec 31 (WSV ZIP)
+        id: heal
         if: inputs.dec31
+        # a red fail rate must not throw away the years already healed: each one
+        # is written only after its own answer checked out, so the partial tree
+        # is still committed — the last step turns the run red afterwards
+        continue-on-error: true
         env:
           STATION: ${{ inputs.station }}
           PARALLEL: ${{ inputs.parallel }}
@@ -104,3 +137,9 @@ jobs:
         run: gh workflow run pages.yml --ref main
         env:
           GH_TOKEN: ${{ github.token }}
+      - name: Fail the run if the Dec-31 heal did
+        # continue-on-error above kept the partial result; the run still says so
+        if: steps.heal.outcome == 'failure'
+        run: |
+          echo "::error::the Dec-31 heal step failed (fail rate or bad input) — its partial result was committed above; re-run to continue"
+          exit 1

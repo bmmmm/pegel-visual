@@ -8,6 +8,8 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { flattenedYears, healStation } from '../scripts/heal-dec31.mjs';
 import { daysInYear } from '../scripts/fetch-wsv-archive.mjs';
 
@@ -122,4 +124,36 @@ test('a passed deadline stops before the next request', async () => {
   const r = await healStation(dir, 'uuid-bonn', { fetchRange, throttleMs: 0, deadline: Date.now() - 1 });
   assert.deepEqual(calls, []);
   assert.equal(r.stopped, true);
+});
+
+test('a leap year heals slot 365, not 364', async () => {
+  // 2024 has 366 days: Dec 31 is index 365, and index 364 is Dec 30
+  const dir = station([year(2024, { 0: [311, 311], 1: [331, 353] })]);
+  const { calls, fetchRange } = recorder(() => [
+    { timestamp: '2024-12-30T12:00:00+01:00', value: 150 },
+    { timestamp: '2024-12-31T00:00:00+01:00', value: 311 },
+    { timestamp: '2024-12-31T18:00:00+01:00', value: 305 },
+    { timestamp: '2025-01-01T00:00:00+01:00', value: 999 },
+  ]);
+  await healStation(dir, 'uuid-bonn', { fetchRange, throttleMs: 0 });
+  assert.deepEqual(calls.map(c => [c.start, c.end]), [['2024-12-30', '2025-01-01']]);
+  const [yr] = JSON.parse(readFileSync(join(dir, 'closed.json'), 'utf8'));
+  assert.equal(yr.min.length, 366);
+  assert.deepEqual([yr.min[365], yr.max[365]], [305, 311]);
+  assert.deepEqual([yr.min[364], yr.max[364]], [331, 353], 'Dec 30 untouched');
+});
+
+test('a --station that matches nothing fails instead of reporting nothing to heal', () => {
+  const out = tmp('pegel-heal-cli-');
+  mkdirSync(join(out, 'uuid-bonn'));
+  writeFileSync(join(out, 'uuid-bonn', 'meta.json'), JSON.stringify({ name: 'BONN' }));
+  writeFileSync(join(out, 'uuid-bonn', 'closed.json'), JSON.stringify([flat2025()]));
+  const script = fileURLToPath(new URL('../scripts/heal-dec31.mjs', import.meta.url));
+  const run = (...a) => spawnSync(process.execPath, [script, '--out', out, '--dry-run', ...a], { encoding: 'utf8', timeout: 20000 });
+  const typo = run('--station', 'BON');
+  assert.equal(typo.status, 1, typo.stdout + typo.stderr);
+  assert.match(typo.stderr, /--station BON: no WSV station/);
+  const hit = run('--station', 'bonn');
+  assert.equal(hit.status, 0, hit.stdout + hit.stderr);
+  assert.match(hit.stdout, /^1 flattened Dec 31 across 1 station/);
 });

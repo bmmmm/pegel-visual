@@ -159,6 +159,8 @@ test('every collector and builder main() gets past its argument parsing', () => 
     [['fetch-rws-archive.mjs', '--nope'], 2, /unknown flag --nope/],
     [['heal-dec31.mjs', '--nope'], 2, /unknown flag --nope/],
     [['heal-dec31.mjs', '--out', missing, '--dry-run'], 1, /no station directories under/],
+    // a mistyped worker count used to become NaN — zero workers, a green no-op
+    [['heal-dec31.mjs', '--parallel', 'two', '--out', missing], 2, /--parallel two: want an integer/],
   ];
   for (const [argv, code, expect] of cases) {
     const r = spawnSync(process.execPath, [join(SCRIPTS, argv[0]), ...argv.slice(1)], { encoding: 'utf8', timeout: 20000 });
