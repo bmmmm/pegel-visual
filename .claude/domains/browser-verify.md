@@ -14,7 +14,8 @@ memory `browser-verify-cdp-recipe` points here as the source.
   client over the global `WebSocket`: `Page.navigate`, sleep, evaluate
   `renderNow()`, `Page.captureScreenshot`.
   `Emulation.setDeviceMetricsOverride {mobile:true}` gives a true phone
-  viewport, `setEmulatedMedia` a real `pointer: coarse`, and a `clip` at
+  viewport, `Emulation.setTouchEmulationEnabled` a real `pointer: coarse`
+  (`setEmulatedMedia` answers OK and changes nothing there), and a `clip` at
   `scale: 4` is how you read a 12 px swatch. Measure through
   `Runtime.evaluate` in the same run — a `getBoundingClientRect()` sweep
   catches what a screenshot only hints at. `Runtime.enable` + `Log.enable` +
