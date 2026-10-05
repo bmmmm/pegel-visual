@@ -34,7 +34,7 @@ export const fixtures = {
 // network — the caller decides how to say so, but neither caller may guess.
 export function routeFor(url) {
   const u = String(url);
-  if (u.includes('api.open-meteo.com')) return { name: 'weather', body: fixtures.weather };
+  if (/^https?:\/\/api\.open-meteo\.com\//.test(u)) return { name: 'weather', body: fixtures.weather };
   if (u.includes('/stations/BONN.json')) return { name: 'info', body: fixtures.info };
   if (u.includes('/stations/BONN/Q.json')) return { name: 'q', body: fixtures.q };
 

@@ -307,7 +307,7 @@ async function run(cdp, url, vp) {
     await s.send('Storage.clearDataForOrigin', { origin: new URL(url).origin, storageTypes: 'all' });
     await s.send('Page.navigate', { url: 'about:blank' });
     await sleep(200);
-    await s.send('Page.navigate', { url: url.replace(/\/$/, '/') + '?history=24h' });
+    await s.send('Page.navigate', { url: new URL('?history=24h', url).href });
     const shared = await painted(s, isPlate);
     const sharedLit = await until(s, LIT, v => v.includes('cmd:h:24h'));
     check(shared.ok && String(sharedLit).includes('cmd:h:24h'),

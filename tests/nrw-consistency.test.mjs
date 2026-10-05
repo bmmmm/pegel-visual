@@ -649,7 +649,7 @@ function cloneSeed() {
   return repo;
 }
 const shardPath = (repo, kind, no, y) => join(repo, 'nrw', kind, no, `${y}.json`);
-const readShard = (repo, kind, no, y) => JSON.parse(execFileSync('cat', [shardPath(repo, kind, no, y)], { encoding: 'utf8' }));
+const readShard = (repo, kind, no, y) => JSON.parse(readFileSync(shardPath(repo, kind, no, y), 'utf8'));
 const writeShard = (repo, kind, no, y, doc) => writeFileSync(shardPath(repo, kind, no, y), JSON.stringify(doc));
 const manifestPath = repo => join(repo, 'nrw', 'manifest.json');
 // Every hand-edit of the mirror changes what the areal rule would produce from
@@ -657,7 +657,7 @@ const manifestPath = repo => join(repo, 'nrw', 'manifest.json');
 // tree and then expects a green gate has to do the same, or it is asserting
 // that N8(e) is asleep.
 const rebuildPrecip = repo => buildPrecip({ tree: join(repo, 'nrw'), out: join(repo, 'nrw', 'precip'), generated: NOW.slice(0, 10) });
-const readManifest = repo => JSON.parse(execFileSync('cat', [manifestPath(repo)], { encoding: 'utf8' }));
+const readManifest = repo => JSON.parse(readFileSync(manifestPath(repo), 'utf8'));
 
 test('CLI: an untouched healthy checkout is green and prints the fleet numbers', () => {
   const { code, stdout } = runChecker(cloneSeed());
@@ -749,7 +749,7 @@ test('CLI: a manifest range that narrows or an entry that vanishes is red', () =
 test('CLI: revised alert stages are printed as notes on a green run', () => {
   const repo = cloneSeed();
   const metaPath = join(repo, 'nrw', 'gauges', 'g0', 'meta.json');
-  const meta = JSON.parse(execFileSync('cat', [metaPath], { encoding: 'utf8' }));
+  const meta = JSON.parse(readFileSync(metaPath, 'utf8'));
   meta.info = [250, 415, 440]; meta.mw = 70;
   writeFileSync(metaPath, JSON.stringify(meta));
   const { code, stdout } = runChecker(repo);
@@ -794,7 +794,7 @@ test('CLI: dropped alert columns are red on N6 while every series stays healthy'
   const repo = cloneSeed();
   for (let i = 0; i < 25; i++) {
     const p = join(repo, 'nrw', 'gauges', 'g' + i, 'meta.json');
-    const meta = JSON.parse(execFileSync('cat', [p], { encoding: 'utf8' }));
+    const meta = JSON.parse(readFileSync(p, 'utf8'));
     meta.info = [null, null, null];
     writeFileSync(p, JSON.stringify(meta));
   }
@@ -1245,7 +1245,7 @@ test('N4: precip/ may shrink — it is derived, and N8 floors are what stop it v
 test('CLI: N8 runs — a hand-edited precip shard is red through the real dispatcher', () => {
   const repo = cloneSeed();
   const p = join(repo, 'nrw', 'precip', 'g0', '2026.json');
-  const doc = JSON.parse(execFileSync('cat', [p], { encoding: 'utf8' }));
+  const doc = JSON.parse(readFileSync(p, 'utf8'));
   const i = doc.mm.findIndex(v => v !== null);
   doc.mm[i] = null;                       // mm null while n stays > 0
   writeFileSync(p, JSON.stringify(doc));
@@ -1259,7 +1259,7 @@ test('CLI: N8 runs — a hand-edited precip shard is red through the real dispat
 test('CLI: N8(e) alone catches a stale product the shape rules would pass', () => {
   const repo = cloneSeed();
   const p = join(repo, 'nrw', 'precip', 'g0', '2026.json');
-  const doc = JSON.parse(execFileSync('cat', [p], { encoding: 'utf8' }));
+  const doc = JSON.parse(readFileSync(p, 'utf8'));
   const i = doc.mm.findIndex(v => v !== null);
   // a perfectly well-formed day that is simply not the one the rule computes:
   // mm, med and mx moved together, n untouched — every invariant still holds
@@ -1395,7 +1395,7 @@ test('CLI: N9(g) and N9(h) are dispatched — a --hires tree the product was not
 test('CLI: N8 counters are red when the product shrinks below its floor', () => {
   const repo = cloneSeed();
   const p = join(repo, 'nrw', 'precip', 'index.json');
-  const ix = JSON.parse(execFileSync('cat', [p], { encoding: 'utf8' }));
+  const ix = JSON.parse(readFileSync(p, 'utf8'));
   ix.counts.withSeries = 3;
   writeFileSync(p, JSON.stringify(ix));
   const { code, stdout } = runChecker(repo);
@@ -1412,7 +1412,7 @@ test('the collector places every station inside the box, and no station outside 
   const m = readManifest(repo);
   const placed = Object.values(m.gauges).filter(e => e.la != null);
   assert.equal(placed.length, 0, 'the fixture manifest is written by the test, not by buildManifest');
-  const topo = JSON.parse(execFileSync('cat', [join(repo, 'nrw', 'topology.json')], { encoding: 'utf8' }));
+  const topo = JSON.parse(readFileSync(join(repo, 'nrw', 'topology.json'), 'utf8'));
   const built = buildManifest({
     out: join(repo, 'nrw'), registry: new Map(Array.from({ length: 617 }, (_, i) => ['s' + i, {}])),
     topo, basinOf: () => '272', coverage: coverage(), exportAt: NOW, window: WINDOW, generated: NOW, tier2: null,
