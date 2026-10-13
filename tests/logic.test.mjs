@@ -1350,35 +1350,6 @@ test('buildReportBody: state.error reports honestly', () => {
   assert.match(body, /_\(no note provided\)_/);
 });
 
-test('an old ?adsb= bookmark is dropped, not quoted into a bug report', () => {
-  // The receiver overlay is gone, but the addresses it wrote are not: they sit in
-  // two localStorage keys and in every bookmark switchStation ever built. The
-  // report quotes the address bar, so a stale bookmark would carry a LAN address
-  // into a public issue — dropReceiverParams() runs at boot to stop that.
-  const app = loadApp({ search: '?station=BONN&adsb=10.0.0.5:8080&ais=10.0.0.9:8080/aiscatcher',
-    storage: { 'pegel.adsb': '10.0.0.5:8080', 'pegel.ais': '10.0.0.9:8080/aiscatcher' } });
-
-  assert.equal(app.localStorage['pegel.adsb'], undefined, 'the stored receiver address is deleted at boot');
-  assert.equal(app.localStorage['pegel.ais'], undefined);
-
-  // what it asked the browser to put in the address bar instead
-  const replaced = app.run(`(() => {
-    let seen = null;
-    history.replaceState = (a, b, url) => { seen = url; };
-    location.search = '?station=BONN&adsb=10.0.0.5:8080&ais=10.0.0.9:8080/aiscatcher';
-    return { url: dropReceiverParams(), seen };
-  })()`);
-  assert.equal(replaced.url, replaced.seen, 'the rewrite really goes through history.replaceState');
-  assert.match(replaced.url, /station=BONN/, 'everything else about the link survives');
-  assert.ok(!/adsb|ais|10\.0\.0/.test(replaced.url), `neither param survives: ${replaced.url}`);
-
-  // and with the address bar cleaned, the report body carries no receiver address
-  app.run(`location.search = '?station=BONN'`);
-  const body = app.run(`buildReportBody('')`);
-  assert.match(body, /- URL: [^\n]*\?station=BONN/, 'the report still quotes the URL it is about');
-  assert.ok(!body.includes('10.0.0.'), 'no home-network address anywhere in the report');
-});
-
 test('buildReportUrl: trims an oversized note to stay under the GitHub URL limit', () => {
   const app = loadApp({ search: '?station=BONN' });
   app.run(`state.info = { water: { shortname: 'RHEIN' }, km: 654.8 }`);

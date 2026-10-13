@@ -1815,27 +1815,6 @@ const narrowTools = matchMedia('(max-width: 640px)');
   sync();
   narrowTools.addEventListener('change', sync);
 }
-// The receiver overlay (--adsb/--ais) was removed on 2026-09-07, but a reader
-// who ever set one still carries their home-network address in two localStorage
-// keys and in every bookmark and history entry switchStation wrote it into.
-// Nothing reads either any more — but `report issue` quotes the address bar, so
-// an old bookmark would carry a LAN address into a public issue. Drop both here,
-// before anything reads the URL. Deletable once no such bookmark can plausibly
-// still be in use.
-function dropReceiverParams() {
-  localStorage.removeItem('pegel.adsb');
-  localStorage.removeItem('pegel.ais');
-  const q = new URLSearchParams(location.search);
-  if (!q.has('adsb') && !q.has('ais')) return null;
-  q.delete('adsb');
-  q.delete('ais');
-  const qs = q.toString();
-  const url = qs ? '?' + qs : location.pathname;
-  history.replaceState(null, '', url);
-  return url;
-}
-dropReceiverParams();
-
 let station = (new URLSearchParams(location.search).get('station') || 'BONN').toUpperCase();
 // five mutually exclusive views: the single-station terminal, a whole-river
 // longitudinal profile, the rivers map listing every water at once, the
