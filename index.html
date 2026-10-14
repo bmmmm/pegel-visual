@@ -10007,11 +10007,15 @@ function reportTitle() {
 
 // The report goes into a public issue but quotes the address bar, and a bookmark
 // can carry anything — a retired feature's param, a tracking tag, a private
-// address. So it quotes only what this page reads, each part as written (a bare
-// ?rising stays bare). A test keeps this list in step with the source.
-const REPORT_PARAMS = ['station', 'river', 'rivers', 'rising', 'd7', 'total', 'diff', 'd', 'y', 'm', 'rain', 'w', 'view', 'history', 'year'];
+// address. So it quotes only what this page reads, the way it reads it: a flag
+// read by .has() goes out bare whatever it carried, a value only its first copy
+// (all .get() ever sees). A test keeps both lists in step with the source.
+const REPORT_FLAGS = ['rivers', 'rising', 'd7', 'total', 'diff'];
+const REPORT_PARAMS = ['station', 'river', 'd', 'y', 'm', 'rain', 'w', 'view', 'history', 'year', ...REPORT_FLAGS];
 function reportSearch() {
-  const kept = location.search.slice(1).split('&').filter(part => REPORT_PARAMS.includes(part.split('=')[0]));
+  const q = new URLSearchParams(location.search);
+  const kept = [...new Set(q.keys())].filter(k => REPORT_PARAMS.includes(k))
+    .map(k => REPORT_FLAGS.includes(k) || q.get(k) === '' ? k : `${k}=${encodeURIComponent(q.get(k))}`);
   return kept.length ? '?' + kept.join('&') : '';
 }
 

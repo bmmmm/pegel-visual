@@ -1361,12 +1361,22 @@ test('the report quotes only the parameters the page reads', () => {
   assert.match(url, /\?station=BONN&rising&d7&view=years$/, `every read param survives: ${url}`);
   assert.ok(!/adsb|utm_|10\.0\.0/.test(body), 'nothing the page does not read reaches the report');
 
+  // read the way the page reads it: a flag goes out bare, a value only once, a
+  // percent-encoded key is still the key the page decodes
+  const quoted = s => { app.run(`location.search = ${JSON.stringify(s)}`); return app.run('reportSearch()'); };
+  assert.equal(quoted('?rising=10.0.0.5&d7=x'), '?rising&d7', 'a flag carries no value into the report');
+  assert.equal(quoted('?station=BONN&station=10.0.0.5'), '?station=BONN', 'only the copy .get() reads');
+  assert.equal(quoted('?st%61tion=KOELN'), '?station=KOELN', 'the key as the page decodes it');
+  assert.equal(quoted(''), '');
+
   // drift guard: a param the page starts reading must join the list, or the
-  // report silently stops quoting it
+  // report silently stops quoting it — and a flag is one the page only .has()es
   const src = readFileSync(fileURLToPath(new URL('../index.html', import.meta.url)), 'utf8');
   const legendSets = new Set(['mean', 'record', 'above', 'below']);   // .has() on mark sets, not on the URL
-  const read = new Set([...src.matchAll(/\.(?:get|has)\('([a-z0-9]+)'\)/g)].map(m => m[1]).filter(k => !legendSets.has(k)));
-  assert.deepEqual([...read].sort(), [...app.run('REPORT_PARAMS')].sort());
+  const reads = how => new Set([...src.matchAll(new RegExp(`\\.${how}\\('([a-z0-9]+)'\\)`, 'g'))].map(m => m[1]).filter(k => !legendSets.has(k)));
+  const got = reads('get'), had = reads('has');
+  assert.deepEqual([...new Set([...got, ...had])].sort(), [...app.run('REPORT_PARAMS')].sort());
+  assert.deepEqual([...had].filter(k => !got.has(k)).sort(), [...app.run('REPORT_FLAGS')].sort());
 });
 
 test('buildReportUrl: trims an oversized note to stay under the GitHub URL limit', () => {
