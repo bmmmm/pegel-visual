@@ -1350,6 +1350,25 @@ test('buildReportBody: state.error reports honestly', () => {
   assert.match(body, /_\(no note provided\)_/);
 });
 
+test('the report quotes only the parameters the page reads', () => {
+  // A bookmark can carry anything — a retired feature's param, a tracking tag, a
+  // private address. The report goes into a public issue, so it quotes only what
+  // the page itself reads, in the form it was written (a bare ?rising stays bare).
+  const search = '?station=BONN&rising&d7&adsb=10.0.0.5:8080&utm_source=x&view=years';
+  const app = loadApp({ search });
+  const body = app.run(`buildReportBody('')`);
+  const url = body.match(/- URL: ([^\n]*)/)[1];
+  assert.match(url, /\?station=BONN&rising&d7&view=years$/, `every read param survives: ${url}`);
+  assert.ok(!/adsb|utm_|10\.0\.0/.test(body), 'nothing the page does not read reaches the report');
+
+  // drift guard: a param the page starts reading must join the list, or the
+  // report silently stops quoting it
+  const src = readFileSync(fileURLToPath(new URL('../index.html', import.meta.url)), 'utf8');
+  const legendSets = new Set(['mean', 'record', 'above', 'below']);   // .has() on mark sets, not on the URL
+  const read = new Set([...src.matchAll(/\.(?:get|has)\('([a-z0-9]+)'\)/g)].map(m => m[1]).filter(k => !legendSets.has(k)));
+  assert.deepEqual([...read].sort(), [...app.run('REPORT_PARAMS')].sort());
+});
+
 test('buildReportUrl: trims an oversized note to stay under the GitHub URL limit', () => {
   const app = loadApp({ search: '?station=BONN' });
   app.run(`state.info = { water: { shortname: 'RHEIN' }, km: 654.8 }`);

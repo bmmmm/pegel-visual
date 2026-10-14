@@ -10005,6 +10005,16 @@ function reportTitle() {
   return mode === 'river' ? `bug report: river ${state.river}` : `bug report: ${station}`;
 }
 
+// The report goes into a public issue but quotes the address bar, and a bookmark
+// can carry anything — a retired feature's param, a tracking tag, a private
+// address. So it quotes only what this page reads, each part as written (a bare
+// ?rising stays bare). A test keeps this list in step with the source.
+const REPORT_PARAMS = ['station', 'river', 'rivers', 'rising', 'd7', 'total', 'diff', 'd', 'y', 'm', 'rain', 'w', 'view', 'history', 'year'];
+function reportSearch() {
+  const kept = location.search.slice(1).split('&').filter(part => REPORT_PARAMS.includes(part.split('=')[0]));
+  return kept.length ? '?' + kept.join('&') : '';
+}
+
 // returns an ordered list of { name, required, text } sections; `required`
 // sections are never dropped by the GitHub-URL trimmer
 function buildReportSections(note) {
@@ -10014,7 +10024,7 @@ function buildReportSections(note) {
   const vh = document.documentElement.clientHeight || 0;
 
   const context = [
-    `- URL: ${location.origin + location.pathname + location.search}`,
+    `- URL: ${location.origin + location.pathname + reportSearch()}`,
     `- station: ${station}`,
     `- mode: ${mode}`,
   ];
