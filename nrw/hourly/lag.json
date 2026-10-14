@@ -1,6 +1,6 @@
 {
  "schema": 1,
- "generated": "2026-10-13",
+ "generated": "2026-10-14",
  "ruleVersion": 2,
  "lagRuleVersion": 1,
  "rule": {
@@ -29,12 +29,12 @@
   "rainHourMm": 0.1
  },
  "window": {
-  "from": "2026-08-11T22:00Z",
-  "to": "2026-10-13T21:00Z",
+  "from": "2026-08-12T20:00Z",
+  "to": "2026-10-14T19:00Z",
   "hours": 1512
  },
  "inputs": {
-  "sha256": "5da236c24d81c8030e9c0b04b258589cdc32a1f6302c0df842e74ff604dfa49b",
+  "sha256": "798ef601292b0b8e80eaefbc0d6fc2dc02092c8e81e8f8f178f77ba3cb74ba94",
   "files": 2246
  },
  "counts": {
