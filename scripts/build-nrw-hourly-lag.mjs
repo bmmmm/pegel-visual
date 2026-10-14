@@ -470,17 +470,6 @@ export function publish(bench, {
   return { rows, gauges, counts, shifts };
 }
 
-// Why a gauge has no class, in the product's OWN words — so a check can compare
-// the plate against this file instead of against a string it also knows.
-export function reasonFor(row, { minR = MIN_PEAK_R } = {}) {
-  if (!row) return 'this gauge is not in the hourly product';
-  if (row.skip) return row.why;
-  if (row.h == null) return row.why;
-  if (!(row.r >= minR)) return `the rain explains too little of this gauge's movement (peak r ${row.r.toFixed(2)}, needs ${minR})`;
-  if (!row.significant) return 'the peak does not survive a rotation test against chance';
-  return 'no response class for this gauge';
-}
-
 // ---------- the input digest ----------
 
 // NOT a commit SHA, and that is not a nicety: this runs BEFORE either push, the

@@ -22,7 +22,7 @@ import { execFileSync } from 'node:child_process';
 
 const {
   buildHourlyLag, publish, estimateAll, loadBench, gaugeInputs, lagStats, arealHourly,
-  hourlyAxis, rotateLevel, rotationShifts, benjaminiHochberg, classOf, reasonFor,
+  hourlyAxis, rotateLevel, rotationShifts, benjaminiHochberg, classOf,
   inputsDigest, hiresFiles, dailyGauges,
   CLASSES, MIN_PEAK_R, ROTATIONS, FDR_Q, ROTATION_GUARD_H, MAX_LAG_H,
   LAG_RULE_VERSION, MIN_RAIN_HOUR_FRAC, WINDOW_H,
@@ -313,15 +313,6 @@ test('the product refuses to build at all when no gauge has a daily rain field',
     assert.throws(() => buildHourlyLag({ tree: fx.tree, hires: fx.hires, out: join(fx.tree, 'hourly'), generated: '2026-07-31' }),
       /run scripts\/build-nrw-precip\.mjs first/);
   } finally { rmSync(fx.dir, { recursive: true, force: true }); }
-});
-
-test('the reason a gauge has no class is the PRODUCT\'s own sentence', () => {
-  const r = build();
-  const by = Object.fromEntries(r.rows.map(x => [x.no, x]));
-  assert.match(reasonFor(by['500']), /no hourly level series/);
-  assert.match(reasonFor(by['600']), /wet hours/);
-  assert.match(reasonFor(by['400']), /peak r 0\.\d+, needs 0\.25/);
-  assert.match(reasonFor(null), /not in the hourly product/);
 });
 
 // ---------- the file on disk ----------
