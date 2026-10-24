@@ -105,7 +105,7 @@ jobs:
           if [ -z "$NRW_DATE" ]; then
             PROBLEMS="$PROBLEMS${PROBLEMS:+$NL$NL}The nrw branch does not exist: nrw-update.yml has never pushed (or the branch was deleted). Its first run creates the branch from the raw seed on nrw-hires plus the live export — check its recent runs, or dispatch it."
           elif [ "$NRW_HOURS" -gt 30 ]; then
-            PROBLEMS="$PROBLEMS${PROBLEMS:+$NL$NL}The nrw branch's last commit is ${NRW_HOURS}h old (committed ${NRW_DATE}), past the 30h threshold for the daily LANUK mirror (nrw-update.yml). The source window rolls daily — 63 days for the 15-minute series — so every missed day is lost for good. Check its recent runs."
+            PROBLEMS="$PROBLEMS${PROBLEMS:+$NL$NL}The nrw branch's last commit is ${NRW_HOURS}h old (committed ${NRW_DATE}), past the 30h threshold for the daily LANUK mirror (nrw-update.yml). The source window rolls daily — 63 days for the 15-minute series — so nothing is lost while the next green run comes within that window: the first 15-minute day rolls out unmirrored around $(date -u -d "$NRW_DATE + 63 days" +%F). Check its recent runs."
           fi
 
           if [ -z "$PROBLEMS" ]; then

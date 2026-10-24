@@ -8,10 +8,15 @@ name: nrw-update
 #
 # Daily, because the source is a daily export with a ROLLING window: 730 days
 # for the daily products, only 63 for the fine resolution. A day that has
-# rolled out of the window can never be fetched again. The daily level would
-# survive a missed run for two years; the fine resolution loses 1.6 % of its
-# stock per missed day, so the cron is daily and the retry/watchdog wiring of
-# Actions (not a sleeping laptop) carries it. 17:41 UTC is ~2 h after the
+# rolled out of the window can never be fetched again — but a missed RUN costs
+# nothing while the outage is shorter than the window: the next green run
+# refetches the whole window and the merge fills the hole (2026-10-21/22: two
+# red runs while the source was unreachable worldwide, caught up in full on
+# the 23rd). What is lost is the day that rolls out while the mirror is down:
+# the first one 63 days into an outage for the fine resolution, two years in
+# for the daily level. The cron is daily so the mirror never runs close to
+# that edge, and the retry/watchdog wiring of Actions (not a sleeping laptop)
+# carries it. 17:41 UTC is ~2 h after the
 # export's inner timestamps (14:10-15:45 UTC measured 2026-09-04) and clear of
 # snapshot-update (05:17/15:17) and archive-update (Mon 04:23).
 #
@@ -161,6 +166,6 @@ jobs:
           if [ -n "$ISSUE_NUM" ]; then
             gh issue comment "$ISSUE_NUM" --body "nrw-update run failed: $RUN_URL"
           else
-            BODY="The nrw-update workflow run failed: $RUN_URL"$'\n\n'"The LANUK source window rolls daily (63 days for the fine resolution); every missed day is gone for good. This issue was opened automatically and is never closed automatically — close it once the pipeline is confirmed caught up."
+            BODY="The nrw-update workflow run failed: $RUN_URL"$'\n\n'"The LANUK source window rolls daily (63 days for the fine resolution); a missed run is caught up by the next green one, and data is lost only once an outage outlasts that window — about 63 days after the last green run. This issue was opened automatically and is never closed automatically — close it once the pipeline is confirmed caught up."
             gh issue create --title "Data pipeline stale: nrw-update run failed" --label data-freshness --body "$BODY"
           fi
