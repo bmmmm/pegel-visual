@@ -8,10 +8,15 @@ name: nrw-update
 #
 # Daily, because the source is a daily export with a ROLLING window: 730 days
 # for the daily products, only 63 for the fine resolution. A day that has
-# rolled out of the window can never be fetched again. The daily level would
-# survive a missed run for two years; the fine resolution loses 1.6 % of its
-# stock per missed day, so the cron is daily and the retry/watchdog wiring of
-# Actions (not a sleeping laptop) carries it. 17:41 UTC is ~2 h after the
+# rolled out of the window can never be fetched again — but a missed RUN costs
+# nothing while the outage is shorter than the window: the next green run
+# refetches the whole window and the merge fills the hole (2026-10-21/22: two
+# red runs while the source was unreachable worldwide, caught up in full on
+# the 23rd). What is lost is the day that rolls out while the mirror is down:
+# the first one 63 days into an outage for the fine resolution, two years in
+# for the daily level. The cron is daily so the mirror never runs close to
+# that edge, and the retry/watchdog wiring of Actions (not a sleeping laptop)
+# carries it. 17:41 UTC is ~2 h after the
 # export's inner timestamps (14:10-15:45 UTC measured 2026-09-04) and clear of
 # snapshot-update (05:17/15:17) and archive-update (Mon 04:23).
 #
@@ -81,6 +86,7 @@ jobs:
           if [ -f nrw-branch/nrw/manifest.json ]; then echo 'nrw is seeded already'; exit 0; fi
           node scripts/fetch-nrw-archive.mjs --raw nrw-hires-branch/nrw-hires/raw/2026-09-04 --out nrw-branch/nrw --out-hires nrw-hires-branch/nrw-hires --bulk-only
       - name: Collect from hochwasserportal.nrw
+        id: collect
         # Tier 1 (four bulk products, the explicitly licensed primary source)
         # plus Tier 2 (index.json-driven single-station series for the gauges
         # no bulk product carries). The pruning levers (--max-years,
@@ -152,15 +158,28 @@ jobs:
         if: failure() || cancelled()
         env:
           GH_TOKEN: ${{ github.token }}
+          FAILURE_KIND: ${{ steps.collect.outputs.failure_kind }}
+          FAILURE_CODE: ${{ steps.collect.outputs.failure_code }}
+          RUN_CANCELLED: ${{ cancelled() }}
         run: |
           set -euo pipefail
           gh label create data-freshness --force --color B60205 \
             --description "Data pipeline freshness / failure watchdog" >/dev/null
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          FAILURE="pipeline failure — read the log"
+          if [ "$RUN_CANCELLED" = true ]; then
+            FAILURE="pipeline failure (cancelled or timed out) — read the log"
+          elif [ "$FAILURE_KIND" = source-unreachable ]; then
+            FAILURE="LANUK source unreachable ($FAILURE_CODE) — not a pipeline bug; the next green run catches up while the outage is shorter than the 63-day window."
+          fi
+          FAILED_STEP=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT/jobs" \
+            --jq '[.jobs[] | select(.name == "mirror") | .steps[] | select(.conclusion == "failure" or .conclusion == "cancelled") | .name][0] // empty' || true)
+          if [ -n "$FAILED_STEP" ]; then FAILURE="$FAILURE (step: $FAILED_STEP)"; fi
+          REPORT="nrw-update run failed: $RUN_URL"$'\n\n'"$FAILURE"
           ISSUE_NUM=$(gh issue list --label data-freshness --state open --json number --jq '.[0].number')
           if [ -n "$ISSUE_NUM" ]; then
-            gh issue comment "$ISSUE_NUM" --body "nrw-update run failed: $RUN_URL"
+            gh issue comment "$ISSUE_NUM" --body "$REPORT"
           else
-            BODY="The nrw-update workflow run failed: $RUN_URL"$'\n\n'"The LANUK source window rolls daily (63 days for the fine resolution); every missed day is gone for good. This issue was opened automatically and is never closed automatically — close it once the pipeline is confirmed caught up."
+            BODY="$REPORT"$'\n\n'"The LANUK source window rolls daily (63 days for the fine resolution); a missed run is caught up by the next green one, and data is lost only once an outage outlasts that window — about 63 days after the last green run. This issue was opened automatically and is never closed automatically — close it once the pipeline is confirmed caught up."
             gh issue create --title "Data pipeline stale: nrw-update run failed" --label data-freshness --body "$BODY"
           fi

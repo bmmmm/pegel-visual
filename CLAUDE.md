@@ -46,7 +46,8 @@ class** (`nrw/hourly/lag.json`, gate **N9**, built 2026-09-08), the data
 branches or the LANUK seam in `index.html`. Six things to carry without opening
 it: the source has **no CORS and no live feed** (a daily export, ~24 h
 old, mirrored into two GitHub-only orphan branches); its window **rolls**, so a
-missed day is gone for good and the merge policy is the inverse of the WSV
+day is gone for good once it rolls out unmirrored (63 days for the fine
+resolution — a missed run is caught up by the next green one) and the merge policy is the inverse of the WSV
 extreme-union; **WeatherNext** was evaluated on 2026-09-04 and rejected on four
 independent grounds — do not reopen it without new facts; there are **two
 clocks in one source**, a rain day against a gauge day, so the right edge of

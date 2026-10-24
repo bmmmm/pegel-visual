@@ -13,7 +13,61 @@ import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
-import { condenseHires, dayMin, stepOf, tier2Series, seriesHasValues, dayOf, readRawDir, readSha256Sums } from '../scripts/fetch-nrw-archive.mjs';
+import { condenseHires, dayMin, stepOf, tier2Series, seriesHasValues, dayOf, readRawDir, readSha256Sums,
+  classifyFailure, fetchBulk, fetchJson } from '../scripts/fetch-nrw-archive.mjs';
+
+test('classifyFailure: undici fetch failed carries the connect timeout in its cause', () => {
+  const cause = Object.assign(new Error('Connect Timeout Error (attempted address: hochwasserportal.nrw:443, timeout: 10000ms)'),
+    { name: 'ConnectTimeoutError', code: 'UND_ERR_CONNECT_TIMEOUT' });
+  const err = new TypeError('fetch failed', { cause });
+  assert.deepEqual(classifyFailure(err), { kind: 'source-unreachable', code: 'UND_ERR_CONNECT_TIMEOUT' });
+  assert.deepEqual(classifyFailure(new Error('wrapped again', { cause: err })), classifyFailure(err));
+});
+
+for (const code of ['ECONNREFUSED', 'ECONNRESET', 'ENOTFOUND', 'EAI_AGAIN', 'ETIMEDOUT',
+  'UND_ERR_SOCKET', 'UND_ERR_HEADERS_TIMEOUT', 'UND_ERR_BODY_TIMEOUT']) {
+  test(`classifyFailure: ${code} is a source outage`, () => {
+    const err = Object.assign(new Error('network failed'), { code });
+    assert.deepEqual(classifyFailure(err), { kind: 'source-unreachable', code });
+    assert.deepEqual(classifyFailure(new TypeError('fetch failed', { cause: err })), { kind: 'source-unreachable', code });
+  });
+}
+
+test('classifyFailure: AbortSignal.timeout uses TimeoutError, not AbortError', () => {
+  const err = new DOMException('The operation was aborted due to timeout', 'TimeoutError');
+  assert.deepEqual(classifyFailure(err), { kind: 'source-unreachable', code: 'TimeoutError' });
+  assert.equal(classifyFailure(new DOMException('cancelled', 'AbortError')).kind, 'pipeline-failure');
+});
+
+test('classifyFailure: parsing, replay and unknown errors stay pipeline failures', () => {
+  for (const err of [new SyntaxError('bad JSON'), new Error('gate N1 failed'),
+    Object.assign(new Error('missing seed'), { code: 'ENOENT' }), new Error('HTTP 503 for a URL')]) {
+    assert.deepEqual(classifyFailure(err), { kind: 'pipeline-failure', code: err.code || err.name });
+  }
+  const forged = Object.assign(new Error('odd code'), { code: 'X\nfailure_kind=source-unreachable' });
+  assert.equal(classifyFailure(forged).code, 'X_failure_kind_source-unreachable');
+  const cycle = new Error('circular cause');
+  cycle.cause = cycle;
+  assert.equal(classifyFailure(cycle).kind, 'pipeline-failure');
+});
+
+test('HTTP status from either fetch path: 5xx is a source outage, 4xx is a pipeline failure', async () => {
+  for (const status of [400, 404, 499, 500, 503, 599]) {
+    const fetchImpl = async () => ({ ok: false, status });
+    for (const bulk of [true, false]) {
+      const run = () => bulk ? fetchBulk(fetchImpl) : fetchJson('https://example.invalid/data', fetchImpl);
+      // Tier 2's missing station remains an expected null, unlike a missing bulk download.
+      if (status === 404 && !bulk) { assert.equal(await run(), null); continue; }
+      await assert.rejects(run, err => {
+        assert.equal(err.status, status);
+        assert.match(err.message, new RegExp(`^HTTP ${status} for https://`));
+        assert.equal(classifyFailure(err).kind, status >= 500 ? 'source-unreachable' : 'pipeline-failure');
+        if (status >= 500) assert.equal(classifyFailure(err).code, `HTTP_${status}`);
+        return true;
+      });
+    }
+  }
+});
 
 test('readRawDir: a seed with SHA256SUMS is checked, a tampered file refuses to replay', () => {
   const dir = mkdtempSync(join(tmpdir(), 'nrw-seed-'));
