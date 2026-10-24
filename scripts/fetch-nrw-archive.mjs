@@ -241,7 +241,7 @@
 //    "required_pull_request_reviews":null,"restrictions":null,
 //    "allow_force_pushes":false,"allow_deletions":false}
 //   JSON
-import { mkdirSync, writeFileSync, readFileSync, existsSync, unlinkSync } from 'node:fs';
+import { mkdirSync, writeFileSync, appendFileSync, readFileSync, existsSync, unlinkSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -889,9 +889,25 @@ function upsertMeta(dir, fresh) {
 
 // ---------- tier 1: the four downloads ----------
 
+const SOURCE_FAILURE_CODES = new Set([
+  'UND_ERR_CONNECT_TIMEOUT', 'ECONNREFUSED', 'ECONNRESET', 'ENOTFOUND', 'EAI_AGAIN', 'ETIMEDOUT',
+  'UND_ERR_SOCKET', 'UND_ERR_HEADERS_TIMEOUT', 'UND_ERR_BODY_TIMEOUT',
+]);
+
+export function classifyFailure(err) {
+  const seen = new Set();
+  for (let e = err; e && !seen.has(e); e = e.cause) {
+    seen.add(e);
+    if (SOURCE_FAILURE_CODES.has(e.code)) return { kind: 'source-unreachable', code: e.code };
+    if (e.name === 'TimeoutError') return { kind: 'source-unreachable', code: 'TimeoutError' };
+    if (e.status >= 500 && e.status < 600) return { kind: 'source-unreachable', code: `HTTP_${e.status}` };
+  }
+  return { kind: 'pipeline-failure', code: err?.code || err?.name || 'unknown' };
+}
+
 async function fetchBytes(url, fetchImpl) {
   const res = await fetchImpl(url, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS * 3) });
-  if (!res.ok) throw new Error(`HTTP ${res.status} for ${url}`);
+  if (!res.ok) throw Object.assign(new Error(`HTTP ${res.status} for ${url}`), { status: res.status });
   return new Uint8Array(await res.arrayBuffer());
 }
 
@@ -959,7 +975,7 @@ export function openProduct(zip, product, names = Object.values(product.tables))
 export async function fetchJson(url, fetchImpl = fetch) {
   const res = await fetchImpl(url, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
   if (res.status === 404) return null;
-  if (!res.ok) throw new Error(`HTTP ${res.status} for ${url}`);
+  if (!res.ok) throw Object.assign(new Error(`HTTP ${res.status} for ${url}`), { status: res.status });
   return res.json();
 }
 
@@ -1486,5 +1502,14 @@ async function main() {
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  main().catch(e => { console.error(e); process.exit(1); });
+  main().catch(e => {
+    console.error(e);
+    const { kind, code } = classifyFailure(e);
+    console.error(`nrw-failure: ${JSON.stringify({ kind, code })}`);
+    if (process.env.GITHUB_OUTPUT) {
+      try { appendFileSync(process.env.GITHUB_OUTPUT, `failure_kind=${kind}\nfailure_code=${code}\n`); }
+      catch (outputError) { console.error('could not write failure outputs:', outputError); }
+    }
+    process.exit(1);
+  });
 }

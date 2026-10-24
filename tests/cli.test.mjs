@@ -5,7 +5,7 @@
 // lib/cdp.mjs, which no browser check can gate inside `node --test`.
 import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
@@ -143,6 +143,8 @@ test('lib/cdp.mjs imports and binds what it re-exports', async () => {
 // anything; their unknown-flag sweep (exit 2) is what makes them spawnable here.
 test('every collector and builder main() gets past its argument parsing', () => {
   const missing = join(tmp('cli-main-'), 'nowhere');
+  const output = join(tmp('cli-output-'), 'github-output');
+  writeFileSync(output, 'existing=value\n');
   const cases = [
     [['fetch-wsv-archive.mjs', '--migrate'], 2, /unknown flag --migrate/],
     [['fetch-wsv-archive.mjs', '--current', '--running'], 1, /separate passes/],
@@ -167,10 +169,16 @@ test('every collector and builder main() gets past its argument parsing', () => 
     // heal-dec31-run.test.mjs.
   ];
   for (const [argv, code, expect] of cases) {
-    const r = spawnSync(process.execPath, [join(SCRIPTS, argv[0]), ...argv.slice(1)], { encoding: 'utf8', timeout: 20000 });
+    const nrw = argv[0] === 'fetch-nrw-archive.mjs';
+    const env = nrw ? { ...process.env, GITHUB_OUTPUT: output } : process.env;
+    const r = spawnSync(process.execPath, [join(SCRIPTS, argv[0]), ...argv.slice(1)], { encoding: 'utf8', timeout: 20000, env });
     const out = r.stdout + r.stderr;
     assert.doesNotMatch(out, /ReferenceError|is not defined/, `${argv[0]}: an unbound identifier in main()`);
     assert.equal(r.status, code, `${argv[0]} exit: ${out.slice(0, 300)}`);
     assert.match(out, expect, argv[0]);
+    if (nrw) {
+      assert.match(r.stderr, /^nrw-failure: {"kind":"pipeline-failure","code":"ENOENT"}$/m);
+      assert.equal(readFileSync(output, 'utf8'), 'existing=value\nfailure_kind=pipeline-failure\nfailure_code=ENOENT\n');
+    }
   }
 });
