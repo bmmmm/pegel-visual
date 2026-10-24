@@ -44,6 +44,8 @@ test('classifyFailure: parsing, replay and unknown errors stay pipeline failures
     Object.assign(new Error('missing seed'), { code: 'ENOENT' }), new Error('HTTP 503 for a URL')]) {
     assert.deepEqual(classifyFailure(err), { kind: 'pipeline-failure', code: err.code || err.name });
   }
+  const forged = Object.assign(new Error('odd code'), { code: 'X\nfailure_kind=source-unreachable' });
+  assert.equal(classifyFailure(forged).code, 'X_failure_kind_source-unreachable');
   const cycle = new Error('circular cause');
   cycle.cause = cycle;
   assert.equal(classifyFailure(cycle).kind, 'pipeline-failure');

@@ -902,7 +902,8 @@ export function classifyFailure(err) {
     if (e.name === 'TimeoutError') return { kind: 'source-unreachable', code: 'TimeoutError' };
     if (e.status >= 500 && e.status < 600) return { kind: 'source-unreachable', code: `HTTP_${e.status}` };
   }
-  return { kind: 'pipeline-failure', code: err?.code || err?.name || 'unknown' };
+  // err.code/name lands in $GITHUB_OUTPUT: a newline there would forge an output line
+  return { kind: 'pipeline-failure', code: String(err?.code || err?.name || 'unknown').replace(/[^\w.-]/g, '_') };
 }
 
 async function fetchBytes(url, fetchImpl) {
