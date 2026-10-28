@@ -192,8 +192,9 @@ own script tree, needed when working on it and not before. Moved verbatim.
   because `.meter.neg` was set on three negative bars and defined nowhere, and no
   assertion on markup could see it.
 - **`collect-hires.mjs` is the only source of 15-minute data.** Weekly via the
-  LaunchAgent `de.6bm.pegel-hires` (wrapper `collect-hires.sh`, heartbeat
-  `cron:pegel-hires`, on the recap roster at 192 h), into
+  LaunchAgent `de.6bm.pegel-hires` (wrapper `collect-hires.sh`, one outcome line
+  per run in the launchd log; no dead-man signal since wallii's retirement on
+  2026-10-28), into
   `tmp-forecast/hires/<uuid>/<YYYY-MM>.json` on this Mac and from there into the
   GitHub-only, protected `hires` data branch (clone under
   `tmp-forecast/hires-branch/`, fast-forward only, never `origin`) — the
