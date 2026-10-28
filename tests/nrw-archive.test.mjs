@@ -14,7 +14,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { condenseHires, dayMin, stepOf, tier2Series, seriesHasValues, dayOf, readRawDir, readSha256Sums,
-  classifyFailure, fetchBulk, fetchJson } from '../scripts/fetch-nrw-archive.mjs';
+  classifyFailure, fetchBulk, fetchJson, missingTables, PRODUCTS } from '../scripts/fetch-nrw-archive.mjs';
 
 test('classifyFailure: undici fetch failed carries the connect timeout in its cause', () => {
   const cause = Object.assign(new Error('Connect Timeout Error (attempted address: hochwasserportal.nrw:443, timeout: 10000ms)'),
@@ -188,4 +188,18 @@ test('seriesHasValues: rain sums count, an empty map does not', () => {
   assert.equal(seriesHasValues(new Map()), false);
   assert.equal(seriesHasValues(new Map([[2026, { y: 2026, mm: [null, 0.4] }]])), true);
   assert.equal(seriesHasValues(new Map([[2026, { y: 2026, mm: [null, null] }]])), false);
+});
+
+// 2026-10-27: pegeldaten.zip shipped without pegel_messwerte.txt and the whole
+// run refused, stalling the day tables, rain and temperature with it
+test('missingTables: only a fine series may be absent, every other table still stops the run', () => {
+  assert.deepEqual(missingTables(['pegel_messwerte.txt'], PRODUCTS.gauges), { required: [], optional: ['pegel_messwerte.txt'] });
+  for (const p of Object.values(PRODUCTS)) {
+    const { hires, ...rest } = p.tables;
+    assert.deepEqual(missingTables([hires], p).required, [], p.zip);
+    for (const name of Object.values(rest)) {
+      assert.deepEqual(missingTables([name, hires], p), { required: [name], optional: [hires] }, `${p.zip} ${name}`);
+    }
+  }
+  assert.deepEqual(missingTables([], PRODUCTS.rain), { required: [], optional: [] });
 });
