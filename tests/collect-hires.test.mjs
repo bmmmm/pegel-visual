@@ -147,8 +147,8 @@ test('main: a run that succeeds counts the disk too, without calling it unchange
 
 // The wrapper waits for the network before it lets node run. The rig: an
 // unreachable probe host, a one-second budget, HOME moved so the wrapper's own
-// PATH prefix (~/.local/bin, where wallii lives) finds nothing, and a wallii shim
-// in front that records the post instead of making it.
+// PATH prefix (~/.local/bin) finds nothing, and a wallii shim in front that
+// records a call: wallii is retired (2026-10-28), so the shim must stay unused.
 test('wrapper: a dead network is waited for and reported as a skip, before node ever runs', () => {
   const shim = mkdtempSync(join(tmpdir(), 'hires-shim-'));
   const wall = join(shim, 'wall.log');
@@ -163,5 +163,6 @@ test('wrapper: a dead network is waited for and reported as a skip, before node 
   assert.match(r.stdout, /waiting for the network: curl/, 'the wait is logged, with curl’s own reason');
   assert.doesNotMatch(r.stdout, /collect-hires start/, 'node never ran');
   assert.match(r.stderr, /network unreachable for 1s, giving up/);
-  assert.match(readFileSync(wall, 'utf8'), /--outcome failed .*network unreachable for 1s, nothing on disk touched/);
+  assert.match(r.stderr, /collect-hires\.sh: failed: .*network unreachable for 1s, nothing on disk touched/);
+  assert.ok(!existsSync(wall), 'wallii is never called');
 });

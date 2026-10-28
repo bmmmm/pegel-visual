@@ -15,19 +15,14 @@
 # agent is reinstalled, while an export takes effect on the next run
 # (ops/reference/machine-conventions.md, three silent outages in one summer).
 #
-# Heartbeat: a job that dies cannot report its own death, so a healthy run posts
-# `cron:pegel-hires` onto the wall and the SessionStart recap raises the ABSENCE
-# of that word past the cadence (dotfiles session-recap.sh roster, 192 h).
-# Fail-soft — the wall is a report channel, not a dependency — but never silent:
-# a rejected post is printed, not swallowed. Collected but not mirrored is
-# `partial`, so a broken push is visible without hiding that the data is safe
-# on disk.
+# Outcome line: every run ends with one `collect-hires.sh: <outcome>: ...` line
+# on stderr, the launchd log. Collected but not mirrored is `partial`, so a
+# broken push is visible without hiding that the data is safe on disk.
 set -euo pipefail
 export PATH="$HOME/.local/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:$PATH"
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$REPO"
-LABEL=pegel-hires
 DATA="$REPO/tmp-forecast/hires"
 SINK="$REPO/tmp-forecast/hires-branch"
 SINK_URL="https://github.com/bmmmm/pegel-visual.git"
@@ -37,12 +32,8 @@ for tool in node git gh rsync curl; do
   command -v "$tool" >/dev/null 2>&1 || { printf 'collect-hires.sh: %s not on PATH (%s)\n' "$tool" "$PATH" >&2; exit 1; }
 done
 
-report() { # <ok|partial|failed> <message ≤140 chars>
-  local outcome="$1" msg="$2"
-  command -v wallii >/dev/null 2>&1 || { printf 'collect-hires.sh: wallii not on PATH — no heartbeat for cron:%s\n' "$LABEL" >&2; return 0; }
-  WALLII_ACTOR="cron:$LABEL" wallii post -t chore --outcome "$outcome" --took none "${msg:0:140}" >/dev/null \
-    || printf 'collect-hires.sh: wall post for cron:%s rejected (see above)\n' "$LABEL" >&2
-  return 0
+report() { # <ok|partial|failed> <message>
+  printf 'collect-hires.sh: %s: %s\n' "$1" "$2" >&2
 }
 
 # the local clone of the data branch: created on first use, seeded as an orphan
