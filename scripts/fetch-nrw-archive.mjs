@@ -60,7 +60,9 @@
 //                                        two are not a partition and 310+308 = 618)
 //   downloads/pegeldaten.zip             pegel_stationen.txt (16 cols, catchment_no is col 5),
 //                                        pegel_tagesmittelwerte.txt, pegel_tagesmaxima.txt
-//                                        (730 days), pegel_messwerte.txt (15-min, 63 days, 108 MB)
+//                                        (730 days), pegel_messwerte.txt (15-min, 63 days, 108 MB;
+//                                        absent since the 2026-10-27 export — the
+//                                        *_messwerte.txt are optional, see missingTables)
 //   downloads/niederschlagsdaten.zip     nieder_stationen.txt (13 cols), nieder_tageswerte.txt
 //                                        (mm/24h + coverage %), nieder_messwerte.txt (hourly)
 //   downloads/temperaturdaten.zip        temp_stationen.txt (64 cols — the best metadata row
@@ -971,6 +973,25 @@ export function openProduct(zip, product, names = Object.values(product.tables))
   return { text, exportAt, missing };
 }
 
+// Which absent tables stop the run. The station list and the day tables are
+// the product; the fine series (`hires`) is a layer on top that the run can
+// skip: on 2026-10-27 the source's 15-minute level export froze (messwerte.zip
+// and hidden_messwerte.txt stuck at 15:39 MEZ) and pegeldaten.zip shipped
+// without pegel_messwerte.txt, while the day tables, rain and temperature kept
+// flowing. Refusing the whole run then stalled every product for the sake of
+// the one the source no longer delivered. Skipping is lossless for what is
+// skipped — the stored fine shards, min, n and imax stay as they are (a fresh
+// null never overwrites a stored value) — and the fine window only starts to
+// cost days once the source has been without it for 63 of them, so the run
+// reports it (`degraded` in runs.json and $GITHUB_OUTPUT) instead of failing.
+export function missingTables(missing, product) {
+  const optional = new Set([product.tables.hires].filter(Boolean));
+  return {
+    required: missing.filter(n => !optional.has(n)),
+    optional: missing.filter(n => optional.has(n)),
+  };
+}
+
 // ---------- tier 2: index.json-driven per-station fetch ----------
 
 export async function fetchJson(url, fetchImpl = fetch) {
@@ -1187,9 +1208,15 @@ export async function collect(o) {
   const src = raw ? readRawDir(raw) : await fetchBulk(fetchImpl);
   const products = {};
   let exportAt = null;
+  const degraded = [];
   for (const [key, p] of Object.entries(PRODUCTS)) {
     const opened = openProduct(src.zips[key], p);
-    if (opened.missing.length) throw new Error(`${p.zip}: missing ${opened.missing.join(', ')}`);
+    const { required, optional } = missingTables(opened.missing, p);
+    if (required.length) throw new Error(`${p.zip}: missing ${opened.missing.join(', ')}`);
+    for (const name of optional) {
+      degraded.push(name);
+      err(`::warning::${p.zip}: missing ${name} — the ${key} fine series is skipped this run, everything else is mirrored`);
+    }
     products[key] = opened;
     if (!exportAt || opened.exportAt > exportAt) exportAt = opened.exportAt;
   }
@@ -1216,7 +1243,7 @@ export async function collect(o) {
   const wtIds = new Set(bulkTempIds);
 
   const window = {};
-  const summary = { exportAt: exportAt ? exportAt.toISOString() : null, written: 0, tier2: null };
+  const summary = { exportAt: exportAt ? exportAt.toISOString() : null, written: 0, tier2: null, degraded };
 
   if (dryRun) {
     // the dry run reads tier 1 only: the basins it prints are the bulk view
@@ -1361,7 +1388,7 @@ export async function collect(o) {
       if (upsertMeta(dir, gaugeMeta(e, node, p, { src: 'bulk', noSeries: undefined, params: undefined }))) written++;
     }
     mean.clear(); max.clear();
-    const hires = parseSeries(products.gauges.text.hires).stations;
+    const hires = parseSeries(products.gauges.text.hires ?? '').stations;
     products.gauges.text.hires = null;
     window.gaugesHires = spanOfRows([...hires.values()]);
     for (const [no, rows] of hires) {
@@ -1390,7 +1417,7 @@ export async function collect(o) {
       if (upsertMeta(dir, rainMeta(e, basinOf(e), { src: 'bulk', noSeries: undefined, params: undefined }))) written++;
     }
     daily.clear();
-    const hires = parseSeries(products.rain.text.hires).stations;
+    const hires = parseSeries(products.rain.text.hires ?? '').stations;
     products.rain.text.hires = null;
     window.rainHires = spanOfRows([...hires.values()]);
     for (const [no, rows] of hires) {
@@ -1421,7 +1448,7 @@ export async function collect(o) {
     }
     mean.clear(); max.clear();
     if (outHires) {
-      const hires = parseSeries(products.temp.text.hires).stations;
+      const hires = parseSeries(products.temp.text.hires ?? '').stations;
       products.temp.text.hires = null;
       window.tempHires = spanOfRows([...hires.values()]);
       for (const [no, rows] of hires) {
@@ -1447,7 +1474,7 @@ export async function collect(o) {
   if (written > 0 || !last || last.day !== generated) {
     runs.push({
       day: generated, at: now.toISOString(), sourceExportAt: summary.exportAt, mode: bulkOnly ? 'bulk' : 'bulk+station',
-      written, window, coverage: manifest.coverage, tier2: tier2 ? { attempted: tier2.attempted, ok: tier2.ok, failed: tier2.failed, noIndex: tier2.noIndex } : null,
+      written, window, ...(degraded.length ? { degraded } : {}), coverage: manifest.coverage, tier2: tier2 ? { attempted: tier2.attempted, ok: tier2.ok, failed: tier2.failed, noIndex: tier2.noIndex } : null,
     });
     writeJson(runsPath, { schema: SCHEMA, runs: runs.slice(-RUNS_KEPT) });
     written++;
@@ -1498,6 +1525,12 @@ async function main() {
   if (!has('dry-run')) {
     if (maxYears > 0) console.log(`pruned ${pruneYears(out, maxYears, now)} year shard(s)`);
     if (maxMonths > 0 && outHires) console.log(`pruned ${pruneMonths(outHires, maxMonths, now)} month shard(s)`);
+  }
+  // a green run that skipped a fine series has to say so somewhere a person
+  // reads: nrw-update.yml turns this output into a data-freshness comment
+  const degraded = r.summary.degraded || [];
+  if (degraded.length && process.env.GITHUB_OUTPUT) {
+    appendFileSync(process.env.GITHUB_OUTPUT, `degraded=${degraded.map(n => n.replace(/[^\w.-]/g, '_')).join(',')}\n`);
   }
   return r;
 }

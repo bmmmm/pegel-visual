@@ -152,6 +152,27 @@ jobs:
         run: gh workflow run pages.yml --ref main
         env:
           GH_TOKEN: ${{ github.token }}
+      - name: Report a degraded run to the data-freshness issue
+        # green, but the source export lacked a fine series (the collector's
+        # missingTables: since 2026-10-27 pegel_messwerte.txt): everything
+        # else was mirrored, the fine layer stands still. Nothing else watches
+        # it, so every such run says so; the comment stops when the file is back.
+        if: success() && steps.collect.outputs.degraded != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DEGRADED: ${{ steps.collect.outputs.degraded }}
+        run: |
+          set -euo pipefail
+          gh label create data-freshness --force --color B60205 \
+            --description "Data pipeline freshness / failure watchdog" >/dev/null
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          REPORT="nrw-update run degraded: $RUN_URL"$'\n\n'"The LANUK export lacked $DEGRADED — the daily level, rain and temperature were mirrored, that fine series was skipped. Not a pipeline bug; the fine window starts losing days once the source has been without it for 63 days."
+          ISSUE_NUM=$(gh issue list --label data-freshness --state open --json number --jq '.[0].number')
+          if [ -n "$ISSUE_NUM" ]; then
+            gh issue comment "$ISSUE_NUM" --body "$REPORT"
+          else
+            gh issue create --title "Data pipeline degraded: LANUK fine series missing" --label data-freshness --body "$REPORT"$'\n\n'"This issue was opened automatically and is never closed automatically — close it once the series is back."
+          fi
       - name: Report a failed run to the data-freshness issue
         # same wiring as archive-update.yml: `cancelled()` is load-bearing,
         # because a timeout ends the run as CANCELLED, not failed
