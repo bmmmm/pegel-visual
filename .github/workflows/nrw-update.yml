@@ -181,7 +181,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           FAILURE_KIND: ${{ steps.collect.outputs.failure_kind }}
           FAILURE_CODE: ${{ steps.collect.outputs.failure_code }}
-          RUN_CANCELLED: ${{ cancelled() }}
+          RUN_CANCELLED: ${{ job.status == 'cancelled' }}
         run: |
           set -euo pipefail
           gh label create data-freshness --force --color B60205 \
