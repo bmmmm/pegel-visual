@@ -29,12 +29,12 @@
   "rainHourMm": 0.1
  },
  "window": {
-  "from": "2026-09-10T01:00Z",
-  "to": "2026-11-12T00:00Z",
+  "from": "2026-09-10T23:00Z",
+  "to": "2026-11-12T22:00Z",
   "hours": 1512
  },
  "inputs": {
-  "sha256": "86b2ceb8b3e3f74cb27f20a98a367c9c415883cdd27ba789d41039bae4b5f839",
+  "sha256": "323e84edab0083b79193adf64d895591e35920823f79433162dca70cb9e86f1b",
   "files": 2812
  },
  "counts": {
