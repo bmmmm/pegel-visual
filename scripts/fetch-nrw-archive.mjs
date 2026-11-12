@@ -168,7 +168,9 @@
 // up AND down, so inside the delivered window the fresh value wins; outside it
 // the stored value is frozen (the source can never deliver it again); and a
 // fresh null never overwrites a stored non-null — a truncated ZIP is a no-op,
-// not a loss. Tier 2 is written first, the bulk day tables after (730 days and
+// not a loss. One exception: a gauge min on a day whose mean or max the source
+// revised is retired (null), because it was derived from the old fine series
+// (mergeDaily `derived`, since 2026-11-12). Tier 2 is written first, the bulk day tables after (730 days and
 // the accuracy column beat 364 days), the fields derived from the fine series
 // (min, n, imax) last and additively — they never touch mean/max. An unchanged
 // shard is not rewritten (no branch churn), manifest.generated is a DATE, and
@@ -198,7 +200,8 @@
 // whose min sits ABOVE the mean) reaches it. And the repair is **forward-only**
 // — mergeDaily never lets a fresh null overwrite a stored value, so the four
 // days above keep the minima they were given (2824450000100 day 208 carries
-// min -14.2 against mean 17.52) until someone reseeds the branch.
+// min -14.2 against mean 17.52) until someone reseeds the branch, or until the
+// source revises that day's mean or max (then the min is retired, see above).
 // The floor sits where the min is DERIVED, not at the gate, because that is
 // the only place that can still see how many samples stood behind it.
 //
@@ -704,7 +707,15 @@ export const seriesHasValues = years => [...years.values()].some(yr => ['mean', 
 // delivered window — the delivery has no values there). `acc` follows the
 // value it belongs to: a fresh value brings its own accuracy or clears the
 // stored one.
-export function mergeDaily(existing, fresh, fields, sparse = 'acc') {
+// `derived` names stored values that were computed from a series the source
+// may since have revised: { min: ['mean', 'max'] } drops a stored min on every
+// day whose fresh mean or max differs from the stored one. Without it a
+// revision outside the 63-day fine window leaves the old min standing over the
+// new, lower day values (2769629000100, export 2026-11-10: mean/max rewritten
+// for days 6..314, the frozen min above the mean on 34 days — N5 red). Inside
+// the window the hires pass re-derives the min right after; outside it stays
+// null, like the seeded history.
+export function mergeDaily(existing, fresh, fields, sparse = 'acc', { derived = null } = {}) {
   const y = fresh.y;
   const n = daysInYear(y);
   const out = { id: fresh.id ?? existing?.id, y };
@@ -713,6 +724,17 @@ export function mergeDaily(existing, fresh, fields, sparse = 'acc') {
     const a = (ex && Array.isArray(ex[f]) && ex[f].length === n) ? ex[f] : Array(n).fill(null);
     const b = Array.isArray(fresh[f]) ? fresh[f] : null;
     out[f] = b ? a.map((v, d) => (b[d] != null ? b[d] : v)) : a.slice();
+  }
+  if (ex && derived) {
+    for (const [f, sources] of Object.entries(derived)) {
+      if (!Array.isArray(out[f])) continue;
+      for (let d = 0; d < n; d++) {
+        if (Array.isArray(fresh[f]) && fresh[f][d] != null) continue;
+        const revised = sources.some(s => Array.isArray(fresh[s]) && Array.isArray(ex[s])
+          && fresh[s][d] != null && ex[s][d] != null && fresh[s][d] !== ex[s][d]);
+        if (revised) out[f][d] = null;
+      }
+    }
   }
   const acc = { ...((ex && ex[sparse]) || {}) };
   // only a delivery that carries accuracies may touch them: the fields
@@ -806,16 +828,21 @@ function trimNulls(v) {
 // ---------- files ----------
 
 // upsert year shards for one station; returns the number of files written
-export function upsertYears(dir, id, years, fields, sparse = 'acc') {
+export function upsertYears(dir, id, years, fields, sparse = 'acc', opts = {}) {
   let written = 0;
   for (const [y, fresh] of years) {
     if (!fields.some(f => Array.isArray(fresh[f]) && fresh[f].some(v => v != null))) continue;
     const path = join(dir, `${y}.json`);
-    const merged = mergeDaily(readJson(path), { ...fresh, id }, fields, sparse);
+    const merged = mergeDaily(readJson(path), { ...fresh, id }, fields, sparse, opts);
     if (writeJson(path, merged)) written++;
   }
   return written;
 }
+
+// the bulk gauge pass: the source's day mean/max, and a revised day value
+// retires the min derived from the old fine series (mergeDaily `derived`)
+export const upsertGaugeDays = (dir, id, years) =>
+  upsertYears(dir, id, years, ['min', 'mean', 'max', 'n'], 'acc', { derived: { min: ['mean', 'max'] } });
 
 export function upsertMonths(dir, id, months) {
   let written = 0;
@@ -1381,7 +1408,7 @@ export async function collect(o) {
       foldDaily(mean.get(r.station_no) || [], { field: 'mean', plausible: [PLAUSIBLE_MIN_CM, PLAUSIBLE_MAX_CM], into: years });
       foldDaily(max.get(r.station_no) || [], { field: 'max', reduce: 'max', plausible: [PLAUSIBLE_MIN_CM, PLAUSIBLE_MAX_CM], into: years });
       const dir = join(out, 'gauges', r.station_no);
-      const n = upsertYears(dir, r.station_no, years, ['min', 'mean', 'max', 'n']);
+      const n = upsertGaugeDays(dir, r.station_no, years);
       written += n;
       const hasData = [...years.values()].some(yr => yr.mean.some(v => v != null) || yr.max.some(v => v != null));
       if (hasData) coverage.gauges.bulk++;

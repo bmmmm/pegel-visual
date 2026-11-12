@@ -93,7 +93,7 @@ dropout pushes the min DOWN, so N5 is green over all 17 173 stored minima
 today; the repair is **forward-only**, because `mergeDaily` never lets a fresh
 null overwrite a stored value, so those four days keep their minima
 (2824450000100 day 208: `min -14.2` against `mean 17.52`) until the branch is
-reseeded; and the constant is pinned from BOTH sides by two tests, to
+reseeded or the source revises that day's mean/max (see the merge policy); and the constant is pinned from BOTH sides by two tests, to
 **(0.8333, 0.9166]** — widening re-admits two-hour holes, narrowing throws
 away days the source may legitimately deliver.
 
@@ -732,6 +732,16 @@ Merge policy is the **inverse** of the WSV extreme-union: inside the source
 window the fresh value wins (the source declares unchecked raw data and
 revises downward too), outside it the stored value is frozen; a fresh `null`
 never overwrites a stored non-null (a truncated ZIP is a no-op, not a loss).
+**One exception (2026-11-12):** a gauge `min` on a day whose `mean` or `max`
+the source revised is retired to `null` (`mergeDaily` option `derived`, via
+`upsertGaugeDays`) — it was derived from the old fine series. Inside the
+63-day fine window the hires pass re-derives it in the same run; outside it
+stays null and the band falls back to `mean`, like the seed. N4 allows exactly
+this slot change and nothing else. Trigger: 2769629000100, export 2026-11-10,
+mean/max rewritten for days 6..314 ~0.5–1.5 cm lower, the frozen min above the
+mean on 34 days (N5 red). The same export had 72 such days on 2 gauges. In a
+run without the fine series (hires optional) a revised window day loses its min
+too, and only a later hires delivery restores it.
 
 In the app the seam is at loader level: `state.info`/`state.gauge` stay the
 shared language, everything above (view models, renderers, routing, finder,

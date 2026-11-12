@@ -288,6 +288,21 @@ test('N4: a slot going non-null -> null is red, a revised value is not', () => {
   assert.deepEqual(compareSeries('gauges', null, nulled, 'p'), [], 'no baseline, nothing to compare');
 });
 
+test('N4: a gauge min may go null only on a day whose mean or max the source revised', () => {
+  const head = mkShard('gauges', 'a', 2026, { to: SEP2_2026 });
+  const tree = mkShard('gauges', 'a', 2026, { to: SEP2_2026 });
+  tree.mean[100] = head.mean[100] - 1.5; tree.min[100] = null;   // revised mean: the min retires
+  tree.max[101] = head.max[101] - 1.5; tree.min[101] = null;     // revised max: the same
+  assert.deepEqual(compareSeries('gauges', head, tree, 'p'), []);
+  tree.min[102] = null;                                          // untouched day: still red
+  const v = compareSeries('gauges', head, tree, 'p');
+  assert.equal(v.length, 1, v.join('\n'));
+  assert.match(v[0], /^N4: p: min: 1 slot\(s\) went non-null -> null \(first day index 102\)/);
+  const gone = mkShard('gauges', 'a', 2026, { to: SEP2_2026 });
+  gone.mean[100] = null; gone.min[100] = null;                   // a vanished mean is no revision
+  assert.equal(compareSeries('gauges', head, gone, 'p').length, 2);
+});
+
 test('N4: rain and temperature shards are compared on their own keys', () => {
   const head = mkShard('rain', 'r', 2026, { to: SEP2_2026 });
   const tree = mkShard('rain', 'r', 2026, { to: SEP2_2026 });

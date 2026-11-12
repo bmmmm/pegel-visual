@@ -9,12 +9,12 @@
 //      (N1 red)
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { condenseHires, dayMin, stepOf, tier2Series, seriesHasValues, dayOf, readRawDir, readSha256Sums,
-  classifyFailure, fetchBulk, fetchJson, missingTables, PRODUCTS } from '../scripts/fetch-nrw-archive.mjs';
+  classifyFailure, fetchBulk, fetchJson, missingTables, mergeDaily, upsertGaugeDays, PRODUCTS } from '../scripts/fetch-nrw-archive.mjs';
 
 test('classifyFailure: undici fetch failed carries the connect timeout in its cause', () => {
   const cause = Object.assign(new Error('Connect Timeout Error (attempted address: hochwasserportal.nrw:443, timeout: 10000ms)'),
@@ -202,4 +202,34 @@ test('missingTables: only a fine series may be absent, every other table still s
     }
   }
   assert.deepEqual(missingTables([], PRODUCTS.rain), { required: [], optional: [] });
+});
+
+test('mergeDaily: a revised day value retires the stored derived min, an unchanged one keeps it', () => {
+  const n = 365;
+  const col = vals => { const a = Array(n).fill(null); for (const [d, v] of Object.entries(vals)) a[d] = v; return a; };
+  const stored = { id: 'g', y: 2025, min: col({ 0: 24.6, 1: 24.4, 2: 24.3 }), mean: col({ 0: 25.04, 1: 24.65, 2: 24.49 }),
+    max: col({ 0: 26.6, 1: 24.8, 2: 24.7 }), n: col({ 0: 96, 1: 96, 2: 96 }), acc: {} };
+  // day 0 mean revised, day 1 max revised, day 2 untouched, day 3 new
+  const fresh = { y: 2025, mean: col({ 0: 24.25, 1: 24.65, 2: 24.49, 3: 23.3 }), max: col({ 0: 26.6, 1: 23.4, 2: 24.7, 3: 23.4 }) };
+  const fields = ['min', 'mean', 'max', 'n'];
+  const out = mergeDaily(stored, fresh, fields, 'acc', { derived: { min: ['mean', 'max'] } });
+  assert.deepEqual(out.min.slice(0, 4), [null, null, 24.3, null]);
+  assert.deepEqual(out.n.slice(0, 3), [96, 96, 96]);
+  // without the option the policy stays forward-only (the N5 failure of 2026-11-10)
+  assert.deepEqual(mergeDaily(stored, fresh, fields).min.slice(0, 3), [24.6, 24.4, 24.3]);
+  // a fresh min on the day still wins
+  const withMin = mergeDaily(stored, { ...fresh, min: col({ 0: 24.1 }) }, fields, 'acc', { derived: { min: ['mean', 'max'] } });
+  assert.equal(withMin.min[0], 24.1);
+});
+
+test('upsertGaugeDays: the bulk pass retires a stored min whose day mean the source revised', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'nrw-gdays-'));
+  try {
+    const col = vals => { const a = Array(365).fill(null); for (const [d, v] of Object.entries(vals)) a[d] = v; return a; };
+    writeFileSync(join(dir, '2025.json'), JSON.stringify({ id: 'g', y: 2025, min: col({ 0: 24.6, 1: 24.4 }),
+      mean: col({ 0: 25.04, 1: 24.65 }), max: col({ 0: 26.6, 1: 24.8 }), n: col({ 0: 96, 1: 96 }), acc: {} }));
+    upsertGaugeDays(dir, 'g', new Map([[2025, { y: 2025, mean: col({ 0: 24.25, 1: 24.65 }), max: col({ 0: 25, 1: 24.8 }) }]]));
+    const out = JSON.parse(readFileSync(join(dir, '2025.json'), 'utf8'));
+    assert.deepEqual(out.min.slice(0, 2), [null, 24.4]);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });

@@ -28,7 +28,8 @@
 //                     --allow-prune, which CI never passes), no series slot
 //                     goes non-null -> null (a fresh null never overwrites a
 //                     stored value — that is what makes a truncated ZIP a
-//                     no-op instead of a loss), `from` only sinks, `to` only
+//                     no-op instead of a loss; sole exception: a gauge min on
+//                     a day whose mean or max the source revised), `from` only sinks, `to` only
 //                     rises, no manifest entry vanishes. Revised info / mw /
 //                     mnw / mhw values are PRINTED, not refused: the operator
 //                     revises them, and a silent swallow is the failure mode.
@@ -505,8 +506,17 @@ export function checkRegressionStatuses(changes, allowPrune = false) {
   return checkChangeStatuses(mirrored).map(m => m.replace(/^R4:/, 'N4:'));
 }
 
+// the one sanctioned non-null -> null: a gauge min whose day the source has
+// revised (mean or max stored on both sides and different) — the min was
+// derived from the old fine series, and the collector retires it (mergeDaily
+// `derived`, 2769629000100 on 2026-11-10). The same condition as there, so a
+// min lost on an untouched day stays red.
+const dayRevised = (head, tree, i) => ['mean', 'max'].some(s => Array.isArray(head[s]) && Array.isArray(tree[s])
+  && head[s][i] != null && tree[s][i] != null && head[s][i] !== tree[s][i]);
+
 // a changed year shard keeps every stored value: a slot goes non-null -> null
-// only through a bug in the merge (a fresh null must never win)
+// only through a bug in the merge (a fresh null must never win) — or through
+// the retired gauge min above
 export function compareSeries(kind, head, tree, path) {
   if (!head || typeof head.y !== 'number') return [];
   if (!tree || typeof tree.y !== 'number') return [`N4: ${path}: unreadable while HEAD had year ${head.y}`];
@@ -516,7 +526,7 @@ export function compareSeries(kind, head, tree, path) {
     const t = Array.isArray(tree[k]) ? tree[k] : [];
     let lost = 0, first = -1;
     for (let i = 0; i < h.length; i++) {
-      if (h[i] != null && t[i] == null) { lost++; if (first < 0) first = i; }
+      if (h[i] != null && t[i] == null && !(kind === 'gauges' && k === 'min' && dayRevised(head, tree, i))) { lost++; if (first < 0) first = i; }
     }
     if (lost) v.push(`N4: ${path}: ${k}: ${lost} slot(s) went non-null -> null (first day index ${first}) — a stored value is never overwritten by a fresh null`);
   }
