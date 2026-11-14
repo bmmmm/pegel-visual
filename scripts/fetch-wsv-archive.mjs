@@ -833,11 +833,14 @@ async function main() {
   await Promise.all(Array.from({ length: PARALLEL }, (_, w) => worker(w)));
   if (!ONLY_STATION) {
     const m = buildManifest(stations, OUT);
-    const none = Object.values(m.stations).filter(e => e.none).length;
-    console.log(`manifest: ${stations.length} stations, ${stations.length - none} archived, ${none} without WSV archive`);
+    const entries = Object.values(m.stations);
+    const none = entries.filter(e => e.none).length;
+    const marked = entries.filter(e => e.noArchive).length;
+    console.log(`manifest: ${entries.length} stations (${stations.length} live), ${entries.length - none} with data, `
+      + `${none} without stored data, ${marked} marked no WSV long-term archive`);
   }
   console.log(`done · ${ok} fetched${RUNNING ? ` (${written} healed)` : ''} · ${skipped} already complete`
-    + ` · ${noArchive} without a WSV ZIP archive · ${failed} failed${failed ? ' (re-run to retry)' : ''}`);
+    + ` · ${noArchive} archive-unavailable responses · ${failed} failed${failed ? ' (re-run to retry)' : ''}`);
   reportRunOutcome('WSV archive fetch', ok, failed);
   // --running is the one mode that attempts EVERY station, so it is the one
   // that can tell a fleet-wide problem from a gauge-level one: if not a single
