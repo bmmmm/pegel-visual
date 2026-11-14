@@ -109,8 +109,17 @@ jobs:
       - name: Heal the running year from the WSV ZIP archive
         if: inputs.running
         run: node scripts/fetch-wsv-archive.mjs --running --parallel 2 --out archive-branch/archive
+      - name: Gap sweep after the running-year heal
+        if: inputs.running
+        run: node scripts/fetch-wsv-archive.mjs --out archive-branch/archive
+      - name: Refresh Rijkswaterstaat gauges after the WSV pass
+        if: inputs.running
+        run: node scripts/fetch-rws-archive.mjs --current --out archive-branch/archive
       - name: Rebuild river totals (?total view)
         run: node scripts/build-river-totals.mjs --rebuild --archive archive-branch/archive --out archive-branch/archive/totals --fetch-units
+      - name: Record the completed monthly pass
+        if: inputs.running
+        run: node scripts/archive-monthly-pass.mjs --tree archive-branch/archive --complete
       - name: Consistency gate
         run: node scripts/check-archive-consistency.mjs --tree archive-branch/archive --git archive-branch
       - name: Commit and push

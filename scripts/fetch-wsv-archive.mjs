@@ -87,7 +87,7 @@ import { inflateRawSync } from 'node:zlib';
 import { parseArgs, pinnedNow, readJson, sleep } from './lib/cli.mjs';
 
 const API = 'https://www.pegelonline.wsv.de/webservices/rest-api/v2';
-const PREPARE = 'https://www.pegelonline.wsv.de/gast/historische-zeitreihen/prepare-download';
+const PREPARE = 'https://pegelonline.wsv.de/gast/download/prepare';
 const THROTTLE_MS = 1500;
 // PEGEL_NOW pins the clock for tests (e.g. PEGEL_NOW=2027-01-03 to rehearse the
 // January year-freeze); production runs use the real clock
@@ -247,7 +247,7 @@ export function condense(measurements) {
 
 // ---------- request window planning (the Dec-31 midnight trap) ----------
 
-// The ZIP prepare endpoint reads `end` as MIDNIGHT of that day, so end=Y-12-31
+// The old ZIP endpoint read `end` as MIDNIGHT of that day, so end=Y-12-31
 // hands back only Dec 31's 00:00 reading and flattens the year's last day to
 // min == max (measured 2026-08-21: ~2076 station-years, 601 of 622 stations for
 // 2025 alone). Every request therefore runs through Jan 1 of the FOLLOWING year,
@@ -295,19 +295,23 @@ export function dropSpillYears(years, lastYear) {
 // start and end are both full YYYY-MM-DD days. The backfill always asks from
 // Jan 1 of its first year; the snapshot heal (snapshot-wsv.mjs --heal-source
 // zip) asks for an arbitrary window inside the running year, which is why the
-// start is a date and not a year. Both ends are read as MIDNIGHT by the
-// endpoint — see requestEnd for what that costs at the far end.
+// start is a date and not a year. Keep the old contract: midnight MEZ at both
+// ends, inclusive. The replacement endpoint (verified 2026-11-14 in the
+// portal's zeitreihen-download-modal.js) takes parameter W and returns a JSON
+// downloadUrl. It exports inclusive CIVIL days in MEZ/MESZ, not the old
+// midnight boundary. Trim its extra samples by instant so every caller keeps
+// the same fixed-MEZ buckets, including summer and chunk/year boundaries.
 export async function fetchRawRange(uuid, startDate, endDate) {
   const body = new URLSearchParams({
     uuid,
-    parameter: 'WASSERSTAND ROHDATEN',
+    parameter: 'W',
     start: startDate,
     end: endDate,
     format: 'json',
   });
   const res = await fetch(PREPARE, { method: 'POST', body, redirect: 'manual', signal: AbortSignal.timeout(180000) });
   const loc = res.headers.get('location');
-  if (!loc || loc.includes('error')) {
+  if (res.status !== 200) {
     const err = new Error(`prepare failed (${res.status}, ${loc || 'no redirect'})`);
     // A 303 to the error page is how the endpoint says "no historical series
     // for this gauge" — the steady state for ~111 lock and weir gauges WSV
@@ -315,23 +319,54 @@ export async function fetchRawRange(uuid, startDate, endDate) {
     // every scheduled archive-update run red (and therefore unpushed) since
     // the fail-rate guard went in: the sweep skips the 626 complete stations,
     // attempts only the hopeless ones, and lands at a 100% failure rate.
-    err.noArchive = loc ? loc.includes('/errorpages/errorException') : false;
+    err.noArchive = res.status === 303 && loc
+      ? new URL(loc, PREPARE).pathname === '/errorpages/errorException' : false;
     throw err;
   }
-  const zipRes = await fetch(new URL(loc, PREPARE), { signal: AbortSignal.timeout(300000) });
+  const prepared = await res.json();
+  if (typeof prepared?.downloadUrl !== 'string') throw new Error('prepare returned no downloadUrl');
+  const download = new URL(prepared.downloadUrl, PREPARE);
+  if (download.origin !== new URL(PREPARE).origin || download.pathname !== '/gast/download') {
+    throw new Error('prepare returned an unexpected downloadUrl');
+  }
+  const zipRes = await fetch(download, { signal: AbortSignal.timeout(300000) });
   if (!zipRes.ok) throw new Error('download failed HTTP ' + zipRes.status);
   const bytes = new Uint8Array(await zipRes.arrayBuffer());
   const text = unzipJsonEntry(bytes).toString();
+  let measurements;
   try {
-    return JSON.parse(text);
+    measurements = JSON.parse(text);
   } catch {
     // some stations' generated JSON is not valid JSON: a bare minus for
     // missing values ("value":-,) and leading-dot decimals ("value":-.87,
     // seen on m+NN gauges) — patch both and try once more
-    return JSON.parse(text
+    measurements = JSON.parse(text
       .replace(/("value"\s*:\s*)-(?=\s*[,}\]])/g, '$1null')
       .replace(/("value"\s*:\s*-?)\.(?=\d)/g, '$10.'));
   }
+  if (!Array.isArray(measurements)) throw new Error('download contains no measurement array');
+  const start = Date.parse(`${startDate}T00:00:00+01:00`);
+  const end = Date.parse(`${endDate}T00:00:00+01:00`);
+  return measurements.filter(m => {
+    const t = Date.parse(m.timestamp);
+    return t >= start && t <= end;
+  });
+}
+
+// The new ZIP service also returns the REST tail for gauges with no long-term
+// archive (ACHLEITEN: 31 days in a whole-year request, no data for 2025).
+// Only data older than that retention can withdraw a recorded noArchive fact.
+export function hasLongArchive(years, referenceDate = now) {
+  const cutoff = referenceDate.getTime() - 35 * 864e5;
+  return [...years].some(([y, yr]) => yr.min.some((v, d) =>
+    v != null && Date.UTC(y, 0, 1) + d * 864e5 - 36e5 < cutoff));
+}
+
+export function recordArchiveEvidence(dir, years, { running = false, referenceDate = now } = {}) {
+  if (!running && ![...years.values()].some(yr => yr.min.some(v => v != null))) {
+    throw Object.assign(new Error('no historical measurements in the requested archive years'), { noArchive: true });
+  }
+  if (hasLongArchive(years, referenceDate)) clearNoArchive(dir);
 }
 
 // full range in one request where possible; coastal gauges measure every
@@ -359,19 +394,11 @@ async function fetchCondensed(uuid, startYear, endDate) {
   }
 }
 
-// the monthly refresh's source: the official REST API at 15-min resolution —
-// no doubled-CORS quirk, no ZIP prepare step. The cron fires on the 3rd of
-// each month, so consecutive runs sit 31 days apart after a 31-day month: a
-// P30D window would leave the boundary day between two runs thinly sampled
-// (missing its afternoon peak). We request P35D for margin, but measured
-// 2026-07-17 the server silently clamps to ~31 days — enough to cover the
-// cadence exactly, with no slack for a delayed run. That residual risk is
-// deliberate: the January ZIP re-backfill (freezeFromZip) heals any hole in
-// the completed year, and if WSV ever lifts the cap the wider window starts
-// working for free. Overlap is harmless — writeStation's merge is idempotent.
-// condense buckets by MEZ day, so the live data's DST offset (+02:00 in
-// summer) folds onto the same day boundaries as the ZIP archive's year-round
-// UTC+1 timestamps.
+// Weekly refresh: the official REST API at 15-min resolution. Request P35D
+// for overlap, although the server caps it at ~31 days. The full monthly ZIP
+// pass (first Monday, retried on later Mondays) is what reaches older gaps.
+// Overlap is harmless — writeStation's merge is idempotent. Both REST and the
+// new ZIP service publish MEZ/MESZ offsets; condense uses fixed-MEZ days.
 async function fetchCurrentViaRest(uuid) {
   const url = `${API}/stations/${uuid}/W/measurements.json?start=P35D`;
   const res = await fetch(url, { signal: AbortSignal.timeout(120000) });
@@ -748,12 +775,10 @@ async function main() {
         // measured 2026-09-03, the endpoint accepts a future end date and simply
         // returns everything up to the last reading)
         : await fetchCondensed(s.uuid, startYear, requestEnd(RUNNING ? CURRENT_YEAR : TO));
-      // A ZIP answer is the only thing that can withdraw a standing noArchive
-      // verdict, so this sits above the RUNNING/CURRENT_ONLY split rather than
-      // inside writeStation: --current reaches these gauges over REST every
-      // week and succeeds, and REST success says nothing about the ZIP archive.
-      // Clearing on "any successful write" would erase the marker every Monday.
-      if (!CURRENT_ONLY) clearNoArchive(dir);
+      // The new ZIP service can contain only the REST tail; it takes older
+      // observations to withdraw noArchive. Empty closed-year exports are the
+      // new equivalent of the old no-archive redirect, not a fetched history.
+      if (!CURRENT_ONLY) recordArchiveEvidence(dir, years, { running: RUNNING });
       if (RUNNING) {
         const healed = healRunningYearFromZip(dir, s.shortname, CURRENT_YEAR, years.get(CURRENT_YEAR));
         console.log(`${tag} · ${pts} pts -> ${healed ? 'running year healed' : 'left alone'}`);

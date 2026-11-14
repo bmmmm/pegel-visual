@@ -26,7 +26,8 @@ name: archive-update
 # when a third run (the daily snapshot, 54 minutes later) joins it, silently
 # and with no failure step to report it. So the schedule is weekly and the
 # expensive steps decide by date: the first Monday of the month carries the
-# ZIP heal and the gap sweep.
+# ZIP heal and the gap sweep. A durable checkpoint makes later Mondays retry
+# a missed full pass, independently of the weekly manifest timestamp.
 on:
   schedule:
     - cron: '23 4 * * 1'
@@ -62,25 +63,24 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
-      - name: Decide whether this is the monthly pass
-        # first Monday of the month (the weekly cron only ever fires on a
-        # Monday, so day-of-month <= 7 IS the first one); a manual dispatch
-        # always does the full pass
+      - name: Decide whether the monthly pass is due
+        # A missing/old checkpoint retries the full pass, even after the first
+        # Monday. Manual dispatch deliberately forces a full pass.
         id: pass
+        env:
+          MANUAL: ${{ github.event_name == 'workflow_dispatch' }}
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ] || [ "$(date -u +%d)" -le 07 ]; then
-            echo "monthly=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "monthly=false" >> "$GITHUB_OUTPUT"
-          fi
+          set -- --tree archive-branch/archive
+          if [ "$MANUAL" = true ]; then set -- "$@" --force; fi
+          node scripts/archive-monthly-pass.mjs "$@"
       - name: Fetch current-year data from WSV (REST, last 30 days)
         run: node scripts/fetch-wsv-archive.mjs --current --out archive-branch/archive
       - name: Heal the running year from the WSV ZIP archive
         # the authority on the running year: the ZIP endpoint returns it whole
         # (BONN 2026-01-01..09-03: 23517 points, no missing day), so a month
         # the REST refresh never saw is still recoverable months later. Monthly
-        # only — ~17min at --parallel 2, and the weekly REST run keeps the
-        # window covered in between.
+        # plus weekly retries until the monthly checkpoint is current. The
+        # weekly REST run keeps the recent window covered in between.
         if: steps.pass.outputs.monthly == 'true'
         run: node scripts/fetch-wsv-archive.mjs --running --parallel 2 --out archive-branch/archive
       - name: Gap sweep (new stations + retry the none-stations)
@@ -102,6 +102,13 @@ jobs:
         # sidecar so metre-reporting elevation gauges stay excluded. Runs last
         # so it sees the WSV refresh, the gap sweep and the RWS upsert.
         run: node scripts/build-river-totals.mjs --rebuild --archive archive-branch/archive --out archive-branch/archive/totals --fetch-units
+      - name: Record the completed monthly pass
+        # The checkpoint shares the data commit: gate/push failure leaves the
+        # remote checkpoint unchanged, so the next weekly run retries.
+        if: steps.pass.outputs.monthly == 'true'
+        env:
+          PERIOD: ${{ steps.pass.outputs.period }}
+        run: node scripts/archive-monthly-pass.mjs --tree archive-branch/archive --complete --period "$PERIOD"
       - name: Consistency gate
         # content-level guard before anything is pushed: recency, totals
         # liveness, station coverage, and no regression against the branch
