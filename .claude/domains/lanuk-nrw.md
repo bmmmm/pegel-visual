@@ -714,6 +714,12 @@ runs before the push;
 different rain day boundary, and a derived minimum would put R6 at risk for
 the whole WSV fleet.
 
+After a successful gate and both pushes, `report-nrw-fine-status.mjs` reports
+only changes in the missing fine-series tables: a warning, changed scope,
+then one recovery. It reads the shared issue's own bot reports (including
+legacy warnings) as durable state; unchanged runs stay quiet. It never closes
+the shared issue or claims that the historical data is complete.
+
 **A local `github/nrw` ref is a date, not a fact — and nothing on disk
 contradicts it.** These branches have no working tree, so a stale
 remote-tracking ref reads exactly like a current one: `git show
