@@ -26,7 +26,7 @@ const {
   requestEnd, lastYearOf, planChunks, dropSpillYears,
   writeStation, graduateCompletedYear, hasClosedYears, markNoArchive, clearNoArchive,
   PLAUSIBLE_MIN_CM, PLAUSIBLE_MAX_CM,
-  failureVerdict, reportRunOutcome,
+  failureVerdict, reportRunOutcome, hasLongArchive, recordArchiveEvidence,
 } = await import('../scripts/fetch-wsv-archive.mjs');
 
 const tmp = prefix => mkdtempSync(join(tmpdir(), prefix));
@@ -195,7 +195,7 @@ test('fetchRawRange sends the start DAY it was given, not a Jan 1 derived from i
   }
   assert.equal(seen[0].start, '2026-08-01', 'the snapshot heal asks for a window inside the year');
   assert.equal(seen[0].end, '2026-08-13');
-  assert.equal(seen[0].parameter, 'WASSERSTAND ROHDATEN');
+  assert.equal(seen[0].parameter, 'W');
 });
 
 test('fetchRawRange tells "WSV has no archive for this gauge" apart from a real failure', async () => {
@@ -556,4 +556,63 @@ test('reportRunOutcome sets a non-zero exit code exactly when the verdict is red
   } finally {
     process.exitCode = before;
   }
+});
+
+// New portal protocol, measured 2026-11-14: KÖLN Oct 24–26 spans the DST
+// change. The real ZIP includes whole civil days and two extra text files.
+test('WSV download v2: JSON prepare response, real ZIP, fixed-MEZ range across DST', async () => {
+  const realFetch = globalThis.fetch;
+  const seen = [];
+  globalThis.fetch = async (url, init) => {
+    seen.push(String(url));
+    if (seen.length === 1) {
+      assert.equal(String(url), 'https://pegelonline.wsv.de/gast/download/prepare');
+      assert.equal(init.method, 'POST');
+      assert.equal(init.redirect, 'manual');
+      assert.deepEqual(Object.fromEntries(init.body), { uuid: 'uuid-x', parameter: 'W', start: '2026-10-24', end: '2026-10-26', format: 'json' });
+      return new Response(JSON.stringify({ downloadUrl: '/gast/download?filename=example.zip' }));
+    }
+    return new Response(readFileSync(new URL('./fixtures/wsv-download-dst.zip', import.meta.url)));
+  };
+  try {
+    const rows = await fetchRawRange('uuid-x', '2026-10-24', '2026-10-26');
+    assert.equal(rows.length, 193, '48 fixed-MEZ hours plus the inclusive end sample');
+    assert.equal(rows[0].timestamp, '2026-10-24T01:00:00+02:00', 'exclude the previous MEZ day');
+    assert.equal(rows.at(-1).timestamp, '2026-10-26T00:00:00+01:00', 'exclude the extra civil end day');
+    assert.equal(seen[1], 'https://pegelonline.wsv.de/gast/download?filename=example.zip');
+    const years = condense(rows);
+    assert.equal(years.get(2026).min[doy(2026, 10, 23)], null);
+    assert.notEqual(years.get(2026).min[doy(2026, 10, 24)], null);
+    assert.notEqual(years.get(2026).min[doy(2026, 10, 25)], null);
+  } finally { globalThis.fetch = realFetch; }
+});
+
+test('WSV download v2: obsolete 404, malformed prepare and unexpected download hosts stay failures', async () => {
+  const realFetch = globalThis.fetch;
+  try {
+    for (const [response, error] of [
+      [new Response('', { status: 404 }), /prepare failed \(404/],
+      [new Response('{}'), /no downloadUrl/],
+      [new Response('{"downloadUrl":"https://other.example/gast/download"}'), /unexpected downloadUrl/],
+    ]) {
+      let calls = 0;
+      globalThis.fetch = async () => { assert.equal(++calls, 1, 'no download for an invalid prepare'); return response; };
+      await assert.rejects(() => fetchRawRange('uuid-x', '2026-01-01', '2027-01-01'), error);
+    }
+  } finally { globalThis.fetch = realFetch; }
+});
+
+test('new ZIP service: REST-tail data does not erase noArchive; older observations do', () => {
+  const dir = tmp('wsv-evidence-');
+  markNoArchive(dir);
+  const now = new Date('2026-11-14T10:00:00Z');
+  const tail = condense([{ timestamp: '2026-10-14T01:15:00+02:00', value: 237 }]);
+  assert.equal(hasLongArchive(tail, now), false);
+  recordArchiveEvidence(dir, tail, { running: true, referenceDate: now });
+  assert.equal(JSON.parse(readFileSync(join(dir, 'meta.json'))).noArchive, true);
+  const old = condense([{ timestamp: '2026-02-01T12:00:00+01:00', value: 100 }]);
+  assert.equal(hasLongArchive(old, now), true);
+  recordArchiveEvidence(dir, old, { running: true, referenceDate: now });
+  assert.equal(JSON.parse(readFileSync(join(dir, 'meta.json'))).noArchive, undefined);
+  assert.throws(() => recordArchiveEvidence(dir, new Map()), e => e.noArchive === true);
 });

@@ -448,8 +448,11 @@ find and a blocked snapshot loses its day slot for good. The `nrw` branch
 has its own gate (`check-nrw-consistency.mjs`, N1–N8); `nrw-hires` is
 mirrored as fetched. `data-freshness` watches the two deployed branches once
 a day — `archive` for commit age, deployed drift and manifest age, `nrw` for
-commit age — and opens or updates an issue labelled `data-freshness` instead
-of failing silently. `hires` has no watchdog: its collector's wall
+commit age. The full monthly ZIP heal and gap sweep have their own checkpoint
+in `archive/pipeline-status.json`: weekly refreshes cannot renew it, and later
+Mondays retry a missing monthly pass. The watchdog reports changed problem
+sets and one recovery in the shared `data-freshness` issue; unchanged problems
+stay quiet. `hires` has no watchdog: its collector's wall
 heartbeat went with wallii (2026-10-28), so a missed weekly run shows only as
 a missing outcome line in the launchd log.
 

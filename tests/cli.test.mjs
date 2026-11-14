@@ -161,6 +161,9 @@ test('every collector and builder main() gets past its argument parsing', () => 
     [['fetch-rws-archive.mjs', '--nope'], 2, /unknown flag --nope/],
     [['heal-dec31.mjs', '--nope'], 2, /unknown flag --nope/],
     [['report-nrw-fine-status.mjs', '--nope'], 1, /usage: node scripts\/report-nrw-fine-status/],
+    [['check-data-freshness.mjs', '--nope'], 1, /usage: node scripts\/check-data-freshness/],
+    [['archive-monthly-pass.mjs', '--tree', missing], 1, /no manifest\.json under/],
+    [['archive-monthly-pass.mjs', '--tree', missing, '--complete', '--period', '2026-11'], 1, /no manifest\.json under/],
     [['heal-dec31.mjs', '--out', missing, '--dry-run'], 1, /no station directories under/],
     // a mistyped worker count used to become NaN — zero workers, a green no-op
     [['heal-dec31.mjs', '--parallel', 'two', '--out', missing], 2, /--parallel two: want an integer/],
