@@ -1,6 +1,6 @@
 {
  "schema": 1,
- "generated": "2026-11-13",
+ "generated": "2026-11-14",
  "ruleVersion": 2,
  "lagRuleVersion": 1,
  "rule": {
@@ -29,12 +29,12 @@
   "rainHourMm": 0.1
  },
  "window": {
-  "from": "2026-09-11T21:00Z",
-  "to": "2026-11-13T20:00Z",
+  "from": "2026-09-12T21:00Z",
+  "to": "2026-11-14T20:00Z",
   "hours": 1512
  },
  "inputs": {
-  "sha256": "a56cfc41772ac93d973b321c4a24a59e6036111c5ebc8a5539feea176feff431",
+  "sha256": "3e070cb1cf3b2ab326265ccc4456eef8188553ab643827a436799ccce1eaa747",
   "files": 2812
  },
  "counts": {
@@ -45,8 +45,8 @@
   "withPeak": 251,
   "noPeak": 0,
   "weak": 37,
-  "notSignificant": 1,
-  "published": 213,
+  "notSignificant": 0,
+  "published": 214,
   "noPeakWhy": {
    "wetHours": 0,
    "pairs": 0,
@@ -55,7 +55,7 @@
   },
   "byClass": [
    113,
-   85,
+   86,
    15
   ],
   "unclassed": 0
@@ -252,6 +252,7 @@
   "4589000000100": 1,
   "4619100000100": 0,
   "4621900000100": 1,
+  "4622900000100": 1,
   "4624900000100": 1,
   "4627100000200": 1,
   "4639000000100": 0,
