@@ -18,25 +18,21 @@ on:
     # that dispatch path is why workflow_dispatch has to stay.
   workflow_dispatch:
 
+# what the build needs; the deploy job adds its own two
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
 concurrency:
   group: pages
   cancel-in-progress: true
 
 jobs:
-  deploy:
+  build:
     # a manual or data-pipeline dispatch always deploys; a test run only when
-    # it went green
+    # it went green (deploy needs this job, so it is skipped along with it)
     if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -92,5 +88,31 @@ jobs:
       - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
         with:
           path: /tmp/site
+
+  deploy:
+    # Upload and deploy used to share one job, and deploy-pages looked the
+    # artifact up a fraction of a second after it was finalized. The listing
+    # it uses (ListArtifacts) can lag behind finalize: three runs between
+    # 2026-11-20 and 2026-11-23 got "Found 0 artifact(s)" 0.4-0.8 s after
+    # "successfully finalized" (actions/deploy-pages#451; deploy-pages does
+    # not retry an empty listing). A separate job starts its lookup seconds
+    # later — the layout GitHub's own Pages starters use; how long the listing
+    # can lag is not documented, so this is not a measured guarantee.
+    # "Re-run failed jobs" now runs only this job and finds the build's one
+    # artifact, where a re-run of the single job uploaded a second
+    # `github-pages` and failed on "Artifact count is 2". That re-run deploys
+    # the failed run's build and works only while the artifact is retained
+    # (one day): once a newer run has deployed, dispatch a fresh run instead.
+    # "Re-run all jobs" still uploads a second artifact and fails.
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
       - id: deployment
         uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
