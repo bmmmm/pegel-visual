@@ -24,13 +24,14 @@ permissions:
   contents: read
 
 # One deploy at a time, the newest run wins (its resolve runs last, so it
-# deploys the newest green commit). Only a run that will deploy joins `pages`:
-# workflow-level concurrency applies before any job `if`, so a red or
-# cancelled `tests` run in the shared group cancelled an in-flight deploy (a
-# data dispatch, say) and then skipped. Every other run gets a group of its
-# own. The condition is resolve's `if`, word for word; change them together.
-# Not job-level groups: build and deploy would be separate members, and a
-# queued deploy of an older run could cancel a newer run's build.
+# deploys the newest green commit the runs list shows). Only a run that will
+# deploy joins `pages`: workflow-level concurrency applies before any job
+# `if`, so a red or cancelled `tests` run in the shared group cancelled an
+# in-flight deploy (a data dispatch, say) and then skipped. Every other run
+# gets a group of its own. The condition is resolve's `if`, word for word;
+# change them together. Not job-level groups: build and deploy would be
+# separate members, and a queued deploy of an older run could cancel a newer
+# run's build.
 concurrency:
   group: >-
     ${{ (github.event_name == 'workflow_dispatch' ||
@@ -64,10 +65,13 @@ jobs:
         # and deploying its head_sha would roll the live site back. The API
         # orders runs by created_at and a re-run keeps its original one, so
         # the first entry is the newest commit, not the newest run.
-        # workflow_run whose sha is not that newest green one (a re-run, or
-        # a runs list lagging behind the completion event): deploy the newest
-        # green one anyway. Skipping was wrong: this run has already joined
+        # workflow_run whose sha is not that newest green one: deploy the
+        # listed one anyway. Skipping was wrong: this run has already joined
         # the `pages` group and may have cancelled the deploy it defers to.
+        # For a re-run of an old run that is the newest green commit. If the
+        # list lags behind the completion event, it is an OLDER green commit
+        # (the run's own commit goes live with the next deploy, at the latest
+        # the next data-pipeline dispatch).
         # workflow_dispatch with main's HEAD still untested: the previous
         # green commit is deployed, and a push gets a workflow_run of its own
         # once its tests finish. A commit merged with GITHUB_TOKEN gets none:
@@ -93,7 +97,7 @@ jobs:
           done
           [ -n "$sha" ] || { echo "::error::no successful tests run on main — refusing to deploy"; exit 1; }
           if [ -n "$RUN_SHA" ] && [ "$RUN_SHA" != "$sha" ]; then
-            echo "::notice::tests run for $RUN_SHA is not the newest green commit — deploying the newest green commit $sha instead"
+            echo "::notice::tests run for $RUN_SHA is not the newest green commit listed — deploying the listed one, $sha, instead"
           fi
           echo "deploying tested commit $sha"
           echo "sha=$sha" >> "$GITHUB_OUTPUT"
