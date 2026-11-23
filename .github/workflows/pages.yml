@@ -18,9 +18,11 @@ on:
     # that dispatch path is why workflow_dispatch has to stay.
   workflow_dispatch:
 
-# what the build needs; the deploy job adds its own two
+# what the build needs (actions: read to look up the last green test run);
+# the deploy job adds its own two
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: pages
@@ -28,15 +30,44 @@ concurrency:
 
 jobs:
   build:
-    # a manual or data-pipeline dispatch always deploys; a test run only when
-    # it went green (deploy needs this job, so it is skipped along with it)
-    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    # a manual or data-pipeline dispatch always deploys (the last tested main
+    # commit, see "Resolve the tested commit"); a test run only when it was a
+    # green push run. `event == 'push'` matters: `tests` also runs on pull
+    # requests, and a fork branch named `main` passes the `branches` filter.
+    # (deploy needs this job, so it is skipped along with it)
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push')
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
+      - name: Resolve the tested commit
+        # Deploy exactly the commit the tests ran on, never `main` as it is
+        # when this job starts: a push landing in between (or a dispatch on an
+        # untested HEAD) would otherwise go live without a green run.
+        # workflow_run: the run that triggered us. workflow_dispatch: the head
+        # of the newest successful `tests` push run on main — if main's HEAD is
+        # still untested, the previous green commit is deployed and the
+        # workflow_run for the new one follows (and supersedes this run via
+        # the concurrency group).
+        id: tested
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          sha="$RUN_SHA"
+          if [ -z "$sha" ]; then
+            sha=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/test.yml/runs?branch=main&event=push&status=success&per_page=1" \
+                  --jq '.workflow_runs[0].head_sha // empty')
+          fi
+          [ -n "$sha" ] || { echo "no successful tests run on main — refusing to deploy"; exit 1; }
+          echo "deploying tested commit $sha"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: main
+          ref: ${{ steps.tested.outputs.sha }}
       - name: Assemble site
         run: |
           mkdir /tmp/site
@@ -46,9 +77,9 @@ jobs:
           rsync -a --exclude .git --exclude .github --exclude tests --exclude scripts \
                 --exclude .claude --exclude CLAUDE.md ./ /tmp/site/
       - name: Stamp the deployed commit and date
-        # main's own HEAD, not $GITHUB_SHA — a push to the `archive` branch also
-        # triggers this workflow, and GITHUB_SHA would then be the archive
-        # branch's commit even though `ref: main` is what's actually deployed.
+        # the checked-out tested commit's HEAD, not $GITHUB_SHA — for a
+        # workflow_run that is the default branch's tip, for a dispatch the
+        # ref it was started on; neither need be what is actually deployed.
         # The sitemap's lastmod is the same idea: every URL in it is this one
         # page in a different mode, so its date is simply the deploy's.
         run: |
