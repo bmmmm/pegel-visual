@@ -1,5 +1,7 @@
 name: tests
 
+# pages.yml depends on this file's name (test.yml), the workflow name `tests` and the unfiltered push trigger on main — change them together.
+
 on:
   push:
     branches: [main]

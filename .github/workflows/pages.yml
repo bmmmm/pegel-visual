@@ -18,56 +18,71 @@ on:
     # that dispatch path is why workflow_dispatch has to stay.
   workflow_dispatch:
 
-# what the build needs (actions: read to look up the last green test run);
-# the deploy job adds its own two
+# default for the jobs; a job-level `permissions:` block REPLACES this, it does
+# not add to it (resolve and deploy each declare their complete set)
 permissions:
   contents: read
-  actions: read
 
 concurrency:
   group: pages
   cancel-in-progress: true
 
 jobs:
-  build:
-    # a manual or data-pipeline dispatch always deploys (the last tested main
-    # commit, see "Resolve the tested commit"); a test run only when it was a
-    # green push run. `event == 'push'` matters: `tests` also runs on pull
-    # requests, and a fork branch named `main` passes the `branches` filter.
-    # (deploy needs this job, so it is skipped along with it)
+  resolve:
+    # a manual or data-pipeline dispatch always deploys (the newest tested main
+    # commit); a test run only when it was a green push run. `event == 'push'`
+    # matters: `tests` also runs on pull requests, and a fork branch named
+    # `main` passes the `branches` filter.
     if: >-
       github.event_name == 'workflow_dispatch' ||
       (github.event.workflow_run.conclusion == 'success' &&
        github.event.workflow_run.event == 'push')
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 5
+    permissions:
+      actions: read # to list the `tests` runs
+    outputs:
+      sha: ${{ steps.tested.outputs.sha }}
     steps:
       - name: Resolve the tested commit
-        # Deploy exactly the commit the tests ran on, never `main` as it is
-        # when this job starts: a push landing in between (or a dispatch on an
-        # untested HEAD) would otherwise go live without a green run.
-        # workflow_run: the run that triggered us. workflow_dispatch: the head
-        # of the newest successful `tests` push run on main — if main's HEAD is
-        # still untested, the previous green commit is deployed and the
-        # workflow_run for the new one follows (and supersedes this run via
-        # the concurrency group).
+        # Deploy exactly the newest commit with a green `tests` push run on
+        # main, for BOTH triggers. Never `main` as it is when this job starts
+        # (an untested push landing in between), and never just the run that
+        # triggered us: a re-run of an old green run fires workflow_run too,
+        # and deploying its head_sha would roll the live site back. The API
+        # orders runs by created_at and a re-run keeps its original one, so
+        # the first entry is the newest commit, not the newest run.
+        # workflow_run whose sha is not that newest green one: skip with
+        # exit 0 — a newer run will deploy, or already has.
+        # workflow_dispatch with main's HEAD still untested: the previous
+        # green commit is deployed and the workflow_run for the new one
+        # follows (superseding this run via the concurrency group).
         id: tested
         env:
           GH_TOKEN: ${{ github.token }}
           RUN_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
           set -euo pipefail
-          sha="$RUN_SHA"
-          if [ -z "$sha" ]; then
-            sha=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/test.yml/runs?branch=main&event=push&status=success&per_page=1" \
-                  --jq '.workflow_runs[0].head_sha // empty')
+          sha=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/test.yml/runs?branch=main&event=push&status=success&per_page=1" \
+                --jq '.workflow_runs[0].head_sha // empty')
+          [ -n "$sha" ] || { echo "::error::no successful tests run on main — refusing to deploy"; exit 1; }
+          if [ -n "$RUN_SHA" ] && [ "$RUN_SHA" != "$sha" ]; then
+            echo "::notice::tests run for $RUN_SHA is not the newest green commit ($sha) — skipping, a newer deploy covers it"
+            exit 0
           fi
-          [ -n "$sha" ] || { echo "no successful tests run on main — refusing to deploy"; exit 1; }
           echo "deploying tested commit $sha"
           echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
+  build:
+    # no sha = resolve skipped this run on purpose (deploy is skipped with it)
+    needs: resolve
+    if: needs.resolve.outputs.sha != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ steps.tested.outputs.sha }}
+          ref: ${{ needs.resolve.outputs.sha }}
       - name: Assemble site
         run: |
           mkdir /tmp/site
