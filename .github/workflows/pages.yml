@@ -18,10 +18,9 @@ on:
     # that dispatch path is why workflow_dispatch has to stay.
   workflow_dispatch:
 
+# what the build needs; the deploy job adds its own two
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
 concurrency:
   group: pages
@@ -95,16 +94,22 @@ jobs:
     # artifact up a fraction of a second after it was finalized. The listing
     # it uses (ListArtifacts) can lag behind finalize: three runs between
     # 2026-11-20 and 2026-11-23 got "Found 0 artifact(s)" 0.4-0.8 s after
-    # "successfully finalized", while the artifact was in the run all along
-    # (actions/deploy-pages#451; deploy-pages does not retry the lookup). A
-    # separate job starts its lookup seconds later. It also makes "Re-run
-    # failed jobs" usable: only this job runs again and finds the build's one
+    # "successfully finalized" (actions/deploy-pages#451; deploy-pages does
+    # not retry an empty listing). A separate job starts its lookup seconds
+    # later — the layout GitHub's own Pages starters use; how long the listing
+    # can lag is not documented, so this is not a measured guarantee.
+    # "Re-run failed jobs" now runs only this job and finds the build's one
     # artifact, where a re-run of the single job uploaded a second
-    # `github-pages` and failed on "Artifact count is 2". ("Re-run all jobs"
-    # still uploads a second one and fails the same way.)
+    # `github-pages` and failed on "Artifact count is 2". That re-run deploys
+    # the failed run's build and works only while the artifact is retained
+    # (one day): once a newer run has deployed, dispatch a fresh run instead.
+    # "Re-run all jobs" still uploads a second artifact and fails.
     needs: build
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    permissions:
+      pages: write
+      id-token: write
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
